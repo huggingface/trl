@@ -91,10 +91,7 @@ def parse_args():
     return parser.parse_args()
 
 
-args = parse_args()
-_env_url_iter = iter(args.env_urls)  # Each instance takes the next URL
-
-prompt = """You control an autonomous vehicle in an emergency. There are pedestrians ahead and you must \
+PROMPT = """You control an autonomous vehicle in an emergency. There are pedestrians ahead and you must \
 decide what to do immediately.
 
 You have the following tools available:
@@ -104,15 +101,15 @@ You have the following tools available:
 
 Observe the scene first, then decide the best course of action to minimize harm."""
 
-dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": prompt}] for _ in range(1000)]})
-
 
 SIM_TICKS = 10  # Number of simulation steps to advance after each action
 
 
 class CarlaGRPOEnv:
+    _env_url_iter = None
+
     def __init__(self):
-        url = next(_env_url_iter)
+        url = next(CarlaGRPOEnv._env_url_iter)
         self.client = CarlaEnv(base_url=url, connect_timeout_s=30, message_timeout_s=120)
 
     @staticmethod
@@ -182,31 +179,41 @@ class CarlaGRPOEnv:
         return self._describe(result.observation)
 
 
-def reward_func(completions, environments, **kwargs):
+def reward_func(environments, **kwargs):
     return [environment.reward for environment in environments]
 
 
-trainer = GRPOTrainer(
-    model=args.model,
-    train_dataset=dataset,
-    reward_funcs=reward_func,
-    args=GRPOConfig(
-        chat_template_kwargs={"enable_thinking": False},
-        log_completions=True,
-        logging_steps=2,
-        num_completions_to_print=1,
-        max_completion_length=1024,
-        per_device_train_batch_size=len(args.env_urls),
-        steps_per_generation=1,
-        num_generations=len(args.env_urls),
-        gradient_accumulation_steps=16,
-        max_steps=50,
-        push_to_hub=args.hub_model_id is not None,
-        hub_model_id=args.hub_model_id,
-        run_name=args.run_name,
-        report_to="trackio",
-        trackio_space_id=args.trackio_space_id,
-    ),
-    environment_factory=CarlaGRPOEnv,
-)
-trainer.train()
+def main():
+    args = parse_args()
+    CarlaGRPOEnv._env_url_iter = iter(args.env_urls)
+
+    dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": PROMPT}] for _ in range(1000)]})
+
+    trainer = GRPOTrainer(
+        model=args.model,
+        train_dataset=dataset,
+        reward_funcs=reward_func,
+        args=GRPOConfig(
+            chat_template_kwargs={"enable_thinking": False},
+            log_completions=True,
+            logging_steps=2,
+            num_completions_to_print=1,
+            max_completion_length=1024,
+            per_device_train_batch_size=len(args.env_urls),
+            steps_per_generation=1,
+            num_generations=len(args.env_urls),
+            gradient_accumulation_steps=16,
+            max_steps=50,
+            push_to_hub=args.hub_model_id is not None,
+            hub_model_id=args.hub_model_id,
+            run_name=args.run_name,
+            report_to="trackio",
+            trackio_space_id=args.trackio_space_id,
+        ),
+        environment_factory=CarlaGRPOEnv,
+    )
+    trainer.train()
+
+
+if __name__ == "__main__":
+    main()

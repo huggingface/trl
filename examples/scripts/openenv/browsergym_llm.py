@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl[vllm]",
-#     "peft",
+#     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
 #     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
@@ -70,10 +69,8 @@ from pathlib import Path
 
 from browsergym_env import BrowserGymAction, BrowserGymEnv
 from datasets import Dataset
-from transformers import AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.experimental.openenv import generate_rollout_completions
 
 
 def parse_args() -> argparse.Namespace:
@@ -117,10 +114,10 @@ def parse_args() -> argparse.Namespace:
         help="Maximum number of steps per episode.",
     )
     parser.add_argument(
-        "--max-new-tokens",
+        "--max-completion-length",
         type=int,
-        default=32,
-        help="Maximum number of new tokens to request from vLLM for each action.",
+        default=1024,
+        help="Maximum completion length in tokens for tool-calling generation.",
     )
     parser.add_argument(
         "--temperature",
@@ -227,12 +224,6 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Frequency of logging steps for GRPO training.",
     )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        default=False,
-        help="Enable verbose debugging output during rollouts.",
-    )
     return parser.parse_args()
 
 
@@ -244,158 +235,29 @@ def sanitize_name(name: str) -> str:
 # System Prompt
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You control a web browser through BrowserGym actions.
-You must complete the given web task by interacting with the page.
-
-Available actions:
-- noop() - Do nothing
-- click(bid) - Click element with BrowserGym ID (the number in brackets)
-- fill(bid, text) - Fill input field with text
-- send_keys(text) - Send keyboard input
-- scroll(direction) - Scroll up/down
+SYSTEM_PROMPT = """You control a web browser to complete tasks.
 
 The page structure shows elements as: [bid] element_type 'element_text'
-For example: [13] button 'Click Me!' means bid='13'
+For example: [13] button 'Click Me!' means the element has bid='13'.
 
-Reply with exactly ONE action on a single line, e.g.:
-click('13')
-fill('42', 'hello world')
-noop()
+Use the available tools to interact with the page:
+- click: Click an element by its bid
+- fill: Fill an input field with text
+- send_keys: Send keyboard input
+- scroll: Scroll the page
+- noop: Do nothing
 
-Do not include explanations or multiple actions."""
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def make_user_prompt(goal: str, step_num: int, axtree: str, error: str = "") -> str:
-    """Create user prompt from observation."""
-    prompt_parts = [f"Step {step_num + 1}"]
-
-    if goal:
-        prompt_parts.append(f"Goal: {goal}")
-
-    if error:
-        prompt_parts.append(f"Previous action error: {error}")
-
-    # Include accessibility tree (truncated for context)
-    if axtree:
-        max_len = 2000
-        axtree_truncated = axtree[:max_len] + "..." if len(axtree) > max_len else axtree
-        prompt_parts.append(f"Page structure:\n{axtree_truncated}")
-
-    prompt_parts.append("What action do you take?")
-
-    return "\n\n".join(prompt_parts)
-
-
-def parse_action(response_text: str) -> str:
-    """Parse BrowserGym action from model response."""
-    # Extract first line that looks like an action
-    for line in response_text.strip().split("\n"):
-        line = line.strip()
-        if "(" in line and ")" in line:
-            return line
-
-    # Fallback to noop if no valid action found
-    return "noop()"
-
-
-def rollout_once(
-    trainer: GRPOTrainer,
-    env: BrowserGymEnv,
-    tokenizer: AutoTokenizer,
-    dataset_prompt: str,
-    max_steps: int,
-    debug: bool = False,
-) -> dict[str, list]:
-    """Run one episode and collect training data (text-only, no screenshots)."""
-    result = env.reset()
-    observation = result.observation
-
-    prompt_ids: list[int] = []
-    completion_ids: list[int] = []
-    logprobs: list[float] = []
-    step_rewards: list[float] = []
-    completion_rewards: list[float] = []
-
-    for step_num in range(max_steps):
-        if result.done:
-            break
-
-        # Create prompt from observation (text-only using accessibility tree)
-        goal = observation.goal or dataset_prompt
-        axtree = observation.axtree_txt or ""
-        error = observation.error if observation.last_action_error else ""
-
-        user_prompt = make_user_prompt(goal, step_num, axtree, error)
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
-        prompt_text = tokenizer.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=False,
-        )
-
-        # Generate action with vLLM
-        rollout_outputs = generate_rollout_completions(trainer, [prompt_text])[0]
-        prompt_ids.extend(rollout_outputs["prompt_ids"])
-        completion_ids.extend(rollout_outputs["completion_ids"])
-        logprobs.extend(rollout_outputs["logprobs"])
-
-        completion_text = rollout_outputs.get("text") or tokenizer.decode(
-            rollout_outputs["completion_ids"], skip_special_tokens=True
-        )
-
-        # Parse and execute action
-        action_str = parse_action(completion_text)
-
-        if debug:
-            print(f"Step {step_num + 1}: {action_str}")
-
-        # Take action in environment
-        result = env.step(BrowserGymAction(action_str=action_str))
-        observation = result.observation
-
-        # Track rewards
-        step_reward = float(result.reward or 0.0)
-        step_rewards.append(step_reward)
-
-        # Reward shaping: success is most important
-        if result.done and step_reward > 0:
-            completion_rewards.append(1.0)  # Task completed successfully
-        elif result.done and step_reward == 0:
-            completion_rewards.append(0.0)  # Task failed
-        else:
-            completion_rewards.append(step_reward)  # Intermediate reward
-
-    # Final reward is based on task completion
-    final_reward = completion_rewards[-1] if completion_rewards else 0.0
-
-    return {
-        "prompt_ids": prompt_ids,
-        "completion_ids": completion_ids,
-        "logprobs": logprobs,
-        "step_rewards": step_rewards,
-        "completion_reward": final_reward,
-    }
+Complete the given task as efficiently as possible."""
 
 
 # ---------------------------------------------------------------------------
-# Rewards
+# Reward
 # ---------------------------------------------------------------------------
 
 
-def reward_completion(completions: list[str], **kwargs) -> list[float]:
+def reward_completion(environments, **kwargs) -> list[float]:
     """Reward for task completion."""
-    rewards = kwargs.get("completion_reward") if kwargs else None
-    if rewards is None:
-        return [0.0 for _ in completions]
-    return [float(r) for r in rewards]
+    return [env.reward for env in environments]
 
 
 # ---------------------------------------------------------------------------
@@ -406,11 +268,141 @@ def reward_completion(completions: list[str], **kwargs) -> list[float]:
 def main() -> None:
     args = parse_args()
 
-    # Connect to BrowserGym environment via Hugging Face Space
-    client = BrowserGymEnv(base_url=args.space_url)
-    print(f"🌍 Using Hugging Face Space environment at: {args.space_url}")
+    space_url = args.space_url
+    max_steps = args.max_steps
 
-    dataset = Dataset.from_dict({"prompt": [args.dataset_prompt] * args.dataset_size})
+    dataset = Dataset.from_dict(
+        {
+            "prompt": [
+                [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": args.dataset_prompt},
+                ]
+            ]
+            * args.dataset_size
+        }
+    )
+
+    class BrowserGymLLMEnv:
+        def __init__(self):
+            self.client = BrowserGymEnv(base_url=space_url)
+            self.reward = 0.0
+            self._done = False
+            self._step_count = 0
+
+        def _ensure_large_max_size(self):
+            """Raise WebSocket max message size for large observations (e.g. accessibility trees).
+
+            openenv-core<=0.2.1 does not pass max_size to ws_connect, so the websockets library
+            defaults to 1MB. We force a connection and patch it to 100MB before any messages are sent.
+            """
+            self.client.connect()
+            ws = self.client._ws
+            if ws is not None and hasattr(ws, "protocol"):
+                proto = ws.protocol
+                # websockets <16: max_size; websockets >=16: max_message_size
+                attr = "max_size" if hasattr(proto, "max_size") else "max_message_size"
+                if getattr(proto, attr) == 2**20:
+                    setattr(proto, attr, 100 * 1024 * 1024)
+
+        def reset(self, **kwargs) -> str:
+            self.reward = 0.0
+            self._done = False
+            self._step_count = 0
+            self._ensure_large_max_size()
+            result = self.client.reset()
+            self._done = result.done
+            return self._format_observation(result.observation)
+
+        def click(self, bid: str) -> str:
+            """Click an element on the page.
+
+            Args:
+                bid: The BrowserGym ID of the element to click.
+
+            Returns:
+                The updated page observation.
+            """
+            return self._do_action(f"click({bid!r})")
+
+        def fill(self, bid: str, text: str) -> str:
+            """Fill an input field with text.
+
+            Args:
+                bid: The BrowserGym ID of the input field.
+                text: The text to type into the field.
+
+            Returns:
+                The updated page observation.
+            """
+            return self._do_action(f"fill({bid!r}, {text!r})")
+
+        def send_keys(self, text: str) -> str:
+            """Send keyboard input to the page.
+
+            Args:
+                text: The keyboard input to send.
+
+            Returns:
+                The updated page observation.
+            """
+            return self._do_action(f"send_keys({text!r})")
+
+        def scroll(self, direction: str) -> str:
+            """Scroll the page.
+
+            Args:
+                direction: Direction to scroll, either 'up' or 'down'.
+
+            Returns:
+                The updated page observation.
+            """
+            return self._do_action(f"scroll({direction!r})")
+
+        def noop(self) -> str:
+            """Do nothing and observe the current page state.
+
+            Returns:
+                The current page observation.
+            """
+            return self._do_action("noop()")
+
+        def _do_action(self, action_str: str) -> str:
+            if self._done:
+                raise ValueError("Episode is done.")
+
+            self._step_count += 1
+            result = self.client.step(BrowserGymAction(action_str=action_str))
+            observation = result.observation
+            step_reward = float(result.reward or 0.0)
+            self._done = result.done
+
+            # Reward shaping: binary success/failure on completion
+            if self._done and step_reward > 0:
+                self.reward = 1.0
+            elif self._done:
+                self.reward = 0.0
+            else:
+                self.reward = step_reward
+
+            # Enforce max steps
+            if self._step_count >= max_steps:
+                self._done = True
+
+            return self._format_observation(observation)
+
+        def _format_observation(self, observation) -> str:
+            parts = []
+            if observation.goal:
+                parts.append(f"Goal: {observation.goal}")
+            if observation.last_action_error and observation.error:
+                parts.append(f"Error: {observation.error}")
+            if observation.axtree_txt:
+                axtree = observation.axtree_txt
+                if len(axtree) > 2000:
+                    axtree = axtree[:2000] + "..."
+                parts.append(f"Page structure:\n{axtree}")
+            return "\n\n".join(parts) if parts else "No observation available."
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     default_output_dir = Path("outputs") / f"browsergym-grpo-{sanitize_name(args.model_id)}-{timestamp}"
@@ -429,8 +421,8 @@ def main() -> None:
         per_device_train_batch_size=args.per_device_batch_size,
         warmup_steps=args.warmup_steps,
         num_generations=args.num_generations,
-        generation_batch_size=args.num_generations,  # Must be divisible by num_generations
-        max_completion_length=args.max_new_tokens,
+        generation_batch_size=args.num_generations,
+        max_completion_length=args.max_completion_length,
         logging_steps=args.logging_steps,
         report_to="trackio",
         trackio_space_id=f"browsergym-grpo-{sanitize_name(args.model_id)}-{timestamp}",
@@ -440,49 +432,18 @@ def main() -> None:
         temperature=args.temperature,
         top_k=args.top_k,
         top_p=args.top_p,
+        chat_template_kwargs={"enable_thinking": False},
     )
 
     grpo_config.run_name = args.run_name or f"run-{timestamp}"
     grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
-
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
-        episode_prompt_ids: list[list[int]] = []
-        episode_completion_ids: list[list[int]] = []
-        episode_logprobs: list[list[float]] = []
-        completion_rewards: list[float] = []
-
-        if args.debug:
-            print(f"\n[DEBUG] rollout_func called with {len(prompts)} prompts (LLM mode, text-only)")
-
-        for i, prompt_text in enumerate(prompts):
-            if args.debug:
-                print(f"[DEBUG] Processing prompt {i + 1}/{len(prompts)}")
-            episode = rollout_once(
-                trainer=trainer,
-                env=client,
-                tokenizer=trainer.processing_class,
-                dataset_prompt=prompt_text,
-                max_steps=args.max_steps,
-                debug=args.debug,
-            )
-            episode_prompt_ids.append(episode["prompt_ids"])
-            episode_completion_ids.append(episode["completion_ids"])
-            episode_logprobs.append(episode["logprobs"])
-            completion_rewards.append(episode["completion_reward"])
-
-        return {
-            "prompt_ids": episode_prompt_ids,
-            "completion_ids": episode_completion_ids,
-            "logprobs": episode_logprobs,
-            "completion_reward": completion_rewards,
-        }
 
     trainer = GRPOTrainer(
         model=args.model_id,
         reward_funcs=[reward_completion],
         train_dataset=dataset,
         args=grpo_config,
-        rollout_func=rollout_func,
+        environment_factory=BrowserGymLLMEnv,
     )
 
     print("=" * 80)
@@ -495,11 +456,7 @@ def main() -> None:
     print(f"Output directory: {output_dir}")
     print("=" * 80)
 
-    try:
-        trainer.train()
-        print("\nTraining completed successfully!")
-    finally:
-        client.close()
+    trainer.train()
 
 
 if __name__ == "__main__":
