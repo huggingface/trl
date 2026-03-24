@@ -170,17 +170,17 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        # Convert to tensor
-        input_ids = [torch.tensor(example["input_ids"]) for example in examples]
+        input_ids = [example["input_ids"] for example in examples]
         batch_seq_lengths = [example["seq_lengths"] for example in examples] if "seq_lengths" in examples[0] else None
-        if "labels" in examples[0]:
-            labels = [torch.tensor(example["labels"]) for example in examples]
-        else:
-            labels = [torch.tensor(example["input_ids"]) for example in examples]
-        if self.completion_only_loss and "completion_mask" in examples[0]:
-            completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
-        if "assistant_masks" in examples[0]:
-            assistant_masks = [torch.tensor(example["assistant_masks"]) for example in examples]
+        labels = [example.get("labels", example["input_ids"]) for example in examples]
+        completion_mask = (
+            [example["completion_mask"] for example in examples]
+            if self.completion_only_loss and "completion_mask" in examples[0]
+            else None
+        )
+        assistant_masks = (
+            [example["assistant_masks"] for example in examples] if "assistant_masks" in examples[0] else None
+        )
 
         # Truncate per sequence if necessary
         if self.max_length is not None and not self.padding_free:
@@ -194,10 +194,18 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 )
             input_ids = [ids[sl] for ids in input_ids]
             labels = [lbl[sl] for lbl in labels]
-            if self.completion_only_loss and "completion_mask" in examples[0]:
+            if completion_mask is not None:
                 completion_mask = [m[sl] for m in completion_mask]
-            if "assistant_masks" in examples[0]:
+            if assistant_masks is not None:
                 assistant_masks = [m[sl] for m in assistant_masks]
+
+        # Convert to tensor
+        input_ids = [torch.tensor(ids) for ids in input_ids]
+        labels = [torch.tensor(lbl) for lbl in labels]
+        if completion_mask is not None:
+            completion_mask = [torch.tensor(m) for m in completion_mask]
+        if assistant_masks is not None:
+            assistant_masks = [torch.tensor(m) for m in assistant_masks]
 
         # For padding-free, we should NOT create attention_mask as it causes FlashAttention to ignore position_ids and
         # compute wrong cu_seq_lens from the all-1s mask
@@ -215,9 +223,9 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             input_ids = [torch.cat(input_ids, dim=0)]
             labels = [torch.cat(labels, dim=0)]
             position_ids = [torch.cat(position_ids, dim=0)]
-            if self.completion_only_loss and "completion_mask" in examples[0]:
+            if completion_mask is not None:
                 completion_mask = [torch.cat(completion_mask, dim=0)]
-            if "assistant_masks" in examples[0]:
+            if assistant_masks is not None:
                 assistant_masks = [torch.cat(assistant_masks, dim=0)]
 
         # Pad
@@ -239,12 +247,12 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             output["attention_mask"] = pad(
                 attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
-        if self.completion_only_loss and "completion_mask" in examples[0]:
+        if completion_mask is not None:
             completion_mask = pad(
                 completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
             output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
-        if "assistant_masks" in examples[0]:
+        if assistant_masks is not None:
             assistant_masks = pad(
                 assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
