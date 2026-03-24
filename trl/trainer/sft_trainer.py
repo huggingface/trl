@@ -51,7 +51,6 @@ from ..data_utils import (
     maybe_convert_to_chatml,
     pack_dataset,
     prepare_multimodal_messages,
-    truncate_dataset,
 )
 from ..models import get_act_offloading_ctx_manager
 from .base_trainer import _BaseTrainer
@@ -1210,12 +1209,6 @@ class SFTTrainer(_BaseTrainer):
 
                 # Packing adds new column "seq_lengths" needed for document aware FlashAttention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
-            elif args.max_length is not None:
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
-                dataset = truncate_dataset(
-                    dataset, args.max_length, truncation_mode=args.truncation_mode, map_kwargs=map_kwargs
-                )
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
                 collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
