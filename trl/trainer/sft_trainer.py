@@ -1187,7 +1187,7 @@ class SFTTrainer(_BaseTrainer):
                     **map_kwargs,
                 )
 
-            # Pack or truncate
+            # Pack
             if packing:
                 if args.max_length is None:
                     raise ValueError("When packing is enabled, `max_length` can't be `None`.")
