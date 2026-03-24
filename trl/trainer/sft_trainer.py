@@ -1167,7 +1167,10 @@ class SFTTrainer(_BaseTrainer):
                             processed = {k: v[0] if isinstance(v[0], list) else v for k, v in processed.items()}
                             output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
-                            output = {"input_ids": processing_class(text=example[dataset_text_field])["input_ids"]}
+                            # Fix transformers inconsistency: for VLMs, processing_class returns lists of lists
+                            # even for single examples, while for LLMs it returns lists of ints.
+                            ids = processing_class(text=example[dataset_text_field])["input_ids"]
+                            output = {"input_ids": ids[0] if isinstance(ids[0], list) else ids}
 
                     if "assistant_masks" in output and 1 not in output["assistant_masks"]:
                         raise RuntimeError(
