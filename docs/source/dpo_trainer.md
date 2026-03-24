@@ -253,7 +253,7 @@ Unsloth is an open‑source framework for fine‑tuning and reinforcement learni
 The [`DPOTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
 
 * The conversation messages (prompt, chosen and rejected), including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
-* The list of available tools in the `tools` column, typically provided as JSON `str` schemas
+* The list of available tools in the `tools` column, typically provided as JSON schemas
 
 For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 

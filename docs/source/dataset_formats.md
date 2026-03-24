@@ -215,7 +215,7 @@ features = Features(
 dataset = Dataset.from_list(data, features=features)
 ```
 
-On older versions of `datasets` (<4.8) that don't have the `Json()` type, you should store `tools` as a JSON `str` (with `json.dumps([...])`):
+On older versions of `datasets` (<4.7.0) that don't have the `Json()` type, you should store `tools` as a JSON `str` (with `json.dumps([...])`):
 
 ```python
 dataset = Dataset.from_list(

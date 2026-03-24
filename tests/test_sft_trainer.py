@@ -243,6 +243,80 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3], [-100, 5, -100]]))
 
+    def test_max_length_keep_start(self):
+        """Test that sequences longer than max_length are truncated from the start."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3)
+        examples = [{"input_ids": [1, 2, 3, 4, 5]}, {"input_ids": [6, 7, 8]}]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [6, 7, 8]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 1]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [6, 7, 8]]))
+
+    def test_max_length_keep_end(self):
+        """Test that sequences longer than max_length are truncated from the end (keeping last tokens)."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3, truncation_mode="keep_end")
+        examples = [{"input_ids": [1, 2, 3, 4, 5]}, {"input_ids": [6, 7, 8]}]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[3, 4, 5], [6, 7, 8]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 1]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[3, 4, 5], [6, 7, 8]]))
+
+    def test_max_length_no_truncation_needed(self):
+        """Test that max_length larger than sequences does not alter the output."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=10)
+        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
+
+    def test_max_length_with_completion_mask(self):
+        """Test that truncation is applied correctly when completion masks are present."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3)
+        examples = [
+            {"input_ids": [1, 2, 3, 4, 5], "completion_mask": [0, 0, 1, 1, 1]},
+            {"input_ids": [6, 7, 8], "completion_mask": [0, 1, 1]},
+        ]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [6, 7, 8]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 1]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[-100, -100, 3], [-100, 7, 8]]))
+
+    def test_max_length_keep_end_with_completion_mask(self):
+        """Test keep_end truncation with completion masks preserves the final tokens."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3, truncation_mode="keep_end")
+        examples = [
+            {"input_ids": [1, 2, 3, 4, 5], "completion_mask": [0, 0, 1, 1, 1]},
+            {"input_ids": [6, 7, 8], "completion_mask": [0, 1, 1]},
+        ]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[3, 4, 5], [6, 7, 8]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 1]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[3, 4, 5], [-100, 7, 8]]))
+
+    def test_max_length_invalid_truncation_mode(self):
+        """Test that an invalid truncation_mode raises ValueError."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3, truncation_mode="invalid")
+        examples = [{"input_ids": [1, 2, 3, 4, 5]}]
+
+        with pytest.raises(ValueError, match="Unsupported truncation mode"):
+            collator(examples)
+
     def test_single_example_single_doc(self):
         batch_seq_lengths = [[5]]
         result = DataCollatorForLanguageModeling.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
@@ -910,6 +984,39 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
+    def test_skip_prepare_dataset_passes_truncation_to_text_collator(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_length=16,
+            truncation_mode="keep_end",
+            dataset_kwargs={"skip_prepare_dataset": True},
+            report_to="none",
+        )
+
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert isinstance(trainer.data_collator, DataCollatorForLanguageModeling)
+        assert trainer.data_collator.max_length == 16
+        assert trainer.data_collator.truncation_mode == "keep_end"
+
+    def test_skip_prepare_dataset_with_padding_free_and_max_length_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_length=16,
+            padding_free=True,
+            dataset_kwargs={"skip_prepare_dataset": True},
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="must be enforced during dataset preparation or packing"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
 
     def test_train_with_iterable_dataset(self):
         # Get the dataset

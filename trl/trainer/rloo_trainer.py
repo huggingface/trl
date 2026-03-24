@@ -16,6 +16,7 @@ import asyncio
 import atexit
 import copy
 import inspect
+import math
 import textwrap
 import time
 from collections import defaultdict, deque
@@ -952,7 +953,7 @@ class RLOOTrainer(_BaseTrainer):
 
             # Generate using vLLM (note: RLOO doesn't use logprobs from generation, so we ignore them)
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-            prompt_ids, completion_ids, _, _ = self.vllm_generation.generate(
+            _, completion_ids, _, _ = self.vllm_generation.generate(
                 prompts=prompt_ids,
                 images=images,
                 num_generations=num_generations,
@@ -1013,8 +1014,7 @@ class RLOOTrainer(_BaseTrainer):
                     **generate_inputs, generation_config=self.generation_config, disable_compile=True
                 )
             # Compute prompt length and extract completion ids
-            prompt_ids_tensor, prompt_mask = generate_inputs["input_ids"], generate_inputs["attention_mask"]
-            prompt_length = prompt_ids_tensor.size(1)
+            prompt_length = generate_inputs["input_ids"].size(1)
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
             # Mask everything after the first EOS token
@@ -1023,15 +1023,11 @@ class RLOOTrainer(_BaseTrainer):
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-            # Move tensors to CPU before per-sample to avoid many CUDA syncs/copies (costly at scale/contention).
-            prompt_ids = [
-                p[m].tolist() for p, m in zip(prompt_ids_tensor.cpu(), prompt_mask.bool().cpu(), strict=True)
-            ]
             completion_ids = [
                 c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
             ]
 
-        return prompt_ids, completion_ids
+        return completion_ids
 
     def _generate(self, prompts: list):
         device = self.accelerator.device
@@ -1041,7 +1037,7 @@ class RLOOTrainer(_BaseTrainer):
         prompts = copy.deepcopy(prompts)
 
         prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
-        prompt_ids, completion_ids = self._generate_single_turn(prompt_ids, images, multimodal_fields)
+        completion_ids = self._generate_single_turn(prompt_ids, images, multimodal_fields)
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
@@ -1315,7 +1311,7 @@ class RLOOTrainer(_BaseTrainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
-        rewards = rewards_per_func.nansum(dim=1)
+        rewards = (rewards_per_func * self.reward_weights.to(rewards_per_func.device).unsqueeze(0)).nansum(dim=1)
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(rewards.std().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
@@ -1447,7 +1443,15 @@ class RLOOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+        # Average the metrics
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            # Filter out NaN values before averaging. A reward function that returns None for all samples
+            # in a batch produces NaN for that batch's metric. With logging_steps > 1, a naive sum()/len()
+            # would let a single NaN contaminate valid data from other batches. Only return None when no
+            # valid values remain (e.g. JSON loggers crash on float NaN).
+            valid = [v for v in val if not math.isnan(v)]
+            metrics[key] = sum(valid) / len(valid) if valid else None
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.

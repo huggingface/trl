@@ -180,8 +180,8 @@ While training and evaluating, we record the following reward metrics:
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
-- `reward`: The overall average reward after summing rewards across functions (unweighted).
-- `reward_std`: The standard deviation of summed rewards across functions (unweighted), computed over the full batch.
+- `reward`: The overall average reward after summing rewards across functions (weighted by `reward_weights`).
+- `reward_std`: The standard deviation of summed rewards across functions (weighted by `reward_weights`), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
@@ -378,6 +378,7 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
      - `log_extra`: a callable `log_extra(column: str, values: list)` to add extra columns to the completions table. See Example 6. In distributed training, it's important that all processes log the same set of keys.
      - `log_metric`: a callable `log_metric(name: str, value: float)` to log scalar metrics as plots alongside `kl`, `entropy`, etc. See Example 6. In distributed training, it's important that all processes log the same set of keys.
+     - `environments`: a list of environment instances, one per completion. Only present when `environment_factory` is provided. Use this to read state accumulated during the episode (e.g., `env.reward`).
      - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
