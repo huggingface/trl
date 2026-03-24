@@ -1,3 +1,12 @@
+# This workflow runs on every PR opened or edited by a first-time contributor (author_association
+# is FIRST_TIME_CONTRIBUTOR or NONE). It checks that the PR body:
+#   1. Contains a non-empty description (not just the template placeholder)
+#   2. Includes the "## Before submitting" checklist
+#   3. Has at least one checkbox checked
+# If any check fails, the workflow posts a comment and closes the PR.
+# Uses pull_request_target (instead of pull_request) so it runs without maintainer approval
+# for fork PRs. No code from the PR is checked out, so this is safe.
+
 name: PR Template Check
 
 on:
