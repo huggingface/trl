@@ -1012,7 +1012,7 @@ class TestSFTTrainer(TrlTestCase):
             report_to="none",
         )
 
-        with pytest.raises(ValueError, match="max_length` is not enforced"):
+        with pytest.raises(ValueError, match="`max_length` is not enforced"):
             SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
