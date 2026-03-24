@@ -1829,7 +1829,12 @@ class TestSFTTrainer(TrlTestCase):
     )
     @pytest.mark.parametrize(
         "dataset_config",
-        ["conversational_language_modeling", "conversational_prompt_completion", "standard_prompt_completion"],
+        [
+            "conversational_language_modeling",
+            "conversational_prompt_completion",
+            "standard_language_modeling",  # Regression test for #5334
+            "standard_prompt_completion",
+        ],
     )
     @require_vision
     def test_train_vlm_text_only_data(self, model_id, dataset_config):
