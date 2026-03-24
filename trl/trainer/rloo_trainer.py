@@ -1311,7 +1311,7 @@ class RLOOTrainer(_BaseTrainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
-        rewards = rewards_per_func.nansum(dim=1)
+        rewards = (rewards_per_func * self.reward_weights.to(rewards_per_func.device).unsqueeze(0)).nansum(dim=1)
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(rewards.std().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())

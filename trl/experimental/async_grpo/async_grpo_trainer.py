@@ -290,7 +290,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Model
         model_name = model
-        model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.bfloat16)
+        model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.float32)
 
         # Processing class
         if processing_class is None:
