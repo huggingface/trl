@@ -57,11 +57,7 @@ from transformers import (
 from transformers.utils import is_peft_available, is_rich_available
 
 from ..chat_template_utils import add_response_schema, get_training_chat_template, parse_response
-from ..data_utils import (
-    apply_chat_template,
-    is_conversational,
-    prepare_multimodal_messages,
-)
+from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..import_utils import is_jmespath_available, is_liger_kernel_available
@@ -105,6 +101,7 @@ if is_wandb_available():
 
 if is_trackio_available():
     import trackio
+
 
 logger = get_logger(__name__)
 
@@ -261,8 +258,7 @@ class GRPOTrainer(_BaseTrainer):
                 author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
                 year         = 2024,
                 eprint       = {arXiv:2402.03300},
-            }
-            """),
+            }"""),
     }
 
     def __init__(
@@ -336,7 +332,6 @@ class GRPOTrainer(_BaseTrainer):
                 "and unload the existing adapter, save the resulting base model, and then pass that base model along "
                 "with the new `peft_config` to the trainer."
             )
-
         if is_peft_available() and is_peft_model(model) and args.beta != 0.0:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during GRPO training.

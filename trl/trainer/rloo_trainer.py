@@ -726,7 +726,7 @@ class RLOOTrainer(_BaseTrainer):
             logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
+            logits.div_(self.temperature)
             completion_ids = input_ids_batch[:, -logits_to_keep:]
             logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
@@ -1124,10 +1124,7 @@ class RLOOTrainer(_BaseTrainer):
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
         prompt_mask = pad(
-            prompt_mask,
-            padding_value=0,
-            padding_side="left",
-            pad_to_multiple_of=self.pad_to_multiple_of,
+            prompt_mask, padding_value=0, padding_side="left", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
         completion_ids = [torch.tensor(ids) for ids in completion_ids_list]
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
@@ -1138,15 +1135,13 @@ class RLOOTrainer(_BaseTrainer):
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
         completion_mask = pad(
-            completion_mask,
-            padding_value=0,
-            padding_side="right",
-            pad_to_multiple_of=self.pad_to_multiple_of,
+            completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
             eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            # Mask completion_mask for attention masking
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
@@ -1480,7 +1475,7 @@ class RLOOTrainer(_BaseTrainer):
                 logging_backends.append(trackio)
 
             table = {
-                "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
+                "step": [self.state.global_step] * len(self._logs["prompt"]),
                 "prompt": self._logs["prompt"],
                 "completion": self._logs["completion"],
                 **self._logs["rewards"],
