@@ -906,60 +906,33 @@ class DPOTrainer(_BaseTrainer):
                 tools = json.loads(tools) if isinstance(tools, str) else tools
                 output = {}
                 if is_conversational(example):
-                    if self._is_vlm:
-                        prompt = prepare_multimodal_messages(example["prompt"], images=[])
-                        chosen = prepare_multimodal_messages(example["chosen"], images=[])
-                        rejected = prepare_multimodal_messages(example["rejected"], images=[])
-                    else:
-                        prompt = example["prompt"]
-                        chosen = example["chosen"]
-                        rejected = example["rejected"]
-                    prompt_ids = processing_class.apply_chat_template(
-                        prompt,
+                    prompt_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"],
                         tools=tools,
                         add_generation_prompt=True,
-                        tokenize=True,
-                        return_dict=False,
                         **example.get("chat_template_kwargs", {}),
-                    )
-                    prompt_chosen_processed = processing_class.apply_chat_template(
-                        prompt + chosen,
+                    )["input_ids"]
+                    prompt_chosen_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"] + example["chosen"],
                         tools=tools,
-                        tokenize=True,
-                        return_dict=True,
                         **example.get("chat_template_kwargs", {}),
-                    )
-                    prompt_rejected_processed = processing_class.apply_chat_template(
-                        prompt + rejected,
+                    )["input_ids"]
+                    prompt_rejected_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"] + example["rejected"],
                         tools=tools,
-                        tokenize=True,
-                        return_dict=True,
                         **example.get("chat_template_kwargs", {}),
-                    )
-                    # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
-                    # even for single examples, while for LLMs it returns lists of ints.
-                    prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
-                    prompt_chosen_processed = {
-                        k: v[0] if isinstance(v[0], list) else v for k, v in prompt_chosen_processed.items()
-                    }
-                    prompt_rejected_processed = {
-                        k: v[0] if isinstance(v[0], list) else v for k, v in prompt_rejected_processed.items()
-                    }
-                    prompt_chosen_ids = prompt_chosen_processed["input_ids"]
-                    prompt_rejected_ids = prompt_rejected_processed["input_ids"]
+                    )["input_ids"]
                 else:
-                    prompt_ids = processing_class(text=example["prompt"])["input_ids"]
-                    prompt_chosen_ids = processing_class(text=example["prompt"] + example["chosen"])["input_ids"]
-                    prompt_rejected_ids = processing_class(text=example["prompt"] + example["rejected"])["input_ids"]
-                    # Fix transformers inconsistency: for VLMs, processing_class returns lists of lists
-                    # even for single examples, while for LLMs it returns lists of ints.
-                    prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
-                    prompt_chosen_ids = (
-                        prompt_chosen_ids[0] if isinstance(prompt_chosen_ids[0], list) else prompt_chosen_ids
-                    )
-                    prompt_rejected_ids = (
-                        prompt_rejected_ids[0] if isinstance(prompt_rejected_ids[0], list) else prompt_rejected_ids
-                    )
+                    prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_chosen_ids = self._tokenize(processing_class, example["prompt"] + example["chosen"])[
+                        "input_ids"
+                    ]
+                    prompt_rejected_ids = self._tokenize(processing_class, example["prompt"] + example["rejected"])[
+                        "input_ids"
+                    ]
 
                 # Check if the tokenized prompt starts with the tokenized prompt+completion
                 if not prompt_chosen_ids[: len(prompt_ids)] == prompt_ids:
