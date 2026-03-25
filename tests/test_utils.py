@@ -28,7 +28,6 @@ from trl.trainer.utils import (
     RepeatSampler,
     entropy_from_logits,
     flush_left,
-    flush_right,
     forward_masked_logits,
     generate_model_card,
     get_peft_config,
@@ -380,50 +379,6 @@ class TestFlushLeft(TrlTestCase):
         mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
         new_mask = flush_left(mask)
         expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
-        assert torch.equal(new_mask, expected_mask)
-
-
-class TestFlushRight(TrlTestCase):
-    def test_basic_case(self):
-        mask = torch.tensor([[1, 1, 1, 0, 0], [0, 0, 1, 1, 0]])
-        tensor1 = torch.tensor([[2, 3, 4, 0, 0], [0, 0, 5, 6, 0]])
-        tensor2 = torch.tensor([[7, 8, 9, 0, 0], [0, 0, 10, 11, 0]])
-        new_mask, new_tensor1, new_tensor2 = flush_right(mask, tensor1, tensor2)
-
-        expected_mask = torch.tensor([[1, 1, 1], [0, 1, 1]])
-        expected_tensor1 = torch.tensor([[2, 3, 4], [0, 5, 6]])
-        expected_tensor2 = torch.tensor([[7, 8, 9], [0, 10, 11]])
-
-        assert torch.equal(new_mask, expected_mask)
-        assert torch.equal(new_tensor1, expected_tensor1)
-        assert torch.equal(new_tensor2, expected_tensor2)
-
-    def test_single_row(self):
-        mask = torch.tensor([[1, 1, 0, 0]])
-        tensor1 = torch.tensor([[2, 3, 0, 0]])
-        new_mask, new_tensor1 = flush_right(mask, tensor1)
-
-        expected_mask = torch.tensor([[1, 1]])
-        expected_tensor1 = torch.tensor([[2, 3]])
-
-        assert torch.equal(new_mask, expected_mask)
-        assert torch.equal(new_tensor1, expected_tensor1)
-
-    def test_no_shift_needed(self):
-        mask = torch.tensor([[0, 0, 1, 1], [0, 0, 0, 1]])
-        tensor1 = torch.tensor([[0, 0, 5, 6], [0, 0, 0, 7]])
-        new_mask, new_tensor1 = flush_right(mask, tensor1)
-
-        expected_mask = torch.tensor([[1, 1], [0, 1]])
-        expected_tensor1 = torch.tensor([[5, 6], [0, 7]])
-
-        assert torch.equal(new_mask, expected_mask)
-        assert torch.equal(new_tensor1, expected_tensor1)
-
-    def test_no_tensors(self):
-        mask = torch.tensor([[1, 1, 1, 0, 0], [0, 0, 1, 1, 0]])
-        new_mask = flush_right(mask)
-        expected_mask = torch.tensor([[1, 1, 1], [0, 1, 1]])
         assert torch.equal(new_mask, expected_mask)
 
 

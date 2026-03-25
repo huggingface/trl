@@ -451,6 +451,25 @@ training_args = GRPOConfig(
 )
 ```
 
+### It Takes Two: Your GRPO Is Secretly DPO
+
+**📜 Paper**: https://huggingface.co/papers/2510.00977
+
+Shows that GRPO's effectiveness stems from an implicit contrastive objective rather than accurate advantage estimation via large group sizes. This establishes a formal connection between GRPO and DPO, where group size only affects Monte Carlo estimators of the contrastive objective. The authors introduce 2-GRPO — using just two rollouts — which matches the performance of 16-GRPO at significantly lower training cost. Used in TRL via [`GRPOTrainer`] with `num_generations=2`. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+training_args = GRPOConfig(
+    num_generations=2,  # minimal two-rollout case (2-GRPO) from the paper
+    loss_type="grpo",
+)
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
+)
+```
+
 ### Soft Adaptive Policy Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2511.20347
