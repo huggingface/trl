@@ -111,9 +111,6 @@ class DataCollatorForPreference(DataCollatorMixin):
         max_length (`int`, *optional*):
             Maximum length of the sequences after concatenation. Sequences longer than `max_length` are truncated
             before padding, which avoids allocating oversized tensors for batches containing very long sequences.
-        truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
-            Truncation mode when a concatenated sequence exceeds `max_length`. Possible values are `"keep_end"` and
-            `"keep_start"`.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -146,7 +143,6 @@ class DataCollatorForPreference(DataCollatorMixin):
 
     pad_token_id: int
     max_length: int | None = None
-    truncation_mode: str = "keep_start"
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
@@ -157,14 +153,7 @@ class DataCollatorForPreference(DataCollatorMixin):
         rejected_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["rejected_ids"]) for example in examples]
 
         if self.max_length is not None:
-            if self.truncation_mode == "keep_start":
-                sl = slice(None, self.max_length)
-            elif self.truncation_mode == "keep_end":
-                sl = slice(-self.max_length, None)
-            else:
-                raise ValueError(
-                    f"Unsupported truncation mode: {self.truncation_mode}, expected 'keep_start' or 'keep_end'"
-                )
+            sl = slice(None, self.max_length)
             prompt_chosen_ids = [ids[sl] for ids in prompt_chosen_ids]
             prompt_rejected_ids = [ids[sl] for ids in prompt_rejected_ids]
             chosen_mask = [m[sl] for m in chosen_mask]
@@ -624,13 +613,6 @@ class DPOTrainer(_BaseTrainer):
                 "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
                 "model does not seem to be a vision-language model. Please check your model and dataset."
             )
-        if self._is_vision_dataset and args.max_length is not None and args.truncation_mode == "keep_end":
-            raise ValueError(
-                "truncation_mode='keep_end' is not supported for vision-language models. Image tokens reside "
-                "inside the prompt portion of the sequence; depending on the example, keep_end may silently "
-                "drop them, causing pixel_values to be forwarded to the model with no corresponding visual "
-                "tokens in input_ids. Use truncation_mode='keep_start' (the default) or set max_length=None."
-            )
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
@@ -645,7 +627,6 @@ class DPOTrainer(_BaseTrainer):
             data_collator = DataCollatorForPreference(
                 pad_token_id=pad_token_id,
                 max_length=args.max_length,
-                truncation_mode=args.truncation_mode,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
         elif data_collator is None and self._is_vision_dataset:
