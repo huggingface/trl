@@ -49,7 +49,7 @@ from transformers.utils import (
     is_rich_available,
 )
 
-from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset, truncate_dataset
+from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
@@ -64,7 +64,7 @@ from ...trainer.utils import (
     pad,
     split_tensor_dict,
 )
-from ..utils import DataCollatorForChatML, empty_cache
+from ..utils import DataCollatorForChatML, empty_cache, truncate_dataset
 from .gold_config import GOLDConfig
 
 
