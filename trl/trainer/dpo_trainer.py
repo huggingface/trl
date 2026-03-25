@@ -158,15 +158,17 @@ class DataCollatorForPreference(DataCollatorMixin):
 
         if self.max_length is not None:
             if self.truncation_mode == "keep_start":
-                prompt_chosen_ids = [ids[: self.max_length] for ids in prompt_chosen_ids]
-                prompt_rejected_ids = [ids[: self.max_length] for ids in prompt_rejected_ids]
-                chosen_mask = [m[: self.max_length] for m in chosen_mask]
-                rejected_mask = [m[: self.max_length] for m in rejected_mask]
+                sl = slice(None, self.max_length)
             elif self.truncation_mode == "keep_end":
-                prompt_chosen_ids = [ids[-self.max_length :] for ids in prompt_chosen_ids]
-                prompt_rejected_ids = [ids[-self.max_length :] for ids in prompt_rejected_ids]
-                chosen_mask = [m[-self.max_length :] for m in chosen_mask]
-                rejected_mask = [m[-self.max_length :] for m in rejected_mask]
+                sl = slice(-self.max_length, None)
+            else:
+                raise ValueError(
+                    f"Unsupported truncation mode: {self.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                )
+            prompt_chosen_ids = [ids[sl] for ids in prompt_chosen_ids]
+            prompt_rejected_ids = [ids[sl] for ids in prompt_rejected_ids]
+            chosen_mask = [m[sl] for m in chosen_mask]
+            rejected_mask = [m[sl] for m in rejected_mask]
 
         chosen_attention_mask = [[1] * len(ids) for ids in prompt_chosen_ids]
         rejected_attention_mask = [[1] * len(ids) for ids in prompt_rejected_ids]
