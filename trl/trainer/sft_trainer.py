@@ -308,7 +308,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     - `"pixel_values"`: Tensor representing image pixel values.
     - `"labels"`: Tensor for training labels.
 
-    Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"pixel_position_ids"`.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
