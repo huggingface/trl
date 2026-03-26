@@ -116,8 +116,9 @@ class GRPOTrainer(_GRPOTrainer):
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
         elif self.loss_type == "dapo":
-            normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
-            loss = (per_token_loss * completion_mask).sum() / normalizer
+            # Average tokens within each prompt first, then average across prompts
+            per_prompt_loss = (per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+            loss = per_prompt_loss.mean()
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
