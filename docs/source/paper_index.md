@@ -451,6 +451,25 @@ training_args = GRPOConfig(
 )
 ```
 
+### It Takes Two: Your GRPO Is Secretly DPO
+
+**📜 Paper**: https://huggingface.co/papers/2510.00977
+
+Shows that GRPO's effectiveness stems from an implicit contrastive objective rather than accurate advantage estimation via large group sizes. This establishes a formal connection between GRPO and DPO, where group size only affects Monte Carlo estimators of the contrastive objective. The authors introduce 2-GRPO — using just two rollouts — which matches the performance of 16-GRPO at significantly lower training cost. Used in TRL via [`GRPOTrainer`] with `num_generations=2`. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+training_args = GRPOConfig(
+    num_generations=2,  # minimal two-rollout case (2-GRPO) from the paper
+    loss_type="grpo",
+)
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
+)
+```
+
 ### Soft Adaptive Policy Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2511.20347
@@ -1629,6 +1648,84 @@ trainer.train()
 ```
 
 For more details, see the [MiniLLM Trainer documentation](minillm) documentation.
+
+### Reinforcement Learning via Self-Distillation
+
+**📜 Paper**: https://huggingface.co/papers/2601.20802
+
+Self-Distillation Policy Optimization (SDPO) enhances reinforcement learning with verifiable rewards by converting rich textual feedback (e.g., runtime errors, judge evaluations) into a dense learning signal without any external teacher or explicit reward model. SDPO treats the current model conditioned on feedback as a self-teacher and distills its feedback-informed next-token predictions back into the policy. Notably, SDPO also outperforms baselines in standard RLVR environments that only return scalar feedback by using successful rollouts as implicit feedback for failed attempts.
+
+```python
+from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
+
+training_args = SDPOConfig(
+    distillation_alpha=0.5,                # Jensen-Shannon divergence (recommended)
+    distillation_topk=100,                 # Top-K logit distillation approximation
+    full_logit_distillation=True,          # Required for top-K logit-level SDPO
+    distillation_is_clip=2.0,              # Importance sampling clipping
+    distillation_weight=1.0,               # Weight for self-distillation loss
+    sdpo_policy_loss_mode="distillation_only",
+    use_successful_as_teacher=True,        # Use successful rollouts as teacher
+    teacher_regularization="ema",          # Supported: "ema", "none"
+    teacher_update_rate=0.05,              # EMA update rate
+    include_environment_feedback=False,    # Use dataset privileged_context when available
+)
+
+trainer = SDPOTrainer(
+    model="Qwen/Qwen2.5-1.5B-Instruct",
+    reward_funcs=...,
+    args=training_args,
+    train_dataset=...,
+)
+trainer.train()
+```
+
+Expected dataset columns:
+
+- `prompt`
+- `privileged_context` for optional environment feedback
+
+For more details, see the [SDPO Trainer documentation](sdpo_trainer).
+
+### Self-Training with On-Policy Self-Distillation for Language Model Alignment
+
+**📜 Paper**: https://huggingface.co/papers/2601.19897
+
+Self-Distilled Fine-Tuning (SDFT) performs on-policy self-distillation by generating completions during training, then distilling an explicit teacher-conditioned view of those same completions back into the student. In TRL, SDFT uses a shared self-distillation core with SDPO where the teacher is the model itself (base weights with adapter disabled for PEFT, or the same model under `no_grad` for non-PEFT).
+The teacher prompt is composed internally from the student `prompt` plus the dataset `privileged_context`.
+
+```python
+from datasets import Dataset
+
+from trl.experimental.sdft import SDFTConfig, SDFTTrainer
+
+dataset = Dataset.from_dict(
+    {
+        "prompt": [[{"role": "user", "content": "Solve 2+2."}]],
+        "privileged_context": ["Example answer: 4."],
+    }
+)
+
+training_args = SDFTConfig(
+    distillation_alpha=0.5,
+    distillation_topk=5,
+    max_completion_length=64,
+)
+
+trainer = SDFTTrainer(
+    model="Qwen/Qwen2.5-1.5B-Instruct",
+    args=training_args,
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
+Expected dataset columns:
+
+- `prompt`
+- `privileged_context` containing only the extra teacher-only information
+
+For more details, see the [SDFT Trainer documentation](sdft_trainer).
 
 ## Distributed Training
 

@@ -56,7 +56,6 @@ from .utils import (
     disable_dropout_in_model,
     entropy_from_logits,
     flush_left,
-    flush_right,
     get_config_model_id,
     hash_module,
     pad,
@@ -159,15 +158,17 @@ class DataCollatorForPreference(DataCollatorMixin):
 
         if self.max_length is not None:
             if self.truncation_mode == "keep_start":
-                prompt_chosen_ids = [ids[: self.max_length] for ids in prompt_chosen_ids]
-                prompt_rejected_ids = [ids[: self.max_length] for ids in prompt_rejected_ids]
-                chosen_mask = [m[: self.max_length] for m in chosen_mask]
-                rejected_mask = [m[: self.max_length] for m in rejected_mask]
+                sl = slice(None, self.max_length)
             elif self.truncation_mode == "keep_end":
-                prompt_chosen_ids = [ids[-self.max_length :] for ids in prompt_chosen_ids]
-                prompt_rejected_ids = [ids[-self.max_length :] for ids in prompt_rejected_ids]
-                chosen_mask = [m[-self.max_length :] for m in chosen_mask]
-                rejected_mask = [m[-self.max_length :] for m in rejected_mask]
+                sl = slice(-self.max_length, None)
+            else:
+                raise ValueError(
+                    f"Unsupported truncation mode: {self.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                )
+            prompt_chosen_ids = [ids[sl] for ids in prompt_chosen_ids]
+            prompt_rejected_ids = [ids[sl] for ids in prompt_rejected_ids]
+            chosen_mask = [m[sl] for m in chosen_mask]
+            rejected_mask = [m[sl] for m in rejected_mask]
 
         chosen_attention_mask = [[1] * len(ids) for ids in prompt_chosen_ids]
         rejected_attention_mask = [[1] * len(ids) for ids in prompt_rejected_ids]
@@ -446,7 +447,8 @@ class DPOTrainer(_BaseTrainer):
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`~trainer.dpo_trainer.DataCollatorForPreference`] if the model is a language model and
-            [`~trainer.dpo_trainer.DataCollatorForVisionPreference`] if the model is a vision-language model.
+            [`~trainer.dpo_trainer.DataCollatorForVisionPreference`] if the model is a vision-language model. Custom
+            collators must truncate sequences before padding; the trainer does not apply post-collation truncation.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
@@ -1014,40 +1016,6 @@ class DPOTrainer(_BaseTrainer):
 
         return dataset
 
-    def _truncate_inputs(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        completion_mask: torch.Tensor,
-        *extra: torch.Tensor,
-    ) -> tuple[torch.Tensor, ...]:
-        if self.args.max_length is None:
-            return input_ids, attention_mask, completion_mask, *extra
-
-        if self.args.truncation_mode == "keep_start":
-            input_ids = input_ids[:, : self.args.max_length]
-            attention_mask = attention_mask[:, : self.args.max_length]
-            completion_mask = completion_mask[:, : self.args.max_length]
-            extra = tuple(t[:, : self.args.max_length] for t in extra)
-        elif self.args.truncation_mode == "keep_end":
-            attention_mask, input_ids, completion_mask, *extra = flush_right(
-                attention_mask, input_ids, completion_mask, *extra
-            )
-            input_ids = input_ids[:, -self.args.max_length :]
-            attention_mask = attention_mask[:, -self.args.max_length :]
-            completion_mask = completion_mask[:, -self.args.max_length :]
-            extra = tuple(t[:, -self.args.max_length :] for t in extra)
-            attention_mask, input_ids, completion_mask, *extra = flush_left(
-                attention_mask, input_ids, completion_mask, *extra
-            )
-            extra = tuple(extra)
-        else:
-            raise ValueError(
-                f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
-            )
-
-        return input_ids, attention_mask, completion_mask, *extra
-
     def compute_ref_log_probs(self, inputs):
         """Computes reference log probabilities for a single padded batch."""
         device = self.accelerator.device
@@ -1055,19 +1023,18 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        # token_type_ids and mm_token_type_ids are sequence-length-aligned: truncate to match input_ids
-        extra_keys = [k for k in ("token_type_ids", "mm_token_type_ids") if k in inputs]
-        input_ids, attention_mask, completion_mask, *extra = self._truncate_inputs(
-            input_ids, attention_mask, completion_mask, *[inputs[k] for k in extra_keys]
-        )
-
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()
 
         model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key, val in zip(extra_keys, extra, strict=False):
-            model_kwargs[key] = val
-        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes"):
+        for key in (
+            "token_type_ids",
+            "mm_token_type_ids",
+            "pixel_values",
+            "pixel_attention_mask",
+            "image_grid_thw",
+            "image_sizes",
+        ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
 
@@ -1112,7 +1079,6 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
 
         decoder = model.get_decoder()
         outputs = decoder(input_ids, attention_mask=attention_mask, use_cache=False)
@@ -1185,16 +1151,15 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        # token_type_ids and mm_token_type_ids are sequence-length-aligned: truncate to match input_ids
-        extra_keys = [k for k in ("token_type_ids", "mm_token_type_ids") if k in inputs]
-        input_ids, attention_mask, completion_mask, *extra = self._truncate_inputs(
-            input_ids, attention_mask, completion_mask, *[inputs[k] for k in extra_keys]
-        )
-
         model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key, val in zip(extra_keys, extra, strict=False):
-            model_kwargs[key] = val
-        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes"):
+        for key in (
+            "token_type_ids",
+            "mm_token_type_ids",
+            "pixel_values",
+            "pixel_attention_mask",
+            "image_grid_thw",
+            "image_sizes",
+        ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
 

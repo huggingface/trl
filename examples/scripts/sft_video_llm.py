@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "qwen-vl-utils",
 #     "torchvision",
 #     "bitsandbytes",
