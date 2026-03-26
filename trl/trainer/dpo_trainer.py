@@ -59,7 +59,6 @@ from .utils import (
     get_config_model_id,
     hash_module,
     pad,
-    remove_none_values,
     selective_log_softmax,
     use_adapter,
 )
@@ -863,11 +862,6 @@ class DPOTrainer(_BaseTrainer):
         args: DPOConfig,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
-        # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
-        # sampled data.
-        if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
-            dataset = dataset.with_transform(remove_none_values)
-
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
