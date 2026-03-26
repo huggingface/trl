@@ -222,7 +222,7 @@ def main(test_size, push_to_hub, repo_id):
             json.dumps([start_timer, create_reminder]),
             json.dumps([get_weather_forecast, get_wind_conditions]),
         ]
-    })
+    }, on_mixed_types="use_json")
     language_modeling_dataset = language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         language_modeling_dataset.push_to_hub(repo_id, config_name="language_modeling")
@@ -328,7 +328,7 @@ def main(test_size, push_to_hub, repo_id):
             json.dumps([create_reminder]),
             json.dumps([get_wind_conditions]),
         ],
-    })
+    }, on_mixed_types="use_json")
     preference_dataset = preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         preference_dataset.push_to_hub(repo_id, config_name="preference")
