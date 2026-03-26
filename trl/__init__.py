@@ -39,7 +39,6 @@ _import_structure = {
         "pack_dataset",
         "prepare_multimodal_messages",
         "prepare_multimodal_messages_vllm",
-        "truncate_dataset",
         "unpair_preference_dataset",
     ],
     "models": ["create_reference_model"],
@@ -83,7 +82,6 @@ if TYPE_CHECKING:
         pack_dataset,
         prepare_multimodal_messages,
         prepare_multimodal_messages_vllm,
-        truncate_dataset,
         unpair_preference_dataset,
     )
     from .models import create_reference_model
