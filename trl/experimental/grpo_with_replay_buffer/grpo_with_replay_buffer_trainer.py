@@ -173,7 +173,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         if images is not None:
             prompts_text = [
                 apply_chat_template(
-                    {"prompt": prompt}, self.processing_class, tools=self.tools or None, **self.chat_template_kwargs
+                    {"prompt": prompt}, self.processing_class, tools=self.tools, **self.chat_template_kwargs
                 )["prompt"]
                 for prompt in prompts
             ]

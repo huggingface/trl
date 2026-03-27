@@ -1261,7 +1261,7 @@ class GRPOTrainer(_BaseTrainer):
             # See: https://github.com/huggingface/transformers/issues/44514
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
-                tools=self.tools or None,
+                tools=self.tools or None,  # "or None": Llama-specific bug: it renders tool boilerplate for tools=[]
                 chat_template=self.chat_template,
                 add_generation_prompt=True,
                 tokenize=True,
@@ -1816,7 +1816,7 @@ class GRPOTrainer(_BaseTrainer):
         if images is not None:
             prompts_text = [
                 apply_chat_template(
-                    {"prompt": prompt}, self.processing_class, tools=self.tools or None, **self.chat_template_kwargs
+                    {"prompt": prompt}, self.processing_class, tools=self.tools, **self.chat_template_kwargs
                 )["prompt"]
                 for prompt in prompts
             ]
