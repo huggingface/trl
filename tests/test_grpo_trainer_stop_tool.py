@@ -232,13 +232,9 @@ class TestGRPOStopToolTraining(TrlTestCase):
         def fake_generate(input_ids, **kwargs):
             generate_call_count[0] += 1
             if generate_call_count[0] == 1:
-                comp = torch.tensor(
-                    [final_answer_ids] * input_ids.shape[0], device=input_ids.device
-                )
+                comp = torch.tensor([final_answer_ids] * input_ids.shape[0], device=input_ids.device)
             else:
-                comp = torch.tensor(
-                    [done_ids] * input_ids.shape[0], device=input_ids.device
-                )
+                comp = torch.tensor([done_ids] * input_ids.shape[0], device=input_ids.device)
             return torch.cat([input_ids, comp], dim=-1)
 
         dataset = load_dataset(_DATASET, "conversational_prompt_only", split="train")
@@ -254,9 +250,7 @@ class TestGRPOStopToolTraining(TrlTestCase):
         with patch.object(trainer.model, "generate", side_effect=fake_generate):
             trainer.train()
 
-        assert generate_call_count[0] > 1, (
-            "Without stop_tool_names the loop must re-generate after the tool result"
-        )
+        assert generate_call_count[0] > 1, "Without stop_tool_names the loop must re-generate after the tool result"
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
@@ -342,9 +336,7 @@ class TestGRPOStopToolTraining(TrlTestCase):
             return [1.0] * len(completions)
 
         def fake_generate(input_ids, **kwargs):
-            comp = torch.tensor(
-                [final_answer_ids] * input_ids.shape[0], device=input_ids.device
-            )
+            comp = torch.tensor([final_answer_ids] * input_ids.shape[0], device=input_ids.device)
             return torch.cat([input_ids, comp], dim=-1)
 
         dataset = load_dataset(_DATASET, "conversational_prompt_only", split="train")
@@ -392,9 +384,7 @@ class TestGRPOStopToolTraining(TrlTestCase):
         gc.collect()
 
         def fake_generate(input_ids, **kwargs):
-            comp = torch.tensor(
-                [final_answer_ids] * input_ids.shape[0], device=input_ids.device
-            )
+            comp = torch.tensor([final_answer_ids] * input_ids.shape[0], device=input_ids.device)
             return torch.cat([input_ids, comp], dim=-1)
 
         dataset = load_dataset(_DATASET, "conversational_prompt_only", split="train")
@@ -436,13 +426,9 @@ class TestGRPOStopToolTraining(TrlTestCase):
         def fake_generate(input_ids, **kwargs):
             generate_call_count[0] += 1
             if generate_call_count[0] == 1:
-                comp = torch.tensor(
-                    [multiply_ids] * input_ids.shape[0], device=input_ids.device
-                )
+                comp = torch.tensor([multiply_ids] * input_ids.shape[0], device=input_ids.device)
             else:
-                comp = torch.tensor(
-                    [done_ids] * input_ids.shape[0], device=input_ids.device
-                )
+                comp = torch.tensor([done_ids] * input_ids.shape[0], device=input_ids.device)
             return torch.cat([input_ids, comp], dim=-1)
 
         dataset = load_dataset(_DATASET, "conversational_prompt_only", split="train")
@@ -459,9 +445,7 @@ class TestGRPOStopToolTraining(TrlTestCase):
         with patch.object(trainer.model, "generate", side_effect=fake_generate):
             trainer.train()
 
-        assert generate_call_count[0] > 1, (
-            "Loop should continue because the stop tool was never called"
-        )
+        assert generate_call_count[0] > 1, "Loop should continue because the stop tool was never called"
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
@@ -478,9 +462,7 @@ class TestGRPOStopToolTraining(TrlTestCase):
         gc.collect()
 
         def fake_generate(input_ids, **kwargs):
-            comp = torch.tensor(
-                [final_answer_ids] * input_ids.shape[0], device=input_ids.device
-            )
+            comp = torch.tensor([final_answer_ids] * input_ids.shape[0], device=input_ids.device)
             return torch.cat([input_ids, comp], dim=-1)
 
         dataset = load_dataset(_DATASET, "conversational_prompt_only", split="train")
