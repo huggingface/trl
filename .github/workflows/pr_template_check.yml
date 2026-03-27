@@ -27,9 +27,11 @@ jobs:
       - name: Check PR body follows template
         id: check
         uses: actions/github-script@v7
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
         with:
           script: |
-            const body = context.payload.pull_request.body || "";
+            const body = process.env.PR_BODY || "";
 
             const errors = [];
 
