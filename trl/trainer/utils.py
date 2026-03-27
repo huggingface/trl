@@ -986,7 +986,10 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
         example (`list` or `Mapping`):
             Input nested structure (list or dictionary) from which to remove `None`.
 
-    Example:
+    Examples:
+    ```python
+    >>> dataset = dataset.with_transform(remove_none_values)
+    ```
     ```python
     >>> [
     ...     {
