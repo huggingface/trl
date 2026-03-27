@@ -409,3 +409,13 @@ Warnings play a critical role in guiding users toward resolving potential issues
    ```
 
 By following this classification, you ensure that warnings, information, and exceptions are used appropriately, providing clear guidance to the user without cluttering the system with unnecessary messages.
+
+## Coding with AI agents
+
+This repository keeps AI-agent configuration in `.ai/` and exposes local agent files via symlinks.
+
+Skills can be exposed to agents by running `make codex` or `make claude`
+
+`AGENTS.md`, `CLAUDE.md`, and `.cursor/BUGBOT.md` all point to `.ai/AGENTS.md`.
+
+Cursor reads `AGENTS.md` and Bugbot reads `.cursor/BUGBOT.md`. Cursor reads skills from Claude or Codex paths, so setting up the repository for Claude or Codex will work for Cursor.

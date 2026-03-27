@@ -1003,17 +1003,16 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.data_collator.max_length == 16
         assert trainer.data_collator.truncation_mode == "keep_end"
 
-    def test_skip_prepare_dataset_with_padding_free_and_max_length_raises(self):
+    def test_padding_free_without_packing_and_max_length_raises(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             max_length=16,
             padding_free=True,
-            dataset_kwargs={"skip_prepare_dataset": True},
             report_to="none",
         )
 
-        with pytest.raises(ValueError, match="must be enforced during dataset preparation or packing"):
+        with pytest.raises(ValueError, match="`max_length` is not enforced"):
             SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
@@ -1829,7 +1828,12 @@ class TestSFTTrainer(TrlTestCase):
     )
     @pytest.mark.parametrize(
         "dataset_config",
-        ["conversational_language_modeling", "conversational_prompt_completion", "standard_prompt_completion"],
+        [
+            "conversational_language_modeling",
+            "conversational_prompt_completion",
+            "standard_language_modeling",  # Regression test for #5334
+            "standard_prompt_completion",
+        ],
     )
     @require_vision
     def test_train_vlm_text_only_data(self, model_id, dataset_config):

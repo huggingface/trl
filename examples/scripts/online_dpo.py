@@ -48,8 +48,6 @@ python examples/scripts/online_dpo.py \
     --use_peft
 """
 
-import os
-
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
@@ -65,10 +63,6 @@ from trl import (
 )
 from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge, PairRMJudge
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 JUDGES = {"pair_rm": PairRMJudge, "openai": OpenAIPairwiseJudge, "hf": HfPairwiseJudge}

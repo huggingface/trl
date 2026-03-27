@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import random
 import textwrap
 import warnings
@@ -27,11 +26,10 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState
-from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
+from accelerate.utils import DistributedType, broadcast_object_list, gather_object
 from datasets import Dataset, IterableDataset
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, TrainerCallback, TrainerControl, TrainerState, is_bitsandbytes_available
+from transformers import AutoTokenizer, TrainerCallback
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
@@ -49,9 +47,9 @@ from transformers.utils import (
     is_rich_available,
 )
 
-from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset, truncate_dataset
+from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset
 from ...extras.profiling import profiling_decorator
-from ...generation.vllm_client import VLLMClient
+from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
@@ -60,11 +58,10 @@ from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
-    ensure_master_addr_port,
     pad,
     split_tensor_dict,
 )
-from ..utils import DataCollatorForChatML, empty_cache
+from ..utils import DataCollatorForChatML, empty_cache, truncate_dataset
 from .gold_config import GOLDConfig
 
 
@@ -74,9 +71,6 @@ if is_peft_available():
 if is_wandb_available():
     import wandb
 
-if is_vllm_available():
-    from vllm import LLM, SamplingParams
-    from vllm.sampling_params import StructuredOutputsParams
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
@@ -86,9 +80,6 @@ if is_rich_available():
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
-
-if is_bitsandbytes_available():
-    import bitsandbytes as bnb
 
 
 def print_prompt_completions_sample_uld(
@@ -751,26 +742,6 @@ class ULDLoss(nn.Module):
         return answers_index, answers_size
 
 
-class GOLDVLLMSyncCallback(TrainerCallback):
-    """Sync the model weights to vLLM after training steps when it's safe to do so."""
-
-    def __init__(self, trainer):
-        self.trainer = trainer
-
-    def on_step_end(self, args, state: TrainerState, control: TrainerControl, **kwargs):
-        """Sync weights after training step when DeepSpeed is stable."""
-        if (
-            self.trainer.use_vllm
-            and state.global_step != self.trainer._last_vllm_sync_step
-            and state.global_step % self.trainer.vllm_sync_frequency == 0
-        ):
-            # Check if this is a step where gradients are synchronized
-            # This happens at the end of gradient accumulation cycles
-            if hasattr(self.trainer.accelerator, "sync_gradients") and self.trainer.accelerator.sync_gradients:
-                self.trainer._move_model_to_vllm()
-                self.trainer._last_vllm_sync_step = state.global_step
-
-
 class GOLDTrainer(SFTTrainer):
     _tag_names = ["trl", "gold"]
     _name = "GOLD"
@@ -964,85 +935,34 @@ class GOLDTrainer(SFTTrainer):
                     "vLLM is not available and use_vllm is set to True. Please install vLLM with "
                     "`pip install vllm` to use it."
                 )
-            self.vllm_mode = args.vllm_mode
-            self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size
-            self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization
-            self.vllm_enable_sleep_mode = args.vllm_enable_sleep_mode
-            if self.vllm_mode == "server":
-                if self.accelerator.is_main_process:
-                    self.vllm_client = VLLMClient(
-                        host=args.vllm_server_host,
-                        server_port=args.vllm_server_port,
-                        connection_timeout=args.vllm_server_timeout,
-                    )
-                    self.vllm_client.init_communicator()
-            elif self.vllm_mode == "colocate":
-                student_model_name_or_path = self.model_name_or_path
-
-                # Make sure tensor_parallel_size divides world size evenly
-                if not self.accelerator.num_processes % self.vllm_tensor_parallel_size == 0:
-                    raise ValueError(
-                        f"vllm_tensor_parallel_size ({self.vllm_tensor_parallel_size}) must divide world size "
-                        f"({self.accelerator.num_processes}) evenly."
-                    )
-
-                if self.vllm_tensor_parallel_size > 1:
-                    # Create subgroups of ranks for TP
-                    self.vllm_tp_group, _ = torch.distributed.new_subgroups_by_enumeration(
-                        [
-                            list(
-                                range(
-                                    i * self.vllm_tensor_parallel_size,
-                                    (i + 1) * self.vllm_tensor_parallel_size,
-                                )
-                            )
-                            for i in range(self.accelerator.num_processes // self.vllm_tensor_parallel_size)
-                        ]
-                    )
-
-                # vLLM requires the environment variables to be set for distributed training.
-                os.environ["RANK"] = str(self.accelerator.process_index)
-                os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
-                os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
-                ensure_master_addr_port()
-
-                vllm_quantization = None
-                if is_bitsandbytes_available():
-                    for _, module in model.named_modules():
-                        if isinstance(module, bnb.nn.Linear4bit):
-                            vllm_quantization = "bitsandbytes"
-                            break
-                        elif isinstance(module, bnb.nn.Linear8bitLt):
-                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
-
-                self.vllm_engine = LLM(
-                    model=student_model_name_or_path,
-                    revision=self.model_revision,
-                    tensor_parallel_size=self.vllm_tensor_parallel_size,
-                    gpu_memory_utilization=self.vllm_gpu_memory_utilization,
-                    max_num_seqs=self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps,
-                    max_model_len=args.max_length,
-                    distributed_executor_backend="external_launcher",
-                    # Feed identical seed for tp groups to ensure sampling results are the same across workers
-                    seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
-                    enable_sleep_mode=self.vllm_enable_sleep_mode,
-                    quantization=vllm_quantization,
-                )
-
-                if self.vllm_enable_sleep_mode:
-                    self.vllm_engine.sleep(level=2)
-
-                # When using vLLM, the main process is responsible for loading the model weights. This can cause process
-                # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
-                # synchronize all processes after vLLM has been fully initialized.
-                self.accelerator.wait_for_everyone()
-            else:
-                raise ValueError(f"Unknown vllm_mode: {self.vllm_mode}")
-            self.vllm_structured_outputs_regex = args.vllm_structured_outputs_regex
+            self.vllm_generation = VLLMGeneration(
+                model=self.model,
+                accelerator=self.accelerator,
+                is_fsdp_enabled=self.is_fsdp_enabled,
+                processing_class=self.processing_class,
+                mode=args.vllm_mode,
+                structured_outputs_regex=args.vllm_structured_outputs_regex,
+                server_base_url=args.vllm_server_base_url,
+                server_host=args.vllm_server_host,
+                server_port=args.vllm_server_port,
+                group_port=args.vllm_group_port,
+                server_timeout=args.vllm_server_timeout,
+                tensor_parallel_size=args.vllm_tensor_parallel_size,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                max_model_length=args.vllm_max_model_length or args.max_length,
+                max_num_seqs=args.per_device_train_batch_size * args.gradient_accumulation_steps,
+                enable_sleep_mode=args.vllm_enable_sleep_mode,
+                model_impl=args.vllm_model_impl,
+                repetition_penalty=getattr(args, "repetition_penalty", 1.0),
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                min_p=getattr(args, "min_p", 0.0),
+                max_completion_length=args.max_completion_length,
+                logprobs=None,
+            )
             self.vllm_sync_frequency = args.vllm_sync_frequency
-            self._last_vllm_sync_step = -1
-
-            self.add_callback(GOLDVLLMSyncCallback(self))
+            self._last_vllm_sync_step = -self.vllm_sync_frequency
 
     def _set_signature_columns_if_needed(self):
         super()._set_signature_columns_if_needed()
@@ -1175,20 +1095,28 @@ class GOLDTrainer(SFTTrainer):
 
     @staticmethod
     def _build_sequence_batch(
-        new_input_ids: torch.Tensor, prompt_lengths: torch.Tensor, pad_token_id: int | None
+        new_input_ids: torch.Tensor,
+        prompt_lengths: torch.Tensor,
+        pad_token_id: int | None,
+        attention_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Build attention mask and labels from full sequences and prompt lengths."""
         prompt_lengths = prompt_lengths.to(device=new_input_ids.device, dtype=torch.long)
         positions = torch.arange(new_input_ids.shape[1], device=new_input_ids.device).unsqueeze(0)
         completion_mask = positions >= prompt_lengths.unsqueeze(1)
 
-        new_attention_mask = torch.ones_like(new_input_ids)
-        if pad_token_id is not None:
-            new_attention_mask[new_input_ids == pad_token_id] = 0
+        if attention_mask is not None:
+            new_attention_mask = attention_mask.to(device=new_input_ids.device, dtype=new_input_ids.dtype)
+        else:
+            new_attention_mask = torch.ones_like(new_input_ids)
+            if pad_token_id is not None:
+                new_attention_mask[new_input_ids == pad_token_id] = 0
 
         new_labels = torch.full_like(new_input_ids, -100)
-        new_labels[completion_mask] = new_input_ids[completion_mask]
-        if pad_token_id is not None:
+        new_labels[completion_mask & new_attention_mask.bool()] = new_input_ids[
+            completion_mask & new_attention_mask.bool()
+        ]
+        if attention_mask is None and pad_token_id is not None:
             new_labels[new_input_ids == pad_token_id] = -100
 
         return new_attention_mask, new_labels
@@ -1231,216 +1159,53 @@ class GOLDTrainer(SFTTrainer):
     def _generate_on_policy_for_slices(
         self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]
     ):
-        local_prompts = []
+        prompt_ids_list = []
         local_slice_indices = []
         for slice_idx in on_policy_indices:
             slice_inputs = slices[slice_idx]
-            for prompt in slice_inputs["prompts"]:
-                local_prompts.append(prompt)
+            prompt_attention_mask = slice_inputs.get("prompt_attention_mask")
+            for prompt_idx, prompt in enumerate(slice_inputs["prompts"]):
+                if prompt_attention_mask is not None:
+                    prompt = prompt[prompt_attention_mask[prompt_idx].bool()]
+                prompt_ids_list.append(prompt.tolist())
                 local_slice_indices.append(slice_idx)
 
-        prompts_text_for_vllm = self.processing_class.batch_decode(
-            torch.stack(local_prompts) if local_prompts else torch.empty(0, dtype=torch.long),
+        prompts_text = self.processing_class.batch_decode(
+            prompt_ids_list,
             skip_special_tokens=True,
         )
-        if self.processing_class.pad_token:
-            prompts_text_for_vllm = [p.replace(self.processing_class.pad_token, "") for p in prompts_text_for_vllm]
-
         prompts_text_with_special = self.processing_class.batch_decode(
-            torch.stack(local_prompts) if local_prompts else torch.empty(0, dtype=torch.long),
+            prompt_ids_list,
             skip_special_tokens=False,
         )
 
-        if self.use_vllm:
-            self._wake_vllm_if_needed()
-
-        max_completion_length = self.generation_config.max_new_tokens
-        temperature = self.generation_config.temperature
-        top_k = (
-            self.generation_config.top_k if self.generation_config.top_k and self.generation_config.top_k > 0 else -1
-        )
-        top_p = self.args.top_p if hasattr(self.args, "top_p") else 1.0
-        repetition_penalty = self.args.repetition_penalty if hasattr(self.args, "repetition_penalty") else 1.0
-        min_p = self.args.min_p if hasattr(self.args, "min_p") else 0.0
-
-        if self.use_vllm and self.vllm_mode == "server":
-            completion_ids = self._generate_vllm_server_global(
-                prompts_text_for_vllm,
-                max_completion_length,
-                temperature,
-                top_k,
-                top_p,
-                repetition_penalty,
-                min_p,
-                n=self.num_generations,
-            )
-        elif self.use_vllm and self.vllm_mode == "colocate":
-            completion_ids = self._generate_vllm_colocate(
-                prompts_text_for_vllm,
-                max_completion_length,
-                temperature,
-                top_k,
-                top_p,
-                repetition_penalty,
-                min_p,
-                n=self.num_generations,
-            )
-        else:
+        if not self.use_vllm:
             self._generate_non_vllm_for_slices(slices, on_policy_indices)
             return
+
+        if (
+            self.state.global_step != self._last_vllm_sync_step
+            and self.state.global_step >= self._last_vllm_sync_step + self.vllm_sync_frequency
+        ):
+            self.vllm_generation.sync_weights()
+            self._last_vllm_sync_step = self.state.global_step
+
+        _, completion_ids, _, _ = self.vllm_generation.generate(
+            prompts=prompt_ids_list,
+            images=None,
+            num_generations=self.num_generations,
+        )
 
         self._process_completions_to_buffer(
             slices,
             on_policy_indices,
             local_slice_indices,
             completion_ids,
-            prompts_text_for_vllm,
+            prompt_ids_list,
             prompts_text_with_special,
-            max_completion_length,
+            prompts_text,
+            self.generation_config.max_new_tokens,
         )
-
-    @staticmethod
-    def _deduplicate_prompts(
-        prompts: list[str], num_generations: int
-    ) -> tuple[list[str], list[tuple[int, int]]] | None:
-        """Deduplicate prompts and build a completion remapping."""
-        seen: dict[str, list[int]] = {}
-        unique_prompts: list[str] = []
-        dedup_mapping: list[tuple[int, int]] = []
-
-        for prompt in prompts:
-            if prompt not in seen:
-                seen[prompt] = [len(unique_prompts), 0]
-                unique_prompts.append(prompt)
-            entry = seen[prompt]
-            if entry[1] >= num_generations:
-                return None
-            dedup_mapping.append((entry[0], entry[1]))
-            entry[1] += 1
-
-        return unique_prompts, dedup_mapping
-
-    def _generate_vllm_server_global(
-        self,
-        prompts_text: list[str],
-        max_tokens: int,
-        temperature: float,
-        top_k: int,
-        top_p: float,
-        repetition_penalty: float,
-        min_p: float,
-        n: int = 1,
-    ) -> list:
-        all_prompts_text = gather_object(prompts_text)
-        local_count = len(prompts_text)
-
-        if self.accelerator.is_main_process:
-            if all_prompts_text:
-                dedup_mapping = None
-                if n > 1:
-                    dedup_result = self._deduplicate_prompts(all_prompts_text, n)
-                    if dedup_result is not None:
-                        gen_prompts, dedup_mapping = dedup_result
-                        gen_n = n
-                    else:
-                        gen_prompts = all_prompts_text
-                        gen_n = 1
-                else:
-                    gen_prompts = all_prompts_text
-                    gen_n = 1
-
-                completion_ids = self.vllm_client.generate(
-                    prompts=gen_prompts,
-                    n=gen_n,
-                    repetition_penalty=repetition_penalty,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    min_p=min_p,
-                    max_tokens=max_tokens,
-                    structured_outputs_regex=self.vllm_structured_outputs_regex,
-                )["completion_ids"]
-
-                if dedup_mapping is not None:
-                    completion_ids = [completion_ids[uid * gen_n + gid] for uid, gid in dedup_mapping]
-            else:
-                completion_ids = []
-        else:
-            completion_ids = [None] * len(all_prompts_text) if all_prompts_text else []
-
-        completion_ids = broadcast_object_list(completion_ids, from_process=0)
-        process_slice = slice(
-            self.accelerator.process_index * local_count,
-            (self.accelerator.process_index + 1) * local_count,
-        )
-        return completion_ids[process_slice]
-
-    def _generate_vllm_colocate(
-        self,
-        prompts_text: list[str],
-        max_tokens: int,
-        temperature: float,
-        top_k: int,
-        top_p: float,
-        repetition_penalty: float,
-        min_p: float,
-        n: int = 1,
-    ) -> list:
-        if self.vllm_structured_outputs_regex:
-            structured_outputs = StructuredOutputsParams(backend="outlines", regex=self.vllm_structured_outputs_regex)
-        else:
-            structured_outputs = None
-
-        if hasattr(self, "vllm_tp_group") and self.vllm_tensor_parallel_size > 1:
-            orig_size = len(prompts_text)
-            gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
-            torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.vllm_tp_group)
-            all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
-        else:
-            all_prompts_text = prompts_text
-
-        dedup_mapping = None
-        if n > 1 and all_prompts_text:
-            dedup_result = self._deduplicate_prompts(all_prompts_text, n)
-            if dedup_result is not None:
-                gen_prompts, dedup_mapping = dedup_result
-                gen_n = n
-            else:
-                gen_prompts = all_prompts_text
-                gen_n = 1
-        else:
-            gen_prompts = all_prompts_text
-            gen_n = 1
-
-        sampling_params = SamplingParams(
-            n=gen_n,
-            repetition_penalty=repetition_penalty,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            structured_outputs=structured_outputs,
-        )
-
-        if gen_prompts:
-            all_outputs = self.vllm_engine.generate(gen_prompts, sampling_params=sampling_params, use_tqdm=False)
-            completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
-        else:
-            completion_ids = []
-
-        if dedup_mapping is not None:
-            completion_ids = [completion_ids[uid * gen_n + gid] for uid, gid in dedup_mapping]
-
-        if hasattr(self, "vllm_tp_group") and self.vllm_tensor_parallel_size > 1:
-            local_rank_in_group = torch.distributed.get_rank(group=self.vllm_tp_group)
-            tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
-            completion_ids = completion_ids[tp_slice]
-
-        if self.vllm_enable_sleep_mode:
-            self.vllm_engine.sleep(level=2)
-
-        return completion_ids
 
     def _generate_non_vllm_for_slices(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
         """Fallback generation without vLLM (uses model.generate per slice)."""
@@ -1475,8 +1240,9 @@ class GOLDTrainer(SFTTrainer):
         on_policy_indices: list[int],
         local_slice_indices: list[int],
         completion_ids: list,
-        prompts_text: list[str],
+        prompt_ids_list: list[list[int]],
         prompts_text_with_special: list[str],
+        prompts_text: list[str],
         max_completion_length: int,
     ):
         """
@@ -1486,40 +1252,52 @@ class GOLDTrainer(SFTTrainer):
         pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
 
         slice_completions = {idx: [] for idx in on_policy_indices}
+        slice_prompt_ids = {idx: [] for idx in on_policy_indices}
         slice_prompts = {idx: [] for idx in on_policy_indices}
         slice_prompts_special = {idx: [] for idx in on_policy_indices}
 
         for i, slice_idx in enumerate(local_slice_indices):
             slice_completions[slice_idx].append(completion_ids[i])
-            slice_prompts[slice_idx].append(prompts_text[i])
+            slice_prompt_ids[slice_idx].append(prompt_ids_list[i])
             slice_prompts_special[slice_idx].append(prompts_text_with_special[i])
+            slice_prompts[slice_idx].append(prompts_text[i])
 
         for slice_idx in on_policy_indices:
             slice_inputs = slices[slice_idx]
             completion_ids_for_slice = slice_completions[slice_idx]
+            prompt_ids_for_slice = slice_prompt_ids[slice_idx]
             prompt_txts = slice_prompts[slice_idx]
             prompt_txts_with_special = slice_prompts_special[slice_idx]
 
             prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
-            prompt_tokenized = self.processing_class(
-                prompt_txts,
-                return_tensors="pt",
-                padding="longest",
-                padding_side="left",
-                truncation=True if prompt_max_length else False,
-                max_length=prompt_max_length,
-                add_special_tokens=False,
-            ).to(device)
-            prompt_ids = prompt_tokenized.input_ids
+            truncated_prompt_ids = []
+            prompt_attention_masks = []
+            truncation_side = getattr(self.processing_class, "truncation_side", "right")
+            for prompt_ids in prompt_ids_for_slice:
+                if prompt_max_length and len(prompt_ids) > prompt_max_length:
+                    if truncation_side == "left":
+                        prompt_ids = prompt_ids[-prompt_max_length:]
+                    else:
+                        prompt_ids = prompt_ids[:prompt_max_length]
+                prompt_tensor = torch.tensor(prompt_ids, device=device, dtype=torch.long)
+                truncated_prompt_ids.append(prompt_tensor)
+                prompt_attention_masks.append(torch.ones(len(prompt_ids), device=device, dtype=torch.long))
+
+            prompt_ids = pad(truncated_prompt_ids, padding_side="left", padding_value=pad_token_id)
+            prompt_attention_mask = pad(prompt_attention_masks, padding_side="left", padding_value=0)
 
             completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids_for_slice]
             completion_ids_for_text: list[list[int]] = []
             padded_completion_ids_list = []
+            completion_attention_masks = []
             for completion_tensor in completion_ids_tensors:
                 if len(completion_tensor) > max_completion_length:
                     truncated_completion_tensor = completion_tensor[:max_completion_length]
                     padded_completion_ids_list.append(truncated_completion_tensor)
                     completion_ids_for_text.append(truncated_completion_tensor.tolist())
+                    completion_attention_masks.append(
+                        torch.ones(len(truncated_completion_tensor), device=device, dtype=torch.long)
+                    )
                 elif len(completion_tensor) < max_completion_length:
                     padding_needed = max_completion_length - len(completion_tensor)
                     padded_tensor = torch.cat(
@@ -1535,15 +1313,33 @@ class GOLDTrainer(SFTTrainer):
                     )
                     padded_completion_ids_list.append(padded_tensor)
                     completion_ids_for_text.append(completion_tensor.tolist())
+                    completion_attention_masks.append(
+                        torch.cat(
+                            [
+                                torch.ones(len(completion_tensor), device=device, dtype=torch.long),
+                                torch.zeros(padding_needed, device=device, dtype=torch.long),
+                            ]
+                        )
+                    )
                 else:
                     padded_completion_ids_list.append(completion_tensor)
                     completion_ids_for_text.append(completion_tensor.tolist())
+                    completion_attention_masks.append(
+                        torch.ones(len(completion_tensor), device=device, dtype=torch.long)
+                    )
 
             completion_ids_padded = torch.stack(padded_completion_ids_list)
+            completion_attention_mask = torch.stack(completion_attention_masks)
 
             new_input_ids = torch.cat([prompt_ids, completion_ids_padded], dim=1)
+            new_attention_mask = torch.cat([prompt_attention_mask, completion_attention_mask], dim=1)
             prompt_lengths = torch.full((prompt_ids.shape[0],), prompt_ids.shape[1], device=device)
-            new_attention_mask, new_labels = self._build_sequence_batch(new_input_ids, prompt_lengths, pad_token_id)
+            new_attention_mask, new_labels = self._build_sequence_batch(
+                new_input_ids,
+                prompt_lengths,
+                pad_token_id,
+                attention_mask=new_attention_mask,
+            )
 
             completion_texts = self.processing_class.batch_decode(
                 completion_ids_for_text,
@@ -2160,108 +1956,6 @@ class GOLDTrainer(SFTTrainer):
 
         return new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts
 
-    def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
-        """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with student vLLM."""
-        if visited is None:
-            visited = set()
-
-        for child_name, child_module in module.named_children():
-            child_prefix = f"{prefix}.{child_name}" if prefix else child_name
-            # recurse into the child
-            self._sync_fsdp_params_to_vllm(child_module, prefix=child_prefix, visited=visited)
-
-        if isinstance(module, FSDP):
-            with FSDP.summon_full_params(module, recurse=False, writeback=False):
-                for param_name, param in module.named_parameters():
-                    full_name = f"{prefix}.{param_name}" if prefix else param_name
-                    for extra in ("_fsdp_wrapped_module.", "_checkpoint_wrapped_module."):
-                        full_name = full_name.replace(extra, "")
-
-                    if full_name in visited:
-                        continue  # skip FSDP subtrees already traversed
-                    visited.add(full_name)
-
-                    if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                        self.vllm_client.update_named_param(full_name, param.data)
-                    elif self.vllm_mode == "colocate":
-                        llm_model = self.vllm_engine.llm_engine.model_executor.driver_worker.model_runner.model
-                        llm_model.load_weights([(full_name, param.data)])
-
-    def _move_model_to_vllm(self):
-        """Synchronize student model weights to vLLM engine."""
-        # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-        if zero_stage_3:
-            import deepspeed
-
-            gather_if_zero3 = deepspeed.zero.GatheredParameters
-        else:
-            gather_if_zero3 = nullcontext
-
-        if self.vllm_mode == "colocate" and self.vllm_enable_sleep_mode:
-            empty_cache()
-            self.vllm_engine.wake_up(tags=["weights"])
-            # Work around for https://github.com/vllm-project/vllm/issues/29341
-            self.vllm_engine.collective_rpc("reload_weights")
-
-        if is_peft_model(self.model):
-            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
-            # merging adapters in a sharded manner is not supported.
-            with gather_if_zero3(list(self.model.parameters())):
-                self.model.merge_adapter()
-
-                # Update vLLM weights while parameters are gathered
-                if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
-                    # Update vLLM weights while parameters are gathered
-                    # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    self._sync_fsdp_params_to_vllm(self.model)
-                else:
-                    # DeepSpeed ZeRO-3 with PEFT
-                    for name, param in self.model.named_parameters():
-                        # When using PEFT, we need to recover the original parameter name and discard some parameters
-                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        if self.model.prefix in name:
-                            continue
-                        # When module to save, remove its prefix and discard the original module
-                        if "original_module" in name:
-                            continue
-                        name = name.replace("modules_to_save.default.", "")
-
-                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.vllm_mode == "colocate":
-                            llm_model = self.vllm_engine.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
-                # Unmerge adapters while parameters are still gathered
-                self.model.unmerge_adapter()
-                # Parameters will automatically be repartitioned when exiting the context
-        else:
-            # For non-PEFT models, simply gather (if needed) and update each parameter individually.
-            if self.is_fsdp_enabled:
-                # use memory-efficient post-order traversal for FSDP
-                self._sync_fsdp_params_to_vllm(self.model)
-            else:
-                # For DeepSpeed ZeRO-3, gather each parameter individually like GRPO trainer
-                for name, param in self.model.named_parameters():
-                    with gather_if_zero3([param]):
-                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.vllm_mode == "colocate":
-                            llm_model = self.vllm_engine.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
-
-        # Reset cache on vLLM
-        if self.vllm_mode == "server" and self.accelerator.is_main_process:
-            self.vllm_client.reset_prefix_cache()
-        elif self.vllm_mode == "colocate":
-            self.vllm_engine.reset_prefix_cache()
-
-    def _wake_vllm_if_needed(self):
-        if self.vllm_mode == "colocate" and self.vllm_enable_sleep_mode:
-            empty_cache()
-            self.vllm_engine.wake_up(tags=["kv_cache"])
-
     def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
         if not self.use_liger_gkd_loss:
             return nullcontext()
@@ -2402,7 +2096,7 @@ class GOLDTrainer(SFTTrainer):
                 import pandas as pd
 
                 table = {
-                    "step": [str(self.state.global_step)] * len(self._textual_logs["prompt"]),
+                    "step": [self.state.global_step] * len(self._textual_logs["prompt"]),
                     "prompt": self._textual_logs["prompt"],
                     "completion": self._textual_logs["completion"],
                 }

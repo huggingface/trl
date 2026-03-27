@@ -15,8 +15,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from transformers import TrainingArguments
-
+from ...trainer.base_config import _BaseConfig
 from ...trainer.grpo_config import GRPOConfig
 
 
@@ -87,9 +86,7 @@ class MiniLLMConfig(GRPOConfig):
     def __post_init__(self):
         # We do not use the post_init of GRPOConfig because:
         # 1. num_generations can be < 2 in MiniLLMConfig. Scale_rewards must be set to "none" to avoid nan.
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        TrainingArguments.__post_init__(self)
+        _BaseConfig.__post_init__(self)
 
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
         if self.num_generations == 1:

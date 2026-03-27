@@ -492,36 +492,6 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     return flushed_mask, *flushed_tensors
 
 
-def flush_right(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, ...]:
-    """
-    Shift non-zero elements in the mask and corresponding tensors to the right. See `flush_left` for details.
-    """
-    _, M = mask.shape
-
-    # Create copy of mask and tensors
-    mask_copy = mask.clone()
-    tensors = [t.clone() for t in tensors]
-
-    # Shift non-zero values to the right
-    flipped_mask = torch.fliplr(mask_copy)
-    first_non_zero = flipped_mask.argmax(dim=1)
-    pos = torch.arange(M, device=mask_copy.device).unsqueeze(0)
-    idx_roll = (pos - first_non_zero.unsqueeze(1)) % M
-    mask_roll = mask_copy.gather(1, idx_roll)
-    rolled_tensors = [t.gather(1, idx_roll) for t in tensors]
-
-    # Truncate leading columns that are all zeros in mask_roll
-    col_sums = mask_roll.sum(dim=0)
-    non_empty_cols = col_sums != 0
-    first_non_empty_col = int(non_empty_cols.to(torch.int8).argmax()) if non_empty_cols.any() else M
-    flushed_mask = mask_roll[:, first_non_empty_col:]
-    flushed_tensors = [t[:, first_non_empty_col:] for t in rolled_tensors]
-
-    if not flushed_tensors:
-        return flushed_mask
-    return flushed_mask, *flushed_tensors
-
-
 def selective_log_softmax(logits, index) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
@@ -674,10 +644,15 @@ def print_prompt_completions_sample(
         if isinstance(entry, list) and all(isinstance(m, dict) for m in entry):
             for j, msg in enumerate(entry):
                 role = msg.get("role", "")
-                if "content" in msg:
+                if "content" in msg or "reasoning_content" in msg or "thinking" in msg:
                     # Chat message
                     t.append(f"{role.upper()}\n", style="bold red")
-                    t.append(msg["content"])
+                    reasoning = msg.get("reasoning_content") or msg.get("thinking")
+                    if reasoning:
+                        t.append(reasoning, style="italic dim white")
+                        t.append("\n")
+                    if "content" in msg:
+                        t.append(msg["content"])
                 elif "name" in msg and "args" in msg:
                     # Tool call
                     t.append(f"{role.upper()}\n", style="bold red")
@@ -997,6 +972,12 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
 TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
 
+# This function is intentionally not used internally. It is provided as a utility for users whose datasets contain
+# `None` values inserted by tabular backends (e.g., Arrow/Parquet) for missing keys in nested structures. This
+# situation arises when loading datasets created before `datasets` v4.7.0 (which introduced the Json dtype), or when
+# datasets created after that version were saved without using the Json feature. In both cases, users can apply this
+# function via `dataset = dataset.with_transform(remove_none_values)` before training to strip the spurious `None`
+# values. See the migration guide for more details.
 def remove_none_values(example: TListOrMapping) -> TListOrMapping:
     """
     Recursively removes entries with `None` values from a nested structure (list or dictionary).
@@ -1005,7 +986,10 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
         example (`list` or `Mapping`):
             Input nested structure (list or dictionary) from which to remove `None`.
 
-    Example:
+    Examples:
+    ```python
+    >>> dataset = dataset.with_transform(remove_none_values)
+    ```
     ```python
     >>> [
     ...     {
