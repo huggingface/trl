@@ -42,9 +42,6 @@ class BCOConfig(_BaseConfig):
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model.
-        truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
-            Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
-            This argument is required if you want to use the default data collator.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
@@ -103,14 +100,6 @@ class BCOConfig(_BaseConfig):
         metadata={
             "help": "Parameter controlling the deviation from the reference model. "
             "Higher β means less deviation from the reference model."
-        },
-    )
-    truncation_mode: str = field(
-        default="keep_end",
-        metadata={
-            "help": "Truncation mode to use when the prompt is too long. Possible values are "
-            "`keep_end` or `keep_start`. This argument is required if you want to use the "
-            "default data collator."
         },
     )
     disable_dropout: bool = field(

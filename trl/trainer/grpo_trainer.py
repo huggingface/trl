@@ -57,11 +57,7 @@ from transformers import (
 from transformers.utils import is_peft_available, is_rich_available
 
 from ..chat_template_utils import add_response_schema, get_training_chat_template, parse_response
-from ..data_utils import (
-    apply_chat_template,
-    is_conversational,
-    prepare_multimodal_messages,
-)
+from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..import_utils import is_jmespath_available, is_liger_kernel_available
@@ -105,6 +101,7 @@ if is_wandb_available():
 
 if is_trackio_available():
     import trackio
+
 
 logger = get_logger(__name__)
 
@@ -261,8 +258,7 @@ class GRPOTrainer(_BaseTrainer):
                 author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
                 year         = 2024,
                 eprint       = {arXiv:2402.03300},
-            }
-            """),
+            }"""),
     }
 
     def __init__(
@@ -336,7 +332,6 @@ class GRPOTrainer(_BaseTrainer):
                 "and unload the existing adapter, save the resulting base model, and then pass that base model along "
                 "with the new `peft_config` to the trainer."
             )
-
         if is_peft_available() and is_peft_model(model) and args.beta != 0.0:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during GRPO training.
@@ -930,6 +925,7 @@ class GRPOTrainer(_BaseTrainer):
         image_grid_thw=None,
         pixel_attention_mask=None,
         image_sizes=None,
+        pixel_position_ids=None,
     ):
         if is_peft_model(unwrapped_model):
             unwrapped_model = unwrapped_model.base_model.model
@@ -949,6 +945,8 @@ class GRPOTrainer(_BaseTrainer):
         # For LLaVa-Next
         if image_sizes is not None:
             model_inputs["image_sizes"] = image_sizes
+        if pixel_position_ids is not None:
+            model_inputs["pixel_position_ids"] = pixel_position_ids
 
         # Only add logits_to_keep if the model supports it
         if "logits_to_keep" in self.model_kwarg_keys:
@@ -1018,6 +1016,7 @@ class GRPOTrainer(_BaseTrainer):
         image_sizes=None,
         token_type_ids=None,
         mm_token_type_ids=None,
+        pixel_position_ids=None,
     ) -> dict[str, torch.Tensor | None]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -1049,6 +1048,8 @@ class GRPOTrainer(_BaseTrainer):
                 model_inputs["token_type_ids"] = token_type_ids[start : start + batch_size]
             if mm_token_type_ids is not None:
                 model_inputs["mm_token_type_ids"] = mm_token_type_ids[start : start + batch_size]
+            if pixel_position_ids is not None:
+                model_inputs["pixel_position_ids"] = pixel_position_ids[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -1260,7 +1261,7 @@ class GRPOTrainer(_BaseTrainer):
             # See: https://github.com/huggingface/transformers/issues/44514
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
-                tools=self.tools,
+                tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
                 chat_template=self.chat_template,
                 add_generation_prompt=True,
                 tokenize=True,
@@ -1875,7 +1876,7 @@ class GRPOTrainer(_BaseTrainer):
                     logits_to_keep,
                     batch_size,
                     num_images=num_images,
-                    **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask and image_sizes
+                    **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, pixel_position_ids
                 )
             else:
                 old_per_token_logps = None
@@ -1921,7 +1922,7 @@ class GRPOTrainer(_BaseTrainer):
                         logits_to_keep,
                         batch_size=batch_size,
                         num_images=num_images,
-                        **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask and image_sizes
+                        **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, pixel_position_ids
                     )
                 else:
                     # When training a PEFT adapter, how we obtain the reference depends on the setup:
@@ -1936,7 +1937,7 @@ class GRPOTrainer(_BaseTrainer):
                             logits_to_keep,
                             batch_size=batch_size,
                             num_images=num_images,
-                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask and image_sizes
+                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, pixel_position_ids
                         )
             else:
                 ref_per_token_logps = None
@@ -2115,6 +2116,8 @@ class GRPOTrainer(_BaseTrainer):
             output["token_type_ids"] = forward_kwargs["token_type_ids"]
         if "mm_token_type_ids" in forward_kwargs:
             output["mm_token_type_ids"] = forward_kwargs["mm_token_type_ids"]
+        if "pixel_position_ids" in forward_kwargs:
+            output["pixel_position_ids"] = forward_kwargs["pixel_position_ids"]
         if images is not None:
             output["num_images"] = num_images
         if tool_mask is not None:
@@ -2139,6 +2142,7 @@ class GRPOTrainer(_BaseTrainer):
             inputs.get("image_grid_thw"),
             inputs.get("pixel_attention_mask"),
             inputs.get("image_sizes"),
+            inputs.get("pixel_position_ids"),
         )
 
         # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
@@ -2274,6 +2278,7 @@ class GRPOTrainer(_BaseTrainer):
             image_sizes=inputs.get("image_sizes"),
             token_type_ids=inputs.get("token_type_ids"),
             mm_token_type_ids=inputs.get("mm_token_type_ids"),
+            pixel_position_ids=inputs.get("pixel_position_ids"),
         )
 
         if self.top_entropy_quantile < 1.0:

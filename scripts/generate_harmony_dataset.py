@@ -91,7 +91,7 @@ def main(test_size, push_to_hub, repo_id):
             {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
             {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
         ]
-    })
+    }, on_mixed_types="use_json")
     language_modeling_dataset = language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         language_modeling_dataset.push_to_hub(repo_id, config_name="language_modeling")

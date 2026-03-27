@@ -251,7 +251,7 @@ class DPPOTrainer(GRPOTrainer):
             # See: https://github.com/huggingface/transformers/issues/44514
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
-                tools=self.tools,
+                tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
                 chat_template=self.chat_template,
                 add_generation_prompt=True,
                 tokenize=True,
@@ -491,7 +491,7 @@ class DPPOTrainer(GRPOTrainer):
             # Tokenize and filter samples whose length exceeds max allowed length
             pct_ids = self.processing_class.apply_chat_template(
                 prompt_completion_tools,
-                tools=self.tools,
+                tools=self.tools or None,  #  `or None`: Llama bug: it renders tool boilerplate for tools=[]
                 chat_template=self.chat_template,
                 add_generation_prompt=True,
                 tokenize=True,
