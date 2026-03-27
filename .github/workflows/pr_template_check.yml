@@ -20,9 +20,13 @@ jobs:
   check-pr-template:
     runs-on: ubuntu-latest
     if: |
-      github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' ||
-      github.event.pull_request.author_association == 'FIRST_TIMER' ||
-      github.event.pull_request.author_association == 'NONE'
+      (github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' ||
+       github.event.pull_request.author_association == 'FIRST_TIMER' ||
+       github.event.pull_request.author_association == 'NONE') &&
+      !(github.event.action == 'reopened' &&
+        (github.event.sender.author_association == 'MEMBER' ||
+         github.event.sender.author_association == 'OWNER' ||
+         github.event.sender.author_association == 'COLLABORATOR'))
     steps:
       - name: Check PR body follows template
         id: check
