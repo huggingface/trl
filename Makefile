@@ -1,4 +1,4 @@
-.PHONY: test precommit common_tests slow_tests tests_gpu test_experimental
+.PHONY: test precommit common_tests slow_tests tests_gpu test_experimental codex claude clean-ai
 
 check_dirs := examples tests trl
 
@@ -17,3 +17,16 @@ slow_tests:
 
 test_experimental:
 	pytest -n auto -s -v tests/experimental
+
+codex:
+	mkdir -p .agents
+	rm -rf .agents/skills
+	ln -snf ../.ai/skills .agents/skills
+
+claude:
+	mkdir -p .claude
+	rm -rf .claude/skills
+	ln -snf ../.ai/skills .claude/skills
+
+clean-ai:
+	rm -rf .agents/skills .claude/skills
