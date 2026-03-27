@@ -61,7 +61,6 @@ from .utils import (
     flush_left,
     get_config_model_id,
     pad,
-    remove_none_values,
     selective_log_softmax,
 )
 
@@ -308,7 +307,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     - `"pixel_values"`: Tensor representing image pixel values.
     - `"labels"`: Tensor for training labels.
 
-    Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"pixel_position_ids"`.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
@@ -1054,11 +1053,6 @@ class SFTTrainer(_BaseTrainer):
         formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
-        # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
-        # sampled data.
-        if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
-            dataset = dataset.with_transform(remove_none_values)
-
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = get_dataset_column_names(dataset)
         is_processed = "input_ids" in column_names

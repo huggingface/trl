@@ -59,7 +59,6 @@ from .utils import (
     get_config_model_id,
     hash_module,
     pad,
-    remove_none_values,
     selective_log_softmax,
     use_adapter,
 )
@@ -232,7 +231,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
     - `"pixel_values"`: Tensor representing image pixel values.
 
-    Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"pixel_position_ids"`.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
@@ -822,6 +821,40 @@ class DPOTrainer(_BaseTrainer):
                 else:
                     self.eval_dataset = self._precompute_ref_logps(self.eval_dataset, "eval", batch_size)
 
+    def _tokenize(
+        self,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
+        input: str | list,
+        **kwargs,
+    ) -> dict[str, list]:
+        """Tokenize a single example for dataset preprocessing.
+
+        Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
+        non-conversational input (str). For VLMs, normalizes the batch dimension that processors emit even for single
+        examples.
+
+        Args:
+            processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
+                The tokenizer or processor to use.
+            input (`str` or `list`):
+                A string for non-conversational input, or a list of message dicts for conversational input.
+            **kwargs:
+                Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
+
+        Returns:
+            `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
+        """
+        if isinstance(input, list):  # conversational: list of message dicts
+            if self._is_vlm:
+                input = prepare_multimodal_messages(input, images=[])
+            result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
+        else:  # non-conversational: plain text string
+            result = processing_class(text=input)
+        # VLMs emit a batch dimension even for single examples; unwrap it
+        if self._is_vlm:
+            return {k: v[0] for k, v in result.items()}
+        return result
+
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
@@ -829,11 +862,6 @@ class DPOTrainer(_BaseTrainer):
         args: DPOConfig,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
-        # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
-        # sampled data.
-        if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
-            dataset = dataset.with_transform(remove_none_values)
-
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
@@ -872,60 +900,33 @@ class DPOTrainer(_BaseTrainer):
                 tools = json.loads(tools) if isinstance(tools, str) else tools
                 output = {}
                 if is_conversational(example):
-                    if self._is_vlm:
-                        prompt = prepare_multimodal_messages(example["prompt"], images=[])
-                        chosen = prepare_multimodal_messages(example["chosen"], images=[])
-                        rejected = prepare_multimodal_messages(example["rejected"], images=[])
-                    else:
-                        prompt = example["prompt"]
-                        chosen = example["chosen"]
-                        rejected = example["rejected"]
-                    prompt_ids = processing_class.apply_chat_template(
-                        prompt,
+                    prompt_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"],
                         tools=tools,
                         add_generation_prompt=True,
-                        tokenize=True,
-                        return_dict=False,
                         **example.get("chat_template_kwargs", {}),
-                    )
-                    prompt_chosen_processed = processing_class.apply_chat_template(
-                        prompt + chosen,
+                    )["input_ids"]
+                    prompt_chosen_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"] + example["chosen"],
                         tools=tools,
-                        tokenize=True,
-                        return_dict=True,
                         **example.get("chat_template_kwargs", {}),
-                    )
-                    prompt_rejected_processed = processing_class.apply_chat_template(
-                        prompt + rejected,
+                    )["input_ids"]
+                    prompt_rejected_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"] + example["rejected"],
                         tools=tools,
-                        tokenize=True,
-                        return_dict=True,
                         **example.get("chat_template_kwargs", {}),
-                    )
-                    # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
-                    # even for single examples, while for LLMs it returns lists of ints.
-                    prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
-                    prompt_chosen_processed = {
-                        k: v[0] if isinstance(v[0], list) else v for k, v in prompt_chosen_processed.items()
-                    }
-                    prompt_rejected_processed = {
-                        k: v[0] if isinstance(v[0], list) else v for k, v in prompt_rejected_processed.items()
-                    }
-                    prompt_chosen_ids = prompt_chosen_processed["input_ids"]
-                    prompt_rejected_ids = prompt_rejected_processed["input_ids"]
+                    )["input_ids"]
                 else:
-                    prompt_ids = processing_class(text=example["prompt"])["input_ids"]
-                    prompt_chosen_ids = processing_class(text=example["prompt"] + example["chosen"])["input_ids"]
-                    prompt_rejected_ids = processing_class(text=example["prompt"] + example["rejected"])["input_ids"]
-                    # Fix transformers inconsistency: for VLMs, processing_class returns lists of lists
-                    # even for single examples, while for LLMs it returns lists of ints.
-                    prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
-                    prompt_chosen_ids = (
-                        prompt_chosen_ids[0] if isinstance(prompt_chosen_ids[0], list) else prompt_chosen_ids
-                    )
-                    prompt_rejected_ids = (
-                        prompt_rejected_ids[0] if isinstance(prompt_rejected_ids[0], list) else prompt_rejected_ids
-                    )
+                    prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_chosen_ids = self._tokenize(processing_class, example["prompt"] + example["chosen"])[
+                        "input_ids"
+                    ]
+                    prompt_rejected_ids = self._tokenize(processing_class, example["prompt"] + example["rejected"])[
+                        "input_ids"
+                    ]
 
                 # Check if the tokenized prompt starts with the tokenized prompt+completion
                 if not prompt_chosen_ids[: len(prompt_ids)] == prompt_ids:
@@ -1034,6 +1035,7 @@ class DPOTrainer(_BaseTrainer):
             "pixel_attention_mask",
             "image_grid_thw",
             "image_sizes",
+            "pixel_position_ids",
         ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
@@ -1159,6 +1161,7 @@ class DPOTrainer(_BaseTrainer):
             "pixel_attention_mask",
             "image_grid_thw",
             "image_sizes",
+            "pixel_position_ids",
         ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]

@@ -972,6 +972,12 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
 TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
 
+# This function is intentionally not used internally. It is provided as a utility for users whose datasets contain
+# `None` values inserted by tabular backends (e.g., Arrow/Parquet) for missing keys in nested structures. This
+# situation arises when loading datasets created before `datasets` v4.7.0 (which introduced the Json dtype), or when
+# datasets created after that version were saved without using the Json feature. In both cases, users can apply this
+# function via `dataset = dataset.with_transform(remove_none_values)` before training to strip the spurious `None`
+# values. See the migration guide for more details.
 def remove_none_values(example: TListOrMapping) -> TListOrMapping:
     """
     Recursively removes entries with `None` values from a nested structure (list or dictionary).
@@ -980,7 +986,10 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
         example (`list` or `Mapping`):
             Input nested structure (list or dictionary) from which to remove `None`.
 
-    Example:
+    Examples:
+    ```python
+    >>> dataset = dataset.with_transform(remove_none_values)
+    ```
     ```python
     >>> [
     ...     {
