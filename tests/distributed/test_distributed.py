@@ -234,7 +234,14 @@ class TestDistributed(
                 ),
             ),
             pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899")),
-            "fsdp2",
+            pytest.param(
+                "fsdp2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.4.0"),
+                    reason="Upstream issue: NaN weights on non-rank-0 FSDP processes (see #5386 and transformers#45050)",
+                    strict=True,
+                ),
+            ),
         ],
     )
     def test_rloo(self, config, get_config_path):
