@@ -1418,6 +1418,10 @@ class GRPOTrainer(_BaseTrainer):
         while idxs_with_tool and iteration_num < self.max_tool_calling_iterations:
             prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
 
+            # Track samples that call a stop tool this iteration (by global sample index).
+            # Populated during tool execution below; used after the overlong filter.
+            stop_tool_global_idxs: set[int] = set()
+
             # Call the tools, and build the new prompt for generation
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
@@ -1445,6 +1449,9 @@ class GRPOTrainer(_BaseTrainer):
                             tool_failure_count += 1
                             result = {"error": str(e)}
                             tool_call_results.append((name, result))
+                        # Check whether this is a stop tool (regardless of success/failure).
+                        if self.args.stop_tool_names and name in self.args.stop_tool_names:
+                            stop_tool_global_idxs.add(idx_with_tool)
                     else:
                         tool_failure_count += 1
                         name = tool_call.get("name", "unknown")
@@ -1519,6 +1526,35 @@ class GRPOTrainer(_BaseTrainer):
             ]
             if not idxs_with_tool:
                 break  # all overlong, exit tool loop
+
+            # Remove stop-tool samples from further generation.
+            # For each such sample: update completion_ids to include the tool-result tokens, mark those
+            # tokens as 0 in tool_mask (excluded from loss), then drop the sample from idxs_with_tool.
+            if stop_tool_global_idxs:
+                non_stop_mask = [idx_with_tool not in stop_tool_global_idxs for idx_with_tool in idxs_with_tool]
+                for local_idx, idx_with_tool in enumerate(idxs_with_tool):
+                    if idx_with_tool not in stop_tool_global_idxs:
+                        continue
+                    prompt_length = len(prompt_ids[idx_with_tool])
+                    pct = prompt_completion_tool_ids[local_idx]
+                    # completion_ids still holds the pre-tool-result completion at this point.
+                    old_completion_length = len(completion_ids[idx_with_tool])
+                    tool_suffix_length = len(pct) - prompt_length - old_completion_length
+                    # Extend completion_ids to include tool-result tokens.
+                    completion_ids[idx_with_tool] = pct[prompt_length:]
+                    # Mask tool-result tokens out of the loss.
+                    tool_mask[idx_with_tool] += [0] * tool_suffix_length
+                    if logprobs is not None:
+                        logprobs[idx_with_tool] += [0.0] * tool_suffix_length
+                idxs_with_tool = [i for i, keep in zip(idxs_with_tool, non_stop_mask, strict=False) if keep]
+                prompt_completion_tools = [
+                    p for p, keep in zip(prompt_completion_tools, non_stop_mask, strict=False) if keep
+                ]
+                prompt_completion_tool_ids = [
+                    p for p, keep in zip(prompt_completion_tool_ids, non_stop_mask, strict=False) if keep
+                ]
+                if not idxs_with_tool:
+                    break  # all remaining samples called a stop tool
 
             # Filter images and multimodal fields to match the current subset (index into full batch)
             loop_images = [images[i] for i in idxs_with_tool] if images else None

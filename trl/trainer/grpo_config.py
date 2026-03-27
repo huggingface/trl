@@ -286,6 +286,14 @@ class GRPOConfig(_BaseConfig):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
             `max_model_length`.
+        stop_tool_names (`list[str]`, *optional*):
+            List of tool names that immediately terminate the agent generation loop for a sample when called.
+            When the model calls a tool whose name appears in this list, the tool is executed, its result is
+            appended to the conversation context, and no further model generation occurs for that sample in
+            the current step. This mirrors the ``final_answer`` semantics used in frameworks like smolagents,
+            eliminating the training/evaluation divergence that arises when a termination tool is registered
+            in TRL's tool list but the loop has no way to honour its terminal semantics. Defaults to ``None``
+            (no stop tools — existing behaviour preserved).
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
             recomputed training logprobs. If set to `False`, no IS is applied regardless of
@@ -787,6 +795,15 @@ class GRPOConfig(_BaseConfig):
             "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
             "generation stops when the model generates a response turn with no tool calls or when the total "
             "response length reaches `max_model_length`."
+        },
+    )
+    stop_tool_names: list[str] | None = field(
+        default=None,
+        metadata={
+            "help": "List of tool names that terminate the agent loop immediately when called. When a sample's "
+            "tool call matches any name in this list, the tool is executed, its result is appended to the "
+            "context, and no further model generation occurs for that sample. Useful for `final_answer`-style "
+            "tools used in frameworks like smolagents."
         },
     )
     vllm_importance_sampling_correction: bool = field(
