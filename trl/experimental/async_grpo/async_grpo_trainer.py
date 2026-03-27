@@ -264,8 +264,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
                 year         = 2024,
                 eprint       = {arXiv:2402.03300},
-            }
-            """),
+            }"""),
     }
 
     def __init__(
@@ -290,7 +289,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Model
         model_name = model
-        model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.bfloat16)
+        model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.float32)
 
         # Processing class
         if processing_class is None:

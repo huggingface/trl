@@ -27,16 +27,10 @@ Train Gemma-3 on the Codeforces COTS dataset.
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/sft_gemma3.py
 """
 
-import os
-
 from datasets import load_dataset
 from transformers import AutoModelForImageTextToText
 
 from trl import SFTConfig, SFTTrainer
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main():

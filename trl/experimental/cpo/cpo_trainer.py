@@ -291,7 +291,6 @@ class CPOTrainer(_BaseTrainer):
 
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
-        self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
         self.processing_class = processing_class
 
