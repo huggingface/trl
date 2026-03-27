@@ -1540,18 +1540,23 @@ class GRPOTrainer(_BaseTrainer):
                     # completion_ids still holds the pre-tool-result completion at this point.
                     old_completion_length = len(completion_ids[idx_with_tool])
                     tool_suffix_length = len(pct) - prompt_length - old_completion_length
-                    # Extend completion_ids to include tool-result tokens.
-                    completion_ids[idx_with_tool] = pct[prompt_length:]
-                    # Mask tool-result tokens out of the loss.
-                    tool_mask[idx_with_tool] += [0] * tool_suffix_length
+                    # Build the full completion (old completion + tool-result suffix) and enforce
+                    # max_completion_length, mirroring the truncation applied on the regular post-tool path.
+                    full_completion = pct[prompt_length:]
+                    final_length = min(len(full_completion), self.max_completion_length)
+                    completion_ids[idx_with_tool] = full_completion[:final_length]
+                    # Mask tool-result tokens out of the loss, keeping alignment with completion_ids.
+                    extended_tool_mask = tool_mask[idx_with_tool] + [0] * tool_suffix_length
+                    tool_mask[idx_with_tool] = extended_tool_mask[:final_length]
                     if logprobs is not None:
-                        logprobs[idx_with_tool] += [0.0] * tool_suffix_length
-                idxs_with_tool = [i for i, keep in zip(idxs_with_tool, non_stop_mask, strict=False) if keep]
+                        extended_logprobs = logprobs[idx_with_tool] + [0.0] * tool_suffix_length
+                        logprobs[idx_with_tool] = extended_logprobs[:final_length]
+                idxs_with_tool = [i for i, keep in zip(idxs_with_tool, non_stop_mask, strict=True) if keep]
                 prompt_completion_tools = [
-                    p for p, keep in zip(prompt_completion_tools, non_stop_mask, strict=False) if keep
+                    p for p, keep in zip(prompt_completion_tools, non_stop_mask, strict=True) if keep
                 ]
                 prompt_completion_tool_ids = [
-                    p for p, keep in zip(prompt_completion_tool_ids, non_stop_mask, strict=False) if keep
+                    p for p, keep in zip(prompt_completion_tool_ids, non_stop_mask, strict=True) if keep
                 ]
                 if not idxs_with_tool:
                     break  # all remaining samples called a stop tool

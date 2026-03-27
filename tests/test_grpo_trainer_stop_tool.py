@@ -232,9 +232,13 @@ class TestGRPOStopToolTraining(TrlTestCase):
         def fake_generate(input_ids, **kwargs):
             generate_call_count[0] += 1
             if generate_call_count[0] == 1:
-                comp = torch.tensor([final_answer_ids] * input_ids.shape[0], device=input_ids.device)
+                comp = torch.tensor(
+                    [final_answer_ids] * input_ids.shape[0], device=input_ids.device
+                )
             else:
-                comp = torch.tensor([done_ids] * input_ids.shape[0], device=input_ids.device)
+                comp = torch.tensor(
+                    [done_ids] * input_ids.shape[0], device=input_ids.device
+                )
             return torch.cat([input_ids, comp], dim=-1)
 
         dataset = load_dataset(_DATASET, "conversational_prompt_only", split="train")
@@ -250,7 +254,9 @@ class TestGRPOStopToolTraining(TrlTestCase):
         with patch.object(trainer.model, "generate", side_effect=fake_generate):
             trainer.train()
 
-        assert generate_call_count[0] > 1, "Without stop_tool_names the loop must re-generate after the tool result"
+        assert generate_call_count[0] > 1, (
+            "Without stop_tool_names the loop must re-generate after the tool result"
+        )
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
@@ -336,7 +342,9 @@ class TestGRPOStopToolTraining(TrlTestCase):
             return [1.0] * len(completions)
 
         def fake_generate(input_ids, **kwargs):
-            comp = torch.tensor([final_answer_ids] * input_ids.shape[0], device=input_ids.device)
+            comp = torch.tensor(
+                [final_answer_ids] * input_ids.shape[0], device=input_ids.device
+            )
             return torch.cat([input_ids, comp], dim=-1)
 
         dataset = load_dataset(_DATASET, "conversational_prompt_only", split="train")
@@ -384,7 +392,9 @@ class TestGRPOStopToolTraining(TrlTestCase):
         gc.collect()
 
         def fake_generate(input_ids, **kwargs):
-            comp = torch.tensor([final_answer_ids] * input_ids.shape[0], device=input_ids.device)
+            comp = torch.tensor(
+                [final_answer_ids] * input_ids.shape[0], device=input_ids.device
+            )
             return torch.cat([input_ids, comp], dim=-1)
 
         dataset = load_dataset(_DATASET, "conversational_prompt_only", split="train")
@@ -426,9 +436,13 @@ class TestGRPOStopToolTraining(TrlTestCase):
         def fake_generate(input_ids, **kwargs):
             generate_call_count[0] += 1
             if generate_call_count[0] == 1:
-                comp = torch.tensor([multiply_ids] * input_ids.shape[0], device=input_ids.device)
+                comp = torch.tensor(
+                    [multiply_ids] * input_ids.shape[0], device=input_ids.device
+                )
             else:
-                comp = torch.tensor([done_ids] * input_ids.shape[0], device=input_ids.device)
+                comp = torch.tensor(
+                    [done_ids] * input_ids.shape[0], device=input_ids.device
+                )
             return torch.cat([input_ids, comp], dim=-1)
 
         dataset = load_dataset(_DATASET, "conversational_prompt_only", split="train")
@@ -445,7 +459,9 @@ class TestGRPOStopToolTraining(TrlTestCase):
         with patch.object(trainer.model, "generate", side_effect=fake_generate):
             trainer.train()
 
-        assert generate_call_count[0] > 1, "Loop should continue because the stop tool was never called"
+        assert generate_call_count[0] > 1, (
+            "Loop should continue because the stop tool was never called"
+        )
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
@@ -462,7 +478,9 @@ class TestGRPOStopToolTraining(TrlTestCase):
         gc.collect()
 
         def fake_generate(input_ids, **kwargs):
-            comp = torch.tensor([final_answer_ids] * input_ids.shape[0], device=input_ids.device)
+            comp = torch.tensor(
+                [final_answer_ids] * input_ids.shape[0], device=input_ids.device
+            )
             return torch.cat([input_ids, comp], dim=-1)
 
         dataset = load_dataset(_DATASET, "conversational_prompt_only", split="train")
@@ -483,3 +501,174 @@ class TestGRPOStopToolTraining(TrlTestCase):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_jmespath
+    def test_stop_tool_enforces_max_completion_length(self):
+        """Bug 1 regression: stop-tool path must truncate completions to
+        ``max_completion_length``.
+
+        Before the fix, the stop-tool path appended tool-result suffix tokens to
+        ``completion_ids`` without enforcing ``max_completion_length``.  This
+        caused the padded completion tensor to be wider than expected, silently
+        increasing memory and ``logits_to_keep`` compute.
+
+        We set ``max_completion_length`` to a small value and make the fake
+        model produce completions close to that limit.  After tool execution
+        appends the tool-result suffix, the total would exceed the limit.  The
+        fix must truncate so that ``len(completion_ids[i]) <= max_completion_length``
+        for every sample.
+        """
+        tokenizer = AutoTokenizer.from_pretrained(_MODEL_ID)
+        final_answer_ids = _make_final_answer_ids(tokenizer)
+        # Use a very small max_completion_length so that the completion + tool suffix
+        # is guaranteed to exceed the limit.
+        max_completion_length = len(final_answer_ids) + 2  # just barely fits the raw completion
+        del tokenizer
+        gc.collect()
+
+        captured_completion_ids: list = []
+
+        def capturing_reward(completions, **kwargs):
+            return [1.0] * len(completions)
+
+        def fake_generate(input_ids, **kwargs):
+            comp = torch.tensor(
+                [final_answer_ids] * input_ids.shape[0], device=input_ids.device
+            )
+            return torch.cat([input_ids, comp], dim=-1)
+
+        dataset = load_dataset(_DATASET, "conversational_prompt_only", split="train")
+        config = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=max_completion_length,
+            report_to="none",
+            stop_tool_names=["final_answer"],
+            max_steps=1,
+        )
+        trainer = GRPOTrainer(
+            model=_MODEL_ID,
+            reward_funcs=capturing_reward,
+            args=config,
+            train_dataset=dataset,
+            tools=[multiply_tool, final_answer],
+        )
+
+        # Monkey-patch _tool_call_loop to capture completion_ids after it runs.
+        original_tool_call_loop = trainer._tool_call_loop
+
+        def patched_tool_call_loop(*args, **kwargs):
+            result = original_tool_call_loop(*args, **kwargs)
+            tool_mask, completions, completion_ids, logprobs_out, tc_count, tf_count = result
+            # Capture a snapshot of completion_ids lengths.
+            captured_completion_ids.extend(list(completion_ids))
+            # Also verify tool_mask alignment.
+            for i, (cids, tmask) in enumerate(zip(completion_ids, tool_mask)):
+                assert len(cids) == len(tmask), (
+                    f"completion_ids[{i}] has length {len(cids)} but tool_mask[{i}] "
+                    f"has length {len(tmask)} — they must be aligned"
+                )
+                if logprobs_out is not None:
+                    assert len(cids) == len(logprobs_out[i]), (
+                        f"completion_ids[{i}] has length {len(cids)} but logprobs[{i}] "
+                        f"has length {len(logprobs_out[i])} — they must be aligned"
+                    )
+            return result
+
+        trainer._tool_call_loop = patched_tool_call_loop
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert captured_completion_ids, "_tool_call_loop was never called"
+        for i, cids in enumerate(captured_completion_ids):
+            assert len(cids) <= max_completion_length, (
+                f"completion_ids[{i}] has length {len(cids)}, exceeding "
+                f"max_completion_length={max_completion_length}. "
+                "The stop-tool path failed to truncate."
+            )
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_jmespath
+    def test_stop_tool_truncation_preserves_mask_and_logprobs_alignment(self):
+        """Bug 1 follow-up: when truncation fires, ``tool_mask`` and ``logprobs``
+        must be truncated to the same ``final_length`` as ``completion_ids``.
+
+        This test forces truncation by using a tiny ``max_completion_length``
+        and then verifies that the three parallel lists have identical lengths
+        after ``_tool_call_loop`` returns.
+        """
+        tokenizer = AutoTokenizer.from_pretrained(_MODEL_ID)
+        final_answer_ids = _make_final_answer_ids(tokenizer)
+        # Make max_completion_length shorter than the raw completion alone —
+        # this guarantees truncation even before tool suffix is added.
+        max_completion_length = max(1, len(final_answer_ids) - 3)
+        del tokenizer
+        gc.collect()
+
+        alignment_errors: list = []
+
+        def fake_generate(input_ids, **kwargs):
+            comp = torch.tensor(
+                [final_answer_ids] * input_ids.shape[0], device=input_ids.device
+            )
+            return torch.cat([input_ids, comp], dim=-1)
+
+        dataset = load_dataset(_DATASET, "conversational_prompt_only", split="train")
+        config = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=max_completion_length,
+            report_to="none",
+            stop_tool_names=["final_answer"],
+            max_steps=1,
+        )
+        trainer = GRPOTrainer(
+            model=_MODEL_ID,
+            reward_funcs=_REWARD_MODEL_ID,
+            args=config,
+            train_dataset=dataset,
+            tools=[multiply_tool, final_answer],
+        )
+
+        original_tool_call_loop = trainer._tool_call_loop
+
+        def patched_tool_call_loop(*args, **kwargs):
+            result = original_tool_call_loop(*args, **kwargs)
+            tool_mask, completions, completion_ids, logprobs_out, tc_count, tf_count = result
+            for i in range(len(completion_ids)):
+                clen = len(completion_ids[i])
+                mlen = len(tool_mask[i])
+                if clen != mlen:
+                    alignment_errors.append(
+                        f"sample {i}: completion_ids length {clen} != tool_mask length {mlen}"
+                    )
+                if logprobs_out is not None:
+                    llen = len(logprobs_out[i])
+                    if clen != llen:
+                        alignment_errors.append(
+                            f"sample {i}: completion_ids length {clen} != logprobs length {llen}"
+                        )
+            return result
+
+        trainer._tool_call_loop = patched_tool_call_loop
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert not alignment_errors, (
+            "Truncation caused length misalignment:\n" + "\n".join(alignment_errors)
+        )
