@@ -208,6 +208,7 @@ def apply_chat_template(
 
     For more details, see [`maybe_apply_chat_template`].
     """
+    tools = tools or None  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
     # Check that the example has the correct keys
     supported_keys = ["prompt", "chosen", "rejected", "completion", "messages", "label"]
     example_keys = {key for key in example.keys() if key in supported_keys}
