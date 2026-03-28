@@ -19,6 +19,7 @@ import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
+from trl.experimental.gold import gold_trainer as gold_trainer_module
 from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, build_teacher_inputs_from_texts
 from trl.experimental.utils import DataCollatorForChatML
 
@@ -289,6 +290,304 @@ def pad_labels(labels, target_length):
     return labels + [-100] * (target_length - len(labels))
 
 
+def test_process_completions_to_buffer_left_pads_prompt_ids():
+    class RecordingTokenizer:
+        pad_token_id = 0
+        pad_token = "<pad>"
+
+        def batch_decode(self, sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            del skip_special_tokens, clean_up_tokenization_spaces
+            return [" ".join(str(token) for token in sequence) for sequence in sequences]
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer.processing_class = RecordingTokenizer()
+    trainer.args = SimpleNamespace(max_length=None)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+
+    GOLDTrainer._process_completions_to_buffer(
+        trainer,
+        slices=[{"slice": "original"}],
+        on_policy_indices=[0],
+        local_slice_indices=[0, 0],
+        completion_ids=[[31], [41]],
+        prompts_text_with_special=["short", "longer"],
+        prompt_ids_list=[[11], [21, 22]],
+        prompts_text=["short", "longer"],
+        max_completion_length=1,
+    )
+
+    buffered_inputs = trainer._buffered_inputs[0]
+    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[0, 11, 31], [21, 22, 41]], dtype=torch.long))
+    assert torch.equal(buffered_inputs["attention_mask"], torch.tensor([[0, 1, 1], [1, 1, 1]], dtype=torch.long))
+    assert torch.equal(buffered_inputs["labels"], torch.tensor([[-100, -100, 31], [-100, -100, 41]]))
+
+
+def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_prompts():
+    class RecordingVLLMGeneration:
+        def __init__(self):
+            self.prompts = None
+            self.sync_calls = 0
+
+        def sync_weights(self):
+            self.sync_calls += 1
+
+        def generate(self, prompts, images, num_generations):
+            self.prompts = prompts
+            assert images is None
+            assert num_generations == 1
+            return None, [[42]], None, None
+
+    class RecordingTokenizer:
+        pad_token_id = 9
+        pad_token = "<eos>"
+
+        def batch_decode(self, sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            del clean_up_tokenization_spaces
+            decoded = []
+            token_map = {5: "A", 6: "B", 9: "<eos>"}
+            for sequence in sequences:
+                tokens = []
+                for token in sequence:
+                    token = int(token)
+                    if skip_special_tokens and token == 9:
+                        continue
+                    tokens.append(token_map[token])
+                decoded.append(" ".join(tokens))
+            return decoded
+
+    captured = {}
+
+    def capture_process_completions(
+        slices,
+        on_policy_indices,
+        local_slice_indices,
+        completion_ids,
+        prompt_ids_list,
+        prompts_text_with_special,
+        prompts_text,
+        max_completion_length,
+    ):
+        captured["slices"] = slices
+        captured["on_policy_indices"] = on_policy_indices
+        captured["local_slice_indices"] = local_slice_indices
+        captured["completion_ids"] = completion_ids
+        captured["prompt_ids_list"] = prompt_ids_list
+        captured["prompts_text"] = prompts_text
+        captured["prompts_text_with_special"] = prompts_text_with_special
+        captured["max_completion_length"] = max_completion_length
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(is_main_process=True)
+    trainer.args = SimpleNamespace(report_to=[])
+    trainer.processing_class = RecordingTokenizer()
+    trainer.use_vllm = True
+    trainer.vllm_generation = RecordingVLLMGeneration()
+    trainer.vllm_sync_frequency = 1
+    trainer._last_vllm_sync_step = -1
+    trainer.state = SimpleNamespace(global_step=0)
+    trainer.num_generations = 1
+    trainer.generation_config = SimpleNamespace(max_new_tokens=1)
+    trainer._process_completions_to_buffer = capture_process_completions
+
+    slices = [
+        {
+            "prompts": torch.tensor([[9, 9, 5, 9, 6]], dtype=torch.long),
+            "prompt_attention_mask": torch.tensor([[0, 0, 1, 1, 1]], dtype=torch.long),
+        }
+    ]
+
+    GOLDTrainer._generate_on_policy_for_slices(trainer, slices, [0])
+
+    assert trainer.vllm_generation.prompts == [[5, 9, 6]]
+    assert trainer.vllm_generation.sync_calls == 1
+    assert captured["completion_ids"] == [[42]]
+    assert captured["prompt_ids_list"] == [[5, 9, 6]]
+    assert captured["prompts_text"] == ["A B"]
+    assert captured["prompts_text_with_special"] == ["A <eos> B"]
+
+
+def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens():
+    class RecordingVLLMGeneration:
+        def __init__(self):
+            self.prompts = None
+            self.sync_calls = 0
+
+        def sync_weights(self):
+            self.sync_calls += 1
+
+        def generate(self, prompts, images, num_generations):
+            self.prompts = prompts
+            assert images is None
+            assert num_generations == 1
+            return None, [[42]], None, None
+
+    class RecordingTokenizer:
+        pad_token_id = 0
+        pad_token = "<pad>"
+
+        def __init__(self):
+            self.truncation_side = "right"
+
+        def batch_decode(self, sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            del clean_up_tokenization_spaces
+            token_map = {0: "<pad>", 5: "A", 6: "B", 13: "<special>", 42: "C"}
+            decoded = []
+            for sequence in sequences:
+                tokens = []
+                for token in sequence:
+                    token = int(token)
+                    if skip_special_tokens and token == 13:
+                        continue
+                    if token == 0:
+                        continue
+                    tokens.append(token_map[token])
+                decoded.append(" ".join(tokens))
+            return decoded
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+    trainer.processing_class = RecordingTokenizer()
+    trainer.args = SimpleNamespace(max_length=None, report_to=[])
+    trainer.use_vllm = True
+    trainer.vllm_generation = RecordingVLLMGeneration()
+    trainer.vllm_sync_frequency = 1
+    trainer._last_vllm_sync_step = -1
+    trainer.state = SimpleNamespace(global_step=0)
+    trainer.num_generations = 1
+    trainer.generation_config = SimpleNamespace(max_new_tokens=1)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+
+    slices = [
+        {
+            "slice": "original",
+            "prompts": torch.tensor([[0, 0, 5, 13, 6]], dtype=torch.long),
+            "prompt_attention_mask": torch.tensor([[0, 0, 1, 1, 1]], dtype=torch.long),
+        }
+    ]
+
+    GOLDTrainer._generate_on_policy_for_slices(trainer, slices, [0])
+
+    buffered_inputs = trainer._buffered_inputs[0]
+    assert trainer.vllm_generation.prompts == [[5, 13, 6]]
+    assert trainer.vllm_generation.sync_calls == 1
+    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[5, 13, 6, 42]], dtype=torch.long))
+    assert torch.equal(buffered_inputs["attention_mask"], torch.tensor([[1, 1, 1, 1]], dtype=torch.long))
+    assert torch.equal(buffered_inputs["labels"], torch.tensor([[-100, -100, -100, 42]], dtype=torch.long))
+    assert buffered_inputs["original_prompt_text"] == ["A <special> B"]
+    assert buffered_inputs["original_completion_text"] == ["C"]
+    assert trainer._buffered_text_logs[0] == (["A B"], ["C"])
+
+
+def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypatch):
+    captured = {}
+
+    class DummyStudentModel:
+        def __init__(self):
+            self.config = SimpleNamespace(_name_or_path="student", vocab_size=17)
+            self.generation_config = SimpleNamespace(eos_token_id=2)
+            self.name_or_path = "student"
+
+    class DummyTeacherModel:
+        def __init__(self):
+            self.resized_to = None
+
+        def resize_token_embeddings(self, vocab_size):
+            self.resized_to = vocab_size
+
+    class DummyProcessingClass:
+        pad_token_id = 0
+
+    def fake_sft_init(
+        self,
+        model,
+        args=None,
+        data_collator=None,
+        train_dataset=None,
+        eval_dataset=None,
+        processing_class=None,
+        compute_metrics=None,
+        callbacks=None,
+        optimizers=None,
+        preprocess_logits_for_metrics=None,
+        peft_config=None,
+    ):
+        del data_collator, train_dataset, eval_dataset, compute_metrics, callbacks, optimizers
+        del preprocess_logits_for_metrics, peft_config
+        self.model = model
+        self.args = args
+        self.processing_class = processing_class
+        self.accelerator = SimpleNamespace(
+            device=torch.device("cpu"),
+            num_processes=1,
+            prepare_model=lambda module, evaluation_mode=True: module,
+        )
+        self.is_deepspeed_enabled = False
+        self.is_fsdp_enabled = False
+
+    class CapturingVLLMGeneration:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
+    monkeypatch.setattr(gold_trainer_module, "is_vllm_available", lambda: True)
+    monkeypatch.setattr(gold_trainer_module, "VLLMGeneration", CapturingVLLMGeneration)
+
+    args = SimpleNamespace(
+        model_init_kwargs=None,
+        max_length=128,
+        use_liger_kernel=False,
+        teacher_model_init_kwargs=None,
+        use_uld_loss=False,
+        teacher_tokenizer_name_or_path=None,
+        teacher_model_revision=None,
+        disable_dropout=False,
+        lmbda=1.0,
+        beta=0.5,
+        temperature=1.0,
+        top_p=1.0,
+        seq_kd=False,
+        num_generations=1,
+        use_transformers_paged=False,
+        max_completion_length=16,
+        top_k=0,
+        log_completions=False,
+        log_completions_steps=100,
+        wandb_log_unique_prompts=True,
+        num_completions_to_print=None,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=1,
+        use_vllm=True,
+        vllm_mode="colocate",
+        vllm_structured_outputs_regex=None,
+        vllm_server_base_url=None,
+        vllm_server_host="0.0.0.0",
+        vllm_server_port=8001,
+        vllm_group_port=51216,
+        vllm_server_timeout=240.0,
+        vllm_tensor_parallel_size=1,
+        vllm_gpu_memory_utilization=0.2,
+        vllm_max_model_length=None,
+        vllm_enable_sleep_mode=False,
+        vllm_model_impl="vllm",
+        vllm_sync_frequency=1,
+    )
+
+    teacher_model = DummyTeacherModel()
+    GOLDTrainer(
+        model=DummyStudentModel(),
+        teacher_model=teacher_model,
+        args=args,
+        data_collator=object(),
+        processing_class=DummyProcessingClass(),
+    )
+
+    assert teacher_model.resized_to == 17
+    assert captured["max_model_length"] == 128
+
+
 def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
     config = build_config()
     loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
@@ -323,7 +622,7 @@ def test_merge_probabilities_multiplies_split_tokens():
     expected = probs[0] * probs[1, 1]  # probs[1, 1] = 0.5
     # Expected unnormalized: [0.6 * 0.5, 0.3 * 0.5, 0.1 * 0.5] = [0.3, 0.15, 0.05]
 
-    assert torch.allclose(merged[0], expected, atol=1e-6)
+    torch.testing.assert_close(merged[0], expected)
 
 
 def test_initialize_vocabulary_mapping_contains_common_tokens(llama_tokenizer, qwen_tokenizer):
@@ -382,7 +681,9 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     prompt_tensor[0, pad_width:] = torch.tensor(prompt_ids, dtype=torch.long)
     prompt_mask = (prompt_tensor != pad_id).long()
 
-    generated_sequence = torch.tensor(prompt_ids + completion_ids, dtype=torch.long).unsqueeze(0)
+    # model.generate() returns full sequences including left-padding from the input
+    completion_tensor = torch.tensor(completion_ids, dtype=torch.long).unsqueeze(0)
+    generated_sequence = torch.cat([prompt_tensor, completion_tensor], dim=1)
 
     class DummyModel:
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
@@ -406,9 +707,9 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     else:
         assert torch.all(new_mask == 1)
 
-    prompt_len = len(prompt_ids)
-    assert torch.all(new_labels[0, :prompt_len] == -100)
-    assert torch.equal(new_labels[0, prompt_len:], torch.tensor(completion_ids, dtype=torch.long))
+    padded_prompt_len = prompt_tensor.shape[1]
+    assert torch.all(new_labels[0, :padded_prompt_len] == -100)
+    assert torch.equal(new_labels[0, padded_prompt_len:], torch.tensor(completion_ids, dtype=torch.long))
 
     assert prompt_texts[0] == llama_tokenizer.decode(prompt_ids, skip_special_tokens=False)
     assert completion_texts[0] == llama_tokenizer.decode(completion_ids, skip_special_tokens=False)
@@ -480,7 +781,7 @@ def test_generalized_jsd_loss_accepts_probability_inputs():
         logits_are_probs=True,
     )
 
-    assert torch.allclose(loss, expected, atol=1e-6)
+    torch.testing.assert_close(loss, expected)
 
 
 def test_uldloss_handles_llama_student_qwen_teacher_sequence(llama_tokenizer, qwen_tokenizer):
@@ -640,4 +941,4 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
     assert loss_fn.last_unmatched_loss is not None
 
     expected = config.uld_hybrid_unmatched_weight * loss_fn.last_unmatched_loss
-    assert torch.allclose(loss, expected, atol=1e-6, rtol=1e-5)
+    torch.testing.assert_close(loss, expected, atol=1e-6, rtol=1e-5)

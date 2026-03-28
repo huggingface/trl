@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "trackio",
 #     "kernels",
 # ]
@@ -58,17 +57,11 @@ python examples/scripts/orpo.py \
     --lora_alpha 16
 """
 
-import os
-
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
 from trl import ModelConfig, ScriptArguments, get_peft_config
 from trl.experimental.orpo import ORPOConfig, ORPOTrainer
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":

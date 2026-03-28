@@ -16,7 +16,9 @@ from unittest.mock import patch
 
 import pytest
 import torch
+import transformers
 from datasets import load_dataset
+from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -183,7 +185,7 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
@@ -220,7 +222,7 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
@@ -260,7 +262,7 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
@@ -539,6 +541,43 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_reward_metric_reflects_reward_weights(self):
+        """Test that the logged 'reward' metric uses reward_weights, not an unweighted sum."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def constant_reward_1(completions, **kwargs):
+            return [1.0] * len(completions)
+
+        def constant_reward_0(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            reward_weights=[0.7, 0.3],
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=[constant_reward_1, constant_reward_0],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        log = trainer.state.log_history[-1]
+        # With reward_weights=[0.7, 0.3] and rewards [1.0, 0.0]:
+        # weighted reward = 0.7*1.0 + 0.3*0.0 = 0.7
+        # unweighted reward = 1.0 + 0.0 = 1.0
+        assert abs(log["reward"] - 0.7) < 1e-5, (
+            f"Expected logged reward to be ~0.7 (weighted), got {log['reward']}. "
+            "The reward metric should reflect reward_weights."
+        )
+
     def test_training_multiple_mixed_reward_funcs(self):
         # Test if the trainer can handle a mix of reward functions and reward models
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -678,6 +717,36 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_training_with_pad_to_multiple_of(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            pad_to_multiple_of=8,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     @require_peft
     @require_vllm
     @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
@@ -721,7 +790,7 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n and "original_module" not in n:
                 # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
@@ -1041,6 +1110,17 @@ class TestRLOOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_multiple_dataloader_workers(self):
+        # Pytest/CI often starts background threads before tests run. With Python 3.12, using the default "fork" start
+        # method in a multi-threaded process emits a DeprecationWarning and may deadlock.
+        #
+        # We force "spawn" here to make multiprocessing safe under pytest when DataLoader workers are enabled. This is
+        # test-environment–specific and not required by the training logic itself.
+        #
+        # This means the test does not cover "fork". However, "spawn" is stricter (requires full picklability and clean
+        # state) and avoids fork-after-threads issues that pytest cannot reliably test anyway. Fork-specific behavior,
+        # if needed, should be tested in a clean process outside pytest.
+        torch.multiprocessing.set_start_method("spawn", force=True)
+
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = RLOOConfig(
@@ -1113,9 +1193,9 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            num_generations=2,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
         trainer = RLOOTrainer(
@@ -1125,6 +1205,59 @@ class TestRLOOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
         trainer.train()
+
+    def test_training_reward_func_with_log_extra(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            log_extra = kwargs.get("log_extra")
+            assert log_extra is not None
+            log_extra("test_column", [completion[:5] for completion in completions])
+            return [float(len(completion)) for completion in completions]
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            log_completions=True,
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert "test_column" in trainer._logs["extra"]
+
+    def test_training_reward_func_with_log_metric(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            log_metric = kwargs.get("log_metric")
+            assert log_metric is not None
+            log_metric("custom_accuracy", 0.75)
+            return [float(len(completion)) for completion in completions]
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        # log_metric appends to _metrics, which gets averaged and merged into log_history
+        logged_keys = {k for entry in trainer.state.log_history for k in entry}
+        assert "custom_accuracy" in logged_keys
 
     def test_prepare_input_called_with_correct_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1184,6 +1317,13 @@ class TestRLOOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
         ],
     )
@@ -1228,6 +1368,43 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             if n.startswith(params_to_skip):
                 continue
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_vision
+    def test_training_vlm_with_pad_to_multiple_of(self):
+        # Models like Gemma3 use other forward keyword arguments like token_type_ids that also need to be padded when
+        # using pad_to_multiple_of, so we test that the trainer correctly pads all the necessary inputs in this case.
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            pad_to_multiple_of=7,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
@@ -1320,7 +1497,7 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 

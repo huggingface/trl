@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "qwen-vl-utils",
 #     "torchvision",
 #     "bitsandbytes",
@@ -44,7 +43,7 @@ accelerate launch \
     --save_steps 300 \
     --learning_rate 8e-5 \
     --max_grad_norm 0.3 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --lr_scheduler_type cosine \
     --push_to_hub False \
     --dtype bfloat16
@@ -64,10 +63,6 @@ from qwen_vl_utils import process_vision_info
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def download_video(url: str, cache_dir: str) -> str:

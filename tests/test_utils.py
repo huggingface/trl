@@ -28,10 +28,10 @@ from trl.trainer.utils import (
     RepeatSampler,
     entropy_from_logits,
     flush_left,
-    flush_right,
     forward_masked_logits,
     generate_model_card,
     get_peft_config,
+    hash_module,
     nanstd,
     pad,
     print_prompt_completions_sample,
@@ -187,6 +187,56 @@ class TestPad(TrlTestCase):
         assert torch.equal(output, expected)
 
 
+class TestHashModule(TrlTestCase):
+    def test_hash_module_deterministic_across_order(self):
+        class ModAB(torch.nn.Module):
+            def __init__(self, a: torch.Tensor, b: torch.Tensor):
+                super().__init__()
+                self.a = torch.nn.Parameter(a)
+                self.b = torch.nn.Parameter(b)
+
+        class ModBA(torch.nn.Module):
+            def __init__(self, a: torch.Tensor, b: torch.Tensor):
+                super().__init__()
+                self.b = torch.nn.Parameter(b)
+                self.a = torch.nn.Parameter(a)
+
+        a = torch.tensor([[1.0, 2.0]])
+        b = torch.tensor([3.0])
+        assert hash_module(ModAB(a, b)) == hash_module(ModBA(a, b))
+
+    def test_hash_module_changes_with_value(self):
+        class Mod(torch.nn.Module):
+            def __init__(self, value: float):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([value, 2.0]))
+
+        assert hash_module(Mod(1.0)) != hash_module(Mod(1.5))
+
+    def test_hash_module_includes_dtype(self):
+        class Mod(torch.nn.Module):
+            def __init__(self, dtype: torch.dtype):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([1.0, 2.0], dtype=dtype))
+
+        assert hash_module(Mod(torch.float32)) != hash_module(Mod(torch.float16))
+
+    def test_hash_module_tiny_model_twice(self):
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model_a = AutoModelForCausalLM.from_pretrained(model_id)
+        model_b = AutoModelForCausalLM.from_pretrained(model_id)
+        assert hash_module(model_a) == hash_module(model_b)
+
+    def test_hash_module_tiny_model_change_layer(self):
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        h1 = hash_module(model)
+        with torch.no_grad():
+            model.lm_head.weight.add_(0.01)
+        h2 = hash_module(model)
+        assert h1 != h2
+
+
 @require_peft
 class TestGetPEFTConfig(TrlTestCase):
     def test_create_peft_config_use_peft_false(self):
@@ -225,13 +275,13 @@ class TestNanStd(TrlTestCase):
     def test_nanstd_ignores_nans(self):
         x = torch.tensor([1.0, 2.0, 3.0, float("nan")])
         result = nanstd(x)
-        assert torch.allclose(result, torch.tensor(1.0))
+        torch.testing.assert_close(result, torch.tensor(1.0))
 
     def test_nanstd_dim_and_keepdim(self):
         x = torch.tensor([[1.0, float("nan")], [3.0, 5.0]])
         result = nanstd(x, dim=1, keepdim=True)
         assert torch.isnan(result[0, 0])
-        assert torch.allclose(result[1, 0], torch.tensor(1.4142135), rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(result[1, 0], torch.tensor(1.4142135), rtol=1e-5, atol=1e-6)
 
     def test_nanstd_all_nan(self):
         x = torch.tensor([float("nan"), float("nan")])
@@ -248,6 +298,7 @@ class TestGenerateModelCard(TrlTestCase):
             dataset_name="username/my_dataset",
             tags=["trl", "trainer-tag"],
             wandb_url="https://wandb.ai/username/project_id/runs/abcd1234",
+            trackio_url="https://huggingface.co/spaces/username/space_id",
             comet_url="https://www.comet.com/username/project_id/experiment_id",
             trainer_name="My Trainer",
             trainer_citation="@article{my_trainer, ...}",
@@ -260,6 +311,7 @@ class TestGenerateModelCard(TrlTestCase):
         assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
         assert "datasets: username/my_dataset" in card_text
         assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
+        assert "](https://huggingface.co/spaces/username/space_id)" in card_text
         assert "](https://www.comet.com/username/project_id/experiment_id" in card_text
         assert "My Trainer" in card_text
         assert "```bibtex\n@article{my_trainer, ...}\n```" in card_text
@@ -273,6 +325,7 @@ class TestGenerateModelCard(TrlTestCase):
             dataset_name=None,
             tags=[],
             wandb_url=None,
+            trackio_url=None,
             comet_url=None,
             trainer_name="My Trainer",
             trainer_citation=None,
@@ -326,50 +379,6 @@ class TestFlushLeft(TrlTestCase):
         mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
         new_mask = flush_left(mask)
         expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
-        assert torch.equal(new_mask, expected_mask)
-
-
-class TestFlushRight(TrlTestCase):
-    def test_basic_case(self):
-        mask = torch.tensor([[1, 1, 1, 0, 0], [0, 0, 1, 1, 0]])
-        tensor1 = torch.tensor([[2, 3, 4, 0, 0], [0, 0, 5, 6, 0]])
-        tensor2 = torch.tensor([[7, 8, 9, 0, 0], [0, 0, 10, 11, 0]])
-        new_mask, new_tensor1, new_tensor2 = flush_right(mask, tensor1, tensor2)
-
-        expected_mask = torch.tensor([[1, 1, 1], [0, 1, 1]])
-        expected_tensor1 = torch.tensor([[2, 3, 4], [0, 5, 6]])
-        expected_tensor2 = torch.tensor([[7, 8, 9], [0, 10, 11]])
-
-        assert torch.equal(new_mask, expected_mask)
-        assert torch.equal(new_tensor1, expected_tensor1)
-        assert torch.equal(new_tensor2, expected_tensor2)
-
-    def test_single_row(self):
-        mask = torch.tensor([[1, 1, 0, 0]])
-        tensor1 = torch.tensor([[2, 3, 0, 0]])
-        new_mask, new_tensor1 = flush_right(mask, tensor1)
-
-        expected_mask = torch.tensor([[1, 1]])
-        expected_tensor1 = torch.tensor([[2, 3]])
-
-        assert torch.equal(new_mask, expected_mask)
-        assert torch.equal(new_tensor1, expected_tensor1)
-
-    def test_no_shift_needed(self):
-        mask = torch.tensor([[0, 0, 1, 1], [0, 0, 0, 1]])
-        tensor1 = torch.tensor([[0, 0, 5, 6], [0, 0, 0, 7]])
-        new_mask, new_tensor1 = flush_right(mask, tensor1)
-
-        expected_mask = torch.tensor([[1, 1], [0, 1]])
-        expected_tensor1 = torch.tensor([[5, 6], [0, 7]])
-
-        assert torch.equal(new_mask, expected_mask)
-        assert torch.equal(new_tensor1, expected_tensor1)
-
-    def test_no_tensors(self):
-        mask = torch.tensor([[1, 1, 1, 0, 0], [0, 0, 1, 1, 0]])
-        new_mask = flush_right(mask)
-        expected_mask = torch.tensor([[1, 1, 1], [0, 1, 1]])
         assert torch.equal(new_mask, expected_mask)
 
 
@@ -653,6 +662,60 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
 
         assert output == expected_output
 
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages_with_reasoning_content(self, mock_stdout):
+        prompts = [[{"role": "user", "content": "What color is the sky?"}]]
+        completions = [[{"role": "assistant", "reasoning_content": "I think it is blue.", "content": "It is blue."}]]
+        rewards = {"Score": [0.5]}
+        advantages = [0.9]
+        step = 1
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭─────────────────────────────── Step 1 ───────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt                 ┃ Completion          ┃ Score ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ USER                   │ ASSISTANT           │  0.50 │      0.90 │ │
+        │ │ What color is the sky? │ I think it is blue. │       │           │ │
+        │ │                        │ It is blue.         │       │           │ │
+        │ └────────────────────────┴─────────────────────┴───────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages_with_thinking(self, mock_stdout):
+        prompts = [[{"role": "user", "content": "What color is the sky?"}]]
+        completions = [[{"role": "assistant", "thinking": "I think it is blue.", "content": "It is blue."}]]
+        rewards = {"Score": [0.5]}
+        advantages = [0.9]
+        step = 1
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭─────────────────────────────── Step 1 ───────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt                 ┃ Completion          ┃ Score ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ USER                   │ ASSISTANT           │  0.50 │      0.90 │ │
+        │ │ What color is the sky? │ I think it is blue. │       │           │ │
+        │ │                        │ It is blue.         │       │           │ │
+        │ └────────────────────────┴─────────────────────┴───────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
 
 class TestSelectiveLogSoftmax(TrlTestCase):
     @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
@@ -668,6 +731,27 @@ class TestSelectiveLogSoftmax(TrlTestCase):
         expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
         actual_output = selective_log_softmax(logits, input_ids)
 
+        if dtype in [torch.float16, torch.bfloat16]:
+            # half-precision dtypes fall back to an exact method
+            assert torch.equal(actual_output, expected_output)
+        else:
+            torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
+
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
+    @pytest.mark.parametrize("k", [1, 8])
+    def test_selective_log_softmax_multi_index(self, dtype, k):
+        """Test selective_log_softmax with logits of different dtypes and index widths"""
+        vocab_size = 1024
+        batch_size = 4
+        seq_len = 32
+
+        index = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len, k))
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+
+        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=index)
+        actual_output = selective_log_softmax(logits, index)
+
+        assert actual_output.shape == (batch_size, seq_len, k)
         if dtype in [torch.float16, torch.bfloat16]:
             # half-precision dtypes fall back to an exact method
             assert torch.equal(actual_output, expected_output)
@@ -853,7 +937,7 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         batch = {"pixel_values": pixel_values, "image_grid_thw": image_grid_thw, "other_key": torch.tensor([1])}
         result = unsplit_pixel_values_by_grid(batch)
         assert isinstance(result["pixel_values"], torch.Tensor)
-        assert torch.allclose(result["pixel_values"], pixel_values_merged)
+        torch.testing.assert_close(result["pixel_values"], pixel_values_merged)
         assert isinstance(result["image_grid_thw"], torch.Tensor)
         assert torch.equal(result["image_grid_thw"], image_grid_thw_merged)
         assert "other_key" in result
@@ -870,10 +954,12 @@ class TestForwardMaskedLogits:
         "model_id",
         [
             "trl-internal-testing/tiny-CohereForCausalLM",
+            "trl-internal-testing/tiny-Cohere2ForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
             "trl-internal-testing/tiny-GemmaForCausalLM",
+            "trl-internal-testing/tiny-Glm4MoeForCausalLM",
             "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
@@ -921,10 +1007,17 @@ class TestForwardMaskedLogits:
                         reason="Qwen3-VL series were introduced in transformers-4.57.0",
                     ),
                     pytest.mark.xfail(
-                        Version(transformers.__version__) >= Version("5.0.0"),
-                        reason="Blocked by upstream transformers bug (transformers#43334)",
+                        Version("5.0.0") <= Version(transformers.__version__) < Version("5.1.0"),
+                        reason="Upstream transformers bug (transformers#43334) in 5.0.x; fixed in 5.1.0",
                     ),
                 ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
             ),
         ],
     )

@@ -15,17 +15,29 @@
 # This file contains utility classes and functions that are used across more than one experimental trainer or feature.
 
 import inspect
+import logging
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+import pyarrow as pa
+import pyarrow.types
 import torch
 from accelerate.utils import is_peft_model
 from packaging.version import Version
+from pyarrow import compute as pc
+from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, TrainingArguments
-from transformers.utils import is_peft_available
+from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+from transformers.utils import (
+    is_peft_available,
+    is_torch_mlu_available,
+    is_torch_npu_available,
+    is_torch_xpu_available,
+)
 
-from ..models.utils import peft_module_casting_to_bf16
+from ..data_utils import DatasetType, _get_dataset_format
 from ..trainer.utils import pad
 
 
@@ -507,3 +519,193 @@ def prepare_peft_model(
         peft_module_casting_to_bf16(model)
 
     return model
+
+
+def pad_to_length(tensor: torch.Tensor, length: int, pad_value: int | float, dim: int = -1) -> torch.Tensor:
+    if tensor.size(dim) >= length:
+        return tensor
+    else:
+        pad_size = list(tensor.shape)
+        pad_size[dim] = length - tensor.size(dim)
+        return torch.cat(
+            [
+                tensor,
+                pad_value * torch.ones(*pad_size, dtype=tensor.dtype, device=tensor.device),
+            ],
+            dim=dim,
+        )
+
+
+def empty_cache() -> None:
+    """Empties the cache of the available torch device.
+
+    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA) and empties the cache of
+    the first available device it finds.
+
+    If none of the specific devices are available, it defaults to emptying the CUDA cache.
+    """
+    if is_torch_xpu_available():
+        torch.xpu.empty_cache()
+    elif is_torch_mlu_available():
+        torch.mlu.empty_cache()
+    elif is_torch_npu_available():
+        torch.npu.empty_cache()
+    else:
+        torch.cuda.empty_cache()
+
+
+def peft_module_casting_to_bf16(model):
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
+            module = module.to(torch.float32)
+        elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
+            if hasattr(module, "weight"):
+                if module.weight.dtype == torch.float32:
+                    module = module.to(torch.bfloat16)
+
+
+LAYER_PATTERNS = [
+    "transformer.h.{layer}",
+    "model.decoder.layers.{layer}",
+    "gpt_neox.layers.{layer}",
+    "model.layers.{layer}",
+]
+
+
+def create_reference_model(
+    model: nn.Module, num_shared_layers: int | None = None, pattern: str | None = None
+) -> nn.Module:
+    """
+    Creates a static reference copy of a model. Note that model will be in `.eval()` mode.
+
+    Args:
+        model ([`nn.Module`]): The model to be copied.
+        num_shared_layers (`int`, *optional*):
+            The number of initial layers that are shared between both models and kept frozen.
+        pattern (`str`, *optional*): The shared layers are selected with a string pattern
+            (e.g. "transformer.h.{layer}" for GPT2) and if a custom pattern is necessary it can be passed here.
+
+    Returns:
+        [`nn.Module`]
+    """
+    if is_deepspeed_zero3_enabled():
+        raise ValueError(
+            "DeepSpeed ZeRO-3 is enabled and is not compatible with `create_reference_model()`. Please instantiate your reference model directly with `AutoModelForCausalLM.from_pretrained()`."
+        )
+
+    parameter_names = [n for n, _ in model.named_parameters()]
+    ref_model = deepcopy(model)
+
+    # if no layers are shared, return copy of model
+    if num_shared_layers is None:
+        for param_name in parameter_names:
+            param = ref_model.get_parameter(param_name)
+            param.requires_grad = False
+        return ref_model.eval()
+
+    # identify layer name pattern
+    if pattern is not None:
+        pattern = pattern.format(layer=num_shared_layers)
+    else:
+        for pattern_candidate in LAYER_PATTERNS:
+            pattern_candidate = pattern_candidate.format(layer=num_shared_layers)
+            if any(pattern_candidate in name for name in parameter_names):
+                pattern = pattern_candidate
+                break
+
+    if pattern is None:
+        raise ValueError("Layer pattern could not be matched.")
+
+    # divide parameters in shared and unshared parameter lists
+    shared_param_list = []
+    unshared_param_list = []
+
+    shared_parameter = True
+    for name, _param in model.named_parameters():
+        if pattern in name:
+            shared_parameter = False
+        if shared_parameter:
+            shared_param_list.append(name)
+        else:
+            unshared_param_list.append(name)
+
+    # create reference of the original parameter if they are shared
+    for param_name in shared_param_list:
+        param = model.get_parameter(param_name)
+        param.requires_grad = False
+
+        _ref_param = ref_model.get_parameter(param_name)
+
+    # for all other parameters just make sure they don't use gradients
+    for param_name in unshared_param_list:
+        param = ref_model.get_parameter(param_name)
+        param.requires_grad = False
+
+    if pattern is not None and len(unshared_param_list) == 0:
+        logging.warning("Pattern passed or found, but no layers matched in the model. Check for a typo.")
+
+    return ref_model.eval()
+
+
+def truncate_dataset(
+    dataset: DatasetType,
+    max_length: int,
+    truncation_mode: str = "keep_start",
+    map_kwargs: dict[str, Any] | None = None,
+) -> DatasetType:
+    r"""
+    Truncate sequences in a dataset to a specified `max_length`.
+
+    Args:
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
+            Dataset to truncate.
+        max_length (`int`):
+            Maximum sequence length to truncate to.
+        truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
+            Whether to keep the start (`"keep_start"`) or the end (`"keep_end"`) of the sequence when truncating.
+        map_kwargs (`dict`, *optional*):
+            Additional keyword arguments to pass to the dataset's map method when truncating examples.
+
+    Returns:
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The dataset with truncated sequences.
+
+    Example:
+    ```python
+    >>> from datasets import Dataset
+
+    >>> examples = {
+    ...     "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+    ...     "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+    ... }
+    >>> dataset = Dataset.from_dict(examples)
+    >>> truncated_dataset = truncate_dataset(dataset, max_length=2)
+    >>> truncated_dataset[:]
+    {'input_ids': [[1, 2], [4, 5], [8]],
+     'attention_mask': [[0, 1], [0, 0], [1]]}
+    ```
+    """
+    if truncation_mode not in {"keep_start", "keep_end"}:
+        raise ValueError(f"Invalid truncation mode '{truncation_mode}'.")
+    if map_kwargs is None:
+        map_kwargs = {}
+
+    def truncate(examples):
+        truncated_columns = []
+        for column in examples.columns:
+            if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
+                if truncation_mode == "keep_start":
+                    column = pc.list_slice(column, 0, max_length)
+                else:  # keep_end
+                    column = (
+                        pa.array([[] for _ in range(len(column))], type=column.type)
+                        if max_length == 0
+                        else pa.array([values[-max_length:] for values in column.to_pylist()], type=column.type)
+                    )
+            truncated_columns.append(column)
+        return pa.Table.from_arrays(truncated_columns, names=examples.column_names)
+
+    format = _get_dataset_format(dataset)
+    dataset = dataset.with_format("arrow")
+    dataset = dataset.map(truncate, batched=True, **map_kwargs)
+    dataset = dataset.with_format(**format)
+    return dataset

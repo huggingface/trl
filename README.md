@@ -1,7 +1,10 @@
-# TRL - Transformer Reinforcement Learning
+# TRL - Transformers Reinforcement Learning
 
 <div style="text-align: center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png" alt="TRL Banner">
+    <picture>
+        <source media="(prefers-color-scheme: light)" srcset="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/TRL%20banner%20light.png">
+        <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png" alt="TRL Banner">
+    </picture>
 </div>
 
 <hr> <br>
@@ -113,18 +116,13 @@ trainer.train()
 
 ```python
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import DPOConfig, DPOTrainer
+from trl import DPOTrainer
 
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
-training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
+
 trainer = DPOTrainer(
-    model=model,
-    args=training_args,
+    model="Qwen3/Qwen-0.6B",
     train_dataset=dataset,
-    processing_class=tokenizer
 )
 trainer.train()
 ```

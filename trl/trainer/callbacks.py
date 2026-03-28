@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import logging
-import warnings
 
 import pandas as pd
 import torch
@@ -34,7 +33,7 @@ from transformers.trainer_utils import has_length
 from transformers.utils import is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
-from ..import_utils import is_weave_available, suppress_experimental_warning
+from ..import_utils import is_weave_available
 from ..models.utils import unwrap_model_for_generation
 from .utils import log_table_to_comet_experiment
 
@@ -55,8 +54,6 @@ if is_weave_available():
     from weave import EvaluationLogger
     from weave.trace.context import weave_client_context
 
-with suppress_experimental_warning():
-    from ..experimental.winrate_callback import WinRateCallback as _WinRateCallback
 
 # Logger for module-level logging
 logger = logging.getLogger(__name__)
@@ -252,19 +249,6 @@ class RichProgressCallback(TrainerCallback):
         self.rich_console = None
         self.training_status = None
         self.current_step = None
-
-
-class WinRateCallback(_WinRateCallback):
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "The `WinRateCallback` is now located in `trl.experimental`. Please update your imports to "
-            "`from trl.experimental.winrate_callback import WinRateCallback`. The current import path will be removed "
-            "and no longer supported in TRL 0.29. For more information, see "
-            "https://github.com/huggingface/trl/issues/4223.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        super().__init__(*args, **kwargs)
 
 
 class LogCompletionsCallback(TrainerCallback):

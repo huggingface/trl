@@ -17,7 +17,9 @@ import textwrap
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
     PreTrainedModel,
@@ -29,7 +31,8 @@ from transformers.utils import is_peft_available
 
 from ...models import prepare_deepspeed
 from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc, RolloutFunc
-from ...trainer.utils import disable_dropout_in_model, empty_cache, get_config_model_id
+from ...trainer.utils import disable_dropout_in_model, get_config_model_id
+from ..utils import empty_cache
 from .minillm_config import MiniLLMConfig
 
 
@@ -183,6 +186,14 @@ class MiniLLMTrainer(GRPOTrainer):
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = MiniLLMConfig(f"{model_name}-MiniLLM")
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model,

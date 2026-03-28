@@ -168,7 +168,8 @@ def profiling_decorator(func: Callable) -> Callable:
     """
     Decorator to profile a function and log execution time using [`extras.profiling.profiling_context`].
 
-    This decorator works with methods that have access to a trainer instance (typically as `self`).
+    This decorator works with methods that have access to a trainer instance (typically as `self`). For non-Trainer
+    objects that have an `accelerator` attribute, it will use that for logging configuration.
 
     Args:
         func (`Callable`):
@@ -195,7 +196,22 @@ def profiling_decorator(func: Callable) -> Callable:
 
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
-        with profiling_context(self, func.__name__):
+        # Check if self is a Trainer-like object with required attributes
+        if hasattr(self, "state") and hasattr(self, "args"):
+            with profiling_context(self, func.__name__):
+                return func(self, *args, **kwargs)
+        # For non-Trainer objects (e.g., VLLMGeneration), use ProfilingContext directly
+        elif hasattr(self, "accelerator"):
+            context_name = f"{self.__class__.__name__}.{func.__name__}"
+            with ProfilingContext(
+                name=context_name,
+                report_to=[],  # No reporting for non-Trainer objects without args
+                is_main_process=self.accelerator.is_main_process,
+                step=None,
+            ):
+                return func(self, *args, **kwargs)
+        else:
+            # No profiling available, just run the function
             return func(self, *args, **kwargs)
 
     return wrapper

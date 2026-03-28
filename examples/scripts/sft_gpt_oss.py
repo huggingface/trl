@@ -40,7 +40,7 @@ accelerate launch \
     --per_device_train_batch_size 2 \
     --num_train_epochs 1 \
     --logging_steps 1 \
-    --warmup_ratio 0.03 \
+    --warmup_steps 0.03 \
     --lr_scheduler_type cosine_with_min_lr \
     --lr_scheduler_kwargs '{"min_lr_rate": 0.1}' \
     --output_dir gpt-oss-20b-multilingual-reasoner \
@@ -48,16 +48,10 @@ accelerate launch \
     --seed 42
 """
 
-import os
-
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, Mxfp4Config
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_peft_config
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args):

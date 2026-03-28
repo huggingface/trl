@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "trackio",
 #     "kernels",
 # ]
@@ -32,7 +31,7 @@ python examples/scripts/online_dpo.py \
     --output_dir pythia-1b-tldr-online-dpo \
     --per_device_train_batch_size 8 \
     --gradient_accumulation_steps 16 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --missing_eos_penalty 1.0
 
 With LoRA:
@@ -44,12 +43,10 @@ python examples/scripts/online_dpo.py \
     --output_dir pythia-1b-tldr-online-dpo \
     --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 8 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --missing_eos_penalty 1.0 \
     --use_peft
 """
-
-import os
 
 import torch
 from datasets import load_dataset
@@ -66,10 +63,6 @@ from trl import (
 )
 from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge, PairRMJudge
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 JUDGES = {"pair_rm": PairRMJudge, "openai": OpenAIPairwiseJudge, "hf": HfPairwiseJudge}

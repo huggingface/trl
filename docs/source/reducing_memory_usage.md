@@ -19,25 +19,20 @@ To reduce memory usage, it's important to truncate sequences to a reasonable len
 <hfoptions id="truncation">
 <hfoption id="DPO">
 
-DPO truncation is applied first to the prompt and to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is then used to truncate the resulting sequence.
+DPO truncation is controlled via `max_length`, which truncates the combined prompt+completion sequence.
 
 ![DPO truncation](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png)
 
-To set the truncation parameters, use the following code snippet:
+To set the truncation parameter, use the following code snippet:
 
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., max_prompt_length=..., max_length=...)
+training_args = DPOConfig(..., max_length=...)
 ```
 
-You can also use the `max_completion_length` parameter to truncate the completion, though this is less common since the goal is typically to preserve the completion's full length whenever possible.
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(..., max_completion_length=...)
-```
+> [!WARNING]
+> The legacy `max_prompt_length` and `max_completion_length` parameters are now removed; instead, filter or pre-truncate overlong prompts/completions in your dataset before training.
 
 </hfoption>
 <hfoption id="SFT">
@@ -72,22 +67,35 @@ To help you choose an appropriate value, we provide a utility to visualize the s
 
 [Truncation](#truncation) has several drawbacks:
 
-1. **Loss of information**: Key data at the end of a sequence may be discarded.
-2. **Choosing truncation length**: Too short loses data; too long undermines efficiency.
+1. **Loss of information**: Important tokens at the end of sequences may be discarded.
+2. **Choosing truncation length**: Too short loses data; too long reduces efficiency.
 
-Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.10683), addresses these issues by grouping sequences instead of truncating. It concatenates and splits dataset sequences into the desired lengths.
+Packing mitigates these issues by grouping multiple sequences into the same training row, filling each row up to `max_length`.
 
 ![Packing](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_3.png)
 
-Packing reduces padding by merging several sequences in one row when possible. We use an advanced method to be near-optimal in the way we pack the dataset. To enable packing, use `packing=True` in the [`SFTConfig`].
+TRL implements packing using **Best-Fit Decreasing (BFD)** bin packing, which groups sequences efficiently while minimizing padding. When a sequence exceeds `max_length`, different strategies determine how the overflow tokens are handled.
 
-> [!TIP]
-> In TRL 0.18 and earlier, packing used a more aggressive method that reduced padding to almost nothing, but had the downside of breaking sequence continuity for a large fraction of the dataset. To revert to this strategy, use `packing_strategy="wrapped"` in [`SFTConfig`].
+TRL supports three strategies:
+
+* `"bfd"` (default): Uses **Best-Fit Decreasing packing**. If a sequence exceeds `max_length`, the overflow tokens are discarded.
+
+* `"bfd_split"`: Uses **Best-Fit Decreasing packing**, but long sequences are split into chunks ≤ `max_length` before packing. This preserves all tokens and follows the approach proposed in [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830).
+
+* `"wrapped"`: All tokens are concatenated into a stream and split into fixed-length blocks. This minimizes padding but may mix unrelated examples. This strategy corresponds to the *concatenate-then-split* preprocessing described in the literature (e.g., [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830)). It has the downside of breaking sequence continuity for a large fraction of the dataset, which hurts performance, as discussed in the [Qwen3-Coder-Next Technical Report](https://huggingface.co/papers/2603.00729).
+
+> [!NOTE]
+> If all sequences are shorter than `max_length`, **`bfd` and `bfd_split` behave identically**, since no truncation or splitting is required.
 
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., packing=True, max_length=512)
+training_args = SFTConfig(
+    ...,
+    packing=True,
+    packing_strategy="bfd",
+    max_length=512,
+)
 ```
 
 ## PEFT for parameter-efficient fine-tuning

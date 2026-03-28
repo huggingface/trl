@@ -26,6 +26,7 @@ import torch.distributed.distributed_c10d as c10d
 from requests.adapters import HTTPAdapter
 from torch import nn
 from transformers import is_torch_xpu_available
+from transformers.utils import get_json_schema
 from urllib3.util.retry import Retry
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
@@ -94,10 +95,12 @@ class VLLMClient:
         >>> client.generate(["Hello, AI!", "Tell me a joke"])
         {'prompt_ids': [[9707, 11, 15235, 0],
                         [40451, 752, 264, 21646]],
-         'completion_ids': [[11479, 752, 5046, 279, 1465, 304, 419, 23670, 2038, 358, 2776, 4378, 369, 847, 15549, 6733],
-                            [911, 19654, 382, 3838, 1558, 279, 16158, 1977, 979, 498, 2299, 4460, 311, 10542, 432, 518]],
-         'logprobs': [[-5.193126201629639, -0.05592319369316101, -4.861808776855469, -1.673396110534668, -2.6316866874694824, -0.2861405313014984, -0.35006725788116455, -5.23351526260376, -0.1447441577911377, -5.21489953994751, -1.6022650003433228, -1.9649192094802856, -2.1338791847229004, -1.2775304317474365, -10.004860877990723, -4.171003818511963],
-                      [-0.012896230444312096, -5.747106552124023, -1.5248860120773315, -1.9286258220672607, -2.8512537479400635, -2.8055880069732666, -3.019822835922241, -0.37132859230041504, -0.6311739087104797, -2.562908411026001, -3.1664533615112305, -2.685293436050415, -0.007259538397192955, -7.339841842651367, -1.188662052154541, -3.54781436920166]]}
+         'completion_ids': [[2980, 498, 1492, 752, 448, 264, 13027, 8645, 30, 358, 2776, 4460, 311, 3270, 264, 2025],
+                            [911, 98072, 2142, 624, 45, 51426, 2142, 374, 279, 16396, 429, 4302, 702, 36988, 7290, 476]],
+         'logprobs': [[[-1.6612], [-0.0081], [-1.5189], [-0.0123], [-1.2045], [-0.6227], [-2.9791], [-2.8387], [-0.1267], [-0.0366], [-2.6528], [-0.3197], [-0.0001], [-1.8174], [-0.0251], [-1.473]],
+                      [[-0.018], [-10.7331], [-0.1605], [-0.891], [-3.7945], [-0.0127], [-0.3073], [-1.1648], [-1.8025], [-0.409], [-0.0256], [-1.6127], [-2.2935], [-4.1785], [-0.6531], [-0.2629]]],
+         'logprob_token_ids': [[[2980], [498], [1492], [752], [448], [264], [13027], [8645], [30], [358], [2776], [4460], [311], [3270], [264], [2025]],
+                               [[911], [98072], [2142], [624], [45], [51426], [2142], [374], [279], [16396], [429], [4302], [702], [36988], [7290], [476]]]}
 
         >>> from transformers import AutoModelForCausalLM
 
@@ -200,7 +203,7 @@ class VLLMClient:
 
     def generate(
         self,
-        prompts: list[str],
+        prompts: list[str] | list[list[int]],
         images: list | None = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
@@ -209,7 +212,7 @@ class VLLMClient:
         top_k: int = 0,
         min_p: float = 0.0,
         max_tokens: int = 16,
-        truncate_prompt_tokens: int | None = None,
+        logprobs: int | None = 0,
         structured_outputs_regex: str | None = None,
         generation_kwargs: dict | None = None,
     ) -> dict[str, list[list[int]]]:
@@ -217,10 +220,11 @@ class VLLMClient:
         Generates model completions for the provided prompts.
 
         Args:
-            prompts (`list[str]`):
-                List of text prompts for which the model will generate completions.
-            images (`list[PIL.Image]`, *optional*):
-                List of PIL Images to send along with the prompts.
+            prompts (`list[str]` or `list[list[int]]`):
+                List of text prompts or list of token ID lists for which the model will generate completions.
+            images (`list[list[PIL.Image] | None]`, *optional*):
+                List of image lists for VLM support. Each element is a list of PIL images for the corresponding prompt,
+                or `None` if no images for that prompt.
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
             repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -235,10 +239,10 @@ class VLLMClient:
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each prompt.
-            truncate_prompt_tokens (`int`, *optional*):
-                If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
-                only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
-                disabled.
+            logprobs (`int` or `None`, *optional*, defaults to `0`):
+                Number of top logprobs to return per token. When 0, only the sampled token's logprob is returned. When
+                N>0, returns up to N+1 logprobs sorted by descending probability, because vLLM always includes the
+                sampled token's logprob (which may fall outside the top-N).
             structured_outputs_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
@@ -252,13 +256,20 @@ class VLLMClient:
                     List of lists of token IDs representing the tokenized input prompts.
                 - `completion_ids` (`list[list[int]]`):
                     List of lists of token IDs representing the model-generated completions for each prompt.
-                - `logprobs` (`list[list[float]]`):
-                    List of lists of log probabilities for each generated token.
+                - `logprobs` (`list[list[list[float]]]`):
+                    Per-token logprobs of shape (num_sequences, seq_len, num_logprobs), sorted by descending
+                    probability.
+                - `logprob_token_ids` (`list[list[list[int]]]`):
+                    Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
         url = f"{self.base_url}/generate/"
 
-        # Convert PIL images to base64 strings
-        images = [pil_to_base64(img) for img in images] if images else None
+        # Convert PIL images to base64 strings. Each element is a list of images for the corresponding prompt,
+        # or None if no images for that prompt.
+        if images:
+            images = [
+                [pil_to_base64(img) for img in img_list] if img_list is not None else None for img_list in images
+            ]
 
         response = self.session.post(
             url,
@@ -272,7 +283,7 @@ class VLLMClient:
                 "top_k": top_k,
                 "min_p": min_p,
                 "max_tokens": max_tokens,
-                "truncate_prompt_tokens": truncate_prompt_tokens,
+                "logprobs": logprobs,
                 "structured_outputs_regex": structured_outputs_regex,
                 "generation_kwargs": generation_kwargs or {},
             },
@@ -283,6 +294,7 @@ class VLLMClient:
                 "prompt_ids": json_response["prompt_ids"],
                 "completion_ids": json_response["completion_ids"],
                 "logprobs": json_response["logprobs"],
+                "logprob_token_ids": json_response["logprob_token_ids"],
             }
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
@@ -297,7 +309,7 @@ class VLLMClient:
         top_k: int = 0,
         min_p: float = 0.0,
         max_tokens: int = 16,
-        truncate_prompt_tokens: int | None = None,
+        logprobs: int | None = 0,
         structured_outputs_regex: str | None = None,
         generation_kwargs: dict | None = None,
         chat_template_kwargs: dict | None = None,
@@ -325,10 +337,10 @@ class VLLMClient:
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each message list.
-            truncate_prompt_tokens (`int`, *optional*):
-                If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
-                only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
-                disabled.
+            logprobs (`int` or `None`, *optional*, defaults to `0`):
+                Number of top logprobs to return per token. When 0, only the sampled token's logprob is returned. When
+                N>0, returns up to N+1 logprobs sorted by descending probability, because vLLM always includes the
+                sampled token's logprob (which may fall outside the top-N).
             structured_outputs_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
@@ -337,7 +349,7 @@ class VLLMClient:
                 will override them.
             chat_template_kwargs (`dict`, *optional*):
                 Additional keyword arguments to customize the chat template used by the model.
-            tools (`list`, *optional*):
+            tools (`list[dict | Callable]`, *optional*):
                 List of tool functions available for tool calling during chat generation.
             chat_template (`str`, *optional*):
                 Template to use for structuring the chat. If not provided, the model's default chat template will be
@@ -349,11 +361,12 @@ class VLLMClient:
                     List of lists of token IDs representing the tokenized input messages.
                 - `completion_ids` (`list[list[int]]`):
                     List of lists of token IDs representing the model-generated completions for each message list.
-                - `logprobs` (`list[list[float]]`):
-                    List of lists of log probabilities for each generated token.
+                - `logprobs` (`list[list[list[float]]]`):
+                    Per-token logprobs of shape (num_sequences, seq_len, num_logprobs), sorted by descending
+                    probability.
+                - `logprob_token_ids` (`list[list[list[int]]]`):
+                    Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
-        if tools is not None:
-            raise NotImplementedError("Tool calling is not yet implemented in VLLMClient.chat().")
         if chat_template is not None:
             raise NotImplementedError("Custom chat templates are not yet implemented in VLLMClient.chat().")
 
@@ -368,6 +381,9 @@ class VLLMClient:
                         if part["type"] == "image_pil":
                             part["image_pil"] = pil_to_base64(part["image_pil"])
 
+        if isinstance(tools, list) and len(tools) > 0:
+            tools = [get_json_schema(tool) if callable(tool) else tool for tool in tools]
+
         response = self.session.post(
             url,
             json={
@@ -379,10 +395,11 @@ class VLLMClient:
                 "top_k": top_k,
                 "min_p": min_p,
                 "max_tokens": max_tokens,
-                "truncate_prompt_tokens": truncate_prompt_tokens,
+                "logprobs": logprobs,
                 "structured_outputs_regex": structured_outputs_regex,
                 "generation_kwargs": generation_kwargs or {},
                 "chat_template_kwargs": chat_template_kwargs or {},
+                "tools": tools,
             },
         )
         if response.status_code == 200:
@@ -391,6 +408,7 @@ class VLLMClient:
                 "prompt_ids": json_response["prompt_ids"],
                 "completion_ids": json_response["completion_ids"],
                 "logprobs": json_response["logprobs"],
+                "logprob_token_ids": json_response["logprob_token_ids"],
             }
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")

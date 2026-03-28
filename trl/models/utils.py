@@ -13,22 +13,32 @@
 # limitations under the License.
 
 import itertools
-import logging
+import warnings
 from collections.abc import Callable
 from contextlib import contextmanager
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
-import torch
+import accelerate
 import torch.nn as nn
 import transformers
+from accelerate import Accelerator
 from packaging.version import Version
+from torch.distributed.fsdp import FSDPModule
+from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 from transformers import GenerationConfig, PreTrainedModel
-from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 
+from ..import_utils import suppress_experimental_warning
+
+
+with suppress_experimental_warning():
+    from ..experimental.utils import create_reference_model as _create_reference_model
+
+
+if Version(accelerate.__version__) >= Version("1.11.0"):
+    from accelerate.utils.fsdp_utils import get_parameters_from_modules
 
 if TYPE_CHECKING:
-    from accelerate import Accelerator
     from deepspeed.runtime.engine import DeepSpeedEngine
     from torch.nn import Module
     from torch.nn.parallel.distributed import DistributedDataParallel
@@ -252,31 +262,50 @@ def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
     return model
 
 
-def prepare_fsdp(model, accelerator):
-    # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1421
-    from torch.distributed.fsdp import FSDPModule
-    from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
-
-    # Check if the model is already a FSDP model due to `Manual Wrapping` and if so,
-    # don't wrap it again
-    if not (isinstance(model, FSDP) or isinstance(model, FSDPModule)):
-        accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
+def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
+    # Check if the model is already a FSDP model due to `Manual Wrapping` and if so, don't wrap it again
+    if not isinstance(model, (FSDP, FSDPModule)):
         fsdp_plugin = accelerator.state.fsdp_plugin
-        kwargs = {
-            "sharding_strategy": fsdp_plugin.sharding_strategy or fsdp_plugin.reshard_after_forward,
-            "cpu_offload": fsdp_plugin.cpu_offload,
-            "auto_wrap_policy": fsdp_plugin.auto_wrap_policy,
-            "mixed_precision": fsdp_plugin.mixed_precision_policy,
-            "sync_module_states": fsdp_plugin.sync_module_states,
-            "backward_prefetch": fsdp_plugin.backward_prefetch,
-            "forward_prefetch": fsdp_plugin.forward_prefetch,
-            "use_orig_params": fsdp_plugin.use_orig_params,
-            "param_init_fn": fsdp_plugin.param_init_fn,
-            "ignored_modules": fsdp_plugin.ignored_modules,
-            "limit_all_gathers": fsdp_plugin.limit_all_gathers,
-            "device_id": accelerator.device,
-        }
-        model = FSDP(model, **kwargs)
+        if fsdp_plugin.fsdp_version == 1:
+            accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
+            kwargs = {
+                "sharding_strategy": fsdp_plugin.sharding_strategy or fsdp_plugin.reshard_after_forward,
+                "cpu_offload": fsdp_plugin.cpu_offload,
+                "auto_wrap_policy": fsdp_plugin.auto_wrap_policy,
+                "mixed_precision": fsdp_plugin.mixed_precision_policy,
+                "sync_module_states": fsdp_plugin.sync_module_states,
+                "backward_prefetch": fsdp_plugin.backward_prefetch,
+                "forward_prefetch": fsdp_plugin.forward_prefetch,
+                "use_orig_params": fsdp_plugin.use_orig_params,
+                "param_init_fn": fsdp_plugin.param_init_fn,
+                "ignored_modules": fsdp_plugin.ignored_modules,
+                "limit_all_gathers": fsdp_plugin.limit_all_gathers,
+                "device_id": accelerator.device,
+            }
+            model = FSDP(model, **kwargs)
+        elif fsdp_plugin.fsdp_version == 2:
+            from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+
+            mesh = getattr(accelerator, "torch_device_mesh", None)
+            if Version(accelerate.__version__) >= Version("1.11.0"):
+                ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
+            else:
+                warnings.warn(
+                    "FSDP version 2 is being used with accelerate version < 1.11.0, which may lead to incorrect "
+                    "handling of ignored modules. Please upgrade accelerate to v1.11.0 or later for proper support."
+                )
+                ignored_params = None
+            fully_shard(
+                model,
+                reshard_after_forward=fsdp_plugin.reshard_after_forward,
+                offload_policy=fsdp_plugin.cpu_offload,
+                # `fully_shard` doesn't accept `None` in case of `MixedPrecisionPolicy`
+                mp_policy=fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
+                mesh=mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)] if mesh is not None else None,
+                ignored_params=ignored_params,
+            )
+        else:
+            raise ValueError(f"FSDP version {fsdp_plugin.fsdp_version} is not supported.")
     model.eval()
     return model
 
@@ -332,16 +361,6 @@ class _ForwardRedirection:
         pass
 
 
-def peft_module_casting_to_bf16(model):
-    for name, module in model.named_modules():
-        if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
-            module = module.to(torch.float32)
-        elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
-            if hasattr(module, "weight"):
-                if module.weight.dtype == torch.float32:
-                    module = module.to(torch.bfloat16)
-
-
 @contextmanager
 def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointing_kwargs: dict | None = None):
     """
@@ -363,84 +382,14 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
             model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
 
 
-LAYER_PATTERNS = [
-    "transformer.h.{layer}",
-    "model.decoder.layers.{layer}",
-    "gpt_neox.layers.{layer}",
-    "model.layers.{layer}",
-]
-
-
 def create_reference_model(
     model: nn.Module, num_shared_layers: int | None = None, pattern: str | None = None
 ) -> nn.Module:
-    """
-    Creates a static reference copy of a model. Note that model will be in `.eval()` mode.
-
-    Args:
-        model ([`nn.Module`]): The model to be copied.
-        num_shared_layers (`int`, *optional*):
-            The number of initial layers that are shared between both models and kept frozen.
-        pattern (`str`, *optional*): The shared layers are selected with a string pattern
-            (e.g. "transformer.h.{layer}" for GPT2) and if a custom pattern is necessary it can be passed here.
-
-    Returns:
-        [`nn.Module`]
-    """
-    if is_deepspeed_zero3_enabled():
-        raise ValueError(
-            "DeepSpeed ZeRO-3 is enabled and is not compatible with `create_reference_model()`. Please instantiate your reference model directly with `AutoModelForCausalLM.from_pretrained()`."
-        )
-
-    parameter_names = [n for n, _ in model.named_parameters()]
-    ref_model = deepcopy(model)
-
-    # if no layers are shared, return copy of model
-    if num_shared_layers is None:
-        for param_name in parameter_names:
-            param = ref_model.get_parameter(param_name)
-            param.requires_grad = False
-        return ref_model.eval()
-
-    # identify layer name pattern
-    if pattern is not None:
-        pattern = pattern.format(layer=num_shared_layers)
-    else:
-        for pattern_candidate in LAYER_PATTERNS:
-            pattern_candidate = pattern_candidate.format(layer=num_shared_layers)
-            if any(pattern_candidate in name for name in parameter_names):
-                pattern = pattern_candidate
-                break
-
-    if pattern is None:
-        raise ValueError("Layer pattern could not be matched.")
-
-    # divide parameters in shared and unshared parameter lists
-    shared_param_list = []
-    unshared_param_list = []
-
-    shared_parameter = True
-    for name, _param in model.named_parameters():
-        if pattern in name:
-            shared_parameter = False
-        if shared_parameter:
-            shared_param_list.append(name)
-        else:
-            unshared_param_list.append(name)
-
-    # create reference of the original parameter if they are shared
-    for param_name in shared_param_list:
-        param = model.get_parameter(param_name)
-        param.requires_grad = False
-
-        _ref_param = ref_model.get_parameter(param_name)
-
-    # for all other parameters just make sure they don't use gradients
-    for param_name in unshared_param_list:
-        param = ref_model.get_parameter(param_name)
-        param.requires_grad = False
-
-    if pattern is not None and len(unshared_param_list) == 0:
-        logging.warning("Pattern passed or found, but no layers matched in the model. Check for a typo.")
-
-    return ref_model.eval()
+    warnings.warn(
+        "The `create_reference_model` function is now located in `trl.experimental.utils`. Please update your "
+        "imports to `from trl.experimental.utils import create_reference_model`. This import path will be removed in "
+        "TRL 1.0.0.",
+        FutureWarning,
+        stacklevel=2,
+    )
+    return _create_reference_model(model, num_shared_layers=num_shared_layers, pattern=pattern)

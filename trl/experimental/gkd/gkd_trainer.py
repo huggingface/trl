@@ -38,8 +38,8 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
-from ...trainer.utils import disable_dropout_in_model, empty_cache
-from ..utils import DataCollatorForChatML
+from ...trainer.utils import disable_dropout_in_model
+from ..utils import DataCollatorForChatML, empty_cache
 from .gkd_config import GKDConfig
 
 
@@ -260,9 +260,9 @@ class GKDTrainer(SFTTrainer):
         else:
             # Compute the log of the mixture distribution
             # log(a + b) = log(exp(log(a)) + exp(log(b))) -> for mixture
-            beta = torch.tensor(beta, dtype=student_log_probs.dtype)
+            beta = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
             mixture_log_probs = torch.logsumexp(
-                torch.stack([student_log_probs + torch.log(1 - beta), teacher_log_probs + torch.log(beta)]),
+                torch.stack([student_log_probs + torch.log1p(-beta), teacher_log_probs + torch.log(beta)]),
                 dim=0,
             )
 

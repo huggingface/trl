@@ -33,12 +33,10 @@ python examples/scripts/xpo.py \
     --gradient_accumulation_steps 32 \
     --num_train_epochs 3 \
     --max_new_tokens 64 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --missing_eos_penalty 1.0 \
     --push_to_hub
 """
-
-import os
 
 import torch
 from datasets import load_dataset
@@ -54,10 +52,6 @@ from trl import (
 )
 from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge, PairRMJudge
 from trl.experimental.xpo import XPOConfig, XPOTrainer
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 JUDGES = {"pair_rm": PairRMJudge, "openai": OpenAIPairwiseJudge, "hf": HfPairwiseJudge}

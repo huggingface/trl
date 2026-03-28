@@ -14,14 +14,12 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "trackio",
 #     "kernels",
 # ]
 # ///
 
-import os
 import shutil
 
 import torch
@@ -38,15 +36,10 @@ from trl import ModelConfig, ScriptArguments, get_kbit_device_map, get_peft_conf
 from trl.experimental.ppo import PPOConfig, PPOTrainer
 
 
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
-
-
 """
 python -i examples/scripts/ppo/ppo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
     --dataset_train_split descriptiveness \
-    --learning_rate 3e-6 \
     --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-ppo \
     --per_device_train_batch_size 64 \
     --gradient_accumulation_steps 1 \
@@ -61,7 +54,6 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-ppo \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
-    --learning_rate 3e-6 \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 16 \
     --total_episodes 10000 \
