@@ -22,46 +22,45 @@ and dilute the training signal.
 ## Example
 
 ```python
-import ast
-import operator
 from datasets import Dataset
 from trl import GRPOTrainer, GRPOConfig
 
 
 # Define tool functions
-def calculator(expression: str) -> str:
-    """Evaluate a mathematical expression safely.
+def calculator(number_a: float, operation: str, number_b: float) -> str:
+    """Perform a basic arithmetic operation on two numbers.
 
     Args:
-        expression: A mathematical expression to evaluate, e.g. '2 + 2'.
-        Supports basic arithmetic with +, -, *, /, and parentheses.
+        number_a: The first operand.
+        operation: The operation to perform. One of '+', '-', '*', '/'.
+        number_b: The second operand.
 
     Returns:
-        The result of the expression as a string.
+        The result of the operation as a string.
 
     Raises:
-        ValueError: If the expression contains unsupported syntax.
+        ValueError: If the operation is not supported or division by zero is attempted.
     """
-    _allowed_operators = {
-        ast.Add: operator.add,
-        ast.Sub: operator.sub,
-        ast.Mult: operator.mul,
-        ast.Div: operator.truediv,
-    }
-
-    def _eval(node):
-        if isinstance(node, ast.Expression):
-            return _eval(node.body)
-        if isinstance(node, ast.BinOp) and type(node.op) in _allowed_operators:
-            return _allowed_operators[type(node.op)](_eval(node.left), _eval(node.right))
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
-            operand = _eval(node.operand)
-            return +operand if isinstance(node.op, ast.UAdd) else -operand
-        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-            return node.value
-        raise ValueError("Unsupported expression for calculator tool.")
-
-    return str(_eval(ast.parse(expression, mode="eval")))
+    try:
+        number_a = float(number_a)
+    except (TypeError, ValueError):
+        raise TypeError(f"number_a must be convertible to a number, got {type(number_a).__name__!r}")
+    try:
+        number_b = float(number_b)
+    except (TypeError, ValueError):
+        raise TypeError(f"number_b must be convertible to a number, got {type(number_b).__name__!r}")
+    if operation == "+":
+        return str(number_a + number_b)
+    elif operation == "-":
+        return str(number_a - number_b)
+    elif operation == "*":
+        return str(number_a * number_b)
+    elif operation == "/":
+        if number_b == 0:
+            raise ValueError("Division by zero is not allowed.")
+        return str(number_a / number_b)
+    else:
+        raise ValueError(f"Unsupported operation '{operation}'. Use one of: +, -, *, /")
 
 
 def translator(text: str, target_language: str) -> str:
