@@ -512,7 +512,26 @@ class GRPOTrainer(_BaseTrainer):
 
         # Per-sample tool filtering support
         self.tools_column_name = tools_column_name
+
+        # Validate that tool names are unique before building the registry to avoid silent overwrites.
+        _tool_name_counts = defaultdict(list)
+        for tool in self.tools:
+            _tool_name_counts[getattr(tool, "__name__", str(tool))].append(tool)
+        _duplicate_tool_names = {name: ts for name, ts in _tool_name_counts.items() if len(ts) > 1}
+        if _duplicate_tool_names:
+            _duplicate_info = ", ".join(f"{name} ({len(ts)})" for name, ts in _duplicate_tool_names.items())
+            raise ValueError(
+                f"Duplicate tool names detected: {_duplicate_info}. "
+                "Tool names used with GRPOTrainer must be unique."
+            )
         self._tool_registry = {tool.__name__: tool for tool in self.tools}
+
+        # Fail-fast: check input-only conditions before super().__init__() triggers heavy model initialization.
+        if self.tools_column_name is not None and not self.tools:
+            raise ValueError(
+                f"`tools_column_name='{self.tools_column_name}'` was set, but no `tools` were provided. "
+                "Please pass a `tools` list to GRPOTrainer when using per-sample tool filtering."
+            )
 
         # Check for async functions to start an event loop on a daemon thread
         self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs + self.tools)
@@ -654,11 +673,6 @@ class GRPOTrainer(_BaseTrainer):
 
         # Validate per-sample tool names in the dataset(s)
         if self.tools_column_name is not None:
-            if not self.tools:
-                raise ValueError(
-                    f"`tools_column_name='{self.tools_column_name}'` was set, but no `tools` were provided. "
-                    "Please pass a `tools` list to GRPOTrainer when using per-sample tool filtering."
-                )
             datasets_to_check = []
             if train_dataset is not None:
                 datasets_to_check.append(("train", train_dataset))
@@ -677,11 +691,13 @@ class GRPOTrainer(_BaseTrainer):
                         f"Dataset '{ds_name}' does not contain the column '{self.tools_column_name}' specified "
                         f"by `tools_column_name`. Available columns: {ds.column_names}"
                     )
-                all_tool_names_in_ds = set()
-                for sample in ds:
-                    sample_tools = sample.get(self.tools_column_name)
-                    if sample_tools is not None:
-                        all_tool_names_in_ds.update(sample_tools)
+                # Use vectorized column access instead of row-by-row iteration for efficiency.
+                all_tool_names_in_ds = {
+                    name
+                    for tool_list in ds[self.tools_column_name]
+                    if tool_list is not None
+                    for name in tool_list
+                }
                 unknown_tools = all_tool_names_in_ds - available_tool_names
                 if unknown_tools:
                     raise ValueError(
@@ -1338,7 +1354,7 @@ class GRPOTrainer(_BaseTrainer):
                 for i, (prompt, tools_for_sample) in enumerate(zip(prompts, per_sample_tools, strict=True)):
                     tokenized = self.processing_class.apply_chat_template(
                         conversation=[prompt],
-                        tools=tools_for_sample,
+                        tools=tools_for_sample or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
                         chat_template=self.chat_template,
                         add_generation_prompt=True,
                         tokenize=True,
@@ -1350,6 +1366,10 @@ class GRPOTrainer(_BaseTrainer):
                     for k, v in tokenized.items():
                         if k not in ("input_ids", "attention_mask"):
                             all_multimodal_fields.setdefault(k, []).append(v[0] if isinstance(v, list) else v)
+                # Normalize tensor fields so they are batched consistently with the non-per-sample path.
+                for k, values in all_multimodal_fields.items():
+                    if values and isinstance(values[0], torch.Tensor):
+                        all_multimodal_fields[k] = torch.stack(values, dim=0)
                 multimodal_fields = all_multimodal_fields
             else:
                 # We pass padding=True to work around a bug introduced in transformers 5.2.0 in some processors
@@ -1509,20 +1529,18 @@ class GRPOTrainer(_BaseTrainer):
     ):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
 
-        # Build per-sample sync/async tool dicts from per_sample_tools when provided,
-        # otherwise fall back to the global dicts built at init time.
+        # Build per-sample sync/async tool dicts. When per_sample_tools is provided,
+        # restrict the already-constructed per-sample dicts to the allowed tool names
+        # instead of rebuilding from raw callables, to preserve correct environment binding.
         if per_sample_tools is not None:
             sync_tool_dicts = []
             async_tool_dicts = []
-            for sample_tools in per_sample_tools:
-                sync_d, async_d = {}, {}
-                for tool in sample_tools:
-                    if inspect.iscoroutinefunction(tool):
-                        async_d[tool.__name__] = tool
-                    else:
-                        sync_d[tool.__name__] = tool
-                sync_tool_dicts.append(sync_d)
-                async_tool_dicts.append(async_d)
+            for idx, sample_tools in enumerate(per_sample_tools):
+                allowed_names = {tool.__name__ for tool in sample_tools}
+                base_sync = self._sync_tool_dicts[idx] if idx < len(self._sync_tool_dicts) else {}
+                base_async = self._async_tool_dicts[idx] if idx < len(self._async_tool_dicts) else {}
+                sync_tool_dicts.append({name: fn for name, fn in base_sync.items() if name in allowed_names})
+                async_tool_dicts.append({name: fn for name, fn in base_async.items() if name in allowed_names})
         else:
             sync_tool_dicts = self._sync_tool_dicts
             async_tool_dicts = self._async_tool_dicts
@@ -1863,15 +1881,26 @@ class GRPOTrainer(_BaseTrainer):
 
         # Resolve per-sample tools from the dataset column when tools_column_name is set.
         # Each sample may specify a subset of the global tool pool by name; missing/None falls back to all tools.
+        # We prefer callables from the per-sample dicts (bound to the correct environment instance);
+        # the global _tool_registry is used only as a fallback when no environments are configured.
         per_sample_tools = None
         if self.tools_column_name is not None and self.tools:
             per_sample_tools = []
-            for example in inputs:
+            for i, example in enumerate(inputs):
+                sample_tool_dict = {}
+                if i < len(self._sync_tool_dicts) and self._sync_tool_dicts[i]:
+                    sample_tool_dict.update(self._sync_tool_dicts[i])
+                if i < len(self._async_tool_dicts) and self._async_tool_dicts[i]:
+                    sample_tool_dict.update(self._async_tool_dicts[i])
+                if not sample_tool_dict:
+                    # Fallback when no environments are configured: use the global registry.
+                    sample_tool_dict = self._tool_registry
+
                 tool_names = example.get(self.tools_column_name)
                 if tool_names is not None:
-                    per_sample_tools.append([self._tool_registry[name] for name in tool_names])
+                    per_sample_tools.append([sample_tool_dict[name] for name in tool_names])
                 else:
-                    per_sample_tools.append(list(self.tools))
+                    per_sample_tools.append(list(sample_tool_dict.values()))
 
         (
             prompt_ids_list,

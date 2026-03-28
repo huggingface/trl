@@ -22,21 +22,46 @@ and dilute the training signal.
 ## Example
 
 ```python
+import ast
+import operator
 from datasets import Dataset
 from trl import GRPOTrainer, GRPOConfig
 
 
 # Define tool functions
 def calculator(expression: str) -> str:
-    """Evaluate a mathematical expression.
+    """Evaluate a mathematical expression safely.
 
     Args:
         expression: A mathematical expression to evaluate, e.g. '2 + 2'.
+        Supports basic arithmetic with +, -, *, /, and parentheses.
 
     Returns:
         The result of the expression as a string.
+
+    Raises:
+        ValueError: If the expression contains unsupported syntax.
     """
-    return str(eval(expression))  # noqa: S307
+    _allowed_operators = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+    }
+
+    def _eval(node):
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.BinOp) and type(node.op) in _allowed_operators:
+            return _allowed_operators[type(node.op)](_eval(node.left), _eval(node.right))
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            operand = _eval(node.operand)
+            return +operand if isinstance(node.op, ast.UAdd) else -operand
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return node.value
+        raise ValueError("Unsupported expression for calculator tool.")
+
+    return str(_eval(ast.parse(expression, mode="eval")))
 
 
 def translator(text: str, target_language: str) -> str:
