@@ -164,7 +164,7 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
         }
         if args.generation_kwargs is not None:
             generation_kwargs.update(args.generation_kwargs)
-        self.generation_config = GenerationConfig(**generation_kwargs)
+        self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
 
         if hasattr(model, "warnings_issued"):
             model.warnings_issued["estimate_tokens"] = True

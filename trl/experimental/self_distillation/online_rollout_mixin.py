@@ -71,9 +71,7 @@ class OnlineRolloutMixin:
             torch.no_grad(),
         ):
             prompt_completion_ids = unwrapped_model.generate(
-                **generate_inputs,
-                generation_config=self.generation_config,
-                disable_compile=True,
+                **generate_inputs, generation_config=self.generation_config
             )
         prompt_ids = generate_inputs["input_ids"]
         prompt_mask = generate_inputs["attention_mask"]
