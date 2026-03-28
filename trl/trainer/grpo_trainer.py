@@ -513,17 +513,20 @@ class GRPOTrainer(_BaseTrainer):
         # Per-sample tool filtering support
         self.tools_column_name = tools_column_name
 
-        # Validate that tool names are unique before building the registry to avoid silent overwrites.
-        _tool_name_counts = defaultdict(list)
-        for tool in self.tools:
-            _tool_name_counts[getattr(tool, "__name__", str(tool))].append(tool)
-        _duplicate_tool_names = {name: ts for name, ts in _tool_name_counts.items() if len(ts) > 1}
-        if _duplicate_tool_names:
-            _duplicate_info = ", ".join(f"{name} ({len(ts)})" for name, ts in _duplicate_tool_names.items())
-            raise ValueError(
-                f"Duplicate tool names detected: {_duplicate_info}. "
-                "Tool names used with GRPOTrainer must be unique."
-            )
+        # When tools_column_name is used, the registry is the sole source for resolving tool names from dataset rows.
+        # Duplicate names would cause silent overwrites and make per-sample filtering ambiguous, so we raise early.
+        # Without tools_column_name the registry is not consulted for resolution, so we stay backward-compatible.
+        if tools_column_name is not None:
+            _tool_name_counts = defaultdict(list)
+            for tool in self.tools:
+                _tool_name_counts[tool.__name__].append(tool)
+            _duplicate_tool_names = {name: ts for name, ts in _tool_name_counts.items() if len(ts) > 1}
+            if _duplicate_tool_names:
+                _duplicate_info = ", ".join(f"{name} ({len(ts)})" for name, ts in _duplicate_tool_names.items())
+                raise ValueError(
+                    f"Duplicate tool names detected: {_duplicate_info}. "
+                    "Tool names must be unique when using `tools_column_name`."
+                )
         self._tool_registry = {tool.__name__: tool for tool in self.tools}
 
         # Fail-fast: check input-only conditions before super().__init__() triggers heavy model initialization.
@@ -1365,7 +1368,12 @@ class GRPOTrainer(_BaseTrainer):
                     prompt_ids.append(tokenized["input_ids"][0])
                     for k, v in tokenized.items():
                         if k not in ("input_ids", "attention_mask"):
-                            all_multimodal_fields.setdefault(k, []).append(v[0] if isinstance(v, list) else v)
+                            # apply_chat_template with conversation=[prompt] returns tensors with a leading
+                            # batch-of-1 dimension. Index with [0] for both lists and tensors so that
+                            # torch.stack below produces shape (N, ...) not (N, 1, ...).
+                            all_multimodal_fields.setdefault(k, []).append(
+                                v[0] if isinstance(v, (list, torch.Tensor)) else v
+                            )
                 # Normalize tensor fields so they are batched consistently with the non-per-sample path.
                 for k, values in all_multimodal_fields.items():
                     if values and isinstance(values[0], torch.Tensor):
