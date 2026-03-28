@@ -227,7 +227,7 @@ class GRPOTrainer(_BaseTrainer):
             https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
             use and that it has been fine-tuned for tool calling.
-        tools_column_name (`str`, *optional*, defaults to `None`):
+        tools_column_name (`str`, *optional*):
             Name of a dataset column containing a list of tool names (strings) allowed for each sample. When set,
             only the named tools (a subset of the global `tools` pool) are exposed in the prompt's tool schema and
             available for execution during that sample's rollout. If the column value is missing or ``None`` for a
