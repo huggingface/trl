@@ -16,6 +16,7 @@
 Tests for the per-sample tool filtering feature (tools_column_name) in GRPOTrainer.
 """
 
+import os
 from collections.abc import Callable
 from unittest.mock import patch
 
@@ -191,7 +192,7 @@ class TestToolsColumnValidation(TrlTestCase):
             tools_column_name="tools",
         )
         assert trainer.tools_column_name == "tools"
-        assert set(trainer._tool_registry.keys()) == {"multiply_tool", "add_tool"}
+        assert {t.__name__ for t in trainer.tools} == {"multiply_tool", "add_tool"}
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
@@ -223,8 +224,8 @@ class TestToolsColumnValidation(TrlTestCase):
         strict=True,
     )
     @require_jmespath
-    def test_tool_registry_contains_all_tools(self):
-        """The tool registry should map every tool's __name__ to the callable."""
+    def test_tools_accessible_per_sample(self):
+        """Each per-sample tool dict should contain the correct callables for its sample."""
         dataset = self._make_conversational_dataset([["multiply_tool", "add_tool"]])
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
@@ -239,8 +240,8 @@ class TestToolsColumnValidation(TrlTestCase):
             tools=[multiply_tool, add_tool],
             tools_column_name="tools",
         )
-        assert trainer._tool_registry["multiply_tool"] is multiply_tool
-        assert trainer._tool_registry["add_tool"] is add_tool
+        assert trainer._sync_tool_dicts[0]["multiply_tool"] is multiply_tool
+        assert trainer._sync_tool_dicts[0]["add_tool"] is add_tool
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
@@ -659,3 +660,103 @@ class TestToolsColumnTraining(TrlTestCase):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_training_with_tools_column_and_environment_factory(self):
+        """Verify per-sample tool filtering uses correctly-bound per-environment methods.
+
+        Each sample i should call _sync_tool_dicts[i]["increment"] (bound to environments[i]).
+        If the old _tool_registry fallback were used, all samples would resolve to
+        environments[0].increment, and only environments[0]._counter would be updated.
+        """
+        dataset = Dataset.from_dict({
+            "prompt": [
+                [{"role": "user", "content": "Increment by 1."}],
+                [{"role": "user", "content": "Increment by 1."}],
+                [{"role": "user", "content": "Tell me a joke."}],
+            ],
+            "tools": [
+                ["increment"],
+                ["increment"],
+                ["increment"],
+            ],
+        })
+
+        class DummyEnvironment:
+            def reset(self, **kwargs):
+                self._counter = 0
+
+            def increment(self, step: int) -> int:
+                """
+                Increment the internal counter.
+
+                Args:
+                    step: Value to add to the counter.
+
+                Returns:
+                    The updated counter value.
+                """
+                self._counter += step
+                return self._counter
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=128,
+            report_to="none",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory=DummyEnvironment,
+            tools_column_name="tools",
+        )
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 3:  # first call
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # Sample 0: '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 35744, 497, 330, 16370, 788, 5212, 9520, 788, 220, 16, 11248, 151658, 151645, 151643],
+                        # Sample 1: '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 35744, 497, 330, 16370, 788, 5212, 9520, 788, 220, 16, 11248, 151658, 151645, 151643],
+                        # Sample 2: "I won't increment<|im_end|>"
+                        [40, 2765, 944, 16252, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # second call: 2 samples had tool calls
+                completion_ids = torch.tensor(
+                    [
+                        [17453, 0, 151645],  # 'Done!<|im_end|>'
+                        [17453, 0, 151645],  # 'Done!<|im_end|>'
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Verify correct per-environment binding: each environment's own increment was called.
+        # If all calls resolved to environments[0] (old registry fallback), then
+        # environments[0]._counter would be 2 and environments[1]._counter would be 0.
+        assert trainer.environments[0]._counter == 1
+        assert trainer.environments[1]._counter == 1
+        assert trainer.environments[2]._counter == 0

@@ -527,8 +527,6 @@ class GRPOTrainer(_BaseTrainer):
                     f"Duplicate tool names detected: {_duplicate_info}. "
                     "Tool names must be unique when using `tools_column_name`."
                 )
-        self._tool_registry = {tool.__name__: tool for tool in self.tools}
-
         # Fail-fast: check input-only conditions before super().__init__() triggers heavy model initialization.
         if self.tools_column_name is not None and not self.tools:
             raise ValueError(
@@ -685,7 +683,7 @@ class GRPOTrainer(_BaseTrainer):
                         datasets_to_check.append((f"eval/{name}", ds))
                 else:
                     datasets_to_check.append(("eval", eval_dataset))
-            available_tool_names = set(self._tool_registry.keys())
+            available_tool_names = {tool.__name__ for tool in self.tools}
             for ds_name, ds in datasets_to_check:
                 if isinstance(ds, IterableDataset):
                     continue  # Cannot iterate eagerly over streaming datasets
@@ -1545,10 +1543,8 @@ class GRPOTrainer(_BaseTrainer):
             async_tool_dicts = []
             for idx, sample_tools in enumerate(per_sample_tools):
                 allowed_names = {tool.__name__ for tool in sample_tools}
-                base_sync = self._sync_tool_dicts[idx] if idx < len(self._sync_tool_dicts) else {}
-                base_async = self._async_tool_dicts[idx] if idx < len(self._async_tool_dicts) else {}
-                sync_tool_dicts.append({name: fn for name, fn in base_sync.items() if name in allowed_names})
-                async_tool_dicts.append({name: fn for name, fn in base_async.items() if name in allowed_names})
+                sync_tool_dicts.append({name: fn for name, fn in self._sync_tool_dicts[idx].items() if name in allowed_names})
+                async_tool_dicts.append({name: fn for name, fn in self._async_tool_dicts[idx].items() if name in allowed_names})
         else:
             sync_tool_dicts = self._sync_tool_dicts
             async_tool_dicts = self._async_tool_dicts
@@ -1889,20 +1885,11 @@ class GRPOTrainer(_BaseTrainer):
 
         # Resolve per-sample tools from the dataset column when tools_column_name is set.
         # Each sample may specify a subset of the global tool pool by name; missing/None falls back to all tools.
-        # We prefer callables from the per-sample dicts (bound to the correct environment instance);
-        # the global _tool_registry is used only as a fallback when no environments are configured.
         per_sample_tools = None
         if self.tools_column_name is not None and self.tools:
             per_sample_tools = []
             for i, example in enumerate(inputs):
-                sample_tool_dict = {}
-                if i < len(self._sync_tool_dicts) and self._sync_tool_dicts[i]:
-                    sample_tool_dict.update(self._sync_tool_dicts[i])
-                if i < len(self._async_tool_dicts) and self._async_tool_dicts[i]:
-                    sample_tool_dict.update(self._async_tool_dicts[i])
-                if not sample_tool_dict:
-                    # Fallback when no environments are configured: use the global registry.
-                    sample_tool_dict = self._tool_registry
+                sample_tool_dict = {**self._sync_tool_dicts[i], **self._async_tool_dicts[i]}
 
                 tool_names = example.get(self.tools_column_name)
                 if tool_names is not None:
