@@ -419,7 +419,7 @@ class PPOTrainer(BaseTrainer):
             self.ref_model = None
         else:
             self.ref_model = create_reference_model(self.policy_model)
-
+        
         self.reward_model = reward_model
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
@@ -428,7 +428,6 @@ class PPOTrainer(BaseTrainer):
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
         self.optimizer_cls_and_kwargs = None  # needed for transformers >= 4.47
-
         #########
         # calculate various batch sizes
         #########
@@ -527,7 +526,6 @@ class PPOTrainer(BaseTrainer):
             drop_last=True,
         )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
-
         if self.is_deepspeed_enabled:
             self.reward_model = prepare_deepspeed(
                 self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
@@ -569,19 +567,25 @@ class PPOTrainer(BaseTrainer):
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: str | None = None, _internal_call: bool = False):
+        output_dir = output_dir if output_dir is not None else self.args.output_dir
+
+        # DeepSpeed: 手动保存 unwrapped policy，避免 transformers 里读取 self.deepspeed.config.get(...) 报错
+        if self.is_deepspeed_enabled:
+            os.makedirs(output_dir, exist_ok=True)
+            policy_to_save = self.accelerator.unwrap_model(self.model).policy
+            policy_to_save.save_pretrained(
+                output_dir,
+                safe_serialization=self.args.save_safetensors,
+            )
+            if self.processing_class is not None and self.accelerator.is_main_process:
+                self.processing_class.save_pretrained(output_dir)
+            return
+
+        # 非 DeepSpeed：沿用原逻辑（仅保存 policy）
         backup_model = self.model
-        self.model = self.model.policy  # save only the policy
-
-        if self.is_deepspeed_enabled:
-            backup_deepspeed = self.deepspeed
-            self.deepspeed = self.model
-
+        self.model = self.model.policy
         super().save_model(output_dir, _internal_call)
-
         self.model = backup_model
-
-        if self.is_deepspeed_enabled:
-            self.deepspeed = backup_deepspeed
 
     def train(self):
         args = self.args

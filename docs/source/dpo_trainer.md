@@ -169,7 +169,10 @@ The [TR-DPO](https://huggingface.co/papers/2404.09656) paper suggests syncing th
 
 ### RPO loss
 
-The [RPO](https://huggingface.co/papers/2404.19733) paper implements an iterative preference tuning algorithm using a loss related to the RPO loss in this [paper](https://huggingface.co/papers/2405.16436) that essentially consists of a weighted SFT loss on the chosen preferences together with the DPO loss. To use this loss, set the `rpo_alpha` in the [`DPOConfig`] to an appropriate value. The paper suggests setting this weight to `1.0`.
+The [RPO](https://huggingface.co/papers/2404.19733) paper implements an iterative preference tuning algorithm using a loss related to the RPO loss in this [paper](https://huggingface.co/papers/2405.16436) that essentially consists of a weighted SFT loss on the chosen preferences together with the DPO loss. To use this loss, include `"sft"` in the `loss_type` list in the [`DPOConfig`] and set its weight in `loss_weights`.
+
+> [!WARNING]
+> The old implementation of RPO loss in TRL used the `rpo_alpha` parameter. This parameter is deprecated and will be removed in 0.29.0; instead.
 
 ### WPO loss
 

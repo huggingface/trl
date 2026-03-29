@@ -64,7 +64,7 @@ import argparse
 import os
 
 from accelerate import logging
-from datasets import load_dataset
+from datasets import load_dataset,concatenate_datasets,DatasetDict
 from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 
@@ -86,6 +86,20 @@ logger = logging.get_logger(__name__)
 
 # Enable logging in a Hugging Face Space
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+def merge_dataset(dataset):
+    def process_split(split):
+        original = dataset[split]
+        chosen = original.map(lambda x:{"text":x["chosen"]},remove_columns=original.column_names)
+        rejected = original.map(lambda x:{"text":x["rejected"]},remove_columns = original.column_names)
+        merged = concatenate_datasets([chosen,rejected]) 
+        return merged
+    
+    return DatasetDict({
+        split: process_split(split)
+        for split in dataset.keys()
+    })
+
 
 
 def main(script_args, training_args, model_args, dataset_args):
@@ -131,6 +145,7 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
+    dataset = merge_dataset(dataset)
     # Initialize the SFT trainer
     trainer = SFTTrainer(
         model=model,

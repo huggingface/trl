@@ -296,6 +296,8 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
+          # transformers 5.1.0 is broken with DeepSpeed; PR open: https://github.com/huggingface/transformers/pull/43780
+          uv pip install "transformers!=5.1.0"
 
       - name: Run distributed smoke tests
         run: |
