@@ -211,9 +211,9 @@ class ScriptArguments:
             Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
             `"trace"`.
         distributed_executor_backend (`str` or `None`, *optional*):
-            Distributed executor backend for vLLM. Set to `"ray"` to distribute tensor parallel workers across
-            multiple nodes via a Ray cluster. Required when `tensor_parallel_size` exceeds the number of local GPUs.
-            If not set, vLLM defaults to the multiproc backend (single-node only).
+            Distributed executor backend for vLLM. Set to `"ray"` to distribute tensor parallel workers across multiple
+            nodes via a Ray cluster. Required when `tensor_parallel_size` exceeds the number of local GPUs. If not set,
+            vLLM defaults to the multiproc backend (single-node only).
     """
 
     model: str = field(
@@ -694,7 +694,6 @@ def main(script_args: ScriptArguments):
     # all DP workers stay busy. Without this, async endpoint handlers block the event
     # loop during pipe I/O, serializing requests and leaving DP workers idle.
     import asyncio
-    import threading
 
     _logprob_queue: asyncio.Queue = asyncio.Queue()
 
@@ -756,7 +755,7 @@ def main(script_args: ScriptArguments):
                 all_prompts = []
                 all_prompt_lengths = []
                 offsets = []  # (start_idx, count) per original request
-                for prompts, prompt_lengths, response_format, future in items:
+                for prompts, prompt_lengths, _response_format, _future in items:
                     start = len(all_prompts)
                     all_prompts.extend(prompts)
                     all_prompt_lengths.extend(prompt_lengths)
@@ -770,9 +769,7 @@ def main(script_args: ScriptArguments):
 
                 # Dispatch to workers in a thread to avoid blocking the event loop
                 try:
-                    all_outputs = await loop.run_in_executor(
-                        None, _run_prompt_logprobs, all_prompts, sampling_params
-                    )
+                    all_outputs = await loop.run_in_executor(None, _run_prompt_logprobs, all_prompts, sampling_params)
                 except Exception as e:
                     # Signal error to all waiting requests
                     for _, _, _, future in items:
@@ -781,7 +778,7 @@ def main(script_args: ScriptArguments):
                     continue
 
                 # Split results back to individual requests
-                for (start, count), (_, prompt_lengths, response_format, future) in zip(offsets, items):
+                for (start, count), (_, prompt_lengths, response_format, future) in zip(offsets, items, strict=False):
                     outputs_slice = all_outputs[start : start + count]
                     if not future.done():
                         future.set_result((outputs_slice, prompt_lengths, top_logprobs, response_format))
@@ -812,9 +809,7 @@ def main(script_args: ScriptArguments):
             actual_logprobs_arr = np.full((batch_size, max_comp_len, 1), float("-inf"), dtype=np.float32)
             actual_token_ids_arr = np.zeros((batch_size, max_comp_len, 1), dtype=np.int32)
 
-            for i, (output, prompt_length) in enumerate(
-                zip(all_outputs, prompt_lengths, strict=True)
-            ):
+            for i, (output, prompt_length) in enumerate(zip(all_outputs, prompt_lengths, strict=True)):
                 prompt_lps = output.prompt_logprobs
                 seq_tokens = output.prompt_token_ids
                 if comp_lengths[i] == 0:
@@ -896,9 +891,9 @@ def main(script_args: ScriptArguments):
         """
         Computes teacher logprobs for existing token sequences without generating new tokens.
 
-        Concurrent requests are automatically batched and dispatched together to maximize
-        GPU utilization across DP workers. This avoids the event-loop-blocking problem where
-        synchronous pipe I/O serializes requests despite having multiple DP workers.
+        Concurrent requests are automatically batched and dispatched together to maximize GPU utilization across DP
+        workers. This avoids the event-loop-blocking problem where synchronous pipe I/O serializes requests despite
+        having multiple DP workers.
 
         Supports two response formats:
             - `"json"` (default): Nested lists, backward-compatible with existing clients.
@@ -921,13 +916,15 @@ def main(script_args: ScriptArguments):
         # Submit to the batching queue and await result
         loop = asyncio.get_event_loop()
         future = loop.create_future()
-        await _logprob_queue.put((
-            prompts,
-            list(request.prompt_lengths),
-            request.top_logprobs,
-            request.response_format,
-            future,
-        ))
+        await _logprob_queue.put(
+            (
+                prompts,
+                list(request.prompt_lengths),
+                request.top_logprobs,
+                request.response_format,
+                future,
+            )
+        )
 
         # Wait for the batcher to process our request
         all_outputs, prompt_lengths, top_k, response_format = await future
