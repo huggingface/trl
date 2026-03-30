@@ -1253,7 +1253,7 @@ class DPOTrainer(_BaseTrainer):
                 chosen_avg_score = chosen_scores / chosen_mask.sum(dim=1).clamp(min=1.0)
                 rejected_avg_score = rejected_scores / rejected_mask.sum(dim=1).clamp(min=1.0)
                 delta = chosen_avg_score - rejected_avg_score
-                per_sequence_loss = -F.logsigmoid(self.beta * delta_score)
+                per_sequence_loss = -F.logsigmoid(self.beta * delta)
 
             elif loss_type == "exo_pair":
                 # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856, (Eq. 16)
