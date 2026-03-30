@@ -210,6 +210,10 @@ class ScriptArguments:
         log_level (`str`, *optional*, defaults to `"info"`):
             Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
             `"trace"`.
+        distributed_executor_backend (`str` or `None`, *optional*):
+            Distributed executor backend for vLLM. Set to `"ray"` to distribute tensor parallel workers across
+            multiple nodes via a Ray cluster. Required when `tensor_parallel_size` exceeds the number of local GPUs.
+            If not set, vLLM defaults to the multiproc backend (single-node only).
     """
 
     model: str = field(
@@ -306,6 +310,14 @@ class ScriptArguments:
             "model implementation."
         },
     )
+    distributed_executor_backend: str | None = field(
+        default=None,
+        metadata={
+            "help": "Distributed executor backend for vLLM. When set to 'ray', vLLM uses Ray to distribute tensor "
+            "parallel workers across multiple nodes. Required when tensor_parallel_size exceeds the number of local "
+            "GPUs. If not set, vLLM defaults to the multiproc backend (single-node only)."
+        },
+    )
 
 
 def llm_worker(
@@ -335,6 +347,7 @@ def llm_worker(
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
         trust_remote_code=script_args.trust_remote_code,
         model_impl=script_args.vllm_model_impl,
+        distributed_executor_backend=script_args.distributed_executor_backend,
         # Important so temperature scaling/logit tweaking affects the TIS log probs
         logprobs_mode="processed_logprobs",
     )

@@ -159,6 +159,51 @@ def _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask=Non
             return beta_t * kl_teacher + (1 - beta_t) * kl_student
 
 
+def build_teacher_request_inputs(
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    prompt_attention_mask: torch.Tensor | None = None,
+    labels: torch.Tensor | None = None,
+) -> tuple[list[list[int]], list[int], list[int]]:
+    """Trim padded batch tensors into per-sample sequences for teacher-server requests."""
+
+    if input_ids.shape != attention_mask.shape:
+        raise ValueError(
+            f"input_ids and attention_mask must have the same shape, got {input_ids.shape} and {attention_mask.shape}."
+        )
+
+    input_ids_cpu = input_ids.detach().cpu()
+    attention_mask_cpu = attention_mask.detach().cpu().bool()
+
+    if prompt_attention_mask is not None:
+        prompt_lengths = prompt_attention_mask.detach().cpu().sum(dim=1).to(torch.long)
+    else:
+        if labels is None:
+            raise ValueError("labels are required when prompt_attention_mask is not provided.")
+        if labels.shape != input_ids.shape:
+            raise ValueError(f"labels must match input_ids shape, got {labels.shape} and {input_ids.shape}.")
+        full_lengths = attention_mask_cpu.sum(dim=1).to(torch.long)
+        completion_lengths = (labels.detach().cpu() != -100).sum(dim=1).to(torch.long)
+        prompt_lengths = full_lengths - completion_lengths
+
+    trimmed_input_ids: list[list[int]] = []
+    prompt_lengths_list: list[int] = []
+    completion_lengths_list: list[int] = []
+
+    for row, mask, prompt_length in zip(input_ids_cpu, attention_mask_cpu, prompt_lengths, strict=True):
+        trimmed_row = row[mask]
+        prompt_len = int(prompt_length.item())
+        if prompt_len < 0 or prompt_len > trimmed_row.numel():
+            raise ValueError(
+                f"Invalid prompt length {prompt_len} for trimmed sequence of length {trimmed_row.numel()}."
+            )
+        trimmed_input_ids.append(trimmed_row.tolist())
+        prompt_lengths_list.append(prompt_len)
+        completion_lengths_list.append(int(trimmed_row.numel()) - prompt_len)
+
+    return trimmed_input_ids, prompt_lengths_list, completion_lengths_list
+
+
 class _DistillationCollator:
     """Data collator for the distillation trainer with independent prompt/completion budgets.
 
@@ -407,7 +452,7 @@ class DistillationTrainer(_BaseTrainer):
         self.teacher_client = None
         self._local_teacher_tokenizer_matches_student = True
         if args.teacher_model_server_url is not None:
-            from ..generation.vllm_client import VLLMClient
+            from ...generation.vllm_client import VLLMClient
 
             self.teacher_client = VLLMClient(base_url=args.teacher_model_server_url, connection_timeout=60.0)
             teacher_model = None
@@ -505,6 +550,7 @@ class DistillationTrainer(_BaseTrainer):
         self.top_p = args.top_p
         self.num_generations = args.num_generations
         self.loss_top_k = args.loss_top_k
+        self.loss_add_tail = args.loss_add_tail
 
         # ── Buffer state ──
         self._buffered_inputs = None
@@ -598,6 +644,16 @@ class DistillationTrainer(_BaseTrainer):
                 "the same tokenizer. Use a same-tokenizer local teacher, use `teacher_model_server_url`, or "
                 "override the local teacher loss path in a subclass."
             )
+
+    def _compute_prompt_length(self, inputs: dict[str, torch.Tensor | Any]) -> int:
+        """Compute the earliest prompt boundary that still includes every completion token in the batch."""
+        if inputs.get("labels") is not None:
+            attention_mask = inputs["attention_mask"]
+            labels = inputs["labels"]
+            full_lengths = attention_mask.sum(dim=1)
+            completion_lengths = (labels != -100).sum(dim=1)
+            return int((full_lengths - completion_lengths).min().item())
+        return inputs["prompts"].shape[1]
 
     def _get_completion_lengths(self, generated_tokens: torch.Tensor, prompt_width: int) -> torch.Tensor:
         """Infer per-sample completion lengths from generated tokens."""
@@ -972,6 +1028,7 @@ class DistillationTrainer(_BaseTrainer):
         temperature=1.0,
         reduction="batchmean",
         top_k=0,
+        add_tail=True,
     ):
         """
         Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation.
@@ -987,6 +1044,8 @@ class DistillationTrainer(_BaseTrainer):
                 beta=0 (forward KL) uses teacher's top-k, beta=1 (reverse KL) uses student's top-k,
                 0<beta<1 (JSD) uses the union of both. Distributions are re-normalized over the
                 selected support. If 0, the full vocabulary is used.
+            add_tail: Whether to append a tail bucket representing the remaining probability mass
+                outside the selected top-k support.
 
         Returns:
             Scalar loss tensor.
@@ -1028,12 +1087,16 @@ class DistillationTrainer(_BaseTrainer):
             student_topk_logps = torch.where(support_mask, student_support_logps, neg_inf)
             teacher_topk_logps = torch.where(support_mask, teacher_support_logps, neg_inf)
 
-            # Add tail bucket: append log(1 - sum(exp(top_k_logps))) to preserve
-            # the remaining probability mass outside the top-k. This prevents trivial
-            # zero loss when top_k is small (especially top_k=1).
-            base_support_mask = support_mask
-            student_log_probs, support_mask = _add_tail_bucket(student_topk_logps, base_support_mask)
-            teacher_log_probs, _ = _add_tail_bucket(teacher_topk_logps, base_support_mask)
+            if add_tail:
+                # Add tail bucket: append log(1 - sum(exp(top_k_logps))) to preserve
+                # the remaining probability mass outside the top-k. This prevents trivial
+                # zero loss when top_k is small (especially top_k=1).
+                base_support_mask = support_mask
+                student_log_probs, support_mask = _add_tail_bucket(student_topk_logps, base_support_mask)
+                teacher_log_probs, _ = _add_tail_bucket(teacher_topk_logps, base_support_mask)
+            else:
+                student_log_probs = student_topk_logps - torch.logsumexp(student_topk_logps, dim=-1, keepdim=True)
+                teacher_log_probs = teacher_topk_logps - torch.logsumexp(teacher_topk_logps, dim=-1, keepdim=True)
         else:
             student_log_probs = F.log_softmax(student_logits, dim=-1)
             teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
@@ -1112,7 +1175,9 @@ class DistillationTrainer(_BaseTrainer):
             raise ValueError("No teacher model or teacher server configured.")
 
     def _get_teacher_token_logprobs_from_server(
-        self, inputs: dict[str, torch.Tensor | Any]
+        self,
+        inputs: dict[str, torch.Tensor | Any],
+        aligned_prompt_length: int,
     ) -> dict[str, torch.Tensor]:
         """Fetch per-token teacher logprobs from an external vLLM server.
 
@@ -1126,18 +1191,13 @@ class DistillationTrainer(_BaseTrainer):
         import numpy as np
 
         input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
         batch_size = input_ids.shape[0]
-        prompt_length = inputs["prompts"].shape[1]
-
-        # Extract unpadded sequences
-        sequences = []
-        prompt_lengths = []
-        for i in range(batch_size):
-            valid_mask = attention_mask[i].bool()
-            seq = input_ids[i][valid_mask].tolist()
-            sequences.append(seq)
-            prompt_lengths.append(prompt_length)
+        sequences, prompt_lengths, _ = build_teacher_request_inputs(
+            input_ids,
+            inputs["attention_mask"],
+            prompt_attention_mask=inputs.get("prompt_attention_mask"),
+            labels=inputs.get("labels"),
+        )
 
         # Server path always uses top-1 logprobs. Top-k loss requires a local teacher
         # since reverse KL needs the teacher's logprobs at the student's top-k tokens.
@@ -1149,24 +1209,28 @@ class DistillationTrainer(_BaseTrainer):
         K = 1
 
         device = input_ids.device
-        completion_length = max(len(lps) for lps in result["logprobs"])
+        completion_offsets = [prompt_length - aligned_prompt_length for prompt_length in prompt_lengths]
+        completion_length = max(
+            (offset + len(lps) for offset, lps in zip(completion_offsets, result["logprobs"], strict=True)),
+            default=0,
+        )
 
         # actual_logprobs: (B, T) — teacher logprob for the actual token
         def _actual_to_tensor(key):
             arr = np.full((batch_size, completion_length), float("-inf"), dtype=np.float32)
-            for i, seq_lps in enumerate(result[key]):
+            for i, (offset, seq_lps) in enumerate(zip(completion_offsets, result[key], strict=True)):
                 if seq_lps:
                     vals = np.array(seq_lps, dtype=np.float32)  # (comp_len_i, 1)
-                    arr[i, : vals.shape[0]] = vals[:, 0]
+                    arr[i, offset : offset + vals.shape[0]] = vals[:, 0]
             return torch.from_numpy(arr).to(device)
 
         # topk: (B, T, K)
         def _topk_to_tensor(key, k, np_dtype, fill):
             arr = np.full((batch_size, completion_length, k), fill, dtype=np_dtype)
-            for i, seq_vals in enumerate(result[key]):
+            for i, (offset, seq_vals) in enumerate(zip(completion_offsets, result[key], strict=True)):
                 if seq_vals:
                     vals = np.array(seq_vals, dtype=np_dtype)  # (comp_len_i, k)
-                    arr[i, : vals.shape[0], :] = vals
+                    arr[i, offset : offset + vals.shape[0], :] = vals
             return torch.from_numpy(arr).to(device)
 
         return {
@@ -1184,10 +1248,11 @@ class DistillationTrainer(_BaseTrainer):
     ) -> torch.Tensor:
         """Compute forward/reverse KL or JSD using teacher logprobs from the server.
 
-        The forward KL term sums over the teacher's top-k tokens (better approximation
-        as k increases).  The reverse KL term always uses the actual (student-sampled)
-        token only, because the teacher's top-k may not cover the student's high-probability
-        tokens.
+        The forward KL term uses the teacher's top-k support, optionally collapsed with
+        a tail bucket. The reverse KL term uses the actual completion token only, because
+        the server cannot provide teacher logprobs at arbitrary student-selected token IDs.
+        When the completion is student-sampled, this reverse term is a Monte Carlo
+        approximation of reverse KL on the available token support.
 
         Args:
             teacher_result: dict with ``actual_logprobs`` (B, T), ``topk_logprobs`` (B, T, K),
@@ -1196,8 +1261,8 @@ class DistillationTrainer(_BaseTrainer):
             completion_tokens: (B, T) actual token IDs in the completion.
             labels: (B, T) with -100 for positions to ignore.
         """
-        topk_teacher_lps = teacher_result["topk_logprobs"]   # (B, T, K)
-        topk_token_ids = teacher_result["topk_token_ids"]     # (B, T, K)
+        topk_teacher_lps = teacher_result["topk_logprobs"]  # (B, T, K)
+        topk_token_ids = teacher_result["topk_token_ids"]  # (B, T, K)
         actual_teacher_lps = teacher_result["actual_logprobs"]  # (B, T)
 
         # ── Forward KL term: sum over teacher's top-k tokens ──
@@ -1206,14 +1271,39 @@ class DistillationTrainer(_BaseTrainer):
 
         # Mask out -inf padding (positions where top-k slot was not filled).
         valid = topk_teacher_lps > float("-inf")
-        fwd_per_k = torch.exp(topk_teacher_lps) * (topk_teacher_lps - student_topk_lps)  # (B, T, K)
-        fwd_per_token = (fwd_per_k * valid).sum(dim=-1)  # (B, T)
+        if self.loss_add_tail:
+            neg_inf = torch.full((), float("-inf"), dtype=student_log_probs.dtype, device=student_log_probs.device)
+            student_topk_lps = torch.where(valid, student_topk_lps, neg_inf)
+            teacher_topk_lps = torch.where(valid, topk_teacher_lps, neg_inf)
+            forward_student_log_probs, forward_support_mask = _add_tail_bucket(student_topk_lps, valid)
+            forward_teacher_log_probs, _ = _add_tail_bucket(teacher_topk_lps, valid)
+            fwd_per_token = _jsd_divergence(
+                forward_student_log_probs,
+                forward_teacher_log_probs,
+                beta=0.0,
+                support_mask=forward_support_mask,
+            ).sum(dim=-1)
+        else:
+            fwd_per_k = torch.exp(topk_teacher_lps) * (topk_teacher_lps - student_topk_lps)  # (B, T, K)
+            fwd_per_token = (fwd_per_k * valid).sum(dim=-1)  # (B, T)
 
         # ── Reverse KL term: actual token only ──
         student_actual_lps = student_log_probs.gather(
             dim=-1, index=completion_tokens.unsqueeze(-1)
         ).squeeze(-1)  # (B, T)
-        rev_per_token = torch.exp(student_actual_lps) * (student_actual_lps - actual_teacher_lps)  # (B, T)
+        required = labels != -100
+        missing_actual = required & ~torch.isfinite(actual_teacher_lps)
+        if missing_actual.any():
+            missing_count = int(missing_actual.sum().item())
+            total_required = int(required.sum().item())
+            raise ValueError(
+                "Teacher server is missing actual-token logprobs for required reverse-KL positions: "
+                f"{missing_count}/{total_required}."
+            )
+        # Use the sampled token's logprob difference directly. Multiplying by p_student
+        # again would overweight high-probability tokens because the token itself is
+        # already drawn from the student distribution in the on-policy path.
+        rev_per_token = student_actual_lps - actual_teacher_lps  # (B, T)
 
         # ── Combine according to beta ──
         if self.beta == 0:
@@ -1238,7 +1328,7 @@ class DistillationTrainer(_BaseTrainer):
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
         )
-        prompt_length = inputs["prompts"].shape[1]
+        prompt_length = self._compute_prompt_length(inputs)
         labels = inputs["labels"][:, prompt_length:]
 
         if self.teacher_client is not None:
@@ -1247,7 +1337,7 @@ class DistillationTrainer(_BaseTrainer):
             #   actual_logprobs  – (B, T)    teacher log p(x_actual)  (for reverse KL)
             #   topk_logprobs    – (B, T, K) teacher top-k sorted logprobs (for forward KL)
             #   topk_token_ids   – (B, T, K) corresponding token IDs
-            teacher_result = self._get_teacher_token_logprobs_from_server(inputs)
+            teacher_result = self._get_teacher_token_logprobs_from_server(inputs, prompt_length)
 
             student_logits = student_outputs.logits[:, prompt_length - 1 : -1, :]
             student_log_probs = F.log_softmax(student_logits / self.temperature, dim=-1)
@@ -1276,6 +1366,7 @@ class DistillationTrainer(_BaseTrainer):
                 beta=self.beta,
                 temperature=self.temperature,
                 top_k=self.loss_top_k,
+                add_tail=self.loss_add_tail,
             )
 
         return (loss, student_outputs) if return_outputs else loss

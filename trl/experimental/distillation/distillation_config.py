@@ -76,6 +76,9 @@ class DistillationConfig(_BaseConfig):
             Number of top tokens to use when computing the JSD/KL loss. Both student and teacher distributions are
             restricted to these K tokens and re-normalized before computing divergence. If 0, the full vocabulary
             is used. When using `teacher_model_server_url` with `beta > 0`, only `loss_top_k=1` is supported.
+        loss_add_tail (`bool`, *optional*, defaults to `True`):
+            Whether to append a tail bucket that represents the remaining probability mass outside the selected top-k
+            support when computing the loss.
 
         > Parameters that control on-policy generation
 
@@ -232,7 +235,13 @@ class DistillationConfig(_BaseConfig):
             "(selected based on beta: teacher's top-k for forward KL, student's top-k for reverse KL, "
             "union of both for JSD) and re-normalized before computing divergence. "
             "If 0, the full vocabulary is used (slower but exact). "
-            "Only supported with a local teacher — not with teacher_model_server_url."
+            "When using teacher_model_server_url with beta > 0, only loss_top_k=1 is supported."
+        },
+    )
+    loss_add_tail: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to append a tail bucket representing the remaining probability mass outside the selected top-k support."
         },
     )
 
