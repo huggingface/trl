@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "math-verify",
 #     "latex2sympy2_extended",
 #     "trackio",
@@ -81,8 +80,6 @@ python examples/scripts/online_dpo_vlm.py \
     --trust_remote_code
 """
 
-import os
-
 import torch
 import transformers
 from datasets import load_dataset
@@ -99,10 +96,6 @@ from trl import (
 )
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 from trl.rewards import accuracy_reward, think_format_reward
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":

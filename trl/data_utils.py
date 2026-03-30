@@ -208,6 +208,7 @@ def apply_chat_template(
 
     For more details, see [`maybe_apply_chat_template`].
     """
+    tools = tools or None  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
     # Check that the example has the correct keys
     supported_keys = ["prompt", "chosen", "rejected", "completion", "messages", "label"]
     example_keys = {key for key in example.keys() if key in supported_keys}
@@ -873,54 +874,6 @@ def pack_dataset(
     if strategy in {"bfd", "bfd_split"} and "columns" in format:
         format["columns"] = format["columns"] + ["seq_lengths"]
 
-    dataset = dataset.with_format(**format)
-    return dataset
-
-
-def truncate_dataset(dataset: DatasetType, max_length: int, map_kwargs: dict[str, Any] | None = None) -> DatasetType:
-    r"""
-    Truncate sequences in a dataset to a specified `max_length`.
-
-    Args:
-        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
-            Dataset to truncate.
-        max_length (`int`):
-            Maximum sequence length to truncate to.
-        map_kwargs (`dict`, *optional*):
-            Additional keyword arguments to pass to the dataset's map method when truncating examples.
-
-    Returns:
-        [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The dataset with truncated sequences.
-
-    Example:
-    ```python
-    >>> from datasets import Dataset
-
-    >>> examples = {
-    ...     "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-    ...     "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
-    ... }
-    >>> dataset = Dataset.from_dict(examples)
-    >>> truncated_dataset = truncate_dataset(dataset, max_length=2)
-    >>> truncated_dataset[:]
-    {'input_ids': [[1, 2], [4, 5], [8]],
-     'attention_mask': [[0, 1], [0, 0], [1]]}
-    ```
-    """
-    if map_kwargs is None:
-        map_kwargs = {}
-
-    def truncate(examples):
-        truncated_columns = []
-        for column in examples.columns:
-            if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
-                column = pc.list_slice(column, 0, max_length)
-            truncated_columns.append(column)
-        return pa.Table.from_arrays(truncated_columns, names=examples.column_names)
-
-    format = _get_dataset_format(dataset)
-    dataset = dataset.with_format("arrow")
-    dataset = dataset.map(truncate, batched=True, **map_kwargs)
     dataset = dataset.with_format(**format)
     return dataset
 

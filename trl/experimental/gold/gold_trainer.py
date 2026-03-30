@@ -47,7 +47,7 @@ from transformers.utils import (
     is_rich_available,
 )
 
-from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset, truncate_dataset
+from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
@@ -61,7 +61,7 @@ from ...trainer.utils import (
     pad,
     split_tensor_dict,
 )
-from ..utils import DataCollatorForChatML, empty_cache
+from ..utils import DataCollatorForChatML, empty_cache, truncate_dataset
 from .gold_config import GOLDConfig
 
 
@@ -1592,7 +1592,7 @@ class GOLDTrainer(SFTTrainer):
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
-                dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
+                dataset = truncate_dataset(dataset, args.max_length, map_kwargs=map_kwargs)
 
             if args.use_liger_kernel:
                 required_columns = {
@@ -2096,7 +2096,7 @@ class GOLDTrainer(SFTTrainer):
                 import pandas as pd
 
                 table = {
-                    "step": [str(self.state.global_step)] * len(self._textual_logs["prompt"]),
+                    "step": [self.state.global_step] * len(self._textual_logs["prompt"]),
                     "prompt": self._textual_logs["prompt"],
                     "completion": self._textual_logs["completion"],
                 }

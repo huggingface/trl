@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl[vllm]",
-#     "peft",
+#     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
 #     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",

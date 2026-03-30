@@ -14,14 +14,12 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "trackio",
 #     "kernels",
 # ]
 # ///
 
-import os
 import shutil
 
 import torch
@@ -36,10 +34,6 @@ from transformers import (
 
 from trl import ModelConfig, ScriptArguments, get_kbit_device_map, get_peft_config, get_quantization_config
 from trl.experimental.ppo import PPOConfig, PPOTrainer
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 """

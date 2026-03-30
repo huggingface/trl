@@ -56,11 +56,9 @@ from .utils import (
     disable_dropout_in_model,
     entropy_from_logits,
     flush_left,
-    flush_right,
     get_config_model_id,
     hash_module,
     pad,
-    remove_none_values,
     selective_log_softmax,
     use_adapter,
 )
@@ -109,6 +107,12 @@ class DataCollatorForPreference(DataCollatorMixin):
     Args:
         pad_token_id (`int`):
             Token ID to use for padding.
+        max_length (`int`, *optional*):
+            Maximum length of the sequences after concatenation. Sequences longer than `max_length` are truncated
+            before padding, which avoids allocating oversized tensors for batches containing very long sequences.
+        truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
+            Truncation mode when a concatenated sequence exceeds `max_length`. Possible values are `"keep_end"` and
+            `"keep_start"`.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -140,16 +144,33 @@ class DataCollatorForPreference(DataCollatorMixin):
     """
 
     pad_token_id: int
+    max_length: int | None = None
+    truncation_mode: str = "keep_start"
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         prompt_chosen_ids = [example["prompt_ids"] + example["chosen_ids"] for example in examples]
         prompt_rejected_ids = [example["prompt_ids"] + example["rejected_ids"] for example in examples]
-        chosen_attention_mask = [[1] * len(example["prompt_ids"] + example["chosen_ids"]) for example in examples]
-        rejected_attention_mask = [[1] * len(example["prompt_ids"] + example["rejected_ids"]) for example in examples]
         chosen_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["chosen_ids"]) for example in examples]
         rejected_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["rejected_ids"]) for example in examples]
+
+        if self.max_length is not None:
+            if self.truncation_mode == "keep_start":
+                sl = slice(None, self.max_length)
+            elif self.truncation_mode == "keep_end":
+                sl = slice(-self.max_length, None)
+            else:
+                raise ValueError(
+                    f"Unsupported truncation mode: {self.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                )
+            prompt_chosen_ids = [ids[sl] for ids in prompt_chosen_ids]
+            prompt_rejected_ids = [ids[sl] for ids in prompt_rejected_ids]
+            chosen_mask = [m[sl] for m in chosen_mask]
+            rejected_mask = [m[sl] for m in rejected_mask]
+
+        chosen_attention_mask = [[1] * len(ids) for ids in prompt_chosen_ids]
+        rejected_attention_mask = [[1] * len(ids) for ids in prompt_rejected_ids]
         input_ids = prompt_chosen_ids + prompt_rejected_ids
         attention_mask = chosen_attention_mask + rejected_attention_mask
         completion_mask = chosen_mask + rejected_mask
@@ -210,12 +231,16 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
     - `"pixel_values"`: Tensor representing image pixel values.
 
-    Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"pixel_position_ids"`.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
             The processor used to tokenize text and process images. It must be a subclass of
             [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
+        max_length (`int`, *optional*):
+            Maximum sequence length. Sequences longer than `max_length` are truncated before padding, which avoids
+            allocating oversized tensors for batches containing very long sequences. Only `"keep_start"` truncation
+            applies to vision datasets; `"keep_end"` is rejected upstream.
         pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, optional, defaults to `"pt"`):
@@ -270,6 +295,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     """
 
     processor: ProcessorMixin
+    max_length: int | None = None
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
@@ -356,6 +382,15 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         else:
             attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
 
+        if self.max_length is not None:
+            input_ids = input_ids[:, : self.max_length]
+            attention_mask = attention_mask[:, : self.max_length]
+            completion_mask = completion_mask[:, : self.max_length]
+            if "token_type_ids" in processed_prompts:
+                token_type_ids = token_type_ids[:, : self.max_length]
+            if "mm_token_type_ids" in processed_prompts:
+                mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
+
         # Build the output dictionary
         output = processed_prompts  # we take processed_prompts because it contains the images
         output["input_ids"] = input_ids
@@ -411,7 +446,8 @@ class DPOTrainer(_BaseTrainer):
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`~trainer.dpo_trainer.DataCollatorForPreference`] if the model is a language model and
-            [`~trainer.dpo_trainer.DataCollatorForVisionPreference`] if the model is a vision-language model.
+            [`~trainer.dpo_trainer.DataCollatorForVisionPreference`] if the model is a vision-language model. Custom
+            collators must truncate sequences before padding; the trainer does not apply post-collation truncation.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
@@ -607,11 +643,14 @@ class DPOTrainer(_BaseTrainer):
                 )
             data_collator = DataCollatorForPreference(
                 pad_token_id=pad_token_id,
+                max_length=args.max_length,
+                truncation_mode=args.truncation_mode,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
         elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionPreference(
                 processor=processing_class,
+                max_length=args.max_length,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
 
@@ -782,6 +821,40 @@ class DPOTrainer(_BaseTrainer):
                 else:
                     self.eval_dataset = self._precompute_ref_logps(self.eval_dataset, "eval", batch_size)
 
+    def _tokenize(
+        self,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
+        input: str | list,
+        **kwargs,
+    ) -> dict[str, list]:
+        """Tokenize a single example for dataset preprocessing.
+
+        Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
+        non-conversational input (str). For VLMs, normalizes the batch dimension that processors emit even for single
+        examples.
+
+        Args:
+            processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
+                The tokenizer or processor to use.
+            input (`str` or `list`):
+                A string for non-conversational input, or a list of message dicts for conversational input.
+            **kwargs:
+                Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
+
+        Returns:
+            `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
+        """
+        if isinstance(input, list):  # conversational: list of message dicts
+            if self._is_vlm:
+                input = prepare_multimodal_messages(input, images=[])
+            result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
+        else:  # non-conversational: plain text string
+            result = processing_class(text=input)
+        # VLMs emit a batch dimension even for single examples; unwrap it
+        if self._is_vlm:
+            return {k: v[0] for k, v in result.items()}
+        return result
+
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
@@ -789,11 +862,6 @@ class DPOTrainer(_BaseTrainer):
         args: DPOConfig,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
-        # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
-        # sampled data.
-        if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
-            dataset = dataset.with_transform(remove_none_values)
-
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
@@ -832,60 +900,33 @@ class DPOTrainer(_BaseTrainer):
                 tools = json.loads(tools) if isinstance(tools, str) else tools
                 output = {}
                 if is_conversational(example):
-                    if self._is_vlm:
-                        prompt = prepare_multimodal_messages(example["prompt"], images=[])
-                        chosen = prepare_multimodal_messages(example["chosen"], images=[])
-                        rejected = prepare_multimodal_messages(example["rejected"], images=[])
-                    else:
-                        prompt = example["prompt"]
-                        chosen = example["chosen"]
-                        rejected = example["rejected"]
-                    prompt_ids = processing_class.apply_chat_template(
-                        prompt,
+                    prompt_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"],
                         tools=tools,
                         add_generation_prompt=True,
-                        tokenize=True,
-                        return_dict=False,
                         **example.get("chat_template_kwargs", {}),
-                    )
-                    prompt_chosen_processed = processing_class.apply_chat_template(
-                        prompt + chosen,
+                    )["input_ids"]
+                    prompt_chosen_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"] + example["chosen"],
                         tools=tools,
-                        tokenize=True,
-                        return_dict=True,
                         **example.get("chat_template_kwargs", {}),
-                    )
-                    prompt_rejected_processed = processing_class.apply_chat_template(
-                        prompt + rejected,
+                    )["input_ids"]
+                    prompt_rejected_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"] + example["rejected"],
                         tools=tools,
-                        tokenize=True,
-                        return_dict=True,
                         **example.get("chat_template_kwargs", {}),
-                    )
-                    # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
-                    # even for single examples, while for LLMs it returns lists of ints.
-                    prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
-                    prompt_chosen_processed = {
-                        k: v[0] if isinstance(v[0], list) else v for k, v in prompt_chosen_processed.items()
-                    }
-                    prompt_rejected_processed = {
-                        k: v[0] if isinstance(v[0], list) else v for k, v in prompt_rejected_processed.items()
-                    }
-                    prompt_chosen_ids = prompt_chosen_processed["input_ids"]
-                    prompt_rejected_ids = prompt_rejected_processed["input_ids"]
+                    )["input_ids"]
                 else:
-                    prompt_ids = processing_class(text=example["prompt"])["input_ids"]
-                    prompt_chosen_ids = processing_class(text=example["prompt"] + example["chosen"])["input_ids"]
-                    prompt_rejected_ids = processing_class(text=example["prompt"] + example["rejected"])["input_ids"]
-                    # Fix transformers inconsistency: for VLMs, processing_class returns lists of lists
-                    # even for single examples, while for LLMs it returns lists of ints.
-                    prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
-                    prompt_chosen_ids = (
-                        prompt_chosen_ids[0] if isinstance(prompt_chosen_ids[0], list) else prompt_chosen_ids
-                    )
-                    prompt_rejected_ids = (
-                        prompt_rejected_ids[0] if isinstance(prompt_rejected_ids[0], list) else prompt_rejected_ids
-                    )
+                    prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_chosen_ids = self._tokenize(processing_class, example["prompt"] + example["chosen"])[
+                        "input_ids"
+                    ]
+                    prompt_rejected_ids = self._tokenize(processing_class, example["prompt"] + example["rejected"])[
+                        "input_ids"
+                    ]
 
                 # Check if the tokenized prompt starts with the tokenized prompt+completion
                 if not prompt_chosen_ids[: len(prompt_ids)] == prompt_ids:
@@ -976,40 +1017,6 @@ class DPOTrainer(_BaseTrainer):
 
         return dataset
 
-    def _truncate_inputs(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        completion_mask: torch.Tensor,
-        *extra: torch.Tensor,
-    ) -> tuple[torch.Tensor, ...]:
-        if self.args.max_length is None:
-            return input_ids, attention_mask, completion_mask, *extra
-
-        if self.args.truncation_mode == "keep_start":
-            input_ids = input_ids[:, : self.args.max_length]
-            attention_mask = attention_mask[:, : self.args.max_length]
-            completion_mask = completion_mask[:, : self.args.max_length]
-            extra = tuple(t[:, : self.args.max_length] for t in extra)
-        elif self.args.truncation_mode == "keep_end":
-            attention_mask, input_ids, completion_mask, *extra = flush_right(
-                attention_mask, input_ids, completion_mask, *extra
-            )
-            input_ids = input_ids[:, -self.args.max_length :]
-            attention_mask = attention_mask[:, -self.args.max_length :]
-            completion_mask = completion_mask[:, -self.args.max_length :]
-            extra = tuple(t[:, -self.args.max_length :] for t in extra)
-            attention_mask, input_ids, completion_mask, *extra = flush_left(
-                attention_mask, input_ids, completion_mask, *extra
-            )
-            extra = tuple(extra)
-        else:
-            raise ValueError(
-                f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
-            )
-
-        return input_ids, attention_mask, completion_mask, *extra
-
     def compute_ref_log_probs(self, inputs):
         """Computes reference log probabilities for a single padded batch."""
         device = self.accelerator.device
@@ -1017,19 +1024,19 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        # token_type_ids and mm_token_type_ids are sequence-length-aligned: truncate to match input_ids
-        extra_keys = [k for k in ("token_type_ids", "mm_token_type_ids") if k in inputs]
-        input_ids, attention_mask, completion_mask, *extra = self._truncate_inputs(
-            input_ids, attention_mask, completion_mask, *[inputs[k] for k in extra_keys]
-        )
-
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()
 
         model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key, val in zip(extra_keys, extra, strict=False):
-            model_kwargs[key] = val
-        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes"):
+        for key in (
+            "token_type_ids",
+            "mm_token_type_ids",
+            "pixel_values",
+            "pixel_attention_mask",
+            "image_grid_thw",
+            "image_sizes",
+            "pixel_position_ids",
+        ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
 
@@ -1074,7 +1081,6 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
 
         decoder = model.get_decoder()
         outputs = decoder(input_ids, attention_mask=attention_mask, use_cache=False)
@@ -1147,16 +1153,16 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        # token_type_ids and mm_token_type_ids are sequence-length-aligned: truncate to match input_ids
-        extra_keys = [k for k in ("token_type_ids", "mm_token_type_ids") if k in inputs]
-        input_ids, attention_mask, completion_mask, *extra = self._truncate_inputs(
-            input_ids, attention_mask, completion_mask, *[inputs[k] for k in extra_keys]
-        )
-
         model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key, val in zip(extra_keys, extra, strict=False):
-            model_kwargs[key] = val
-        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes"):
+        for key in (
+            "token_type_ids",
+            "mm_token_type_ids",
+            "pixel_values",
+            "pixel_attention_mask",
+            "image_grid_thw",
+            "image_sizes",
+            "pixel_position_ids",
+        ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
 

@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "einops",
 #     "scikit-learn",
 #     "joblib",
@@ -70,7 +69,6 @@ python examples/scripts/bco.py \
     --lora_alpha 16
 """
 
-import os
 from functools import partial
 
 import torch
@@ -81,10 +79,6 @@ from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgum
 
 from trl import ModelConfig, ScriptArguments, get_peft_config
 from trl.experimental.bco import BCOConfig, BCOTrainer
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, model: PreTrainedModel):

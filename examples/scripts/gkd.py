@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "trackio",
 #     "kernels",
 # ]
@@ -50,8 +49,6 @@ python examples/scripts/gkd.py \
     --lora_alpha 16
 """
 
-import os
-
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
 
@@ -65,10 +62,6 @@ from trl import (
     get_quantization_config,
 )
 from trl.experimental.gkd import GKDConfig, GKDTrainer
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":
