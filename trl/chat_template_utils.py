@@ -143,7 +143,7 @@ qwen3_schema = {
     },
 }
 
-qwen35_schema = {
+qwen3_5_schema = {
     "x-regex": r"^(?:(?:<think>\n?)?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n+(?=<tool_call>))?(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
     "properties": {
@@ -270,7 +270,7 @@ qwen3_chat_template = r"""{%- if tools %}
 {%- endif %}"""
 
 # docstyle-ignore
-qwen35_chat_template = r"""{%- set image_count = namespace(value=0) %}
+qwen3_5_chat_template_2b_and_below = r"""{%- set image_count = namespace(value=0) %}
 {%- set video_count = namespace(value=0) %}
 {%- macro render_content(content, do_vision_count, is_system_content=false) %}
     {%- if content is string %}
@@ -427,7 +427,7 @@ qwen35_chat_template = r"""{%- set image_count = namespace(value=0) %}
 
 
 # docstyle-ignore
-qwen35_chat_template_v2 = r"""{%- set image_count = namespace(value=0) %}
+qwen3_5_chat_template_4b_and_above = r"""{%- set image_count = namespace(value=0) %}
 {%- set video_count = namespace(value=0) %}
 {%- macro render_content(content, do_vision_count, is_system_content=false) %}
     {%- if content is string %}
@@ -615,8 +615,8 @@ def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     if tokenizer.chat_template == qwen3_chat_template:
         tokenizer.response_schema = qwen3_schema
         return tokenizer
-    if tokenizer.chat_template == qwen35_chat_template or tokenizer.chat_template == qwen35_chat_template_v2:
-        tokenizer.response_schema = qwen35_schema
+    if tokenizer.chat_template in [qwen3_5_chat_template_2b_and_below, qwen3_5_chat_template_4b_and_above]:
+        tokenizer.response_schema = qwen3_5_schema
         return tokenizer
     raise ValueError(
         "Unrecognized chat template, failed to add response schema. Please manually set the response schema on the "
@@ -755,7 +755,7 @@ qwen3_training_chat_template = r"""{%- if tools %}
 # - {{- '<|im_start|>' + message.role + '\n' + content }}
 # + {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content + '\n</think>\n\n' + content }}
 #   Always include thinking block during training. It's important to have a prefix-preserving template.
-qwen35_training_chat_template = qwen35_chat_template.replace(
+qwen3_5_training_chat_template = qwen3_5_chat_template_2b_and_below.replace(
     "{%- if '</think>' in content %}",
     "{%- if '<think>' in content and '</think>' in content %}",
 ).replace(
@@ -816,8 +816,8 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     if tokenizer.chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
-    if tokenizer.chat_template == qwen35_chat_template or tokenizer.chat_template == qwen35_chat_template_v2:
-        return qwen35_training_chat_template
+    if tokenizer.chat_template in [qwen3_5_chat_template_2b_and_below, qwen3_5_chat_template_4b_and_above]:
+        return qwen3_5_training_chat_template
     else:
         raise ValueError(
             "The tokenizer's chat template is not prefix-preserving and patching is not supported for this template. "
