@@ -1244,8 +1244,8 @@ class DistillationTrainer(_BaseTrainer):
 
         The forward KL term uses the teacher's top-k support, optionally collapsed with a tail bucket. The reverse KL
         term uses the actual completion token only, because the server cannot provide teacher logprobs at arbitrary
-        student-selected token IDs. When the completion is student-sampled, this reverse term is a Monte Carlo
-        approximation of reverse KL on the available token support.
+        student-selected token IDs. This makes the reverse term a sparse token-level surrogate rather than the exact
+        reverse KL used by the local-teacher path.
 
         Args:
             teacher_result: dict with ``actual_logprobs`` (B, T), ``topk_logprobs`` (B, T, K),
@@ -1293,10 +1293,8 @@ class DistillationTrainer(_BaseTrainer):
                 "Teacher server is missing actual-token logprobs for required reverse-KL positions: "
                 f"{missing_count}/{total_required}."
             )
-        # Use the sampled token's logprob difference directly. Multiplying by p_student
-        # again would overweight high-probability tokens because the token itself is
-        # already drawn from the student distribution in the on-policy path.
-        rev_per_token = student_actual_lps - actual_teacher_lps  # (B, T)
+        student_actual_ps = torch.exp(student_actual_lps)
+        rev_per_token = student_actual_ps * (student_actual_lps - actual_teacher_lps)  # (B, T)
 
         # ── Combine according to beta ──
         if self.beta == 0:
@@ -1304,7 +1302,7 @@ class DistillationTrainer(_BaseTrainer):
         elif self.beta == 1:
             loss_per_token = rev_per_token
         else:
-            loss_per_token = self.beta * fwd_per_token + (1 - self.beta) * rev_per_token
+            loss_per_token = (1 - self.beta) * fwd_per_token + self.beta * rev_per_token
 
         mask = labels != -100
         return loss_per_token[mask].sum() / mask.sum()
