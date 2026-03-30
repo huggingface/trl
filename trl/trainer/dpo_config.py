@@ -70,7 +70,7 @@ class DPOConfig(_BaseConfig):
         > Parameters that control the training
 
         loss_type (`list[str]`, *optional*, defaults to `["sigmoid"]`):
-            Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, `'nca_pair'`,
+            Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'sigmoid_norm'`, `'exo_pair'`, `'nca_pair'`,
             `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`, `'apo_zero'`, `'apo_down'`,
             `'discopop'`, `'sft'`. If multiple loss types are provided, they will be combined using the weights
             specified in `loss_weights`.
@@ -211,7 +211,7 @@ class DPOConfig(_BaseConfig):
     loss_type: list[str] = field(
         default_factory=lambda: ["sigmoid"],
         metadata={
-            "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, "
+            "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'sigmoid_norm'`, `'exo_pair'`, "
             "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`, `'apo_zero'`, "
             "`'apo_down'`, `'discopop'`, `'sft'`. If multiple loss types are provided, they will be combined using "
             "the weights specified in `loss_weights`.",

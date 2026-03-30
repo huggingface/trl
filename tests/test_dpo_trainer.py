@@ -266,6 +266,7 @@ class TestDPOTrainer(TrlTestCase):
             "sigmoid",
             "hinge",
             "ipo",
+            "sigmoid_norm",
             "exo_pair",
             "nca_pair",
             "robust",

@@ -1248,6 +1248,13 @@ class DPOTrainer(_BaseTrainer):
                 # (Eq. 17) of the paper where beta is the regularization parameter for the IPO loss, denoted by τ.
                 per_sequence_loss = (ipo_delta - 1 / (2 * self.beta)) ** 2
 
+            elif loss_type == "sigmoid_norm":
+                chosen_mask, rejected_mask = completion_mask.chunk(2, dim=0)
+                chosen_avg_score = chosen_scores / chosen_mask.sum(dim=1).clamp(min=1.0)
+                rejected_avg_score = rejected_scores / rejected_mask.sum(dim=1).clamp(min=1.0)
+                delta = chosen_avg_score - rejected_avg_score
+                per_sequence_loss = -F.logsigmoid(self.beta * delta_score)
+
             elif loss_type == "exo_pair":
                 # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856, (Eq. 16)
                 # Minimize KL(p_fθ || p_rh) for K=2; p_fθ = softmax(βπ * (log πθ − log π_ref)) over {chosen, rejected}
@@ -1348,7 +1355,7 @@ class DPOTrainer(_BaseTrainer):
 
             else:
                 raise ValueError(
-                    f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
+                    f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'sigmoid_norm', 'exo_pair', "
                     "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired', 'apo_zero', 'apo_down', "
                     "'discopop', 'sft']"
                 )
