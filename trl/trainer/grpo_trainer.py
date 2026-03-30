@@ -1462,20 +1462,20 @@ class GRPOTrainer(_BaseTrainer):
     ):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
 
-        # Build per-sample sync/async tool dicts. When per_sample_tools is provided,
-        # restrict the already-constructed per-sample dicts to the allowed tool names
-        # instead of rebuilding from raw callables, to preserve correct environment binding.
+        # Build per-sample sync/async tool dicts from the provided callables.
         if per_sample_tools is not None:
             sync_tool_dicts = []
             async_tool_dicts = []
-            for idx, sample_tools in enumerate(per_sample_tools):
-                allowed_names = {tool.__name__ for tool in sample_tools}
-                sync_tool_dicts.append(
-                    {name: fn for name, fn in self._sync_tool_dicts[idx].items() if name in allowed_names}
-                )
-                async_tool_dicts.append(
-                    {name: fn for name, fn in self._async_tool_dicts[idx].items() if name in allowed_names}
-                )
+            for sample_tools in per_sample_tools:
+                sync_dict = {}
+                async_dict = {}
+                for tool in sample_tools:
+                    if inspect.iscoroutinefunction(tool):
+                        async_dict[tool.__name__] = tool
+                    else:
+                        sync_dict[tool.__name__] = tool
+                sync_tool_dicts.append(sync_dict)
+                async_tool_dicts.append(async_dict)
         else:
             sync_tool_dicts = self._sync_tool_dicts
             async_tool_dicts = self._async_tool_dicts
@@ -1824,14 +1824,14 @@ class GRPOTrainer(_BaseTrainer):
         # Each sample lists the tool names it wants; missing/None falls back to all tools.
         per_sample_tools = None
         if self.tools and inputs and "tools" in inputs[0]:
+            tool_lookup = {tool.__name__: tool for tool in self.tools}
             per_sample_tools = []
-            for i, example in enumerate(inputs):
-                sample_tool_dict = {**self._sync_tool_dicts[i], **self._async_tool_dicts[i]}
+            for example in inputs:
                 tool_names = example.get("tools")
                 if tool_names is not None:
-                    per_sample_tools.append([sample_tool_dict[name] for name in tool_names])
+                    per_sample_tools.append([tool_lookup[name] for name in tool_names])
                 else:
-                    per_sample_tools.append(list(sample_tool_dict.values()))
+                    per_sample_tools.append(list(tool_lookup.values()))
 
         (
             prompt_ids_list,
