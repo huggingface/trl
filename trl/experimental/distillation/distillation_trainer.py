@@ -1118,19 +1118,22 @@ class DistillationTrainer(_BaseTrainer):
         beta=0.5,
     ):
         """
-        Compute a per-token approximation of the generalized JSD loss using only the sampled token's logprobs.
+        Compute a per-token weighted forward/reverse KL surrogate using only the sampled token's logprobs.
 
-        This is used when the teacher is an external server and the reverse component only has access to the realized
-        token's logprob. For each token position, we have log p_student(token) and log p_teacher(token) and compute:
+        This helper keeps the legacy sparse approximation where only the realized token's logprob is available. For
+        each token position, we have log p_student(token) and log p_teacher(token) and compute:
             - beta=0 (forward KL): exp(log_teacher) * (log_teacher - log_student)
             - beta=1 (reverse KL): exp(log_student) * (log_student - log_teacher)
-            - 0 < beta < 1 (JSD): weighted combination of forward and reverse token-level KL terms
+            - 0 < beta < 1: weighted combination of forward and reverse token-level KL terms
+
+        This is not the exact generalized JSD used by `generalized_jsd_loss` when `0 < beta < 1`.
 
         Args:
             student_logprobs: Tensor of shape (batch_size, completion_length) — student's log-prob per token.
             teacher_logprobs: Tensor of shape (batch_size, completion_length) — teacher's log-prob per token.
             labels: Tensor of shape (batch_size, completion_length) with -100 for positions to ignore.
-            beta: Interpolation coefficient. 0.0 = forward KL, 0.5 = JSD, 1.0 = reverse KL.
+            beta: Interpolation coefficient. 0.0 = forward KL surrogate, 1.0 = reverse KL surrogate, and intermediate
+                values interpolate between them.
 
         Returns:
             Scalar loss tensor.
@@ -1244,13 +1247,16 @@ class DistillationTrainer(_BaseTrainer):
         completion_tokens: torch.Tensor,
         labels: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute forward/reverse KL or JSD using teacher logprobs from the server.
+        """Compute sparse server-side forward/reverse KL surrogates using teacher logprobs from the server.
 
         The forward KL term uses the teacher's top-k support for pure forward KL and top-1 teacher support whenever a
         reverse component is present, optionally collapsed with a tail bucket. The reverse KL term uses the actual
         completion token only, because the server cannot provide teacher logprobs at arbitrary student-selected token
-        IDs. This makes the reverse term a sparse token-level surrogate rather than the exact reverse KL used by the
-        local-teacher path.
+        IDs. When `self.loss_add_tail` is enabled, the reverse term becomes a two-bucket KL over
+        `{actual_token, residual_tail}`. This matches `generalized_jsd_loss(..., beta=1, top_k=1, add_tail=True)`
+        when the sampled token is the same token used in the top-1 support and the logprob values agree. For
+        `0 < beta < 1`, this method still returns a weighted combination of the forward and reverse surrogates rather
+        than the exact generalized JSD used by the local-teacher path.
 
         Args:
             teacher_result: dict with ``actual_logprobs`` (B, T), ``topk_logprobs`` (B, T, K),
@@ -1298,8 +1304,21 @@ class DistillationTrainer(_BaseTrainer):
                 "Teacher server is missing actual-token logprobs for required reverse-KL positions: "
                 f"{missing_count}/{total_required}."
             )
-        student_actual_ps = torch.exp(student_actual_lps)
-        rev_per_token = student_actual_ps * (student_actual_lps - actual_teacher_lps)  # (B, T)
+        if self.loss_add_tail:
+            rev_student_lps = student_actual_lps.unsqueeze(-1)  # (B, T, 1)
+            rev_teacher_lps = actual_teacher_lps.unsqueeze(-1)  # (B, T, 1)
+            rev_valid = torch.ones_like(rev_student_lps, dtype=torch.bool)
+            rev_student_log_probs, rev_support_mask = _add_tail_bucket(rev_student_lps, rev_valid)
+            rev_teacher_log_probs, _ = _add_tail_bucket(rev_teacher_lps, rev_valid)
+            rev_per_token = _jsd_divergence(
+                rev_student_log_probs,
+                rev_teacher_log_probs,
+                beta=1.0,
+                support_mask=rev_support_mask,
+            ).sum(dim=-1)
+        else:
+            student_actual_ps = torch.exp(student_actual_lps)
+            rev_per_token = student_actual_ps * (student_actual_lps - actual_teacher_lps)  # (B, T)
 
         # ── Combine according to beta ──
         if self.beta == 0:
