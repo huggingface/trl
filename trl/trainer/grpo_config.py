@@ -862,7 +862,7 @@ class GRPOConfig(_BaseConfig):
                 "Which trust-region constraint to use. Options:\n"
                 "  - 'clip': Standard PPO/GRPO ratio clipping (default)\n"
                 "  - 'pspo': Probability smoothing toward behavior policy\n"
-                "See https://arxiv.org/abs/2509.21282 for details on PSPO."
+                "See https://huggingface.co/papers/2509.21282 for details on PSPO."
             )
         },
     )

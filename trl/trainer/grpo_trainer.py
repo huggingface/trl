@@ -2363,7 +2363,7 @@ class GRPOTrainer(_BaseTrainer):
                 per_token_loss1 = None
                 per_token_loss2 = None
                 # always use smoothing for loss (no min)
-                per_token_loss = -(coef_2 * advantages.unsqueeze(1))
+                per_token_loss = -(coef_2 * advantages)
             else:
                 raise ValueError(f"Unkown trust region method: {self.trust_region_method}")
         elif self.loss_type == "sapo":
