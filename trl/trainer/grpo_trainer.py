@@ -1822,6 +1822,10 @@ class GRPOTrainer(_BaseTrainer):
 
         # If the dataset has a "tools" column, use it for per-sample tool filtering.
         # Each sample lists the tool names it wants; missing/None falls back to all tools.
+        # Note: combining a `tools` column with `environment_factory` is not supported. When
+        # environments are used, `self.tools` holds environment 0's bound methods (representative
+        # for schema rendering), so all per-sample callables would resolve to environment 0's
+        # instance instead of each sample's own environment.
         per_sample_tools = None
         if self.tools and inputs and "tools" in inputs[0]:
             tool_lookup = {tool.__name__: tool for tool in self.tools}
