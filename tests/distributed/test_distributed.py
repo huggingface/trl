@@ -41,9 +41,7 @@ def get_config_path(lazy_shared_datadir):
 
 
 @require_torch_multi_accelerator
-class TestDistributed(
-    TrlTestCase
-):  # pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899"))
+class TestDistributed(TrlTestCase):
     @pytest.mark.parametrize(
         "config",
         [
