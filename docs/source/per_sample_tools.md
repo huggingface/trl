@@ -7,17 +7,17 @@ For example, a math question might only need a `calculator`, while a translation
 might only need a `translator`. Exposing all tools on every sample can confuse the model
 and dilute the training signal.
 
-`GRPOTrainer` now supports an optional `tools_column_name` parameter that lets you specify
-**which tools are available per dataset sample**, drawn from the global `tools` pool.
+`GRPOTrainer` automatically detects a `tools` column in your dataset and uses it to restrict
+**which tools are available per sample**, drawn from the global `tools` pool.
 
 ## How It Works
 
 1. **Global tool pool** — You pass the full set of tools to the trainer via `tools=[...]` as before.
-2. **Per-sample tool column** — Your dataset includes a column (e.g., `"tools"`) containing a
-   list of tool **names** (strings matching `tool.__name__`) allowed for each sample.
+2. **Per-sample tool column** — Your dataset includes a `"tools"` column containing a list of tool
+   **names** (strings matching `tool.__name__`) allowed for each sample.
 3. **Automatic filtering** — For each rollout, only the specified tools appear in the model's
-   system prompt (chat template) and are available for execution. If the column is missing or
-   `None` for a sample, all tools are used as a fallback.
+   system prompt (chat template) and are available for execution. If the column value is `None`
+   for a sample, all tools are used as a fallback.
 
 ## Example
 
@@ -85,31 +85,24 @@ dataset = Dataset.from_dict({
         [{"role": "user", "content": "Compute 2^10 and translate the result to Spanish."}],
     ],
     "tools": [
-        ["calculator"],            # only calculator available
-        ["translator"],            # only translator available
+        ["calculator"],                # only calculator available
+        ["translator"],                # only translator available
         ["calculator", "translator"],  # both available
     ],
 })
 
-# Create trainer with per-sample tool filtering
+# The trainer automatically detects the "tools" column and applies per-sample filtering
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",
     reward_funcs=my_reward,
     tools=[calculator, translator],
-    tools_column_name="tools",       # <-- activates per-sample filtering
     train_dataset=dataset,
 )
 
 trainer.train()
 ```
 
-## Validation
-
-At initialization, the trainer validates that every tool name referenced in the dataset column
-exists in the global `tools` pool. If an unknown tool name is found, a clear `ValueError` is
-raised listing the offending names and the available pool.
-
 ## Backward Compatibility
 
-When `tools_column_name=None` (the default), behavior is identical to the existing API — all
+When the dataset has no `tools` column, behavior is identical to the existing API — all
 tools in the `tools` list are used for every sample.

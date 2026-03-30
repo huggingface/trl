@@ -13,11 +13,13 @@
 # limitations under the License.
 
 """
-Tests for the per-sample tool filtering feature (tools_column_name) in GRPOTrainer.
+Tests for the per-sample tool filtering feature in GRPOTrainer.
+
+When a dataset contains a `tools` column, GRPOTrainer automatically uses it to restrict
+which tools each sample can call during rollout.
 """
 
 import os
-from collections.abc import Callable
 from unittest.mock import patch
 
 import pytest
@@ -34,6 +36,7 @@ from .testing_utils import TrlTestCase, require_jmespath
 # ──────────────────────────────────────────────────────────────────────
 # Tool definitions
 # ──────────────────────────────────────────────────────────────────────
+
 
 def multiply_tool(a: int, b: int) -> int:
     """
@@ -81,90 +84,14 @@ async def async_add_tool(a: int, b: int) -> int:
 # Unit-level tests (no model loading, fast)
 # ──────────────────────────────────────────────────────────────────────
 
+
 class TestToolsColumnValidation(TrlTestCase):
-    """Test that validation of tools_column_name works correctly at init time."""
+    """Test that per-sample tool filtering via the `tools` dataset column works correctly."""
 
     def _make_conversational_dataset(self, tool_names_per_sample):
         """Helper: create a minimal conversational dataset with a tools column."""
-        prompts = [
-            [{"role": "user", "content": f"Question {i}"}]
-            for i in range(len(tool_names_per_sample))
-        ]
+        prompts = [[{"role": "user", "content": f"Question {i}"}] for i in range(len(tool_names_per_sample))]
         return Dataset.from_dict({"prompt": prompts, "tools": tool_names_per_sample})
-
-    def test_tools_column_name_without_tools_raises(self):
-        """Setting tools_column_name without providing any tools should fail."""
-        dataset = self._make_conversational_dataset([["multiply_tool"]])
-        with pytest.raises(ValueError, match="no `tools` were provided"):
-            GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
-                train_dataset=dataset,
-                tools_column_name="tools",
-                # no tools= provided
-            )
-
-    @pytest.mark.xfail(
-        condition=Version(transformers.__version__) < Version("5.0.0"),
-        reason="Tool parsing is not supported in transformers versions below 5.0.0",
-        strict=True,
-    )
-    @require_jmespath
-    def test_missing_column_in_dataset_raises(self):
-        """If the named column doesn't exist in the dataset, raise ValueError."""
-        dataset = Dataset.from_dict({
-            "prompt": [[{"role": "user", "content": "hi"}]],
-        })
-        with pytest.raises(ValueError, match="does not contain the column"):
-            GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
-                train_dataset=dataset,
-                tools=[multiply_tool],
-                tools_column_name="tools",
-            )
-
-    @pytest.mark.xfail(
-        condition=Version(transformers.__version__) < Version("5.0.0"),
-        reason="Tool parsing is not supported in transformers versions below 5.0.0",
-        strict=True,
-    )
-    @require_jmespath
-    def test_unknown_tool_name_in_dataset_raises(self):
-        """If a sample references a tool name not in the global pool, raise ValueError."""
-        dataset = self._make_conversational_dataset([["multiply_tool"], ["nonexistent_tool"]])
-        with pytest.raises(ValueError, match="nonexistent_tool"):
-            GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
-                train_dataset=dataset,
-                tools=[multiply_tool],
-                tools_column_name="tools",
-            )
-
-    @pytest.mark.xfail(
-        condition=Version(transformers.__version__) < Version("5.0.0"),
-        reason="Tool parsing is not supported in transformers versions below 5.0.0",
-        strict=True,
-    )
-    @require_jmespath
-    def test_unknown_tool_name_in_eval_dataset_raises(self):
-        """Validation also applies to eval datasets."""
-        train_dataset = self._make_conversational_dataset([["multiply_tool"]])
-        eval_dataset = self._make_conversational_dataset([["ghost_tool"]])
-        with pytest.raises(ValueError, match="ghost_tool"):
-            GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
-                train_dataset=train_dataset,
-                eval_dataset=eval_dataset,
-                tools=[multiply_tool],
-                tools_column_name="tools",
-            )
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
@@ -173,11 +100,8 @@ class TestToolsColumnValidation(TrlTestCase):
     )
     @require_jmespath
     def test_valid_tools_column_passes_validation(self):
-        """A valid dataset with all tool names found in the pool should not raise."""
-        dataset = self._make_conversational_dataset(
-            [["multiply_tool"], ["add_tool"], ["multiply_tool", "add_tool"]]
-        )
-        # Should not raise
+        """A dataset with a tools column and matching tool pool should init without errors."""
+        dataset = self._make_conversational_dataset([["multiply_tool"], ["add_tool"], ["multiply_tool", "add_tool"]])
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
@@ -189,9 +113,7 @@ class TestToolsColumnValidation(TrlTestCase):
             ),
             train_dataset=dataset,
             tools=[multiply_tool, add_tool],
-            tools_column_name="tools",
         )
-        assert trainer.tools_column_name == "tools"
         assert {t.__name__ for t in trainer.tools} == {"multiply_tool", "add_tool"}
 
     @pytest.mark.xfail(
@@ -200,8 +122,8 @@ class TestToolsColumnValidation(TrlTestCase):
         strict=True,
     )
     @require_jmespath
-    def test_none_tools_column_name_backward_compat(self):
-        """When tools_column_name is None (default), trainer behaves as before."""
+    def test_no_tools_column_backward_compat(self):
+        """When the dataset has no tools column, trainer behaves as before (all tools used)."""
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
@@ -214,9 +136,8 @@ class TestToolsColumnValidation(TrlTestCase):
             ),
             train_dataset=dataset,
             tools=[multiply_tool],
-            # tools_column_name not set → None
         )
-        assert trainer.tools_column_name is None
+        assert {t.__name__ for t in trainer.tools} == {"multiply_tool"}
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
@@ -238,7 +159,6 @@ class TestToolsColumnValidation(TrlTestCase):
             ),
             train_dataset=dataset,
             tools=[multiply_tool, add_tool],
-            tools_column_name="tools",
         )
         assert trainer._sync_tool_dicts[0]["multiply_tool"] is multiply_tool
         assert trainer._sync_tool_dicts[0]["add_tool"] is add_tool
@@ -249,8 +169,8 @@ class TestToolsColumnValidation(TrlTestCase):
         strict=True,
     )
     @require_jmespath
-    def test_signature_columns_include_tools_column(self):
-        """When tools_column_name is set, it should appear in _signature_columns."""
+    def test_signature_columns_include_tools(self):
+        """The `tools` column should always be included in _signature_columns."""
         dataset = self._make_conversational_dataset([["multiply_tool"]])
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
@@ -263,39 +183,15 @@ class TestToolsColumnValidation(TrlTestCase):
             ),
             train_dataset=dataset,
             tools=[multiply_tool],
-            tools_column_name="tools",
         )
         trainer._set_signature_columns_if_needed()
         assert "tools" in trainer._signature_columns
-
-    @pytest.mark.xfail(
-        condition=Version(transformers.__version__) < Version("5.0.0"),
-        reason="Tool parsing is not supported in transformers versions below 5.0.0",
-        strict=True,
-    )
-    @require_jmespath
-    def test_signature_columns_without_tools_column(self):
-        """When tools_column_name is None, _signature_columns should not include it."""
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=GRPOConfig(
-                output_dir=self.tmp_dir,
-                report_to="none",
-                per_device_train_batch_size=3,
-                num_generations=3,
-            ),
-            train_dataset=dataset,
-            tools=[multiply_tool],
-        )
-        trainer._set_signature_columns_if_needed()
-        assert "tools" not in trainer._signature_columns
 
 
 # ──────────────────────────────────────────────────────────────────────
 # Integration tests (model loading + training with fake_generate)
 # ──────────────────────────────────────────────────────────────────────
+
 
 class TestToolsColumnTraining(TrlTestCase):
     """End-to-end tests for training with per-sample tool filtering."""
@@ -307,26 +203,27 @@ class TestToolsColumnTraining(TrlTestCase):
     )
     @require_jmespath
     def test_training_with_tools_column(self):
-        """Train with tools_column_name and verify that per-sample filtering works end-to-end.
+        """Train with a `tools` dataset column and verify per-sample filtering works end-to-end.
 
         We create a 3-sample dataset where:
           - Sample 0: only multiply_tool available  → model calls multiply_tool (succeeds)
           - Sample 1: only multiply_tool available  → model calls multiply_tool (fails, wrong arg)
           - Sample 2: only multiply_tool available  → model returns plain text (no tool call)
-        This mirrors the existing test_training_with_tools test but adds the tools_column_name dimension.
         """
-        dataset = Dataset.from_dict({
-            "prompt": [
-                [{"role": "user", "content": "What is 3 times 4?"}],
-                [{"role": "user", "content": "Multiply 5 and 6."}],
-                [{"role": "user", "content": "Tell me a joke."}],
-            ],
-            "tools": [
-                ["multiply_tool"],
-                ["multiply_tool"],
-                ["multiply_tool"],
-            ],
-        })
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [
+                    [{"role": "user", "content": "What is 3 times 4?"}],
+                    [{"role": "user", "content": "Multiply 5 and 6."}],
+                    [{"role": "user", "content": "Tell me a joke."}],
+                ],
+                "tools": [
+                    ["multiply_tool"],
+                    ["multiply_tool"],
+                    ["multiply_tool"],
+                ],
+            }
+        )
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -341,8 +238,7 @@ class TestToolsColumnTraining(TrlTestCase):
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
-            tools=[multiply_tool, add_tool],  # global pool has both
-            tools_column_name="tools",        # but dataset only allows multiply_tool
+            tools=[multiply_tool, add_tool],  # global pool has both; dataset column restricts per sample
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -400,18 +296,20 @@ class TestToolsColumnTraining(TrlTestCase):
         Because the model's fake output calls multiply_tool, the sample that only allows add_tool
         should fail the tool call (tool not found) — proving the filtering works.
         """
-        dataset = Dataset.from_dict({
-            "prompt": [
-                [{"role": "user", "content": "What is 3 times 4?"}],
-                [{"role": "user", "content": "Add 1 and 2."}],
-                [{"role": "user", "content": "Tell me a joke."}],
-            ],
-            "tools": [
-                ["multiply_tool"],   # sample 0: only multiply allowed
-                ["add_tool"],        # sample 1: only add allowed → multiply_tool call will fail ("not found")
-                ["multiply_tool", "add_tool"],  # sample 2: both allowed, but model won't call any
-            ],
-        })
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [
+                    [{"role": "user", "content": "What is 3 times 4?"}],
+                    [{"role": "user", "content": "Add 1 and 2."}],
+                    [{"role": "user", "content": "Tell me a joke."}],
+                ],
+                "tools": [
+                    ["multiply_tool"],  # sample 0: only multiply allowed
+                    ["add_tool"],  # sample 1: only add allowed → multiply_tool call will fail ("not found")
+                    ["multiply_tool", "add_tool"],  # sample 2: both allowed, but model won't call any
+                ],
+            }
+        )
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -427,7 +325,6 @@ class TestToolsColumnTraining(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             tools=[multiply_tool, add_tool],
-            tools_column_name="tools",
         )
 
         def fake_generate(input_ids, **kwargs):
@@ -475,7 +372,7 @@ class TestToolsColumnTraining(TrlTestCase):
     )
     @require_jmespath
     def test_training_without_tools_column_backward_compat(self):
-        """Training with tools but without tools_column_name should work exactly as before."""
+        """Training with tools but without a `tools` dataset column should work exactly as before."""
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -492,7 +389,6 @@ class TestToolsColumnTraining(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             tools=[multiply_tool],
-            # no tools_column_name
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -538,18 +434,20 @@ class TestToolsColumnTraining(TrlTestCase):
     @require_jmespath
     def test_training_with_none_in_tools_column_falls_back(self):
         """When a sample's tools column is None, fall back to the full global tools list."""
-        dataset = Dataset.from_dict({
-            "prompt": [
-                [{"role": "user", "content": "What is 3 times 4?"}],
-                [{"role": "user", "content": "What is 5 plus 6?"}],
-                [{"role": "user", "content": "Tell me a joke."}],
-            ],
-            "tools": [
-                ["multiply_tool"],              # only multiply
-                None,                           # fallback to all tools (multiply + add)
-                ["multiply_tool", "add_tool"],  # both tools (fake_generate calls multiply_tool for all batches)
-            ],
-        })
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [
+                    [{"role": "user", "content": "What is 3 times 4?"}],
+                    [{"role": "user", "content": "What is 5 plus 6?"}],
+                    [{"role": "user", "content": "Tell me a joke."}],
+                ],
+                "tools": [
+                    ["multiply_tool"],  # only multiply
+                    None,  # fallback to all tools (multiply + add)
+                    ["multiply_tool", "add_tool"],  # both tools (fake_generate calls multiply_tool for all batches)
+                ],
+            }
+        )
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -565,7 +463,6 @@ class TestToolsColumnTraining(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             tools=[multiply_tool, add_tool],
-            tools_column_name="tools",
         )
 
         def fake_generate(input_ids, **kwargs):
@@ -607,18 +504,20 @@ class TestToolsColumnTraining(TrlTestCase):
     @require_jmespath
     def test_training_with_async_tool_and_tools_column(self):
         """Verify that async tools also work with per-sample filtering."""
-        dataset = Dataset.from_dict({
-            "prompt": [
-                [{"role": "user", "content": "What is 3 times 4?"}],
-                [{"role": "user", "content": "What is 5 plus 6?"}],
-                [{"role": "user", "content": "Tell me a joke."}],
-            ],
-            "tools": [
-                ["multiply_tool"],
-                ["multiply_tool"],
-                ["multiply_tool"],
-            ],
-        })
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [
+                    [{"role": "user", "content": "What is 3 times 4?"}],
+                    [{"role": "user", "content": "What is 5 plus 6?"}],
+                    [{"role": "user", "content": "Tell me a joke."}],
+                ],
+                "tools": [
+                    ["multiply_tool"],
+                    ["multiply_tool"],
+                    ["multiply_tool"],
+                ],
+            }
+        )
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -634,7 +533,6 @@ class TestToolsColumnTraining(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             tools=[multiply_tool, async_add_tool],  # mix of sync and async in global pool
-            tools_column_name="tools",
         )
 
         def fake_generate(input_ids, **kwargs):
@@ -675,18 +573,20 @@ class TestToolsColumnTraining(TrlTestCase):
         If the old _tool_registry fallback were used, all samples would resolve to
         environments[0].increment, and only environments[0]._counter would be updated.
         """
-        dataset = Dataset.from_dict({
-            "prompt": [
-                [{"role": "user", "content": "Increment by 1."}],
-                [{"role": "user", "content": "Increment by 1."}],
-                [{"role": "user", "content": "Tell me a joke."}],
-            ],
-            "tools": [
-                ["increment"],
-                ["increment"],
-                ["increment"],
-            ],
-        })
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [
+                    [{"role": "user", "content": "Increment by 1."}],
+                    [{"role": "user", "content": "Increment by 1."}],
+                    [{"role": "user", "content": "Tell me a joke."}],
+                ],
+                "tools": [
+                    ["increment"],
+                    ["increment"],
+                    ["increment"],
+                ],
+            }
+        )
 
         class DummyEnvironment:
             def reset(self, **kwargs):
@@ -720,7 +620,6 @@ class TestToolsColumnTraining(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             environment_factory=DummyEnvironment,
-            tools_column_name="tools",
         )
 
         def fake_generate(input_ids, **kwargs):

@@ -226,28 +226,9 @@ class GRPOTrainer(_BaseTrainer):
             Google-style docstring describing its purpose, arguments, and return value. For more details, see:
             https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
-            use and that it has been fine-tuned for tool calling.
-        tools_column_name (`str`, *optional*):
-            Name of a dataset column containing a list of tool names (strings) allowed for each sample. When set,
-            only the named tools (a subset of the global `tools` pool) are exposed in the prompt's tool schema and
-            available for execution during that sample's rollout. If the column value is missing or ``None`` for a
-            sample, the full global ``tools`` list is used as a fallback. This enables controlled tool variation
-            across rollouts without breaking the existing API. Example usage:
-
-            ```python
-            dataset = Dataset.from_dict({
-                "prompt": [[{"role": "user", "content": "What is 2+2?"}],
-                           [{"role": "user", "content": "Translate 'hello'"}]],
-                "tools":  [["calculator"], ["translator"]],
-            })
-            trainer = GRPOTrainer(
-                model=model,
-                reward_funcs=reward,
-                tools=[calculator, translator],
-                tools_column_name="tools",
-                train_dataset=dataset,
-            )
-            ```
+            use and that it has been fine-tuned for tool calling. If the dataset contains a `tools` column with a
+            list of tool names per sample, only those tools are exposed during that sample's rollout. If the column
+            value is missing or `None` for a sample, the full `tools` list is used.
         rollout_func (`RolloutFunc`, *optional*):
             Function to use for generating completions. It receives the list of prompts allocated to the current
             process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
@@ -295,7 +276,6 @@ class GRPOTrainer(_BaseTrainer):
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
-        tools_column_name: str | None = None,
         rollout_func: RolloutFunc | None = None,
         environment_factory: EnvironmentFactory | None = None,
     ):
@@ -510,30 +490,6 @@ class GRPOTrainer(_BaseTrainer):
 
         self.tools = tools + (environment_methods[0] if self.environments is not None else [])
 
-        # Per-sample tool filtering support
-        self.tools_column_name = tools_column_name
-
-        # When tools_column_name is used, the registry is the sole source for resolving tool names from dataset rows.
-        # Duplicate names would cause silent overwrites and make per-sample filtering ambiguous, so we raise early.
-        # Without tools_column_name the registry is not consulted for resolution, so we stay backward-compatible.
-        if tools_column_name is not None:
-            _tool_name_counts = defaultdict(list)
-            for tool in self.tools:
-                _tool_name_counts[tool.__name__].append(tool)
-            _duplicate_tool_names = {name: ts for name, ts in _tool_name_counts.items() if len(ts) > 1}
-            if _duplicate_tool_names:
-                _duplicate_info = ", ".join(f"{name} ({len(ts)})" for name, ts in _duplicate_tool_names.items())
-                raise ValueError(
-                    f"Duplicate tool names detected: {_duplicate_info}. "
-                    "Tool names must be unique when using `tools_column_name`."
-                )
-        # Fail-fast: check input-only conditions before super().__init__() triggers heavy model initialization.
-        if self.tools_column_name is not None and not self.tools:
-            raise ValueError(
-                f"`tools_column_name='{self.tools_column_name}'` was set, but no `tools` were provided. "
-                "Please pass a `tools` list to GRPOTrainer when using per-sample tool filtering."
-            )
-
         # Check for async functions to start an event loop on a daemon thread
         self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs + self.tools)
 
@@ -671,41 +627,6 @@ class GRPOTrainer(_BaseTrainer):
 
         # Reference model
         self.beta = args.beta
-
-        # Validate per-sample tool names in the dataset(s)
-        if self.tools_column_name is not None:
-            datasets_to_check = []
-            if train_dataset is not None:
-                datasets_to_check.append(("train", train_dataset))
-            if eval_dataset is not None:
-                if isinstance(eval_dataset, dict):
-                    for name, ds in eval_dataset.items():
-                        datasets_to_check.append((f"eval/{name}", ds))
-                else:
-                    datasets_to_check.append(("eval", eval_dataset))
-            available_tool_names = {tool.__name__ for tool in self.tools}
-            for ds_name, ds in datasets_to_check:
-                if isinstance(ds, IterableDataset):
-                    continue  # Cannot iterate eagerly over streaming datasets
-                if self.tools_column_name not in ds.column_names:
-                    raise ValueError(
-                        f"Dataset '{ds_name}' does not contain the column '{self.tools_column_name}' specified "
-                        f"by `tools_column_name`. Available columns: {ds.column_names}"
-                    )
-                # Use vectorized column access instead of row-by-row iteration for efficiency.
-                all_tool_names_in_ds = {
-                    name
-                    for tool_list in ds[self.tools_column_name]
-                    if tool_list is not None
-                    for name in tool_list
-                }
-                unknown_tools = all_tool_names_in_ds - available_tool_names
-                if unknown_tools:
-                    raise ValueError(
-                        f"Dataset '{ds_name}' column '{self.tools_column_name}' references tool names not found "
-                        f"in the global `tools` pool: {sorted(unknown_tools)}. "
-                        f"Available tool names: {sorted(available_tool_names)}"
-                    )
 
         if self.beta == 0.0:
             # If beta is 0.0, the reference model is not needed
@@ -932,9 +853,7 @@ class GRPOTrainer(_BaseTrainer):
         # and "attention_mask"). In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't
         # work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt", "image", "images"]
-            if self.tools_column_name is not None:
-                self._signature_columns.append(self.tools_column_name)
+            self._signature_columns = ["prompt", "image", "images", "tools"]
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
@@ -1355,7 +1274,8 @@ class GRPOTrainer(_BaseTrainer):
                 for i, (prompt, tools_for_sample) in enumerate(zip(prompts, per_sample_tools, strict=True)):
                     tokenized = self.processing_class.apply_chat_template(
                         conversation=[prompt],
-                        tools=tools_for_sample or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+                        tools=tools_for_sample
+                        or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
                         chat_template=self.chat_template,
                         add_generation_prompt=True,
                         tokenize=True,
@@ -1530,7 +1450,14 @@ class GRPOTrainer(_BaseTrainer):
         return full_ids[len(prefix_ids) :]
 
     def _tool_call_loop(
-        self, prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields,
+        self,
+        prompts,
+        prompt_ids,
+        completion_ids,
+        completions,
+        logprobs,
+        images,
+        multimodal_fields,
         per_sample_tools=None,
     ):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
@@ -1543,8 +1470,12 @@ class GRPOTrainer(_BaseTrainer):
             async_tool_dicts = []
             for idx, sample_tools in enumerate(per_sample_tools):
                 allowed_names = {tool.__name__ for tool in sample_tools}
-                sync_tool_dicts.append({name: fn for name, fn in self._sync_tool_dicts[idx].items() if name in allowed_names})
-                async_tool_dicts.append({name: fn for name, fn in self._async_tool_dicts[idx].items() if name in allowed_names})
+                sync_tool_dicts.append(
+                    {name: fn for name, fn in self._sync_tool_dicts[idx].items() if name in allowed_names}
+                )
+                async_tool_dicts.append(
+                    {name: fn for name, fn in self._async_tool_dicts[idx].items() if name in allowed_names}
+                )
         else:
             sync_tool_dicts = self._sync_tool_dicts
             async_tool_dicts = self._async_tool_dicts
@@ -1781,7 +1712,13 @@ class GRPOTrainer(_BaseTrainer):
                 tool_call_count,
                 tool_failure_count,
             ) = self._tool_call_loop(
-                prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields,
+                prompts,
+                prompt_ids,
+                completion_ids,
+                completions,
+                logprobs,
+                images,
+                multimodal_fields,
                 per_sample_tools=per_sample_tools,
             )
         else:
@@ -1883,15 +1820,14 @@ class GRPOTrainer(_BaseTrainer):
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
-        # Resolve per-sample tools from the dataset column when tools_column_name is set.
-        # Each sample may specify a subset of the global tool pool by name; missing/None falls back to all tools.
+        # If the dataset has a "tools" column, use it for per-sample tool filtering.
+        # Each sample lists the tool names it wants; missing/None falls back to all tools.
         per_sample_tools = None
-        if self.tools_column_name is not None and self.tools:
+        if self.tools and inputs and "tools" in inputs[0]:
             per_sample_tools = []
             for i, example in enumerate(inputs):
                 sample_tool_dict = {**self._sync_tool_dicts[i], **self._async_tool_dicts[i]}
-
-                tool_names = example.get(self.tools_column_name)
+                tool_names = example.get("tools")
                 if tool_names is not None:
                     per_sample_tools.append([sample_tool_dict[name] for name in tool_names])
                 else:
