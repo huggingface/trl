@@ -44,20 +44,20 @@ from transformers.utils import (
     is_rich_available,
 )
 
-from ..extras.profiling import profiling_decorator
-from ..generation.vllm_generation import VLLMGeneration
-from ..import_utils import is_vllm_available
-from ..models import prepare_deepspeed
-from ..models.utils import unwrap_model_for_generation
-from .base_trainer import _BaseTrainer
-from .distillation_config import DistillationConfig
-from .utils import (
+from ...extras.profiling import profiling_decorator
+from ...generation.vllm_generation import VLLMGeneration
+from ...import_utils import is_vllm_available
+from ...models import prepare_deepspeed
+from ...models.utils import unwrap_model_for_generation
+from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
     pad,
     split_tensor_dict,
 )
+from .distillation_config import DistillationConfig
 
 
 if is_peft_available():

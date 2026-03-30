@@ -25,7 +25,7 @@
 """
 # Full training (off-policy only, lmbda=0):
 ```
-python trl/scripts/distillation.py \
+python trl/experimental/distillation/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -39,7 +39,7 @@ python trl/scripts/distillation.py \
 
 # Mixed on/off-policy (lmbda=0.5):
 ```
-python trl/scripts/distillation.py \
+python trl/experimental/distillation/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -54,7 +54,7 @@ python trl/scripts/distillation.py \
 
 # LoRA:
 ```
-python trl/scripts/distillation.py \
+python trl/experimental/distillation/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -84,13 +84,13 @@ def main(script_args, training_args, model_args):
     from transformers import AutoConfig, AutoModelForCausalLM, GenerationConfig
 
     from trl import (
-        DistillationTrainer,
         LogCompletionsCallback,
         ModelConfig,
         get_kbit_device_map,
         get_peft_config,
         get_quantization_config,
     )
+    from trl.experimental.distillation import DistillationTrainer
 
     logger = logging.get_logger(__name__)
 
@@ -174,7 +174,8 @@ def main(script_args, training_args, model_args):
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
-    from trl import DistillationConfig, ModelConfig, ScriptArguments, TrlParser
+    from trl import ModelConfig, ScriptArguments, TrlParser
+    from trl.experimental.distillation import DistillationConfig
 
     dataclass_types = (ScriptArguments, DistillationConfig, ModelConfig)
     if subparsers is not None:

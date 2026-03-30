@@ -16,7 +16,7 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
-from .base_config import _BaseConfig
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
