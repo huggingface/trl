@@ -748,6 +748,7 @@ qwen3_training_chat_template = r"""{%- if tools %}
     {%- endif %}
 {%- endif %}"""
 
+
 # Modifications:
 # - {%- if '</think>' in content %}
 # + {%- if '<think>' in content and '</think>' in content %}
