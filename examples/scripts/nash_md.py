@@ -54,8 +54,6 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --push_to_hub
 """
 
-import os
-
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
@@ -70,10 +68,6 @@ from trl import (
 )
 from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge, PairRMJudge
 from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 JUDGES = {"pair_rm": PairRMJudge, "openai": OpenAIPairwiseJudge, "hf": HfPairwiseJudge}
