@@ -755,13 +755,18 @@ qwen3_training_chat_template = r"""{%- if tools %}
 # - {{- '<|im_start|>' + message.role + '\n' + content }}
 # + {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content + '\n</think>\n\n' + content }}
 #   Always include thinking block during training. It's important to have a prefix-preserving template.
-qwen3_5_training_chat_template = qwen3_5_chat_template_2b_and_below.replace(
-    "{%- if '</think>' in content %}",
-    "{%- if '<think>' in content and '</think>' in content %}",
-).replace(
-    "{{- '<|im_start|>' + message.role + '\\n' + content }}",
-    "{{- '<|im_start|>' + message.role + '\\n<think>\\n' + reasoning_content + '\\n</think>\\n\\n' + content }}",
-)
+def _patch_qwen3_5_training_template(template: str) -> str:
+    return template.replace(
+        "{%- if '</think>' in content %}",
+        "{%- if '<think>' in content and '</think>' in content %}",
+    ).replace(
+        "{{- '<|im_start|>' + message.role + '\\n' + content }}",
+        "{{- '<|im_start|>' + message.role + '\\n<think>\\n' + reasoning_content + '\\n</think>\\n\\n' + content }}",
+    )
+
+
+qwen3_5_training_chat_template_2b_and_below = _patch_qwen3_5_training_template(qwen3_5_chat_template_2b_and_below)
+qwen3_5_training_chat_template_4b_and_above = _patch_qwen3_5_training_template(qwen3_5_chat_template_4b_and_above)
 
 
 def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
@@ -816,8 +821,10 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     if tokenizer.chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
-    if tokenizer.chat_template in [qwen3_5_chat_template_2b_and_below, qwen3_5_chat_template_4b_and_above]:
-        return qwen3_5_training_chat_template
+    if tokenizer.chat_template == qwen3_5_chat_template_2b_and_below:
+        return qwen3_5_training_chat_template_2b_and_below
+    if tokenizer.chat_template == qwen3_5_chat_template_4b_and_above:
+        return qwen3_5_training_chat_template_4b_and_above
     else:
         raise ValueError(
             "The tokenizer's chat template is not prefix-preserving and patching is not supported for this template. "
