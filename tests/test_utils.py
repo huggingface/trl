@@ -1009,6 +1009,7 @@ class TestForwardMaskedLogits:
                     pytest.mark.xfail(
                         Version("5.0.0") <= Version(transformers.__version__) < Version("5.1.0"),
                         reason="Upstream transformers bug (transformers#43334) in 5.0.x; fixed in 5.1.0",
+                        strict=True,
                     ),
                 ],
             ),

@@ -53,6 +53,7 @@ class TestDistributed(
                 marks=pytest.mark.xfail(
                     Version(transformers.__version__) == Version("5.1.0"),
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                    strict=True,
                 ),
             ),
             pytest.param(
@@ -60,6 +61,7 @@ class TestDistributed(
                 marks=pytest.mark.xfail(
                     Version(transformers.__version__) == Version("5.1.0"),
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                    strict=True,
                 ),
             ),
             "fsdp2",
@@ -88,6 +90,7 @@ class TestDistributed(
                 marks=pytest.mark.xfail(
                     Version(transformers.__version__) == Version("5.1.0"),
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                    strict=True,
                 ),
             ),
             pytest.param(
@@ -95,6 +98,7 @@ class TestDistributed(
                 marks=pytest.mark.xfail(
                     Version(transformers.__version__) == Version("5.1.0"),
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                    strict=True,
                 ),
             ),
             "fsdp2",
@@ -123,6 +127,7 @@ class TestDistributed(
                 marks=pytest.mark.xfail(
                     Version(transformers.__version__) == Version("5.1.0"),
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                    strict=True,
                 ),
             ),
             pytest.param(
@@ -130,6 +135,7 @@ class TestDistributed(
                 marks=pytest.mark.xfail(
                     Version(transformers.__version__) == Version("5.1.0"),
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                    strict=True,
                 ),
             ),
             "fsdp2",
@@ -160,6 +166,7 @@ class TestDistributed(
                 marks=pytest.mark.xfail(
                     condition=Version("2.10") <= Version(torch.__version__),
                     reason="ZeRO 2 + PEFT is failing on torch 2.10; see #4884",
+                    strict=True,
                 ),
             ),
             pytest.param(
@@ -167,6 +174,7 @@ class TestDistributed(
                 marks=pytest.mark.xfail(
                     condition=Version("2.10") <= Version(torch.__version__),
                     reason="ZeRO 3 + PEFT is failing on torch 2.10; see #4884",
+                    strict=True,
                 ),
             ),
             "fsdp2",
@@ -196,6 +204,7 @@ class TestDistributed(
                 marks=pytest.mark.xfail(
                     Version(transformers.__version__) == Version("5.1.0"),
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                    strict=True,
                 ),
             ),
             pytest.param(
@@ -203,6 +212,7 @@ class TestDistributed(
                 marks=pytest.mark.xfail(
                     Version(transformers.__version__) == Version("5.1.0"),
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                    strict=True,
                 ),
             ),
             "fsdp2",
@@ -231,6 +241,7 @@ class TestDistributed(
                 marks=pytest.mark.xfail(
                     Version(transformers.__version__) == Version("5.1.0"),
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                    strict=True,
                 ),
             ),
             pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899")),
@@ -268,9 +279,12 @@ class TestDistributed(
                 marks=pytest.mark.xfail(
                     Version(transformers.__version__) == Version("5.1.0"),
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                    strict=True,
                 ),
             ),
-            pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899")),
+            pytest.param(
+                "zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899", strict=True)
+            ),
             "fsdp2",
         ],
     )

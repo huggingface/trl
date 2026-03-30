@@ -1038,6 +1038,7 @@ class TestDPOTrainer(TrlTestCase):
                     pytest.mark.xfail(
                         Version(transformers.__version__) >= Version("5.0.0"),
                         reason="Blocked by upstream transformers bug (transformers#43334)",
+                        strict=True,  # TODO
                     ),
                 ],
             ),
