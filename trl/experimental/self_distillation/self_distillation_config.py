@@ -160,6 +160,52 @@ class SelfDistillationConfig(_BaseConfig):
         default=False,
         metadata={"help": "Whether to use vLLM for generation."},
     )
+    vllm_mode: str = field(
+        default="colocate",
+        metadata={"help": "vLLM mode: 'colocate' (shared GPU) or 'server' (separate vLLM server)."},
+    )
+    vllm_model_impl: str = field(
+        default="vllm",
+        metadata={"help": "Model implementation for vLLM: 'vllm' or 'transformers'."},
+    )
+    vllm_enable_sleep_mode: bool = field(
+        default=False,
+        metadata={"help": "Whether to enable sleep mode for colocated vLLM engine."},
+    )
+    vllm_server_base_url: str | None = field(
+        default=None,
+        metadata={
+            "help": "Base URL for the vLLM server. If provided, vllm_server_host and vllm_server_port are ignored."
+        },
+    )
+    vllm_server_host: str = field(
+        default="0.0.0.0",
+        metadata={"help": "Host of the vLLM server (server mode only)."},
+    )
+    vllm_server_port: int = field(
+        default=8000,
+        metadata={"help": "Port of the vLLM server (server mode only)."},
+    )
+    vllm_group_port: int = field(
+        default=51216,
+        metadata={"help": "Port for the weight update group (server mode only)."},
+    )
+    vllm_server_timeout: float = field(
+        default=240.0,
+        metadata={"help": "Timeout in seconds to wait for the vLLM server."},
+    )
+    vllm_tensor_parallel_size: int = field(
+        default=1,
+        metadata={"help": "Tensor parallel size for colocated vLLM."},
+    )
+    vllm_gpu_memory_utilization: float = field(
+        default=0.3,
+        metadata={"help": "GPU memory utilization ratio for colocated vLLM."},
+    )
+    vllm_max_model_length: int | None = field(
+        default=None,
+        metadata={"help": "Model context length for vLLM. Inferred from model config if not set."},
+    )
     beta: float = field(
         default=0.0,
         metadata={"help": "Reference-model KL coefficient for online policy optimization."},
