@@ -75,7 +75,9 @@ class DistillationConfig(_BaseConfig):
         loss_top_k (`int`, *optional*, defaults to `0`):
             Number of top tokens to use when computing the JSD/KL loss. Both student and teacher distributions are
             restricted to these K tokens and re-normalized before computing divergence. If 0, the full vocabulary
-            is used. When using `teacher_model_server_url` with `beta > 0`, only `loss_top_k=1` is supported.
+            is used. When using `teacher_model_server_url`, the pure forward path (`beta=0`) requires this to be
+            positive and uses the teacher's top-k logprobs for the forward term. Any reverse component (`beta>0`)
+            uses the realized token's logprob for the reverse term and top-1 teacher support for the forward term.
         loss_add_tail (`bool`, *optional*, defaults to `True`):
             Whether to append a tail bucket that represents the remaining probability mass outside the selected top-k
             support when computing the loss.
@@ -233,7 +235,9 @@ class DistillationConfig(_BaseConfig):
             "(selected based on beta: teacher's top-k for forward KL, student's top-k for reverse KL, "
             "union of both for JSD) and re-normalized before computing divergence. "
             "If 0, the full vocabulary is used (slower but exact). "
-            "When using teacher_model_server_url with beta > 0, only loss_top_k=1 is supported."
+            "When using teacher_model_server_url, beta=0 requires loss_top_k > 0 and uses the teacher's top-k "
+            "logprobs for the forward term. Any reverse component uses the realized token's logprob for the reverse "
+            "term and top-1 teacher support for the forward term."
         },
     )
     loss_add_tail: bool = field(
@@ -382,13 +386,11 @@ class DistillationConfig(_BaseConfig):
                 f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
             )
 
-        if self.teacher_model_server_url is not None and self.beta > 0 and self.loss_top_k != 1:
+        if self.teacher_model_server_url is not None and self.beta == 0 and self.loss_top_k < 1:
             raise ValueError(
-                f"loss_top_k != 1 with beta > 0 is not supported with teacher_model_server_url "
-                f"(got loss_top_k={self.loss_top_k}, beta={self.beta}). The server path always uses top-1 "
-                f"logprobs: any reverse KL component (beta > 0) requires the teacher's logprobs at the "
-                f"student's top-k tokens, which the server cannot provide for k > 1 or full vocabulary (k=0). "
-                f"Use a local teacher, set loss_top_k=1, or set beta=0 (pure forward KL)."
+                f"loss_top_k must be positive when using teacher_model_server_url with beta=0 "
+                f"(got loss_top_k={self.loss_top_k}). The pure forward server path only has access to the "
+                f"teacher's top-k logprobs, so it cannot compute the exact full-vocabulary loss when loss_top_k=0."
             )
 
         if self.num_generations > 1 and self.lmbda < 1.0:

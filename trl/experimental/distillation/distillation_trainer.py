@@ -1120,8 +1120,8 @@ class DistillationTrainer(_BaseTrainer):
         """
         Compute a per-token approximation of the generalized JSD loss using only the sampled token's logprobs.
 
-        This is used when the teacher is an external server and only top-1 logprobs are available. For each token
-        position, we have log p_student(token) and log p_teacher(token) and compute:
+        This is used when the teacher is an external server and the reverse component only has access to the realized
+        token's logprob. For each token position, we have log p_student(token) and log p_teacher(token) and compute:
             - beta=0 (forward KL): exp(log_teacher) * (log_teacher - log_student)
             - beta=1 (reverse KL): exp(log_student) * (log_student - log_teacher)
             - 0 < beta < 1 (JSD): weighted combination of forward and reverse token-level KL terms
@@ -1193,14 +1193,18 @@ class DistillationTrainer(_BaseTrainer):
             labels=inputs.get("labels"),
         )
 
-        # Server path always uses top-1 logprobs. Top-k loss requires a local teacher
-        # since reverse KL needs the teacher's logprobs at the student's top-k tokens.
+        # The external-teacher path can use the teacher's configured top-k support for
+        # pure forward KL. Once a reverse component is present, the reverse term only
+        # has access to the realized token's logprob, so we also limit the forward term
+        # to top-1 teacher support to keep the mixed objective balanced.
+        requested_top_k = self.loss_top_k if self.beta == 0 else 1
         result = self.teacher_client.get_sequence_logprobs(
             sequences=sequences,
             prompt_lengths=prompt_lengths,
-            top_logprobs=1,
+            top_logprobs=requested_top_k,
+            temperature=self.temperature,
         )
-        K = 1
+        K = requested_top_k
 
         device = input_ids.device
         completion_offsets = [prompt_length - aligned_prompt_length for prompt_length in prompt_lengths]
@@ -1242,10 +1246,11 @@ class DistillationTrainer(_BaseTrainer):
     ) -> torch.Tensor:
         """Compute forward/reverse KL or JSD using teacher logprobs from the server.
 
-        The forward KL term uses the teacher's top-k support, optionally collapsed with a tail bucket. The reverse KL
-        term uses the actual completion token only, because the server cannot provide teacher logprobs at arbitrary
-        student-selected token IDs. This makes the reverse term a sparse token-level surrogate rather than the exact
-        reverse KL used by the local-teacher path.
+        The forward KL term uses the teacher's top-k support for pure forward KL and top-1 teacher support whenever a
+        reverse component is present, optionally collapsed with a tail bucket. The reverse KL term uses the actual
+        completion token only, because the server cannot provide teacher logprobs at arbitrary student-selected token
+        IDs. This makes the reverse term a sparse token-level surrogate rather than the exact reverse KL used by the
+        local-teacher path.
 
         Args:
             teacher_result: dict with ``actual_logprobs`` (B, T), ``topk_logprobs`` (B, T, K),

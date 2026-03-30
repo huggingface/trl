@@ -666,6 +666,7 @@ def main(script_args: ScriptArguments):
         sequences: list[list[int]]
         prompt_lengths: list[int]
         top_logprobs: int = 100
+        temperature: float = 1.0
         response_format: str = "json"  # "json" (legacy) or "binary" (base64 numpy arrays)
 
     class SequenceLogprobsResponse(BaseModel):
@@ -740,17 +741,17 @@ def main(script_args: ScriptArguments):
                 except asyncio.TimeoutError:
                     break
 
-            # batch is a list of (prompts, prompt_lengths, top_logprobs, response_format, future)
-            # All items in a batch must share the same top_logprobs (enforced at dispatch time)
-            # Group by top_logprobs to handle mixed requests
+            # batch is a list of (prompts, prompt_lengths, top_logprobs, temperature, response_format, future)
+            # All items in a batch must share the same (top_logprobs, temperature) pair.
+            # Group by those execution parameters to handle mixed requests.
             groups = {}
-            for prompts, prompt_lengths, top_logprobs, response_format, future in batch:
-                key = top_logprobs
+            for prompts, prompt_lengths, top_logprobs, temperature, response_format, future in batch:
+                key = (top_logprobs, temperature)
                 if key not in groups:
                     groups[key] = []
                 groups[key].append((prompts, prompt_lengths, response_format, future))
 
-            for top_logprobs, items in groups.items():
+            for (top_logprobs, temperature), items in groups.items():
                 # Merge all sequences into a single batch
                 all_prompts = []
                 all_prompt_lengths = []
@@ -763,7 +764,7 @@ def main(script_args: ScriptArguments):
 
                 sampling_params = SamplingParams(
                     max_tokens=1,
-                    temperature=1.0,
+                    temperature=temperature,
                     prompt_logprobs=top_logprobs,
                 )
 
@@ -921,6 +922,7 @@ def main(script_args: ScriptArguments):
                 prompts,
                 list(request.prompt_lengths),
                 request.top_logprobs,
+                request.temperature,
                 request.response_format,
                 future,
             )

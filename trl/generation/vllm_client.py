@@ -528,6 +528,7 @@ class VLLMClient:
         sequences: list[list[int]],
         prompt_lengths: list[int],
         top_logprobs: int = 100,
+        temperature: float = 1.0,
         use_binary: bool = True,
         chunk_size: int = 0,
         max_concurrent_requests: int = 4,
@@ -551,6 +552,8 @@ class VLLMClient:
                 Number of prompt tokens in each sequence. Logprobs are returned starting from this position.
             top_logprobs (`int`, *optional*, defaults to `100`):
                 Number of top logprobs to return per token position.
+            temperature (`float`, *optional*, defaults to `1.0`):
+                Temperature used when scoring the teacher distribution.
             use_binary (`bool`, *optional*, defaults to `True`):
                 Use binary (base64 numpy) response format for faster serialization.
             chunk_size (`int`, *optional*, defaults to `0`):
@@ -568,6 +571,9 @@ class VLLMClient:
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        if temperature <= 0:
+            raise ValueError(f"temperature must be positive, got {temperature}")
 
         url = f"{self.base_url}/get_sequence_logprobs/"
         response_format = "binary" if use_binary else "json"
@@ -588,6 +594,7 @@ class VLLMClient:
                         "sequences": seqs,
                         "prompt_lengths": plens,
                         "top_logprobs": top_logprobs,
+                        "temperature": temperature,
                         "response_format": response_format,
                     },
                 )
@@ -621,6 +628,7 @@ class VLLMClient:
                     "sequences": sequences,
                     "prompt_lengths": prompt_lengths,
                     "top_logprobs": top_logprobs,
+                    "temperature": temperature,
                     "response_format": response_format,
                 },
             )
