@@ -26,9 +26,9 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object
-from datasets import Dataset, IterableDataset
+from datasets import Dataset
 from torch.utils.data import DataLoader
-from transformers import AutoProcessor, AutoTokenizer, TrainerCallback
+from transformers import AutoTokenizer, TrainerCallback
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
@@ -38,7 +38,6 @@ from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.utils import (
-    is_datasets_available,
     is_liger_kernel_available,
     is_peft_available,
     is_rich_available,
@@ -105,8 +104,8 @@ def _print_completions_sample(prompts: list[str], completions: list[str], step: 
 def _add_tail_bucket(log_probs, valid_mask):
     """Append a (K+1)-th tail element: log(1 - sum(exp(top_k_logps))).
 
-    This creates a proper probability distribution over K+1 elements, preventing
-    trivial zero loss when top_k is small (especially top_k=1).
+    This creates a proper probability distribution over K+1 elements, preventing trivial zero loss when top_k is small
+    (especially top_k=1).
     """
     log_sum = torch.logsumexp(log_probs, dim=-1, keepdim=True)
     log_sum = torch.clamp(log_sum, max=-1e-7)  # ensure sum < 1
@@ -118,8 +117,8 @@ def _add_tail_bucket(log_probs, valid_mask):
 def _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask=None):
     """Compute JSD (or forward/reverse KL) from log-probability tensors.
 
-    When *support_mask* is not None, uses manual computation with masked
-    positions zeroed. When None, uses ``F.kl_div``.
+    When *support_mask* is not None, uses manual computation with masked positions zeroed. When None, uses
+    ``F.kl_div``.
     """
     if support_mask is not None:
         safe_student = torch.where(support_mask, student_log_probs, torch.zeros_like(student_log_probs))
@@ -207,9 +206,9 @@ def build_teacher_request_inputs(
 class _DistillationCollator:
     """Data collator for the distillation trainer with independent prompt/completion budgets.
 
-    Unlike ``DataCollatorForChatML``, this collator tokenizes prompts and completions separately so
-    that long completions can never truncate the prompt to empty.  It also handles prompt-only data
-    (no assistant completions) for pure on-policy distillation (``lmbda=1``).
+    Unlike ``DataCollatorForChatML``, this collator tokenizes prompts and completions separately so that long
+    completions can never truncate the prompt to empty. It also handles prompt-only data (no assistant completions) for
+    pure on-policy distillation (``lmbda=1``).
     """
 
     def __init__(
@@ -258,16 +257,16 @@ class _DistillationCollator:
                 formatted_full = self.tokenizer.apply_chat_template(
                     messages, tokenize=False, add_generation_prompt=False
                 )
-                full_ids = self.tokenizer(
-                    formatted_full, truncation=False, padding=False, add_special_tokens=False
-                )["input_ids"]
+                full_ids = self.tokenizer(formatted_full, truncation=False, padding=False, add_special_tokens=False)[
+                    "input_ids"
+                ]
 
                 # Identify completion tokens: everything after the prompt in the full sequence.
                 # Use the un-truncated prompt length as the split point.
                 formatted_prompt_ids = self.tokenizer(
                     formatted_prompt, truncation=False, padding=False, add_special_tokens=False
                 )["input_ids"]
-                completion_ids = full_ids[len(formatted_prompt_ids):]
+                completion_ids = full_ids[len(formatted_prompt_ids) :]
 
                 # Trim completion so prompt + completion <= max_length
                 max_comp = self.max_length - len(prompt_ids)
@@ -291,23 +290,28 @@ class _DistillationCollator:
         pad_id = self.tokenizer.pad_token_id
         input_ids_t = pad(
             [torch.tensor(ids, dtype=torch.long) for ids in all_input_ids],
-            padding_side="left", padding_value=pad_id,
+            padding_side="left",
+            padding_value=pad_id,
         )
         attention_mask_t = pad(
             [torch.ones(len(ids), dtype=torch.long) for ids in all_input_ids],
-            padding_side="left", padding_value=0,
+            padding_side="left",
+            padding_value=0,
         )
         labels_t = pad(
             [torch.tensor(lab, dtype=torch.long) for lab in all_labels],
-            padding_side="left", padding_value=self.ignore_index,
+            padding_side="left",
+            padding_value=self.ignore_index,
         )
         prompts_t = pad(
             [torch.tensor(ids, dtype=torch.long) for ids in all_prompt_ids],
-            padding_side="left", padding_value=pad_id,
+            padding_side="left",
+            padding_value=pad_id,
         )
         prompt_mask_t = pad(
             [torch.ones(len(ids), dtype=torch.long) for ids in all_prompt_ids],
-            padding_side="left", padding_value=0,
+            padding_side="left",
+            padding_value=0,
         )
 
         return {
@@ -322,10 +326,9 @@ class _DistillationCollator:
 class _RepeatBatchDataLoader:
     """Repeats each collated batch ``repeat_count`` times without re-collation.
 
-    ``RepeatSampler`` with ``repeat_count > 1`` causes the DataLoader to re-collate
-    (re-tokenize) the same examples on every repeat, which is wasteful.  This wrapper
-    instead keeps ``repeat_count=1`` in the sampler and repeats the already-collated
-    tensor dict, avoiding redundant tokenization.
+    ``RepeatSampler`` with ``repeat_count > 1`` causes the DataLoader to re-collate (re-tokenize) the same examples on
+    every repeat, which is wasteful. This wrapper instead keeps ``repeat_count=1`` in the sampler and repeats the
+    already-collated tensor dict, avoiding redundant tokenization.
     """
 
     def __init__(self, dataloader, repeat_count: int):
@@ -717,8 +720,8 @@ class DistillationTrainer(_BaseTrainer):
         Override to load one generation batch per optimizer window.
 
         The dataloader yields batches of size `per_device_train_batch_size * gradient_accumulation_steps`.
-        RepeatSampler ensures each generation batch is repeated `gradient_accumulation_steps` times so the
-        Trainer's loop iterates the correct number of times.
+        RepeatSampler ensures each generation batch is repeated `gradient_accumulation_steps` times so the Trainer's
+        loop iterates the correct number of times.
         """
         if self.train_dataset is None:
             raise ValueError("Trainer: training requires a train_dataset.")
@@ -807,9 +810,7 @@ class DistillationTrainer(_BaseTrainer):
             self._textual_logs["completion"].extend(gather_object(on_policy_completions))
 
     @profiling_decorator
-    def _generate_student_completions(
-        self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]
-    ):
+    def _generate_student_completions(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
         """Generate completions from the student model for on-policy training."""
         if not self.use_vllm:
             self._generate_with_model(slices, on_policy_indices)
@@ -918,8 +919,8 @@ class DistillationTrainer(_BaseTrainer):
     ):
         """Process vLLM completions and store them in the buffer.
 
-        Uses original prompt token IDs directly (no decode/re-encode roundtrip), following the same
-        approach as GRPOTrainer.
+        Uses original prompt token IDs directly (no decode/re-encode roundtrip), following the same approach as
+        GRPOTrainer.
         """
         device = self.accelerator.device
         pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
@@ -943,10 +944,9 @@ class DistillationTrainer(_BaseTrainer):
             ).long()
 
             # Left-pad prompt token IDs to the longest prompt in this slice
-            prompt_ids = torch.stack([
-                F.pad(p, (prompt_width - len(p), 0), value=pad_token_id)
-                for p in prompt_id_tensors
-            ]).to(device)
+            prompt_ids = torch.stack(
+                [F.pad(p, (prompt_width - len(p), 0), value=pad_token_id) for p in prompt_id_tensors]
+            ).to(device)
 
             # Pad/truncate completions (right-pad to max_completion_length)
             completion_tensors = []
@@ -959,9 +959,7 @@ class DistillationTrainer(_BaseTrainer):
                 completion_ids_for_text.append(t.tolist())
                 completion_lengths.append(len(t))
                 if len(t) < max_completion_length:
-                    padding = torch.full(
-                        (max_completion_length - len(t),), pad_token_id, device=device, dtype=t.dtype
-                    )
+                    padding = torch.full((max_completion_length - len(t),), pad_token_id, device=device, dtype=t.dtype)
                     t = torch.cat([t, padding])
                 completion_tensors.append(t)
 
@@ -1002,12 +1000,8 @@ class DistillationTrainer(_BaseTrainer):
         prompt_token_lengths = prompt_token_lengths.to(device=new_input_ids.device, dtype=torch.long)
         completion_lengths = completion_lengths.to(device=new_input_ids.device, dtype=torch.long)
         positions = torch.arange(new_input_ids.shape[1], device=new_input_ids.device).unsqueeze(0)
-        prompt_mask = (positions < prompt_width) & (
-            positions >= (prompt_width - prompt_token_lengths).unsqueeze(1)
-        )
-        completion_mask = (positions >= prompt_width) & (
-            positions < (prompt_width + completion_lengths).unsqueeze(1)
-        )
+        prompt_mask = (positions < prompt_width) & (positions >= (prompt_width - prompt_token_lengths).unsqueeze(1))
+        completion_mask = (positions >= prompt_width) & (positions < (prompt_width + completion_lengths).unsqueeze(1))
         new_attention_mask = (prompt_mask | completion_mask).long()
 
         new_labels = torch.full_like(new_input_ids, -100)
@@ -1041,9 +1035,9 @@ class DistillationTrainer(_BaseTrainer):
             temperature: Softmax temperature.
             reduction: 'batchmean', 'sum', 'mean', or 'none'.
             top_k: Number of top tokens to restrict the loss to. The support set depends on beta:
-                beta=0 (forward KL) uses teacher's top-k, beta=1 (reverse KL) uses student's top-k,
-                0<beta<1 (JSD) uses the union of both. Distributions are re-normalized over the
-                selected support. If 0, the full vocabulary is used.
+                beta=0 (forward KL) uses teacher's top-k, beta=1 (reverse KL) uses student's top-k, 0<beta<1 (JSD) uses
+                the union of both. Distributions are re-normalized over the selected support. If 0, the full vocabulary
+                is used.
             add_tail: Whether to append a tail bucket representing the remaining probability mass
                 outside the selected top-k support.
 
@@ -1075,7 +1069,7 @@ class DistillationTrainer(_BaseTrainer):
                 support = torch.cat([teacher_top, student_top], dim=-1)
                 support_mask = torch.ones(support.shape, dtype=torch.bool, device=support.device)
                 for i in range(1, support.shape[-1]):
-                    prev_matches = support[..., i:i + 1] == support[..., :i]
+                    prev_matches = support[..., i : i + 1] == support[..., :i]
                     prev_valid = support_mask[..., :i]
                     support_mask[..., i] &= ~(prev_matches & prev_valid).any(dim=-1)
                 support = torch.where(support_mask, support, torch.zeros_like(support))
@@ -1126,11 +1120,11 @@ class DistillationTrainer(_BaseTrainer):
         """
         Compute a per-token approximation of the generalized JSD loss using only the sampled token's logprobs.
 
-        This is used when the teacher is an external server and only top-1 logprobs are available.
-        For each token position, we have log p_student(token) and log p_teacher(token) and compute:
-            - beta=0 (forward KL):  exp(log_teacher) * (log_teacher - log_student)
-            - beta=1 (reverse KL):  exp(log_student) * (log_student - log_teacher)
-            - 0 < beta < 1 (JSD):   weighted combination of forward and reverse token-level KL terms
+        This is used when the teacher is an external server and only top-1 logprobs are available. For each token
+        position, we have log p_student(token) and log p_teacher(token) and compute:
+            - beta=0 (forward KL): exp(log_teacher) * (log_teacher - log_student)
+            - beta=1 (reverse KL): exp(log_student) * (log_student - log_teacher)
+            - 0 < beta < 1 (JSD): weighted combination of forward and reverse token-level KL terms
 
         Args:
             student_logprobs: Tensor of shape (batch_size, completion_length) — student's log-prob per token.
@@ -1182,11 +1176,11 @@ class DistillationTrainer(_BaseTrainer):
         """Fetch per-token teacher logprobs from an external vLLM server.
 
         Returns a dict with:
-            ``actual_logprobs``  – (batch, completion_length) teacher log-prob for the actual
+            ``actual_logprobs`` – (batch, completion_length) teacher log-prob for the actual
                                    token at each position (for reverse KL).
-            ``topk_logprobs``    – (batch, completion_length, K) teacher top-k sorted logprobs
+            ``topk_logprobs`` – (batch, completion_length, K) teacher top-k sorted logprobs
                                    (for forward KL).
-            ``topk_token_ids``   – (batch, completion_length, K) corresponding token IDs.
+            ``topk_token_ids`` – (batch, completion_length, K) corresponding token IDs.
         """
         import numpy as np
 
@@ -1248,10 +1242,9 @@ class DistillationTrainer(_BaseTrainer):
     ) -> torch.Tensor:
         """Compute forward/reverse KL or JSD using teacher logprobs from the server.
 
-        The forward KL term uses the teacher's top-k support, optionally collapsed with
-        a tail bucket. The reverse KL term uses the actual completion token only, because
-        the server cannot provide teacher logprobs at arbitrary student-selected token IDs.
-        When the completion is student-sampled, this reverse term is a Monte Carlo
+        The forward KL term uses the teacher's top-k support, optionally collapsed with a tail bucket. The reverse KL
+        term uses the actual completion token only, because the server cannot provide teacher logprobs at arbitrary
+        student-selected token IDs. When the completion is student-sampled, this reverse term is a Monte Carlo
         approximation of reverse KL on the available token support.
 
         Args:
@@ -1288,9 +1281,9 @@ class DistillationTrainer(_BaseTrainer):
             fwd_per_token = (fwd_per_k * valid).sum(dim=-1)  # (B, T)
 
         # ── Reverse KL term: actual token only ──
-        student_actual_lps = student_log_probs.gather(
-            dim=-1, index=completion_tokens.unsqueeze(-1)
-        ).squeeze(-1)  # (B, T)
+        student_actual_lps = student_log_probs.gather(dim=-1, index=completion_tokens.unsqueeze(-1)).squeeze(
+            -1
+        )  # (B, T)
         required = labels != -100
         missing_actual = required & ~torch.isfinite(actual_teacher_lps)
         if missing_actual.any():
@@ -1410,9 +1403,7 @@ class DistillationTrainer(_BaseTrainer):
         teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
 
         labels_mask = inputs["labels"] != -100
-        masked_input_ids = torch.where(
-            labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100)
-        )
+        masked_input_ids = torch.where(labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100))
         true_labels = masked_input_ids[:, 1:].contiguous().reshape(-1)
 
         student_head = unwrapped_student.get_output_embeddings()
@@ -1557,9 +1548,7 @@ class DistillationTrainer(_BaseTrainer):
             completions = list(self._textual_logs["completion"])
 
             if prompts:
-                _print_completions_sample(
-                    prompts, completions, self.state.global_step, self.num_completions_to_print
-                )
+                _print_completions_sample(prompts, completions, self.state.global_step, self.num_completions_to_print)
 
                 # Log as a wandb Table
                 if self.args.report_to and "wandb" in self.args.report_to:

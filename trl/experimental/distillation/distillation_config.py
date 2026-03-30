@@ -154,9 +154,7 @@ class DistillationConfig(_BaseConfig):
     )
     max_length: int | None = field(
         default=1024,
-        metadata={
-            "help": "Maximum total sequence length (prompt + completion) for tokenization and truncation."
-        },
+        metadata={"help": "Maximum total sequence length (prompt + completion) for tokenization and truncation."},
     )
 
     # Overridden defaults

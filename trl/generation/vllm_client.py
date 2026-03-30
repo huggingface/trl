@@ -554,8 +554,8 @@ class VLLMClient:
             use_binary (`bool`, *optional*, defaults to `True`):
                 Use binary (base64 numpy) response format for faster serialization.
             chunk_size (`int`, *optional*, defaults to `0`):
-                If > 0, split batch into chunks of this size and dispatch concurrently.
-                If 0, send the entire batch in a single request.
+                If > 0, split batch into chunks of this size and dispatch concurrently. If 0, send the entire batch in
+                a single request.
             max_concurrent_requests (`int`, *optional*, defaults to `4`):
                 Maximum number of concurrent requests when using chunked dispatch.
 
@@ -567,10 +567,7 @@ class VLLMClient:
                 - `logprob_token_ids` (`list[list[list[int]]]`):
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
-        import base64
         from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        import numpy as np
 
         url = f"{self.base_url}/get_sequence_logprobs/"
         response_format = "binary" if use_binary else "json"
@@ -600,8 +597,7 @@ class VLLMClient:
 
             with ThreadPoolExecutor(max_workers=min(max_concurrent_requests, len(chunks))) as executor:
                 futures = {
-                    executor.submit(_send_chunk, idx, seqs, plens): idx
-                    for idx, (seqs, plens) in enumerate(chunks)
+                    executor.submit(_send_chunk, idx, seqs, plens): idx for idx, (seqs, plens) in enumerate(chunks)
                 }
                 for future in as_completed(futures):
                     idx, result = future.result()
@@ -646,11 +642,9 @@ class VLLMClient:
 
         Returns a dict with:
             ``logprobs`` / ``logprob_token_ids`` — teacher's sorted top-k logprobs and
-                token IDs (shape per sequence: ``(comp_len, top_k)``).  Used for the
-                forward KL term.
+                token IDs (shape per sequence: ``(comp_len, top_k)``). Used for the forward KL term.
             ``actual_logprobs`` / ``actual_token_ids`` — teacher logprob for the actual
-                token at each position (shape per sequence: ``(comp_len, 1)``).  Used
-                for the reverse KL term.
+                token at each position (shape per sequence: ``(comp_len, 1)``). Used for the reverse KL term.
         """
         import base64
 
@@ -674,12 +668,12 @@ class VLLMClient:
         # Decode actual-token logprobs (for reverse KL)
         if "actual_logprobs_b64" in response:
             actual_shape = [shape[0], shape[1], 1]
-            actual_lp = np.frombuffer(
-                base64.b64decode(response["actual_logprobs_b64"]), dtype=np.float32
-            ).reshape(actual_shape)
-            actual_ids = np.frombuffer(
-                base64.b64decode(response["actual_token_ids_b64"]), dtype=np.int32
-            ).reshape(actual_shape)
+            actual_lp = np.frombuffer(base64.b64decode(response["actual_logprobs_b64"]), dtype=np.float32).reshape(
+                actual_shape
+            )
+            actual_ids = np.frombuffer(base64.b64decode(response["actual_token_ids_b64"]), dtype=np.int32).reshape(
+                actual_shape
+            )
             all_actual_lps = []
             all_actual_ids = []
             for i, comp_len in enumerate(comp_lengths):
@@ -693,9 +687,6 @@ class VLLMClient:
     @staticmethod
     def _merge_binary_responses(responses: list[dict], top_logprobs: int) -> dict[str, list]:
         """Merge binary responses from multiple chunks into a single result."""
-        import base64
-
-        import numpy as np
 
         all_logprobs = []
         all_token_ids = []

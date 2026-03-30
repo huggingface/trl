@@ -79,20 +79,16 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args):
-    from accelerate import logging
     from datasets import load_dataset
-    from transformers import AutoConfig, AutoModelForCausalLM, GenerationConfig
+    from transformers import GenerationConfig
 
     from trl import (
         LogCompletionsCallback,
-        ModelConfig,
         get_kbit_device_map,
         get_peft_config,
         get_quantization_config,
     )
     from trl.experimental.distillation import DistillationTrainer
-
-    logger = logging.get_logger(__name__)
 
     ################
     # W&B env vars
