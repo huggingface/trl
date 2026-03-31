@@ -125,15 +125,6 @@ class DistillationConfig(_BaseConfig):
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
             Enable vLLM sleep mode to offload student weights during the optimizer step.
 
-        > Parameters that control W&B logging
-
-        wandb_entity (`str` or `None`, *optional*):
-            The W&B entity to store runs under.
-        wandb_project (`str` or `None`, *optional*):
-            The W&B project to store runs under.
-        wandb_run_group (`str` or `None`, *optional*):
-            The W&B group to store runs under.
-
         > Parameters that control logging
 
         log_completions (`bool`, *optional*, defaults to `False`):

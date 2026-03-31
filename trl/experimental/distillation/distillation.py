@@ -91,16 +91,6 @@ def main(script_args, training_args, model_args):
     from trl.experimental.distillation import DistillationTrainer
 
     ################
-    # W&B env vars
-    ################
-    if training_args.wandb_project is not None:
-        os.environ["WANDB_PROJECT"] = training_args.wandb_project
-    if training_args.wandb_entity is not None:
-        os.environ["WANDB_ENTITY"] = training_args.wandb_entity
-    if training_args.wandb_run_group is not None:
-        os.environ["WANDB_RUN_GROUP"] = training_args.wandb_run_group
-
-    ################
     # Model init kwargs
     ################
     quantization_config = get_quantization_config(model_args)
