@@ -1146,7 +1146,7 @@ class DistillationTrainer(_BaseTrainer):
 
         input_ids = inputs["input_ids"]
         batch_size = input_ids.shape[0]
-        sequences, prompt_lengths, _ = build_teacher_request_inputs(
+        sequences, prompt_lengths, completion_lengths = build_teacher_request_inputs(
             input_ids,
             inputs["attention_mask"],
             prompt_attention_mask=inputs.get("prompt_attention_mask"),
@@ -1167,11 +1167,23 @@ class DistillationTrainer(_BaseTrainer):
         K = requested_top_k
 
         device = input_ids.device
-        completion_offsets = [prompt_length - aligned_prompt_length for prompt_length in prompt_lengths]
-        completion_length = max(
-            (offset + len(lps) for offset, lps in zip(completion_offsets, result["logprobs"], strict=True)),
-            default=0,
-        )
+        completion_length = input_ids.shape[1] - aligned_prompt_length
+        labels = inputs.get("labels")
+        if labels is None:
+            raise ValueError("labels are required to align teacher-server logprobs with the student loss tensors.")
+
+        # The student loss slices tensors in padded-sequence coordinates starting at `aligned_prompt_length`.
+        # Place each teacher completion into that same coordinate system by locating the first non-masked completion
+        # token in `labels`. This works for both left-padded off-policy batches and on-policy batches where
+        # completions are right-padded after a fixed-width prompt block.
+        completion_offsets = []
+        label_mask = labels != -100
+        for sample_mask, comp_len in zip(label_mask, completion_lengths, strict=True):
+            if comp_len == 0:
+                completion_offsets.append(0)
+                continue
+            completion_start = int(torch.nonzero(sample_mask, as_tuple=False)[0].item())
+            completion_offsets.append(completion_start - aligned_prompt_length)
 
         # actual_logprobs: (B, T) — teacher logprob for the actual token
         def _actual_to_tensor(key):
