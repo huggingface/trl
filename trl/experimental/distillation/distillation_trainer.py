@@ -1167,7 +1167,11 @@ class DistillationTrainer(_BaseTrainer):
                     attention_mask=inputs["attention_mask"],
                 ).logits
         elif self.teacher_client is not None:
-            return self._get_teacher_logits_from_server(inputs)
+            raise NotImplementedError(
+                "Fetching full teacher logits from `teacher_model_server_url` is not supported. "
+                "Server-backed distillation only supports per-token logprobs via "
+                "`_get_teacher_token_logprobs_from_server`."
+            )
         else:
             raise ValueError("No teacher model or teacher server configured.")
 
