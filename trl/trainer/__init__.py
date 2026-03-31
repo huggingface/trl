@@ -29,6 +29,8 @@ _import_structure = {
     "dpo_trainer": ["DPOTrainer"],
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
+    "jepo_config": ["JEPOConfig"],
+    "jepo_trainer": ["JEPOTrainer"],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
