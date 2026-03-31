@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
 import torch
-from huggingface_hub import hf_hub_download
+from huggingface_hub import batch_bucket_files, download_bucket_files
 from safetensors import safe_open
 from safetensors.torch import save
 from vllm.config.parallel import ParallelConfig
@@ -46,11 +47,10 @@ class DeltaWeightTransferInitInfo(WeightTransferInitInfo):
 
 @dataclass
 class DeltaWeightTransferUpdateInfo(WeightTransferUpdateInfo):
-    """Metadata sent via ``/update_weights`` — just Hub coordinates."""
+    """Metadata sent via ``/update_weights`` — just bucket coordinates."""
 
-    repo_id: str = ""
+    repo_id: str = ""  # bucket_id
     filename: str = ""
-    revision: str = "main"
 
 
 class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo, DeltaWeightTransferUpdateInfo]):
@@ -88,40 +88,38 @@ class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo
         - **Sparse** (subsequent): keys are ``{name}.indices`` + ``{name}.values`` →
           apply to snapshot, feed reconstructed full tensors to load_weights.
         """
-        local_path = hf_hub_download(
-            repo_id=update_info.repo_id,
-            filename=update_info.filename,
-            revision=update_info.revision,
-            force_download=True,
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_path = f"{tmpdir}/weights.safetensors"
+            download_bucket_files(
+                update_info.repo_id,
+                files=[(update_info.filename, local_path)],
+            )
 
-        with safe_open(local_path, framework="pt", device="cpu") as f:
-            meta = PatchMetadata.from_metadata_dict(f.metadata())
+            with safe_open(local_path, framework="pt", device="cpu") as f:
+                meta = PatchMetadata.from_metadata_dict(f.metadata())
 
-            if not meta.sparse:
-                # Full tensors — feed to load_weights and build snapshot
-                self._bf16_snapshot = {}
-                for name in f.keys():
-                    tensor = f.get_tensor(name)
-                    self._bf16_snapshot[name] = tensor.to(torch.bfloat16).clone()
-                    load_weights([(name, tensor)])
-                logger.info("Applied anchor (step %d, %d params)", meta.model_version, meta.num_changed_params)
-            else:
-                # Sparse — apply indices/values to snapshot, feed full tensors
-                changed_names = json.loads(meta.changed_params)
-                for name in changed_names:
-                    indices = f.get_tensor(f"{name}.indices").long()
-                    values = f.get_tensor(f"{name}.values")
-                    snap = self._bf16_snapshot[name].flatten()
-                    snap[indices] = values
-                    self._bf16_snapshot[name] = snap.reshape(self._bf16_snapshot[name].shape)
-                    load_weights([(name, self._bf16_snapshot[name])])
-                logger.info(
-                    "Applied delta (step %d, %d params, sparsity=%.4f)",
-                    meta.model_version,
-                    meta.num_changed_params,
-                    meta.sparsity,
-                )
+                if not meta.sparse:
+                    self._bf16_snapshot = {}
+                    for name in f.keys():
+                        tensor = f.get_tensor(name)
+                        self._bf16_snapshot[name] = tensor.to(torch.bfloat16).clone()
+                        load_weights([(name, tensor)])
+                    logger.info("Applied anchor (step %d, %d params)", meta.model_version, meta.num_changed_params)
+                else:
+                    changed_names = json.loads(meta.changed_params)
+                    for name in changed_names:
+                        indices = f.get_tensor(f"{name}.indices").long()
+                        values = f.get_tensor(f"{name}.values")
+                        snap = self._bf16_snapshot[name].flatten()
+                        snap[indices] = values
+                        self._bf16_snapshot[name] = snap.reshape(self._bf16_snapshot[name].shape)
+                        load_weights([(name, self._bf16_snapshot[name])])
+                    logger.info(
+                        "Applied delta (step %d, %d params, sparsity=%.4f)",
+                        meta.model_version,
+                        meta.num_changed_params,
+                        meta.sparsity,
+                    )
 
     def shutdown(self) -> None:
         self._bf16_snapshot = None
@@ -137,11 +135,9 @@ class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo
     @staticmethod
     def upload(
         iterator: Iterator[tuple[str, torch.Tensor, torch.Tensor | None]],
-        repo_id: str,
+        bucket_id: str,
         filename: str,
-        hf_api: Any,
         model_version: int = 0,
-        revision: str = "main",
     ) -> PatchMetadata | None:
         """Encode params as safetensors and upload to HF Hub.
 
@@ -189,17 +185,11 @@ class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo
         )
         buf = save(tensors, metadata=meta.to_metadata_dict())
 
-        hf_api.upload_file(
-            path_or_fileobj=buf,
-            path_in_repo=filename,
-            repo_id=repo_id,
-            revision=revision,
-            commit_message=f"step {model_version} ({len(changed_names)} params, {len(buf) / 1e6:.1f} MB, sparse={sparse})",
-        )
+        batch_bucket_files(bucket_id, add=[(buf, filename)])
 
         logger.info(
             "[delta_engine] uploaded %s/%s (%.1f MB, %d params, sparse=%s, sparsity=%.4f)",
-            repo_id,
+            bucket_id,
             filename,
             len(buf) / 1e6,
             len(changed_names),

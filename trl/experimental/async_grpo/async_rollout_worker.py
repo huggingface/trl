@@ -27,6 +27,7 @@ import numpy as np
 import requests
 from accelerate.logging import get_logger
 from datasets import Dataset
+from huggingface_hub import create_bucket
 from transformers import AutoTokenizer
 
 from trl.chat_template_utils import add_response_schema, get_training_chat_template, parse_response
@@ -210,10 +211,7 @@ class AsyncRolloutWorker:
 
     def _init_weight_transfer(self) -> None:
         if self.delta_sync_enabled:
-            from huggingface_hub import HfApi
-
-            self._delta_hf_api = HfApi()
-            self._delta_hf_api.create_repo(repo_id=self._delta_sync_repo_id, repo_type="model", exist_ok=True)
+            create_bucket(self._delta_sync_repo_id, exist_ok=True)
             self._delta_model_version = 0
             self._delta_pending_update_info: dict | None = None
             requests.post(
@@ -318,39 +316,49 @@ class AsyncRolloutWorker:
             self._send_weights_nccl(iterator)
 
     def _send_weights_delta(self, iterator) -> None:
+        """Delta sync via HF Bucket.
+
+        - Non-empty iterator: upload (anchor or delta based on step count).
+        - Empty iterator + pending info: signal vLLM to apply.
+        - Empty iterator + nothing pending: no-op.
+        """
         first = next(iterator, None)
-        if first is not None:
-            full_iter = itertools.chain([first], iterator)
-            self._delta_model_version += 1
-            is_anchor = first[2] is None
-            subdir = "anchors" if is_anchor else "deltas"
-            filename = f"{subdir}/step_{self._delta_model_version:06d}.safetensors"
-            meta = DeltaWeightTransferEngine.upload(
-                iterator=full_iter,
-                repo_id=self._delta_sync_repo_id,
-                filename=filename,
-                hf_api=self._delta_hf_api,
-                model_version=self._delta_model_version,
-            )
-            if meta is not None:
-                self._delta_pending_update_info = {
-                    "repo_id": self._delta_sync_repo_id,
-                    "filename": filename,
-                    "revision": "main",
-                    "is_checkpoint_format": True,
-                }
-        elif self._delta_pending_update_info is not None:
-            # Signal vLLM to fetch and apply
-            resp = requests.post(
-                f"{self.vllm_server_url}/update_weights",
-                json={"update_info": self._delta_pending_update_info},
-                timeout=300,
-            )
-            resp.raise_for_status()
-            self._delta_pending_update_info = None
-        else:
-            # Nothing changed and nothing pending — no-op
-            logger.debug("[delta_sync] nothing changed, skipping")
+
+        # (empty iterator)
+        if first is None:
+            if self._delta_pending_update_info is not None:
+                resp = requests.post(
+                    f"{self.vllm_server_url}/update_weights",
+                    json={"update_info": self._delta_pending_update_info},
+                    timeout=300,
+                )
+                resp.raise_for_status()
+                self._delta_pending_update_info = None
+            return
+
+        # Upload phase
+        self._delta_model_version += 1
+        is_anchor = self._delta_model_version == 1 or self._delta_model_version % self._delta_sync_anchor_interval == 0
+
+        full_iter = itertools.chain([first], iterator)
+        if is_anchor:
+            # Force full tensors — strip masks
+            full_iter = ((name, tensor, None) for name, tensor, _mask in full_iter)
+
+        subdir = "anchors" if is_anchor else "deltas"
+        filename = f"{subdir}/step_{self._delta_model_version:06d}.safetensors"
+        meta = DeltaWeightTransferEngine.upload(
+            iterator=full_iter,
+            bucket_id=self._delta_sync_repo_id,
+            filename=filename,
+            model_version=self._delta_model_version,
+        )
+        if meta is not None:
+            self._delta_pending_update_info = {
+                "repo_id": self._delta_sync_repo_id,
+                "filename": filename,
+                "is_checkpoint_format": True,
+            }
 
     def _send_weights_nccl(self, iterator) -> None:
         """NCCL sync: broadcast all params via NCCL + signal /update_weights."""

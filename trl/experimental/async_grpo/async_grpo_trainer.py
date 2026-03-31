@@ -572,30 +572,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def _streaming_iter(self):
         """Yield ``(name, tensor, mask)`` tuples.
 
-        - No weight diff (NCCL path): all params, ``mask=None``.
-        - Anchor step (every ``anchor_interval``): all params, ``mask=None``.
-        - Delta step: only changed params with element-level masks.
-        - Nothing changed: yields nothing (no-op).
+        - No change detector (NCCL path or first sync): all params, ``mask=None``.
+        - Change detector active: only changed params with element-level masks.
+
+        The anchor/delta decision is NOT made here — the rollout worker handles that.
         """
-        # NCCL path
-        if self._change_detector is None:
+        if self._change_detector is None or not self._change_detector._validated_masks:
             for name, param in self.model.named_parameters():
                 name = name.removeprefix("module.")
                 yield name, (param.full_tensor() if isinstance(param, DTensor) else param.detach()), None
             return
 
-        # Force full upload on anchor interval or when no masks yet (first sync)
         masks = self._change_detector._validated_masks
-        next_version = self.model_version + 1
-        force_anchor = not masks or next_version % self.args.delta_sync_anchor_interval == 0
-
-        if force_anchor:
-            logger.info("Anchor step %d: sending all params", next_version)
-            for name, param in self.model.named_parameters():
-                name = name.removeprefix("module.")
-                yield name, (param.full_tensor() if isinstance(param, DTensor) else param.detach()), None
-            return
-
         total, yielded = 0, 0
         for name, param in self.model.named_parameters():
             total += 1
@@ -605,7 +593,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 continue
             yield name, (param.full_tensor() if isinstance(param, DTensor) else param.detach()), mask
             yielded += 1
-        logger.info(f"ULP: {yielded}/{total} params changed")
+        logger.info(f"Delta: {yielded}/{total} params changed")
 
     def _sync_weight(self):
         # Lazy-init ULP detector for diagnostic logging (delta sync only) bc
