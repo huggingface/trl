@@ -1221,11 +1221,11 @@ class DistillationTrainer(_BaseTrainer):
         The forward KL term uses the teacher's top-k support for pure forward KL and top-1 teacher support whenever a
         reverse component is present, optionally collapsed with a tail bucket. The reverse KL term uses the actual
         completion token only, because the server cannot provide teacher logprobs at arbitrary student-selected token
-        IDs. When `self.loss_add_tail` is enabled, the reverse term becomes a two-bucket KL over
-        `{actual_token, residual_tail}`. This matches `generalized_jsd_loss(..., beta=1, top_k=1, add_tail=True)`
-        when the sampled token is the same token used in the top-1 support and the logprob values agree. For
-        `0 < beta < 1`, this method still returns a weighted combination of the forward and reverse surrogates rather
-        than the exact generalized JSD used by the local-teacher path.
+        IDs. When `self.loss_add_tail` is enabled, the reverse term becomes a two-bucket KL over `{actual_token,
+        residual_tail}`. This matches `generalized_jsd_loss(..., beta=1, top_k=1, add_tail=True)` when the sampled
+        token is the same token used in the top-1 support and the logprob values agree. For `0 < beta < 1`, this method
+        still returns a weighted combination of the forward and reverse surrogates rather than the exact generalized
+        JSD used by the local-teacher path.
 
         Args:
             teacher_result: dict with ``actual_logprobs`` (B, T), ``topk_logprobs`` (B, T, K),
