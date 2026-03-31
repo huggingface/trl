@@ -386,6 +386,12 @@ class DistillationConfig(_BaseConfig):
                 f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
             )
 
+        if self.teacher_model_server_url is not None and self.use_liger_kernel:
+            raise ValueError(
+                "use_liger_kernel=True is not supported with teacher_model_server_url because the Liger loss path "
+                "requires a local teacher model."
+            )
+
         if self.teacher_model_server_url is not None and self.beta == 0 and self.loss_top_k < 1:
             raise ValueError(
                 f"loss_top_k must be positive when using teacher_model_server_url with beta=0 "
