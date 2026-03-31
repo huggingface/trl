@@ -2301,6 +2301,43 @@ class GRPOTrainer(_BaseTrainer):
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
+        # Compute inline IS ratio for non-liger vLLM path. This must happen before the loss type switch
+        # because vespo needs it in get_gamma_weights. For the liger path, IS ratio is pre-computed in
+        # _generate_and_score_completions and passed via inputs["importance_sampling_ratio"].
+        vllm_importance_sampling_ratio = None
+        if self.use_vllm and self.vllm_importance_sampling_correction:
+            sampling_per_token_logps = inputs.get("sampling_per_token_logps")
+            if sampling_per_token_logps is not None and inputs.get("importance_sampling_ratio") is None:
+                per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
+
+                sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
+                if sequence_level_is:
+                    per_sequence_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
+                    logps_diff = per_sequence_logps_diff
+                else:
+                    logps_diff = per_token_logps_diff
+
+                vllm_importance_sampling_ratio = torch.exp(logps_diff)
+
+                # vllm_importance_sampling_ratio.shape:
+                #   token_* modes:     (B, T)  (per-token ratio)
+                #   sequence_* modes:  (B, 1)  (per-sequence ratio)
+
+                if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
+                    vllm_importance_sampling_ratio = torch.clamp(
+                        vllm_importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                    )
+                elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
+                    vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
+                        vllm_importance_sampling_ratio > self.vllm_importance_sampling_cap, value=0.0
+                    )
+                else:
+                    raise ValueError(
+                        f"Unknown vLLM importance sampling level: {self.vllm_importance_sampling_mode}. Possible values are 'token_truncate', 'token_mask', 'sequence_truncate', and 'sequence_mask'."
+                    )
+
+                inputs["importance_sampling_ratio"] = vllm_importance_sampling_ratio
+
         if self.off_policy_mask_threshold is not None:
             # OPSM should use inference-time logprobs to detect both sources of off-policyness:
             # 1. Drift from gradient updates (always present)
@@ -2379,79 +2416,45 @@ class GRPOTrainer(_BaseTrainer):
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
 
-        # Compute IS correction inline for non-liger path.
-        # For liger path, IS ratio is pre-computed in _generate_and_score_completions.
         if self.use_vllm and self.vllm_importance_sampling_correction and self.loss_type != "vespo":
-            sampling_per_token_logps = inputs.get("sampling_per_token_logps")
-            if sampling_per_token_logps is not None:
-                per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
+            per_token_loss = per_token_loss * inputs["importance_sampling_ratio"]
 
-                sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
-                if sequence_level_is:
-                    logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
-                else:
-                    logps_diff = per_token_logps_diff
+        # Log IS correction metrics for inline-computed IS ratio (non-liger path)
+        if self.use_vllm and self.vllm_importance_sampling_correction and vllm_importance_sampling_ratio is not None:
+            mode = "train" if self.model.training else "eval"
+            delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
+            delta = delta[mask.bool()]
+            mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=per_token_logps.device)
+            max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=per_token_logps.device)
+            self._metrics[mode]["sampling/sampling_logp_difference/mean"].append(
+                self.accelerator.gather(mean_delta).mean().item()
+            )
+            self._metrics[mode]["sampling/sampling_logp_difference/max"].append(
+                self.accelerator.gather(max_delta).max().item()
+            )
+            if sequence_level_is:
+                flat_is_ratio = vllm_importance_sampling_ratio.flatten()
+            else:
+                flat_is_ratio = vllm_importance_sampling_ratio[mask.bool()]
 
-                vllm_is_ratio = torch.exp(logps_diff)
-
-                if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
-                    vllm_is_ratio = torch.clamp(vllm_is_ratio, max=self.vllm_importance_sampling_cap)
-                elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
-                    vllm_is_ratio = vllm_is_ratio.masked_fill(
-                        vllm_is_ratio > self.vllm_importance_sampling_cap, value=0.0
-                    )
-
-                per_token_loss = per_token_loss * vllm_is_ratio
-
-                # Log IS correction metrics
-                _mode = "train" if self.model.training else "eval"
-                delta = torch.abs(per_token_logps_diff)
-                bool_mask = mask.bool()
-                delta_masked = delta[bool_mask]
-                mean_delta = (
-                    torch.mean(delta_masked)
-                    if delta_masked.numel() > 0
-                    else torch.tensor(0.0, device=per_token_logps.device)
-                )
-                max_delta = (
-                    torch.max(delta_masked)
-                    if delta_masked.numel() > 0
-                    else torch.tensor(0.0, device=per_token_logps.device)
-                )
-                self._metrics[_mode]["sampling/sampling_logp_difference/mean"].append(
-                    self.accelerator.gather(mean_delta).mean().item()
-                )
-                self._metrics[_mode]["sampling/sampling_logp_difference/max"].append(
-                    self.accelerator.gather(max_delta).max().item()
-                )
-                if sequence_level_is:
-                    flat_is_ratio = vllm_is_ratio.flatten()
-                else:
-                    flat_is_ratio = vllm_is_ratio[bool_mask]
-                min_is = (
-                    torch.min(flat_is_ratio)
-                    if flat_is_ratio.numel() > 0
-                    else torch.tensor(0.0, device=per_token_logps.device)
-                )
-                mean_is = (
-                    torch.mean(flat_is_ratio)
-                    if flat_is_ratio.numel() > 0
-                    else torch.tensor(0.0, device=per_token_logps.device)
-                )
-                max_is = (
-                    torch.max(flat_is_ratio)
-                    if flat_is_ratio.numel() > 0
-                    else torch.tensor(0.0, device=per_token_logps.device)
-                )
-                self._metrics[_mode]["sampling/importance_sampling_ratio/min"].append(
-                    nanmin(self.accelerator.gather(min_is)).item()
-                )
-                self._metrics[_mode]["sampling/importance_sampling_ratio/mean"].append(
-                    self.accelerator.gather(mean_is).nanmean().item()
-                )
-                self._metrics[_mode]["sampling/importance_sampling_ratio/max"].append(
-                    nanmax(self.accelerator.gather(max_is)).item()
-                )
+            min_importance_sampling_ratio = (
+                torch.min(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=per_token_logps.device)
+            )
+            mean_importance_sampling_ratio = (
+                torch.mean(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=per_token_logps.device)
+            )
+            max_importance_sampling_ratio = (
+                torch.max(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=per_token_logps.device)
+            )
+            self._metrics[mode]["sampling/importance_sampling_ratio/min"].append(
+                nanmin(self.accelerator.gather(min_importance_sampling_ratio)).item()
+            )
+            self._metrics[mode]["sampling/importance_sampling_ratio/mean"].append(
+                self.accelerator.gather(mean_importance_sampling_ratio).nanmean().item()
+            )
+            self._metrics[mode]["sampling/importance_sampling_ratio/max"].append(
+                nanmax(self.accelerator.gather(max_importance_sampling_ratio)).item()
+            )
 
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
