@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import itertools
 import queue
 
@@ -21,6 +22,8 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl.experimental.async_grpo import async_grpo_trainer as async_grpo_trainer_module
+from trl.experimental.async_grpo import async_rollout_worker as async_rollout_worker_module
 from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
 
 from ..testing_utils import TrlTestCase
@@ -91,7 +94,110 @@ class _StubRolloutWorker:
         pass
 
 
+class _CapturingRolloutWorker:
+    last_init_kwargs = None
+
+    def __init__(self, **kwargs):
+        type(self).last_init_kwargs = kwargs
+        self.rollout_buffer = queue.Queue()
+
+    def start(self):
+        pass
+
+    def update_model_version(self, version):
+        pass
+
+    def stop(self):
+        pass
+
+    def pause(self):
+        pass
+
+    def resume(self):
+        pass
+
+    def send_weights(self, iterator):
+        pass
+
+
 class TestAsyncGRPOTrainer(TrlTestCase):
+    def test_init_passes_sampling_config_to_rollout_worker(self, monkeypatch):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            num_generations=3,
+            max_completion_length=8,
+            temperature=0.7,
+            top_p=0.9,
+            top_k=10,
+            min_p=0.01,
+            repetition_penalty=1.1,
+            generation_kwargs={"top_k": 50, "seed": 7},
+            report_to="none",
+        )
+
+        monkeypatch.setattr(async_grpo_trainer_module, "AsyncRolloutWorker", _CapturingRolloutWorker)
+
+        AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=tokenizer,
+        )
+
+        assert _CapturingRolloutWorker.last_init_kwargs["max_tokens"] == 8
+        assert _CapturingRolloutWorker.last_init_kwargs["temperature"] == 0.7
+        assert _CapturingRolloutWorker.last_init_kwargs["top_p"] == 0.9
+        assert _CapturingRolloutWorker.last_init_kwargs["top_k"] == 10
+        assert _CapturingRolloutWorker.last_init_kwargs["min_p"] == 0.01
+        assert _CapturingRolloutWorker.last_init_kwargs["repetition_penalty"] == 1.1
+        assert _CapturingRolloutWorker.last_init_kwargs["generation_kwargs"] == {"top_k": 50, "seed": 7}
+
+    def test_rollout_worker_generation_kwargs_override_named_sampling_params(self):
+        worker = async_rollout_worker_module.AsyncRolloutWorker.__new__(async_rollout_worker_module.AsyncRolloutWorker)
+        worker.model_name = "Qwen/Qwen3-4B"
+        worker.max_tokens = 32
+        worker.temperature = 0.9
+        worker.top_p = 0.95
+        worker.top_k = 10
+        worker.min_p = None
+        worker.repetition_penalty = 1.1
+        worker.generation_kwargs = {"top_k": 50, "temperature": 0.2, "seed": 123}
+        worker.request_timeout = 17
+        captured = {}
+
+        async def fake_post(path, payload, timeout):
+            captured["path"] = path
+            captured["payload"] = payload
+            captured["timeout"] = timeout
+            return {"choices": [{"token_ids": [42], "logprobs": {"token_logprobs": [-0.5]}}]}
+
+        worker._post = fake_post
+
+        completion_ids, completion_logprobs = asyncio.run(worker._generate_one_turn([1, 2, 3]))
+
+        assert completion_ids == [42]
+        assert completion_logprobs == [-0.5]
+        assert captured["path"] == "/v1/completions"
+        assert captured["timeout"] == 17
+        assert captured["payload"] == {
+            "model": "Qwen/Qwen3-4B",
+            "prompt": [1, 2, 3],
+            "max_tokens": 32,
+            "temperature": 0.2,
+            "top_p": 0.95,
+            "top_k": 50,
+            "min_p": 0.0,
+            "repetition_penalty": 1.1,
+            "n": 1,
+            "return_token_ids": True,
+            "logprobs": 0,
+            "seed": 123,
+        }
+
     def test_init_minimal(self):
         # Test that AsyncGRPOTrainer can be instantiated with only model, reward_model and train_dataset
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

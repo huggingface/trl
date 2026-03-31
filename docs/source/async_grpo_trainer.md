@@ -31,6 +31,10 @@ Because generation and training run concurrently, the training samples may have 
 
 The number of concurrent requests sent to the vLLM server is controlled by `max_inflight_tasks`. By default it is set automatically to `max_staleness × per_device_train_batch_size × gradient_accumulation_steps × num_processes` — the maximum number of samples the trainer can consume before they become stale. Generating more than this is wasteful since the excess samples will be discarded.
 
+For generation, [`AsyncGRPOConfig`] supports the same primary sampling controls as [`GRPOConfig`]: `temperature`,
+`top_p`, `top_k`, `min_p`, `repetition_penalty`, and `generation_kwargs`. As with [`GRPOTrainer`], keys provided in
+`generation_kwargs` take precedence over the named sampling arguments.
+
 ## Quick start
 
 ```python

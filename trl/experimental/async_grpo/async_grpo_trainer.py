@@ -286,6 +286,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.epsilon_low = self.args.epsilon
         self.epsilon_high = self.args.epsilon_high
         self.temperature = self.args.temperature
+        self.top_p = self.args.top_p
+        self.top_k = self.args.top_k
+        self.min_p = self.args.min_p
+        self.repetition_penalty = self.args.repetition_penalty
+        self.generation_kwargs = self.args.generation_kwargs or {}
 
         # Model
         model_name = model
@@ -370,6 +375,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     vllm_server_url=self.args.vllm_server_base_url,
                     max_tokens=self.args.max_completion_length,
                     temperature=self.args.temperature,
+                    top_p=self.args.top_p,
+                    top_k=self.args.top_k,
+                    min_p=self.args.min_p,
+                    repetition_penalty=self.args.repetition_penalty,
+                    generation_kwargs=self.args.generation_kwargs,
                     request_timeout=self.args.request_timeout,
                     server_timeout=self.args.vllm_server_timeout,
                     chat_template_kwargs=self.args.chat_template_kwargs,

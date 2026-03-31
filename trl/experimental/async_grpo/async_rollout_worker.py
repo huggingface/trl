@@ -93,6 +93,11 @@ class AsyncRolloutWorker:
         vllm_server_url: str = "http://localhost:8000",
         max_tokens: int = 32,
         temperature: float = 1.0,
+        top_p: float = 1.0,
+        top_k: int = 0,
+        min_p: float | None = None,
+        repetition_penalty: float = 1.0,
+        generation_kwargs: dict[str, Any] | None = None,
         request_timeout: int = 120,
         server_timeout: float = 240.0,
         chat_template_kwargs: dict[str, Any] | None = None,
@@ -155,6 +160,11 @@ class AsyncRolloutWorker:
         self.model_update_group = None
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
+        self.min_p = min_p
+        self.repetition_penalty = repetition_penalty
+        self.generation_kwargs = generation_kwargs or {}
         self.request_timeout = request_timeout
         self.server_timeout = server_timeout
         self.chat_template_kwargs = chat_template_kwargs or {}
@@ -611,10 +621,15 @@ class AsyncRolloutWorker:
             "prompt": prompt_ids,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "min_p": 0.0 if self.min_p is None else self.min_p,
+            "repetition_penalty": self.repetition_penalty,
             "n": 1,
             "return_token_ids": True,
             "logprobs": 0,
         }
+        payload.update(self.generation_kwargs)
         while True:
             try:
                 output = await self._post("/v1/completions", payload, self.request_timeout)
