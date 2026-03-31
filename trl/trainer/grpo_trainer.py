@@ -2294,12 +2294,13 @@ class GRPOTrainer(_BaseTrainer):
         # provide advantages with shape (B, T) (e.g., MiniLLM), we *conditionally* unsqueeze the tensor.
         if advantages.dim() == 1:
             advantages = advantages.unsqueeze(1)
-        # When num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps,
-        # old_per_token_logps == per_token_logps. In this case we can skip its computation
-        # (see _generate_and_score_completions) and instead use per_token_logps.detach().
+        # When gradient_accumulation_steps % generate_every == 0 (on-policy),
+        # old_per_token_logps == per_token_logps on the first iteration. In this case we can skip
+        # its computation (see _generate_and_score_completions) and instead use per_token_logps.detach().
         # When using vLLM without liger, IS correction is computed inline below using old_per_token_logps.
+        if inputs.get("old_per_token_logps") is None:
+            inputs["old_per_token_logps"] = per_token_logps.detach()
         old_per_token_logps = inputs.get("old_per_token_logps")
-        old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
         # Compute inline IS ratio for non-liger vLLM path. This must happen before the loss type switch
         # because vespo needs it in get_gamma_weights. For the liger path, IS ratio is pre-computed in
