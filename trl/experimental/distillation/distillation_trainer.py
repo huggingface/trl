@@ -1110,53 +1110,6 @@ class DistillationTrainer(_BaseTrainer):
         else:
             return jsd
 
-    @staticmethod
-    def token_level_divergence_loss(
-        student_logprobs,
-        teacher_logprobs,
-        labels=None,
-        beta=0.5,
-    ):
-        """
-        Compute a per-token weighted forward/reverse KL surrogate using only the sampled token's logprobs.
-
-        This helper keeps the legacy sparse approximation where only the realized token's logprob is available. For
-        each token position, we have log p_student(token) and log p_teacher(token) and compute:
-            - beta=0 (forward KL): exp(log_teacher) * (log_teacher - log_student)
-            - beta=1 (reverse KL): exp(log_student) * (log_student - log_teacher)
-            - 0 < beta < 1: weighted combination of forward and reverse token-level KL terms
-
-        This is not the exact generalized JSD used by `generalized_jsd_loss` when `0 < beta < 1`.
-
-        Args:
-            student_logprobs: Tensor of shape (batch_size, completion_length) — student's log-prob per token.
-            teacher_logprobs: Tensor of shape (batch_size, completion_length) — teacher's log-prob per token.
-            labels: Tensor of shape (batch_size, completion_length) with -100 for positions to ignore.
-            beta: Interpolation coefficient. 0.0 = forward KL surrogate, 1.0 = reverse KL surrogate, and intermediate
-                values interpolate between them.
-
-        Returns:
-            Scalar loss tensor.
-        """
-        if beta == 0:
-            # Forward KL: p_teacher * (log_teacher - log_student)
-            loss = torch.exp(teacher_logprobs) * (teacher_logprobs - student_logprobs)
-        elif beta == 1:
-            # Reverse KL: p_student * (log_student - log_teacher)
-            loss = torch.exp(student_logprobs) * (student_logprobs - teacher_logprobs)
-        else:
-            # Token-level JSD approximation
-            forward_kl = torch.exp(teacher_logprobs) * (teacher_logprobs - student_logprobs)
-            reverse_kl = torch.exp(student_logprobs) * (student_logprobs - teacher_logprobs)
-            loss = beta * forward_kl + (1 - beta) * reverse_kl
-
-        if labels is not None:
-            mask = labels != -100
-            loss = loss[mask]
-            return loss.sum() / mask.sum()
-
-        return loss.mean()
-
     def _get_teacher_logits(self, inputs: dict[str, torch.Tensor | Any]) -> torch.Tensor:
         """Get teacher logits — dispatches between local model and external server."""
         if self.teacher_model is not None:
