@@ -35,6 +35,7 @@ from trl.trainer.utils import pad, selective_log_softmax
 
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
+from .weight_diff import ULPChangeDetector
 
 
 logger = get_logger(__name__)
@@ -380,6 +381,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     weight_names=weight_names,
                     weight_dtype_names=weight_dtype_names,
                     weight_shapes=weight_shapes,
+                    delta_sync_enabled=self.args.delta_sync_enabled,
+                    delta_sync_repo_id=self.args.delta_sync_repo_id,
+                    delta_sync_anchor_interval=self.args.delta_sync_anchor_interval,
+                    delta_sync_verify_checksum=self.args.delta_sync_verify_checksum,
+                    delta_sync_base_model_id=model_name,
                 )
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
@@ -388,6 +394,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Add callbacks
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
+
+        # ULP change detector for diagnostic logging (delta sync only)
+        self._ulp_detector: ULPChangeDetector | None = None
 
     def get_train_dataloader(self) -> DataLoader:
         if self.accelerator.is_main_process:
@@ -571,6 +580,35 @@ class AsyncGRPOTrainer(_BaseTrainer):
             yield name, full
 
     def _sync_weight(self):
+        # Lazy-init ULP detector for diagnostic logging (delta sync only).
+        # Optimizer only exists after Trainer creates it inside super()._inner_training_loop().
+        if (
+            self.args.delta_sync_enabled
+            and self._ulp_detector is None
+            and hasattr(self, "optimizer")
+            and self.optimizer is not None
+        ):
+            # Unwrap AcceleratedOptimizer to get the native PyTorch optimizer
+            # (register_step_pre_hook requires torch.optim.Optimizer internals)
+            raw_optimizer = getattr(self.optimizer, "optimizer", self.optimizer)
+            self._ulp_detector = ULPChangeDetector(self.model, raw_optimizer)
+
+        # Log ULP prediction accuracy (diagnostic, doesn't affect sync)
+        if (
+            self.args.delta_sync_enabled
+            and self.args.delta_sync_log_ulp_accuracy
+            and self._ulp_detector is not None
+            and self.accelerator.is_main_process
+        ):
+            accuracy = self._ulp_detector.get_prediction_accuracy()
+            for k, v in accuracy.items():
+                self._metrics["train"][f"delta/{k}"].append(v)
+            logger.info(
+                f"ULP accuracy: precision={accuracy['precision']:.3f} "
+                f"recall={accuracy['recall']:.3f} "
+                f"sparsity={accuracy['sparsity']:.4%}"
+            )
+
         t0 = time.time()
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process and self.rollout_worker:
@@ -614,3 +652,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         finally:
             if self.accelerator.is_main_process and self.rollout_worker:
                 self.rollout_worker.stop()
+            if self._ulp_detector is not None:
+                self._ulp_detector.close()
+                self._ulp_detector = None

@@ -102,11 +102,17 @@ class AsyncRolloutWorker:
         weight_names: list[str] | None = None,
         weight_dtype_names: list[str] | None = None,
         weight_shapes: list[list[int]] | None = None,
+        delta_sync_enabled: bool = False,
+        delta_sync_repo_id: str | None = None,
+        delta_sync_anchor_interval: int = 10,
+        delta_sync_verify_checksum: bool = True,
+        delta_sync_base_model_id: str = "",
     ):
         if not is_vllm_available(min_version="0.17.1"):
             raise ImportError(
                 "vLLM >= 0.17.1 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.17.1'"
             )
+        self.delta_sync_enabled = delta_sync_enabled
         self.model_name = model_name
         self.max_tool_calling_iterations = max_tool_calling_iterations
         self.dataset = dataset
@@ -171,7 +177,12 @@ class AsyncRolloutWorker:
         self.model_version = 0
         self.session = None
 
-        # Wait for the vLLM server and initialize NCCL weight transfer.
+        self._delta_sync_repo_id = delta_sync_repo_id
+        self._delta_sync_anchor_interval = delta_sync_anchor_interval
+        self._delta_sync_verify_checksum = delta_sync_verify_checksum
+        self._delta_sync_base_model_id = delta_sync_base_model_id
+
+        # Wait for the vLLM server and initialize weight transfer.
         self._wait_for_server_ready_sync(timeout_s=self.server_timeout)
         self._init_weight_transfer()
 
@@ -199,6 +210,24 @@ class AsyncRolloutWorker:
             time.sleep(poll_interval_s)
 
     def _init_weight_transfer(self) -> None:
+        if self.delta_sync_enabled:
+            from .delta_engine import DeltaWeightTransferEngine
+
+            self._delta_trainer_args = DeltaWeightTransferEngine.trainer_init(
+                repo_id=self._delta_sync_repo_id,
+                url=self.vllm_server_url,
+                anchor_interval=self._delta_sync_anchor_interval,
+                verify_checksum=self._delta_sync_verify_checksum,
+                base_model_id=self._delta_sync_base_model_id,
+            )
+            requests.post(
+                f"{self.vllm_server_url}/init_weight_transfer_engine",
+                json={"init_info": {}},
+                timeout=120,
+            )
+            logger.info("Init delta weight transfer with HF Hub repo %s", self._delta_sync_repo_id)
+            return
+
         response = requests.get(f"{self.vllm_server_url}/get_world_size")
         inference_world_size = response.json()["world_size"]
         world_size = inference_world_size + 1
@@ -287,6 +316,16 @@ class AsyncRolloutWorker:
         logger.debug(f"[weight_sync] resume HTTP took {time.time() - t0:.1f}s")
 
     def send_weights(self, iterator) -> None:
+        if self.delta_sync_enabled:
+            from .delta_engine import DeltaWeightTransferEngine
+
+            t0 = time.time()
+            DeltaWeightTransferEngine.trainer_send_weights(
+                iterator=iterator,
+                trainer_args=self._delta_trainer_args,
+            )
+            logger.info(f"[delta_sync] send_weights took {time.time() - t0:.1f}s")
+            return
         if self.model_update_group is None:
             return
         t0 = time.time()
