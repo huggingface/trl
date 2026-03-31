@@ -383,9 +383,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     weight_shapes=weight_shapes,
                     delta_sync_enabled=self.args.delta_sync_enabled,
                     delta_sync_repo_id=self.args.delta_sync_repo_id,
-                    delta_sync_anchor_interval=self.args.delta_sync_anchor_interval,
-                    delta_sync_verify_checksum=self.args.delta_sync_verify_checksum,
-                    delta_sync_base_model_id=model_name,
                 )
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
@@ -572,15 +569,39 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._metrics[mode].clear()
 
     def _streaming_iter(self):
-        # Iterate parameters one at a time. For FSDP2 (DTensor), full_tensor() all-gathers just this parameter across
-        # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
+        """Yield ``(name, tensor, mask)`` tuples.
+
+        - ``_ulp_detector is None`` (NCCL path): all params, ``mask=None``.
+        - ULP active, no masks yet (first sync): all params, ``mask=None``.
+        - ULP active, masks available: only changed params with element-level masks.
+        """
+        if self._ulp_detector is None:
+            for name, param in self.model.named_parameters():
+                name = name.removeprefix("module.")
+                yield name, (param.full_tensor() if isinstance(param, DTensor) else param.detach()), None
+            return
+
+        masks = self._ulp_detector._validated_masks
+        if not masks:
+            # First sync after ULP init — no optimizer step yet, send everything
+            for name, param in self.model.named_parameters():
+                name = name.removeprefix("module.")
+                yield name, (param.full_tensor() if isinstance(param, DTensor) else param.detach()), None
+            return
+
+        total, yielded = 0, 0
         for name, param in self.model.named_parameters():
-            name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
-            full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
-            yield name, full
+            total += 1
+            name = name.removeprefix("module.")
+            mask = masks.get(name)
+            if mask is None or not mask.any():
+                continue
+            yield name, (param.full_tensor() if isinstance(param, DTensor) else param.detach()), mask
+            yielded += 1
+        logger.info(f"ULP: {yielded}/{total} params changed")
 
     def _sync_weight(self):
-        # Lazy-init ULP detector for diagnostic logging (delta sync only).
+        # Lazy-init ULP detector for diagnostic logging (delta sync only) bc
         # Optimizer only exists after Trainer creates it inside super()._inner_training_loop().
         if (
             self.args.delta_sync_enabled
@@ -588,12 +609,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             and hasattr(self, "optimizer")
             and self.optimizer is not None
         ):
+            # TODO(@aminediro): check this works with FSDP2
             # Unwrap AcceleratedOptimizer to get the native PyTorch optimizer
             # (register_step_pre_hook requires torch.optim.Optimizer internals)
             raw_optimizer = getattr(self.optimizer, "optimizer", self.optimizer)
             self._ulp_detector = ULPChangeDetector(self.model, raw_optimizer)
 
-        # Log ULP prediction accuracy (diagnostic, doesn't affect sync)
         if (
             self.args.delta_sync_enabled
             and self.args.delta_sync_log_ulp_accuracy
@@ -610,34 +631,57 @@ class AsyncGRPOTrainer(_BaseTrainer):
             )
 
         t0 = time.time()
-        logger.info("Weight sync: pausing vLLM...")
+        is_delta = self.args.delta_sync_enabled
+
+        if is_delta:
+            # Phase 1: Upload to HF Hub while inference continues
+            logger.info("Weight sync: uploading to HF Hub (inference still running)...")
+            if self.accelerator.is_main_process and self.rollout_worker:
+                self.rollout_worker.send_weights(self._streaming_iter())
+            else:
+                for _ in self._streaming_iter():
+                    pass
+            self.accelerator.wait_for_everyone()
+            t_upload = time.time()
+            logger.info(f"Weight sync: upload took {t_upload - t0:.1f}s, now pausing vLLM...")
+
+        # Phase 2: Pause inference
         if self.accelerator.is_main_process and self.rollout_worker:
             self.rollout_worker.pause()
         t_pause = time.time()
-        logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
 
         self.accelerator.wait_for_everyone()
         t_barrier = time.time()
 
-        logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.send_weights(self._streaming_iter())
+        if is_delta:
+            # Phase 3: Signal vLLM to fetch the already-uploaded weights
+            logger.info(f"Weight sync: signaling vLLM to apply... (pause took {t_pause - t_upload:.1f}s)")
+            if self.accelerator.is_main_process and self.rollout_worker:
+                self.rollout_worker.send_weights(iter([]))
         else:
-            # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
-            for _ in self._streaming_iter():
-                pass
+            # NCCL: transfer all weights directly
+            logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
+            if self.accelerator.is_main_process and self.rollout_worker:
+                self.rollout_worker.send_weights(self._streaming_iter())
+            else:
+                for _ in self._streaming_iter():
+                    pass
+
         t_transfer = time.time()
 
         self.accelerator.wait_for_everyone()
 
-        logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
+        # Phase 4: Resume
+        logger.info(f"Weight sync: resuming vLLM... (apply took {t_transfer - t_barrier:.1f}s)")
         if self.accelerator.is_main_process and self.rollout_worker:
             self.rollout_worker.resume()
             self.model_version += 1
             self.rollout_worker.update_model_version(self.model_version)
         weight_sync_time_s = time.time() - t0
         self._metrics["train"]["weight_sync_time_s"].append(weight_sync_time_s)
-        logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
+        logger.info(
+            f"Weight sync: done. Total {weight_sync_time_s:.1f}s (inference paused {t_transfer - t_pause:.1f}s)"
+        )
 
     def _inner_training_loop(self, *args, **kwargs):
         # Start the rollout worker here (not in __init__) so that checkpoint loading in Trainer.train()
