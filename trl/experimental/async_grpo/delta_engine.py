@@ -199,11 +199,6 @@ class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo
         return meta
 
 
-# ---------------------------------------------------------------------------
-# Worker extension — its import triggers engine registration
-# ---------------------------------------------------------------------------
-
-
 class DeltaWorkerExtension:
     """vLLM worker extension for the delta weight transfer backend.
 
@@ -217,10 +212,6 @@ class DeltaWorkerExtension:
 
     pass
 
-
-# ---------------------------------------------------------------------------
-# Module-level registration
-# ---------------------------------------------------------------------------
 
 if "delta" not in WeightTransferEngineFactory._registry:
     WeightTransferEngineFactory.register_engine("delta", DeltaWeightTransferEngine)
