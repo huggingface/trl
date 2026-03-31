@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -31,6 +32,8 @@ from vllm.distributed.weight_transfer.base import (
     WeightTransferUpdateInfo,
 )
 from vllm.distributed.weight_transfer.factory import WeightTransferEngineFactory
+
+from .weight_diff import PatchMetadata
 
 
 logger = logging.getLogger(__name__)
@@ -62,6 +65,7 @@ class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo
 
     def __init__(self, config: WeightTransferConfig, parallel_config: ParallelConfig) -> None:
         super().__init__(config, parallel_config)
+        # TODO: might be able to eliminate completely
         # CPU-side bf16 snapshot — needed because vLLM's load_weights expects full
         # tensors, so we must reconstruct them from sparse (indices, values) patches.
         # Kept on CPU to avoid GPU memory overhead (~2 bytes/param, e.g. ~1.2 GB for 0.6B model).
@@ -92,32 +96,32 @@ class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo
         )
 
         with safe_open(local_path, framework="pt", device="cpu") as f:
-            is_sparse = f.metadata().get("sparse", "False") == "True"
+            meta = PatchMetadata.from_metadata_dict(f.metadata())
 
-            if not is_sparse:
+            if not meta.sparse:
                 # Full tensors — feed to load_weights and build snapshot
                 self._bf16_snapshot = {}
                 for name in f.keys():
                     tensor = f.get_tensor(name)
                     self._bf16_snapshot[name] = tensor.to(torch.bfloat16).clone()
                     load_weights([(name, tensor)])
-                logger.info("Applied full weights (%d params)", len(self._bf16_snapshot))
+                logger.info("Applied anchor (step %d, %d params)", meta.model_version, meta.num_changed_params)
             else:
                 # Sparse — apply indices/values to snapshot, feed full tensors
-                changed = set()
-                for key in f.keys():
-                    if key.endswith(".indices"):
-                        changed.add(key.removesuffix(".indices"))
-
-                for name in changed:
+                changed_names = json.loads(meta.changed_params)
+                for name in changed_names:
                     indices = f.get_tensor(f"{name}.indices").long()
                     values = f.get_tensor(f"{name}.values")
                     snap = self._bf16_snapshot[name].flatten()
                     snap[indices] = values
                     self._bf16_snapshot[name] = snap.reshape(self._bf16_snapshot[name].shape)
                     load_weights([(name, self._bf16_snapshot[name])])
-
-                logger.info("Applied sparse weights (%d params changed)", len(changed))
+                logger.info(
+                    "Applied delta (step %d, %d params, sparsity=%.4f)",
+                    meta.model_version,
+                    meta.num_changed_params,
+                    meta.sparsity,
+                )
 
     def shutdown(self) -> None:
         self._bf16_snapshot = None
@@ -136,8 +140,9 @@ class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo
         repo_id: str,
         filename: str,
         hf_api: Any,
+        model_version: int = 0,
         revision: str = "main",
-    ) -> int:
+    ) -> PatchMetadata | None:
         """Encode params as safetensors and upload to HF Hub.
 
         Each item is ``(name, tensor, mask)``:
@@ -146,47 +151,62 @@ class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo
         - ``mask`` provided: sparse encoding — only changed elements stored
           as ``{name}.indices`` (int32) + ``{name}.values`` (bf16).
 
-        Returns the number of params encoded.
+        Returns :class:`PatchMetadata` or ``None`` if the iterator was empty.
         """
         tensors: dict[str, torch.Tensor] = {}
-        num_params = 0
+        changed_names: list[str] = []
+        total_changed = 0
+        total_elements = 0
         sparse = False
 
         for name, tensor, mask in iterator:
-            num_params += 1
             bf16 = tensor.to(torch.bfloat16).cpu()
+            total_elements += bf16.numel()
             if mask is None:
                 tensors[name] = bf16.clone()
+                changed_names.append(name)
+                total_changed += bf16.numel()
             else:
                 sparse = True
                 indices = mask.flatten().nonzero(as_tuple=False).squeeze(1).to(torch.int32)
                 values = bf16.flatten()[indices.long()]
                 tensors[f"{name}.indices"] = indices
                 tensors[f"{name}.values"] = values
+                changed_names.append(name)
+                total_changed += len(indices)
 
         if not tensors:
-            return 0
+            return None
 
-        metadata = {"num_params": str(num_params), "sparse": str(sparse)}
-        buf = save(tensors, metadata=metadata)
+        meta = PatchMetadata(
+            sparse=sparse,
+            model_version=model_version,
+            num_changed_params=len(changed_names),
+            total_changed_elements=total_changed,
+            total_elements=total_elements,
+            sparsity=1.0 - total_changed / max(total_elements, 1),
+            changed_params=json.dumps(changed_names),
+        )
+        buf = save(tensors, metadata=meta.to_metadata_dict())
 
         hf_api.upload_file(
             path_or_fileobj=buf,
             path_in_repo=filename,
             repo_id=repo_id,
             revision=revision,
-            commit_message=f"weight update ({num_params} params, {len(buf) / 1e6:.1f} MB, sparse={sparse})",
+            commit_message=f"step {model_version} ({len(changed_names)} params, {len(buf) / 1e6:.1f} MB, sparse={sparse})",
         )
 
         logger.info(
-            "[delta_engine] uploaded %s/%s (%.1f MB, %d params, sparse=%s)",
+            "[delta_engine] uploaded %s/%s (%.1f MB, %d params, sparse=%s, sparsity=%.4f)",
             repo_id,
             filename,
             len(buf) / 1e6,
-            num_params,
+            len(changed_names),
             sparse,
+            meta.sparsity,
         )
-        return num_params
+        return meta
 
 
 # ---------------------------------------------------------------------------

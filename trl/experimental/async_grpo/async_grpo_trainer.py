@@ -35,7 +35,7 @@ from trl.trainer.utils import pad, selective_log_softmax
 
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
-from .weight_diff import ULPChangeDetector
+from .weight_diff import BF16ChangeDetector
 
 
 logger = get_logger(__name__)
@@ -383,6 +383,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     weight_shapes=weight_shapes,
                     delta_sync_enabled=self.args.delta_sync_enabled,
                     delta_sync_repo_id=self.args.delta_sync_repo_id,
+                    delta_sync_anchor_interval=self.args.delta_sync_anchor_interval,
                 )
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
@@ -393,7 +394,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
 
         # ULP change detector for diagnostic logging (delta sync only)
-        self._ulp_detector: ULPChangeDetector | None = None
+        self._change_detector: BF16ChangeDetector | None = None
 
     def get_train_dataloader(self) -> DataLoader:
         if self.accelerator.is_main_process:
@@ -571,19 +572,25 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def _streaming_iter(self):
         """Yield ``(name, tensor, mask)`` tuples.
 
-        - ``_ulp_detector is None`` (NCCL path): all params, ``mask=None``.
-        - ULP active, no masks yet (first sync): all params, ``mask=None``.
-        - ULP active, masks available: only changed params with element-level masks.
+        - No weight diff (NCCL path): all params, ``mask=None``.
+        - Anchor step (every ``anchor_interval``): all params, ``mask=None``.
+        - Delta step: only changed params with element-level masks.
+        - Nothing changed: yields nothing (no-op).
         """
-        if self._ulp_detector is None:
+        # NCCL path
+        if self._change_detector is None:
             for name, param in self.model.named_parameters():
                 name = name.removeprefix("module.")
                 yield name, (param.full_tensor() if isinstance(param, DTensor) else param.detach()), None
             return
 
-        masks = self._ulp_detector._validated_masks
-        if not masks:
-            # First sync after ULP init — no optimizer step yet, send everything
+        # Force full upload on anchor interval or when no masks yet (first sync)
+        masks = self._change_detector._validated_masks
+        next_version = self.model_version + 1
+        force_anchor = not masks or next_version % self.args.delta_sync_anchor_interval == 0
+
+        if force_anchor:
+            logger.info("Anchor step %d: sending all params", next_version)
             for name, param in self.model.named_parameters():
                 name = name.removeprefix("module.")
                 yield name, (param.full_tensor() if isinstance(param, DTensor) else param.detach()), None
@@ -605,7 +612,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Optimizer only exists after Trainer creates it inside super()._inner_training_loop().
         if (
             self.args.delta_sync_enabled
-            and self._ulp_detector is None
+            and self._change_detector is None
             and hasattr(self, "optimizer")
             and self.optimizer is not None
         ):
@@ -613,22 +620,24 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # Unwrap AcceleratedOptimizer to get the native PyTorch optimizer
             # (register_step_pre_hook requires torch.optim.Optimizer internals)
             raw_optimizer = getattr(self.optimizer, "optimizer", self.optimizer)
-            self._ulp_detector = ULPChangeDetector(self.model, raw_optimizer)
+            self._change_detector = BF16ChangeDetector(self.model, raw_optimizer)
 
         if (
             self.args.delta_sync_enabled
-            and self.args.delta_sync_log_ulp_accuracy
-            and self._ulp_detector is not None
+            and self._change_detector is not None
+            and self._change_detector._validated_masks
             and self.accelerator.is_main_process
         ):
-            accuracy = self._ulp_detector.get_prediction_accuracy()
-            for k, v in accuracy.items():
-                self._metrics["train"][f"delta/{k}"].append(v)
-            logger.info(
-                f"ULP accuracy: precision={accuracy['precision']:.3f} "
-                f"recall={accuracy['recall']:.3f} "
-                f"sparsity={accuracy['sparsity']:.4%}"
-            )
+            total_changed = 0
+            total_elements = 0
+            for mask in self._change_detector._validated_masks.values():
+                total_changed += mask.sum().item()
+                total_elements += mask.numel()
+            sparsity = 1.0 - total_changed / max(total_elements, 1)
+            self._metrics["train"]["delta/sparsity"].append(sparsity)
+            self._metrics["train"]["delta/total_changed"].append(total_changed)
+            self._metrics["train"]["delta/total_elements"].append(total_elements)
+            logger.info(f"Delta: {total_changed}/{total_elements} elements changed (sparsity={sparsity:.4%})")
 
         t0 = time.time()
         is_delta = self.args.delta_sync_enabled
@@ -696,6 +705,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         finally:
             if self.accelerator.is_main_process and self.rollout_worker:
                 self.rollout_worker.stop()
-            if self._ulp_detector is not None:
-                self._ulp_detector.close()
-                self._ulp_detector = None
+            if self._change_detector is not None:
+                self._change_detector.close()
+                self._change_detector = None

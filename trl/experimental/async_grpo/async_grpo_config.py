@@ -216,13 +216,6 @@ class AsyncGRPOConfig(_BaseConfig):
             "Adds overhead per sync but guarantees bit-exact reconstruction."
         },
     )
-    delta_sync_log_ulp_accuracy: bool = field(
-        default=True,
-        metadata={
-            "help": "Log precision/recall/F1 of ULP-based change predictions vs. actual bf16 "
-            "changes. Useful for validating the optimizer hook approach."
-        },
-    )
 
     # Parameters that control the logging
     log_completions: bool = field(

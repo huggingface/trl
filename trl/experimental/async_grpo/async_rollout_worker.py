@@ -14,6 +14,7 @@
 
 import asyncio
 import inspect
+import itertools
 import queue
 import threading
 import time
@@ -31,6 +32,8 @@ from transformers import AutoTokenizer
 from trl.chat_template_utils import add_response_schema, get_training_chat_template, parse_response
 from trl.import_utils import is_vllm_available
 from trl.trainer.utils import print_prompt_completions_sample
+
+from .delta_engine import DeltaWeightTransferEngine
 
 
 if is_vllm_available(min_version="0.17.1"):
@@ -104,6 +107,7 @@ class AsyncRolloutWorker:
         weight_shapes: list[list[int]] | None = None,
         delta_sync_enabled: bool = False,
         delta_sync_repo_id: str | None = None,
+        delta_sync_anchor_interval: int = 10,
     ):
         if not is_vllm_available(min_version="0.17.1"):
             raise ImportError(
@@ -175,6 +179,7 @@ class AsyncRolloutWorker:
         self.session = None
 
         self._delta_sync_repo_id = delta_sync_repo_id
+        self._delta_sync_anchor_interval = delta_sync_anchor_interval
 
         # Wait for the vLLM server and initialize weight transfer.
         self._wait_for_server_ready_sync(timeout_s=self.server_timeout)
@@ -313,36 +318,29 @@ class AsyncRolloutWorker:
             self._send_weights_nccl(iterator)
 
     def _send_weights_delta(self, iterator) -> None:
-        """Delta sync via HF Hub.
-
-        - Non-empty iterator (upload phase): encode + upload + stash update_info.
-        - Empty iterator (signal phase): POST /update_weights with stashed info.
-        """
-        from .delta_engine import DeltaWeightTransferEngine
-
-        # Peek first item to distinguish upload vs signal
         first = next(iterator, None)
         if first is not None:
-            # Re-chain the first item back
-            import itertools
-
             full_iter = itertools.chain([first], iterator)
             self._delta_model_version += 1
-            filename = f"steps/step_{self._delta_model_version:06d}.safetensors"
-            DeltaWeightTransferEngine.upload(
+            is_anchor = first[2] is None
+            subdir = "anchors" if is_anchor else "deltas"
+            filename = f"{subdir}/step_{self._delta_model_version:06d}.safetensors"
+            meta = DeltaWeightTransferEngine.upload(
                 iterator=full_iter,
                 repo_id=self._delta_sync_repo_id,
                 filename=filename,
                 hf_api=self._delta_hf_api,
+                model_version=self._delta_model_version,
             )
-            self._delta_pending_update_info = {
-                "repo_id": self._delta_sync_repo_id,
-                "filename": filename,
-                "revision": "main",
-                "is_checkpoint_format": True,
-            }
-        else:
-            # Empty iterator — signal vLLM to fetch and apply
+            if meta is not None:
+                self._delta_pending_update_info = {
+                    "repo_id": self._delta_sync_repo_id,
+                    "filename": filename,
+                    "revision": "main",
+                    "is_checkpoint_format": True,
+                }
+        elif self._delta_pending_update_info is not None:
+            # Signal vLLM to fetch and apply
             resp = requests.post(
                 f"{self.vllm_server_url}/update_weights",
                 json={"update_info": self._delta_pending_update_info},
@@ -350,6 +348,9 @@ class AsyncRolloutWorker:
             )
             resp.raise_for_status()
             self._delta_pending_update_info = None
+        else:
+            # Nothing changed and nothing pending — no-op
+            logger.debug("[delta_sync] nothing changed, skipping")
 
     def _send_weights_nccl(self, iterator) -> None:
         """NCCL sync: broadcast all params via NCCL + signal /update_weights."""
@@ -364,7 +365,6 @@ class AsyncRolloutWorker:
         t_update.start()
         logger.debug(f"[weight_sync] /update_weights POST sent ({time.time() - t0:.1f}s)")
         t_nccl = time.time()
-        # Strip the mask — NCCL expects (name, tensor) pairs
         NCCLWeightTransferEngine.trainer_send_weights(
             iterator=((name, tensor) for name, tensor, _mask in iterator),
             trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
@@ -423,7 +423,7 @@ class AsyncRolloutWorker:
                         # Current assumption: reset side effects matter, return value is ignored.
                         self.environments[slot].reset(**row)
 
-                    logger.info(f"[slot] assigned slot={slot} group={group_id} free_after={len(free_slots)}")
+                    logger.debug(f"[slot] assigned slot={slot} group={group_id} free_after={len(free_slots)}")
                     task = asyncio.create_task(
                         self._generate_one(pending_groups[group_id].prompt, tool_dict=self._sync_tool_dicts[slot])
                     )
