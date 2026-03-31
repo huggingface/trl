@@ -85,8 +85,7 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
     ):
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
-        if args.use_vllm:
-            raise NotImplementedError("Self-distillation trainers do not support `use_vllm=True` yet.")
+        self.use_vllm = args.use_vllm
 
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
@@ -142,6 +141,7 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
         self.mask_truncated_completions = args.mask_truncated_completions
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self._step = 0
+        self._last_loaded_step = 0
         self._buffered_inputs = None
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._diagnostic_counters = {
@@ -164,7 +164,7 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
         }
         if args.generation_kwargs is not None:
             generation_kwargs.update(args.generation_kwargs)
-        self.generation_config = GenerationConfig(**generation_kwargs)
+        self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
 
         if hasattr(model, "warnings_issued"):
             model.warnings_issued["estimate_tokens"] = True
@@ -180,6 +180,39 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
             optimizers=optimizers,
             compute_loss_func="non-None value to disable scaling",
         )
+
+        if self.use_vllm:
+            from ...generation.vllm_generation import VLLMGeneration
+
+            self.vllm_generation = VLLMGeneration(
+                model=self.model,
+                accelerator=self.accelerator,
+                is_fsdp_enabled=self.is_fsdp_enabled,
+                processing_class=self.processing_class,
+                mode=args.vllm_mode,
+                server_base_url=args.vllm_server_base_url,
+                server_host=args.vllm_server_host,
+                server_port=args.vllm_server_port,
+                group_port=args.vllm_group_port,
+                server_timeout=args.vllm_server_timeout,
+                tensor_parallel_size=args.vllm_tensor_parallel_size,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                max_model_length=args.vllm_max_model_length,
+                max_num_seqs=args.per_device_train_batch_size
+                * args.vllm_tensor_parallel_size
+                * args.steps_per_generation,
+                enable_sleep_mode=args.vllm_enable_sleep_mode,
+                model_impl=args.vllm_model_impl,
+                repetition_penalty=args.repetition_penalty,
+                temperature=self.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                min_p=args.min_p,
+                max_completion_length=self.max_completion_length,
+                logprobs=None,
+                generation_kwargs=args.generation_kwargs,
+            )
+            self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
         if reward_funcs is None:
             reward_funcs = []

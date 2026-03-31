@@ -47,6 +47,39 @@ class OnlineRolloutMixin:
         return self._generate_and_score_completions(generation_batch)
 
     def _generate(self, prompts):
+        if self.use_vllm:
+            return self._generate_vllm(prompts)
+        return self._generate_transformers(prompts)
+
+    def _generate_vllm(self, prompts):
+        # Sync weights if training step changed
+        if self.state.global_step != self._last_loaded_step:
+            self.vllm_generation.sync_weights()
+            self._last_loaded_step = self.state.global_step
+
+        # Tokenize prompts to token IDs
+        prompts_text = self._apply_prompt_template(prompts)
+        tokenized = self.processing_class(
+            text=prompts_text,
+            return_tensors=None,
+            padding=False,
+            max_length=self.max_prompt_length,
+            truncation=True,
+            add_special_tokens=False,
+        )
+        prompt_ids = tokenized["input_ids"]  # list of list[int]
+
+        # Generate via vLLM — it deduplicates repeated prompts from RepeatSampler internally
+        mode = "train" if self.model.training else "eval"
+        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+        prompt_ids_out, completion_ids_list, _, _ = self.vllm_generation.generate(
+            prompts=prompt_ids,
+            images=None,
+            num_generations=num_generations,
+        )
+        return prompt_ids_out, completion_ids_list
+
+    def _generate_transformers(self, prompts):
         # Keep the generation path aligned with the reference trainers: generate from left-padded prompts,
         # then recover completion token spans by trimming prompt tokens and stopping at the first EOS.
         prompts_text = self._apply_prompt_template(prompts)
@@ -71,9 +104,7 @@ class OnlineRolloutMixin:
             torch.no_grad(),
         ):
             prompt_completion_ids = unwrapped_model.generate(
-                **generate_inputs,
-                generation_config=self.generation_config,
-                disable_compile=True,
+                **generate_inputs, generation_config=self.generation_config
             )
         prompt_ids = generate_inputs["input_ids"]
         prompt_mask = generate_inputs["attention_mask"]

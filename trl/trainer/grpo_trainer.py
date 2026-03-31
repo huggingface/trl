@@ -771,7 +771,7 @@ class GRPOTrainer(_BaseTrainer):
             }
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
-            self.generation_config = GenerationConfig(**generation_kwargs)
+            self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
             # Keep training-specific generation kwargs to overwrite model's original generation config
             self.generation_kwargs = generation_kwargs
 
@@ -1359,7 +1359,7 @@ class GRPOTrainer(_BaseTrainer):
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
                 prompt_completion_ids = unwrapped_model.generate(
-                    **generate_inputs, generation_config=self.generation_config, disable_compile=True
+                    **generate_inputs, generation_config=self.generation_config
                 )
             # Compute prompt length and extract completion ids
             prompt_length = generate_inputs["input_ids"].size(1)

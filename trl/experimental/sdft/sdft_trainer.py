@@ -252,7 +252,7 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         }
         if args.generation_kwargs is not None:
             generation_kwargs.update(args.generation_kwargs)
-        self.generation_config = GenerationConfig(**generation_kwargs)
+        self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
 
         if hasattr(model, "warnings_issued"):
             model.warnings_issued["estimate_tokens"] = True
@@ -395,9 +395,7 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             torch.no_grad(),
         ):
             prompt_completion_ids = unwrapped_model.generate(
-                **generate_inputs,
-                generation_config=self.generation_config,
-                disable_compile=True,
+                **generate_inputs, generation_config=self.generation_config
             )
 
         prompt_length = generate_inputs["input_ids"].size(1)
