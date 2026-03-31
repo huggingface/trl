@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from trl.trainer.base_config import _BaseConfig
 
@@ -74,6 +75,12 @@ class AsyncGRPOConfig(_BaseConfig):
         weight_sync_steps (`int`, *optional*, defaults to `1`):
             Number of training steps between weight synchronizations to the vLLM server.
 
+        > Other parameters
+
+        model_init_kwargs (`dict[str, Any]`, *optional*):
+            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
+            string.
+
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
@@ -88,6 +95,8 @@ class AsyncGRPOConfig(_BaseConfig):
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
+
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -183,6 +192,13 @@ class AsyncGRPOConfig(_BaseConfig):
     weight_sync_steps: int = field(
         default=1,
         metadata={"help": "Number of training steps between weight synchronizations to the vLLM server."},
+    )
+    model_init_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
+            "model from a string."
+        },
     )
 
     # Parameters that control the logging

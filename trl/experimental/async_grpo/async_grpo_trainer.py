@@ -289,7 +289,26 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Model
         model_name = model
-        model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.float32)
+        model_init_kwargs = {} if self.args.model_init_kwargs is None else self.args.model_init_kwargs.copy()
+        dtype = model_init_kwargs.get("dtype", "auto")
+        if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
+            pass
+        elif isinstance(dtype, str):
+            try:
+                dtype = getattr(torch, dtype)
+            except AttributeError as exc:
+                raise ValueError(
+                    "Invalid `dtype` passed to `AsyncGRPOConfig`. Expected either 'auto' or a string "
+                    f"representing a `torch.dtype` (e.g., 'float32'), but got {dtype}."
+                ) from exc
+        else:
+            raise ValueError(
+                "Invalid `dtype` passed to `AsyncGRPOConfig`. Expected either 'auto', `None`, or a `torch.dtype`, "
+                f"but got {dtype}."
+            )
+        model_init_kwargs["dtype"] = dtype
+        model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", None)
+        model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
         # Processing class
         if processing_class is None:
