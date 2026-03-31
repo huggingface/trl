@@ -127,9 +127,9 @@ def _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask=Non
         teacher_probs = torch.where(support_mask, teacher_log_probs.exp(), torch.zeros_like(teacher_log_probs))
 
         if beta == 0:
-            return teacher_probs * (safe_teacher - safe_student)
+            return torch.nan_to_num(teacher_probs * (safe_teacher - safe_student), nan=0.0)
         elif beta == 1:
-            return student_probs * (safe_student - safe_teacher)
+            return torch.nan_to_num(student_probs * (safe_student - safe_teacher), nan=0.0)
         else:
             beta_t = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
             tiny = torch.finfo(student_probs.dtype).tiny
@@ -139,8 +139,8 @@ def _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask=Non
                 torch.log(mixture_probs.clamp_min(tiny)),
                 torch.zeros_like(student_log_probs),
             )
-            kl_teacher = teacher_probs * (safe_teacher - safe_mixture)
-            kl_student = student_probs * (safe_student - safe_mixture)
+            kl_teacher = torch.nan_to_num(teacher_probs * (safe_teacher - safe_mixture), nan=0.0)
+            kl_student = torch.nan_to_num(student_probs * (safe_student - safe_mixture), nan=0.0)
             return beta_t * kl_teacher + (1 - beta_t) * kl_student
     else:
         if beta == 0:
@@ -1167,7 +1167,6 @@ class DistillationTrainer(_BaseTrainer):
         K = requested_top_k
 
         device = input_ids.device
-        completion_length = input_ids.shape[1] - aligned_prompt_length
         labels = inputs.get("labels")
         if labels is None:
             raise ValueError("labels are required to align teacher-server logprobs with the student loss tensors.")
@@ -1184,6 +1183,14 @@ class DistillationTrainer(_BaseTrainer):
                 continue
             completion_start = int(torch.nonzero(sample_mask, as_tuple=False)[0].item())
             completion_offsets.append(completion_start - aligned_prompt_length)
+
+        # Size the output tensors to tightly fit the teacher logprobs. Using the full padded
+        # sequence length would include padding positions with -inf teacher logprobs, producing
+        # inf in the forward pass and NaN gradients in the backward pass (0 * inf = NaN).
+        completion_length = max(
+            (offset + len(lps) for offset, lps in zip(completion_offsets, result["logprobs"], strict=True)),
+            default=0,
+        )
 
         # actual_logprobs: (B, T) — teacher logprob for the actual token
         def _actual_to_tensor(key):
@@ -1298,7 +1305,10 @@ class DistillationTrainer(_BaseTrainer):
             loss_per_token = (1 - self.beta) * fwd_per_token + self.beta * rev_per_token
 
         mask = labels != -100
-        return loss_per_token[mask].sum() / mask.sum()
+        num_tokens = mask.sum()
+        if num_tokens == 0:
+            return loss_per_token.sum() * 0.0  # no completion tokens — return zero-grad scalar
+        return loss_per_token[mask].sum() / num_tokens
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         self._raise_if_local_teacher_tokenizer_mismatch()
