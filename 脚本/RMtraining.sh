@@ -8,9 +8,11 @@ export CUDA_VISIBLE_DEVICES=0
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # 定义路径
-MODEL_PATH="Qwen/Qwen2.5-0.5B"
-DATA_PATH="Anthropic/hh-rlhf"
-OUTPUT_DIR="/root/autodl-tmp/Qwen2-0.5B-RM-HH"
+MODEL_PATH="/root/autodl-tmp/Qwen2-1.5B-SFT-IF/checkpoint-1392"
+DATA_PATH="BAAI/Infinity-Preference"
+OUTPUT_DIR="/root/autodl-tmp/Qwen2-1.5B-RM-IP"
+
+
 
 # 提速核心参数调优：
 # 1. per_device_train_batch_size: 0.5B模型在32GB下可以直接拉到 32 甚至 64。
@@ -18,25 +20,28 @@ OUTPUT_DIR="/root/autodl-tmp/Qwen2-0.5B-RM-HH"
 # 3. max_length: 1024 覆盖 HH 数据集绝大部分样本。
 # 4. remove_unused_columns: 必须设为 False，否则自定义的 chosen/rejected 会被丢弃。
 
-python /root/trl/trl/scripts/Qwen2.5_Reward_HH.py \
+python /root/trl/trl/scripts/Qwen2.5-1.5B-reward.py \
     --model_name_or_path "$MODEL_PATH" \
     --dataset_name "$DATA_PATH" \
     --output_dir "$OUTPUT_DIR" \
-    --per_device_train_batch_size 8 \
-    --gradient_accumulation_steps 8 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 32 \
     --learning_rate 3e-6 \
     --lr_scheduler_type cosine \
-    --num_train_epochs 2 \
-    --max_length 1024 \
+    --num_train_epochs 1 \
     --bf16 True \
     --attn_implementation "flash_attention_2" \
     --gradient_checkpointing False \
-    --remove_unused_columns False \
     --logging_steps 10 \
-    --eval_strategy "no" \
-    --save_strategy "steps" \
-    --save_steps 800 \
+    --eval_strategy "steps" \
+    --eval_steps 50 \
+    --save_strategy "epoch" \
     --report_to wandb \
-    --run_name "Qwen2.5-0.5B-RM-FAST" \
+    --project graduate_exp \
+    --run_name "Qwen2.5-1.5B-RM" \
     --push_to_hub True \
-    --hub_model_id "chenyongxi/Qwen2.5-0.5B-RM-HH" \
+    --hub_model_id "chenyongxi/Qwen2.5-1.5B-RM-IP" \
+    --dataset_train_split "train" \
+    --dataset_test_split "test" \
+    --eos_token "<|im_end|>" \
+    

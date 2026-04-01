@@ -12,64 +12,9 @@ from transformers import (
     set_seed
 )
 from trl import DPOConfig, DPOTrainer, ModelConfig, TrlParser,ScriptArguments
-
-# 设置日志
+    
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def build_example(ex):
-    subreddit = ex["info"]["subreddit"]
-    post = ex["info"]["post"]
-    title = ex["info"]["title"]
-    text1, text2 = ex["summaries"][0]['text'], ex["summaries"][1]['text']
-    choice = ex["choice"]
-
-    prompt = f"SUBREDDIT: {subreddit}\nTITLE: {title}\nPOST: {post}\nTL;DR: "
-    if choice == 0:
-        chosen_text, rejected_text = text1, text2
-    else:
-        chosen_text, rejected_text = text2, text1
-    return {
-        "prompt": prompt,
-        "chosen": chosen_text,
-        "rejected": rejected_text,
-    }
-
-
-def get_processed_dataset(script_args, training_args, tokenizer):
-    """实现数据持久化缓存逻辑"""
-    model_name = training_args.model_name_or_path.split('/')[-1] if hasattr(training_args, 'model_name_or_path') else "model"
-    processed_path = os.path.join(script_args.cache_dir, f"dpo_tldr_{model_name}")
-    
-    # 缓存命中检查
-    if os.path.exists(processed_path) and len(os.listdir(processed_path)) > 0:
-        logger.info(f" 命中缓存！加载已处理数据集: {processed_path}")
-        return load_from_disk(processed_path)
-    
-    logger.info(" 缓存未命中，开始处理原始数据集...")
-    BASE = "https://hf-mirror.com/datasets/openai/summarize_from_feedback/resolve/refs%2Fconvert%2Fparquet"
-    dataset = load_dataset(
-        "parquet",
-        data_files={
-            "train": f"{BASE}/comparisons/train/0000.parquet",
-            "validation": f"{BASE}/comparisons/validation/0000.parquet",
-        },
-    )
-    
-    # 转换格式
-    dataset = dataset.map(build_example, num_proc=4)
-    
-    # 可以在这里加入你的 sanitize_threshold 过滤逻辑
-    # if script_args.sanitize_threshold > 0:
-    #     dataset = dataset.filter(...)
-
-    # 保存到磁盘
-    os.makedirs(script_args.cache_dir, exist_ok=True)
-    dataset.save_to_disk(processed_path)
-    logger.info(f" 数据集已成功缓存至: {processed_path}")
-    
-    return dataset
 
 def main():
     # 1. 使用 TrlParser 解析三个 dataclass
@@ -91,15 +36,14 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
 
     # 3. 加载并缓存数据集
-    dataset = get_processed_dataset(script_args, training_args, tokenizer)
+    dataset = load_dataset(script_args.dataset_name).select_columns(["chosen","rejected"])
     train_dataset = dataset["train"]
-    eval_dataset = dataset["validation"]
+    eval_dataset = dataset["test"]
 
     # 4. 加载模型 (显式开启 Flash Attention 2)
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
-        torch_dtype=torch.bfloat16 if training_args.bf16 else torch.float32,
-        device_map="auto",
+        torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2", # 强制开启以追求 48h 目标
         trust_remote_code=model_args.trust_remote_code,
         local_files_only=True, # 确保使用本地缓存
@@ -123,6 +67,9 @@ def main():
     trainer.save_model(training_args.output_dir)
     tokenizer.save_pretrained(training_args.output_dir)
     logger.info(f" 训练完成。模型已保存至 {training_args.output_dir}")
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)
+        logger.info("推送至hub")
 
 if __name__ == "__main__":
     main()

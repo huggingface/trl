@@ -783,8 +783,27 @@ class PPOTrainer(BaseTrainer):
                 advantages = masked_whiten(advantages, ~padding_mask)
                 advantages = torch.masked_fill(advantages, padding_mask, 0)
                 empty_cache()
+            #1. Local Batch Size (本地总样本量)
+            # 这是指在**单个计算节点（或单个 GPU）**上，一个完整的训练周期（Epoch）内所拥有的全部样本总数。
 
-            # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
+            # 在 PPO 中： 它通常代表在一个 Rollout（采样）阶段，单个 GPU 收集到的所有经验数据（Experience）。
+
+            # 作用： 它决定了你这一轮训练总共要看多少数据。
+
+            # 2. Mini-batch Size (分步更新大小)
+            # 为了增强训练的稳定性，我们通常不会一次性把整个 Local Batch 塞进优化器，而是将其打乱（Shuffle）并切分成若干个较小的块，这些块就是 Mini-batch。
+
+            # 在 PPO 中： ppo_epoch 循环内部就是在遍历这些 Mini-batches。
+
+            # 作用： 它是算法逻辑上的“更新步长”。梯度是在这个尺度上进行计算和累积的。
+
+            # 3. Micro-batch Size (显存实际吞吐量)
+            # 由于 GPU 显存（VRAM）有限，有时候即使是一个 Mini-batch 也塞不下。这时我们需要把 Mini-batch 进一步切细，这个最小的单位就是 Micro-batch（代码中常写作 per_device_train_batch_size）。
+
+            # 在梯度累积中： 显卡一次只计算一个 Micro-batch 的前向和后向，但不立即更新权重，而是将梯度累加起来。
+
+            # 作用： 它是硬件层面的“吞吐极限”。通过减小它，你可以在显存较小的卡上训练参数巨大的模型。
+            # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch(一套采样用K次，每次的索引都随机打乱)
             for ppo_epoch_idx in range(args.num_ppo_epochs):
                 b_inds = np.random.permutation(args.local_batch_size)
                 minibatch_idx = 0

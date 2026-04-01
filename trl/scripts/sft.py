@@ -59,13 +59,13 @@ python trl/scripts/sft.py \
     --push_to_hub
 ```
 """
-
+from transformers import TrainerCallback
 import argparse
 import os
 
 from accelerate import logging
 from datasets import load_dataset,concatenate_datasets,DatasetDict
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM,AutoTokenizer
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 
 from trl import (
@@ -86,23 +86,85 @@ logger = logging.get_logger(__name__)
 
 # Enable logging in a Hugging Face Space
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
-
-def merge_dataset(dataset):
-    def process_split(split):
-        original = dataset[split]
-        chosen = original.map(lambda x:{"text":x["chosen"]},remove_columns=original.column_names)
-        rejected = original.map(lambda x:{"text":x["rejected"]},remove_columns = original.column_names)
-        merged = concatenate_datasets([chosen,rejected]) 
-        return merged
+# def merge_dataset(dataset):
+#     def process_split(split):
+#         original = dataset[split]
+#         chosen = original.map(lambda x:{"completion":x["chosen"]},remove_columns=original.column_names)
+#         rejected = original.map(lambda x:{"text":x["rejected"]},remove_columns = original.column_names)
+#         merged = concatenate_datasets([chosen,rejected]) 
+#         return merged
     
-    return DatasetDict({
-        split: process_split(split)
-        for split in dataset.keys()
-    })
+#     return DatasetDict({
+#         split: process_split(split)
+#         for split in dataset.keys()
+#     })
+
+# def preprocess(dataset):
+    
+#     def process(ex):
+#         prompt = ex["prompt"]
+#         completion = ex["chosen"][-1]["content"]
+#         return {
+#             "prompt" : prompt,
+#             "completion": completion
+#         }
+
+#     def process_split(split):
+#         origin = dataset[split]
+#         origin = origin.map(process,remove_columns = origin.column_names)
+#         return origin
+
+#     return DatasetDict({
+#         split: process_split(split)
+#         for split in dataset.keys()
+#     })
+    
+class PeekCallback(TrainerCallback):
+    def __init__(self, tokenizer, prompts):
+        self.tokenizer = tokenizer
+        self.prompts = prompts
 
 
+
+    def on_log(self, args, state, control, model, **kwargs):
+        # 仅在主进程打印
+        if state.is_world_process_zero:
+            model.eval()
+            print(f"\n\033[33m[Step {state.global_step}] 中途采样调试:\033[0m")
+            for p in self.prompts:
+                # 注入 Qwen 模板
+                messages = [{"role": "user", "content": p}]
+                input_ids = self.tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    return_tensors="pt",
+                ).to(model.device)
+                output_ids = model.generate(
+                    input_ids=input_ids,
+                    max_new_tokens=128,
+                    do_sample=True,
+                    temperature=0.7,
+                    top_p=0.9,
+                    repetition_penalty=1.12,
+                    no_repeat_ngram_size=4,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                )
+                response = self.tokenizer.decode(output_ids[0], skip_special_tokens=False)
+                print(f"Q: {p}\nA: {response}\n" + "-"*30)
+            
+            model.train()
+
+
+
+    
 
 def main(script_args, training_args, model_args, dataset_args):
+    import trl.trainer.sft_trainer as sft_trainer_module
+
+    print(f"DEBUG SFTTrainer loaded from: {sft_trainer_module.__file__}", flush=True)
+
     ################
     # Model init kwargs
     ################
@@ -145,16 +207,91 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
-    dataset = merge_dataset(dataset)
+    # dataset = preprocess(dataset)
+    
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    tokenizer.eos_token = "<|im_end|>"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # Keep generation config aligned with tokenizer ids.
+    model.config.eos_token_id = tokenizer.eos_token_id
+    model.config.pad_token_id = tokenizer.pad_token_id
+    model.generation_config.eos_token_id = tokenizer.eos_token_id
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
+    
+    
+    def preprocess_dataset(dataset):
+        def process(example):
+            def _extract_ids(x):
+                if isinstance(x, dict):
+                    return x.get("input_ids", [])
+                return x
+
+            prompt = example["chosen"][:-1]
+            completion = [example["chosen"][-1]]
+            prompt_ids = _extract_ids(tokenizer.apply_chat_template(
+                prompt,
+                add_generation_prompt=True,
+                tokenize=True,
+                max_length=10000,
+                truncation=True,
+            ))
+
+            input_ids = _extract_ids(tokenizer.apply_chat_template(
+                prompt + completion,
+                tokenize=True,
+                max_length=10000,
+                truncation=True,
+            ))[:-1]
+
+            completion_mask = [0] * len(prompt_ids) + [1] * (len(input_ids) - len(prompt_ids))
+
+
+            if len(input_ids) == 0:
+                return {"input_ids": [], "completion_mask": []}
+
+            prompt_len = min(len(prompt_ids), len(input_ids))
+            completion_mask = [0] * prompt_len + [1] * (len(input_ids) - prompt_len)
+            return {"input_ids": input_ids, "completion_mask": completion_mask}
+
+        dataset = dataset.map(process, num_proc=4)
+        dataset = dataset.select_columns(["input_ids","completion_mask"])
+        dataset = dataset.filter(lambda x: len(x["input_ids"]) > 0, num_proc=4)
+        return dataset
+
+            
+            
+
+
+    # 显式转换
+    dataset = preprocess_dataset(dataset)
+    for i in range(5):
+        if i < len(dataset["train"]):
+            print(f"数据{i}:{dataset['train'][i]}\n")
+
+
+
+
+    # callback
+    test_prompts = [
+        "国庆节的日期是什么时候",
+        "50字介绍监督微调"
+    ]
+    peek_callback = PeekCallback(tokenizer=tokenizer, prompts=test_prompts)
+
     # Initialize the SFT trainer
     trainer = SFTTrainer(
         model=model,
         args=training_args,
-        train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset["test"],
         peft_config=get_peft_config(model_args),
-    )
+        callbacks=[peek_callback],
 
+        
+    )
+    
     # Train the model
     trainer.train()
 

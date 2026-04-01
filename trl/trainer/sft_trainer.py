@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import json
 import os
 import warnings
 from collections import defaultdict
@@ -71,6 +72,15 @@ if is_peft_available():
 
 
 logger = get_logger(__name__)
+
+
+def _append_debug_json_record(record: dict[str, Any]) -> None:
+    debug_json_path = os.getenv("TRL_DEBUG_JSON_PATH")
+    if not debug_json_path:
+        return
+    os.makedirs(os.path.dirname(debug_json_path), exist_ok=True)
+    with open(debug_json_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
 
 FLASH_ATTENTION_VARIANTS = {
@@ -155,12 +165,54 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     """
 
     pad_token_id: int
+    eos_token_id: int | None = None
     completion_only_loss: bool = True
     padding_free: bool = False
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        completion_tail_debug: list[dict[str, Any]] = []
+        if self.completion_only_loss and "completion_mask" in examples[0]:
+            for i, example in enumerate(examples):
+                completion_positions = [idx for idx, flag in enumerate(example["completion_mask"]) if flag == 1]
+                if not completion_positions:
+                    completion_tail_debug.append(
+                        {
+                            "example_idx": i,
+                            "completion_len": 0,
+                            "second_last_completion_token_id": None,
+                            "second_last_is_eos": None,
+                            "last_completion_token_id": None,
+                            "last_is_eos": None,
+                        }
+                    )
+                    continue
+
+                last_completion_idx = completion_positions[-1]
+                last_completion_token_id = int(example["input_ids"][last_completion_idx])
+                second_last_completion_token_id = None
+                if len(completion_positions) >= 2:
+                    second_last_completion_idx = completion_positions[-2]
+                    second_last_completion_token_id = int(example["input_ids"][second_last_completion_idx])
+                completion_tail_debug.append(
+                    {
+                        "example_idx": i,
+                        "completion_len": len(completion_positions),
+                        "second_last_completion_token_id": second_last_completion_token_id,
+                        "second_last_is_eos": (
+                            None
+                            if self.eos_token_id is None or second_last_completion_token_id is None
+                            else second_last_completion_token_id == self.eos_token_id
+                        ),
+                        "last_completion_token_id": last_completion_token_id,
+                        "eos_token_id": self.eos_token_id,
+                        "last_is_eos": (
+                            None if self.eos_token_id is None else last_completion_token_id == self.eos_token_id
+                        ),
+                    }
+                )
+
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
         if "labels" in examples[0]:
@@ -224,6 +276,67 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
             output["labels"][assistant_masks == 0] = -100
+
+        if not hasattr(self, "_debug_batch_count"):
+            self._debug_batch_count = 0
+        debug_max_batches = int(os.getenv("TRL_DEBUG_COLLATOR_BATCHES", "3"))
+        debug_examples_per_batch = int(os.getenv("TRL_DEBUG_COLLATOR_EXAMPLES", "2"))
+        if self._debug_batch_count < debug_max_batches and PartialState().is_main_process:
+            batch_idx = self._debug_batch_count
+            self._debug_batch_count += 1
+
+            logger.warning("DEBUG collator batch=%d keys: %s", batch_idx, list(output.keys()))
+            logger.warning("DEBUG collator batch=%d input_ids shape: %s", batch_idx, tuple(output["input_ids"].shape))
+            logger.warning("DEBUG collator batch=%d labels shape: %s", batch_idx, tuple(output["labels"].shape))
+
+            batch_size = output["input_ids"].shape[0]
+            show_n = min(debug_examples_per_batch, batch_size)
+            for ex_idx in range(show_n):
+                input_ids_full = output["input_ids"][ex_idx].detach().cpu().tolist()
+                labels_full = output["labels"][ex_idx].detach().cpu().tolist()
+                logger.warning(
+                    "DEBUG collator batch=%d example=%d input_ids(full): %s",
+                    batch_idx,
+                    ex_idx,
+                    input_ids_full,
+                )
+                logger.warning(
+                    "DEBUG collator batch=%d example=%d labels(full): %s",
+                    batch_idx,
+                    ex_idx,
+                    labels_full,
+                )
+                record: dict[str, Any] = {
+                    "stage": "collator",
+                    "batch_idx": batch_idx,
+                    "example_idx": ex_idx,
+                    "keys": list(output.keys()),
+                    "input_ids": input_ids_full,
+                    "labels": labels_full,
+                }
+                if "attention_mask" in output:
+                    attention_mask_full = output["attention_mask"][ex_idx].detach().cpu().tolist()
+                    logger.warning(
+                        "DEBUG collator batch=%d example=%d attention_mask(full): %s",
+                        batch_idx,
+                        ex_idx,
+                        attention_mask_full,
+                    )
+                    record["attention_mask"] = attention_mask_full
+                _append_debug_json_record(record)
+            if completion_tail_debug:
+                logger.warning(
+                    "DEBUG completion tail token check batch=%d (full list): %s",
+                    batch_idx,
+                    completion_tail_debug,
+                )
+                _append_debug_json_record(
+                    {
+                        "stage": "collator_completion_tail",
+                        "batch_idx": batch_idx,
+                        "completion_tail_debug": completion_tail_debug,
+                    }
+                )
         return output
 
     @staticmethod
@@ -660,6 +773,16 @@ class SFTTrainer(BaseTrainer):
                 )
             tokenizer.eos_token_id = eos_token_id
 
+        if PartialState().is_main_process:
+            logger.warning(
+                "DEBUG eos consistency: args.eos_token=%s tokenizer.eos_token=%s tokenizer.eos_token_id=%s im_end_id=%s endoftext_id=%s",
+                args.eos_token,
+                tokenizer.eos_token,
+                tokenizer.eos_token_id,
+                tokenizer.convert_tokens_to_ids("<|im_end|>"),
+                tokenizer.convert_tokens_to_ids("<|endoftext|>"),
+            )
+
         if args.chat_template_path is not None:
             if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
                 with open(args.chat_template_path, encoding="utf-8") as chat_template_file:
@@ -806,6 +929,7 @@ class SFTTrainer(BaseTrainer):
                 )
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
                 completion_only_loss=self.completion_only_loss,
                 padding_free=self.padding_free,
                 pad_to_multiple_of=args.pad_to_multiple_of,
@@ -853,6 +977,52 @@ class SFTTrainer(BaseTrainer):
             train_dataset = self._prepare_dataset(
                 train_dataset, processing_class, args, args.packing, formatting_func, "train"
             )
+
+            if PartialState().is_main_process:
+                debug_prepared_samples = int(os.getenv("TRL_DEBUG_PREPARED_SAMPLES", "6"))
+                try:
+                    total_samples = len(train_dataset)
+                except TypeError:
+                    total_samples = 0
+
+                show_n = min(debug_prepared_samples, total_samples) if total_samples else 0
+                logger.warning(
+                    "DEBUG prepared train dataset sample_count=%s showing=%s",
+                    total_samples,
+                    show_n,
+                )
+                for i in range(show_n):
+                    sample = train_dataset[i]
+                    logger.warning("DEBUG prepared train_dataset[%d] keys: %s", i, list(sample.keys()))
+                    logger.warning("DEBUG prepared train_dataset[%d] full: %s", i, sample)
+                    record: dict[str, Any] = {
+                        "stage": "prepared_dataset",
+                        "split": "train",
+                        "sample_idx": i,
+                        "keys": list(sample.keys()),
+                        "sample": sample,
+                    }
+                    if "input_ids" in sample:
+                        logger.warning(
+                            "DEBUG prepared train_dataset[%d] input_ids_len=%d",
+                            i,
+                            len(sample["input_ids"]),
+                        )
+                        logger.warning(
+                            "DEBUG prepared train_dataset[%d] decoded_full: %s",
+                            i,
+                            tokenizer.decode(sample["input_ids"], skip_special_tokens=False),
+                        )
+                        record["input_ids_len"] = len(sample["input_ids"])
+                        record["decoded_full"] = tokenizer.decode(sample["input_ids"], skip_special_tokens=False)
+                    if "completion_mask" in sample:
+                        logger.warning(
+                            "DEBUG prepared train_dataset[%d] completion_mask(full): %s",
+                            i,
+                            sample["completion_mask"],
+                        )
+                        record["completion_mask"] = sample["completion_mask"]
+                    _append_debug_json_record(record)
             if eval_dataset is not None:
                 packing = args.packing if args.eval_packing is None else args.eval_packing
                 if isinstance(eval_dataset, dict):
@@ -976,7 +1146,7 @@ class SFTTrainer(BaseTrainer):
                         elif "completion" in example and not example["completion"].endswith(eos_token):
                             example["completion"] = example["completion"] + eos_token
                         return example
-
+                
                     eos_token = processing_class.tokenizer.eos_token if self._is_vlm else processing_class.eos_token
                     dataset = dataset.map(
                         add_eos,
