@@ -1823,6 +1823,7 @@ class GRPOTrainer(_BaseTrainer):
             completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
 
         # Extract tool calls from the completions and (possibly) execute them
+        tool_images = []
         if self.tools:
             (
                 tool_mask,
@@ -1836,8 +1837,7 @@ class GRPOTrainer(_BaseTrainer):
                 prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields
             )
             # Merge tool response images into the images list for the forward pass
-            has_tool_images = any(imgs for imgs in tool_images)
-            if has_tool_images:
+            if any(imgs for imgs in tool_images):
                 if images is None:
                     images = [imgs if imgs else None for imgs in tool_images]
                 else:
@@ -2028,10 +2028,7 @@ class GRPOTrainer(_BaseTrainer):
         # When tool images are present (from _tool_call_loop), use image_processor directly and build
         # mm_token_type_ids from prompt_completion_ids. Otherwise, use the full processor pipeline
         # which returns model-specific keys (image_sizes, pixel_attention_mask, etc.).
-        has_tool_images = (
-            self.tools and images is not None and any(img for img_list in images if img_list for img in img_list)
-        )
-        if has_tool_images and self._is_vlm:
+        if self.tools and any(imgs for imgs in tool_images) and self._is_vlm:  # noqa: F821
             flat_images = [img for img_list in images if img_list for img in img_list]
             image_inputs = self.processing_class.image_processor(images=flat_images, return_tensors="pt")
             image_inputs = super()._prepare_inputs(image_inputs)
