@@ -1403,7 +1403,7 @@ class GRPOTrainer(_BaseTrainer):
             **self.chat_template_kwargs,
         )
         # VLM processors return batched output (list of lists), unbatch for single conversation
-        if isinstance(prefix_ids, list) and len(prefix_ids) == 1 and isinstance(prefix_ids[0], list):
+        if self._is_vlm::
             prefix_ids = prefix_ids[0]
 
         # Check if tool messages contain images (multimodal tool responses)
