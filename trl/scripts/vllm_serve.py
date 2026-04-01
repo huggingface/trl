@@ -929,7 +929,9 @@ def main(script_args: ScriptArguments):
         # Wait for the batcher to process our request
         all_outputs, prompt_lengths, top_k, response_format = await future
 
-        return await loop.run_in_executor(None, _format_logprob_response, all_outputs, prompt_lengths, top_k, response_format)
+        return await loop.run_in_executor(
+            None, _format_logprob_response, all_outputs, prompt_lengths, top_k, response_format
+        )
 
     class ChatRequest(BaseModel):
         messages: list[list[dict]]
