@@ -1915,7 +1915,14 @@ class GRPOTrainer(_BaseTrainer):
                 observation = environment.reset(**reset_kwargs)
                 if observation is None:
                     continue
-                prompt[-1]["content"] += observation
+                if isinstance(observation, list):
+                    existing_content = prompt[-1]["content"]
+                    if isinstance(existing_content, str):
+                        prompt[-1]["content"] = [{"type": "text", "text": existing_content}] + observation
+                    else:
+                        prompt[-1]["content"] = existing_content + observation
+                else:
+                    prompt[-1]["content"] += observation
 
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
