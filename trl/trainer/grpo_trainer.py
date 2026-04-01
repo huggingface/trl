@@ -1908,7 +1908,6 @@ class GRPOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
-        build_mm_token_type_ids = False
 
         if self.environments:
             for prompt, environment, reset_kwargs in zip(prompts, self.environments, inputs, strict=True):
@@ -2033,7 +2032,6 @@ class GRPOTrainer(_BaseTrainer):
             image_inputs = self.processing_class.image_processor(images=flat_images, return_tensors="pt")
             image_inputs = super()._prepare_inputs(image_inputs)
             forward_kwargs = dict(image_inputs)
-            build_mm_token_type_ids = True
         elif images is not None:
             prompts_text = [
                 apply_chat_template(
@@ -2078,7 +2076,7 @@ class GRPOTrainer(_BaseTrainer):
         # For VLM tool images: build mm_token_type_ids from the full prompt_completion_ids.
         # This must happen AFTER the mm_token_type_ids extension block above, because our version
         # already covers the full sequence (images are in the completion, not just the prompt).
-        if build_mm_token_type_ids:
+        if self.tools and any(imgs for imgs in tool_images) and self._is_vlm:  # noqa: F821
             vtids = self._get_vision_token_ids()
             mm_ids = torch.zeros_like(prompt_completion_ids)
             if vtids["image_pad"] is not None:
@@ -2086,7 +2084,6 @@ class GRPOTrainer(_BaseTrainer):
             if vtids["video_pad"] is not None:
                 mm_ids[prompt_completion_ids == vtids["video_pad"]] = 2
             forward_kwargs["mm_token_type_ids"] = mm_ids
-            build_mm_token_type_ids = False  # consumed
 
             # Truncation safety: if max_completion_length truncated some image tokens, the number
             # of image pad tokens in input_ids won't match pixel_values features. Check per-sample
