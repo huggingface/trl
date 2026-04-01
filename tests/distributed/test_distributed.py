@@ -235,7 +235,7 @@ class TestDistributed(TrlTestCase):
                 "zero3",
                 marks=pytest.mark.xfail(
                     Version(transformers.__version__) >= Version("5.0.0"),
-                    reason="ZeRO-3 is currently failing, see #4899",
+                    reason="ZeRO-3 fails with transformers >= 5.0.0, see #4899",
                     strict=True,
                 ),
             ),
@@ -278,7 +278,7 @@ class TestDistributed(TrlTestCase):
                 "zero3",
                 marks=pytest.mark.xfail(
                     Version(transformers.__version__) >= Version("5.0.0"),
-                    reason="ZeRO-3 is currently failing, see #4899",
+                    reason="ZeRO-3 fails with transformers >= 5.0.0, see #4899",
                     strict=True,
                 ),
             ),
