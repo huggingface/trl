@@ -54,6 +54,11 @@ class TestOnlineDPOTrainer(TrlTestCase):
         self.reward_tokenizer = AutoTokenizer.from_pretrained(self.reward_model_id)
         self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__) >= Version("5.4.0"),
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        strict=True,
+    )
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_training(self, config_name):
         training_args = OnlineDPOConfig(
@@ -80,6 +85,11 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__) >= Version("5.4.0"),
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        strict=True,
+    )
     def test_training_model_str(self):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
@@ -105,6 +115,11 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__) >= Version("5.4.0"),
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        strict=True,
+    )
     def test_training_with_ref_model(self):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
@@ -152,6 +167,11 @@ class TestOnlineDPOTrainer(TrlTestCase):
                 reward_processing_classes=self.reward_tokenizer,
             )
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__) >= Version("5.4.0"),
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        strict=True,
+    )
     @require_peft
     def test_training_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
@@ -181,6 +201,11 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__) >= Version("5.4.0"),
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        strict=True,
+    )
     @require_peft
     def test_training_with_peft_and_ref_model(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
@@ -211,6 +236,11 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__) >= Version("5.4.0"),
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        strict=True,
+    )
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_llm_blender
     def test_training_with_judge(self, config_name):
@@ -405,6 +435,11 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.generation_config.max_new_tokens == 64
         assert not trainer.generation_config.do_sample  # From generation_kwargs
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__) >= Version("5.4.0"),
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        strict=True,
+    )
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_torch_accelerator
     def test_training_with_transformers_paged(self, config_name):
@@ -435,6 +470,11 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__) >= Version("5.4.0"),
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        strict=True,
+    )
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_training_with_reward_funcs(self, config_name):
         def simple_reward_func(prompts, completions, completion_ids, **kwargs):
