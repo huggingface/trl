@@ -14,7 +14,9 @@
 
 import pytest
 import torch
+import transformers
 from datasets import load_dataset
+from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 from transformers.utils import is_peft_available
 
@@ -87,6 +89,11 @@ class TestNashMDTrainer(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__) >= Version("5.4.0"),
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        strict=True,
+    )
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_nash_md_trainer_training(self, config_name):
         training_args = NashMDConfig(
@@ -116,6 +123,11 @@ class TestNashMDTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__) >= Version("5.4.0"),
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        strict=True,
+    )
     @require_peft
     def test_training_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
@@ -144,6 +156,11 @@ class TestNashMDTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__) >= Version("5.4.0"),
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        strict=True,
+    )
     @require_peft
     def test_training_with_peft_and_ref_model(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
@@ -204,6 +221,11 @@ class TestNashMDTrainer(TrlTestCase):
 
         assert "train_loss" in trainer.state.log_history[-1]
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__) >= Version("5.4.0"),
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        strict=True,
+    )
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_llm_blender
     def test_nash_md_trainer_judge_training(self, config_name):
