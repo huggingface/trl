@@ -315,8 +315,8 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
                 example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
-                example["chosen"] = prepare_multimodal_messages(example["chosen"], images=[])
-                example["rejected"] = prepare_multimodal_messages(example["rejected"], images=[])
+                example["chosen"] = prepare_multimodal_messages(example["chosen"])
+                example["rejected"] = prepare_multimodal_messages(example["rejected"])
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples] * 2  # repeat for chosen and rejected
@@ -846,7 +846,7 @@ class DPOTrainer(_BaseTrainer):
         """
         if isinstance(input, list):  # conversational: list of message dicts
             if self._is_vlm:
-                input = prepare_multimodal_messages(input, images=[])
+                input = prepare_multimodal_messages(input)
             result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
         else:  # non-conversational: plain text string
             result = processing_class(text=input)
