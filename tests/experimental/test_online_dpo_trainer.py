@@ -56,7 +56,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
     @pytest.mark.xfail(
         Version(transformers.__version__) >= Version("5.4.0"),
-        reason="Upstream issue: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
         strict=True,
     )
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
@@ -87,7 +87,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
     @pytest.mark.xfail(
         Version(transformers.__version__) >= Version("5.4.0"),
-        reason="Upstream issue: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
         strict=True,
     )
     def test_training_model_str(self):
@@ -117,7 +117,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
     @pytest.mark.xfail(
         Version(transformers.__version__) >= Version("5.4.0"),
-        reason="Upstream issue: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
         strict=True,
     )
     def test_training_with_ref_model(self):
@@ -169,7 +169,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
     @pytest.mark.xfail(
         Version(transformers.__version__) >= Version("5.4.0"),
-        reason="Upstream issue: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
         strict=True,
     )
     @require_peft
@@ -203,7 +203,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
     @pytest.mark.xfail(
         Version(transformers.__version__) >= Version("5.4.0"),
-        reason="Upstream issue: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
         strict=True,
     )
     @require_peft
@@ -238,7 +238,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
     @pytest.mark.xfail(
         Version(transformers.__version__) >= Version("5.4.0"),
-        reason="Upstream issue: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
         strict=True,
     )
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
@@ -437,7 +437,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
     @pytest.mark.xfail(
         Version(transformers.__version__) >= Version("5.4.0"),
-        reason="Upstream issue: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
         strict=True,
     )
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
@@ -472,7 +472,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
     @pytest.mark.xfail(
         Version(transformers.__version__) >= Version("5.4.0"),
-        reason="Upstream issue: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
+        reason="Issue with transformers >= 5.4.0: Must specify exactly one of input_ids or inputs_embeds (see #5421)",
         strict=True,
     )
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
