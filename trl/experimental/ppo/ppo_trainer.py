@@ -48,13 +48,12 @@ from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
-from ...models.utils import unwrap_model_for_generation
+from ...models.utils import prepare_deepspeed, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
     log_table_to_comet_experiment,
     pad,
-    prepare_deepspeed,
     selective_log_softmax,
 )
 from ..utils import (
@@ -555,17 +554,13 @@ class PPOTrainer(_BaseTrainer):
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
         if self.is_deepspeed_enabled:
-            self.reward_model = prepare_deepspeed(
-                self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
-            )
+            self.reward_model = prepare_deepspeed(self.reward_model, accelerator)
 
             if self.ref_model is None:
                 if not self.is_peft_model:
                     raise ValueError("No reference model and model is not a Peft model.")
             else:
-                self.ref_model = prepare_deepspeed(
-                    self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
-                )
+                self.ref_model = prepare_deepspeed(self.ref_model, accelerator)
         else:
             if self.ref_model is None:
                 if not self.is_peft_model:
