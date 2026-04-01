@@ -1897,6 +1897,7 @@ class GRPOTrainer(_BaseTrainer):
             logprobs,
             extra_fields,
             images,
+            tool_images,
         )
 
     def _generate_and_score_completions(
@@ -1957,6 +1958,7 @@ class GRPOTrainer(_BaseTrainer):
             sampling_per_token_logps_list,
             extra_fields,
             images,
+            tool_images,
         ) = self._generate(prompts)
         if images is None:
             images = dataset_images  # restore dataset images (rollout_func path returns None)
