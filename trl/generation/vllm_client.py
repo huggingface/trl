@@ -654,8 +654,6 @@ class VLLMClient:
             ``actual_logprobs`` / ``actual_token_ids`` — teacher logprob for the actual
                 token at each position (shape per sequence: ``(comp_len, 1)``). Used for the reverse KL term.
         """
-        import base64
-
         import numpy as np
 
         shape = response["shape"]  # [batch, max_comp_len, top_k]
@@ -700,17 +698,25 @@ class VLLMClient:
         all_token_ids = []
         all_actual_lps = []
         all_actual_ids = []
-        has_actual = False
+        has_actual_flags = []
         for resp in responses:
             decoded = VLLMClient._decode_binary_logprobs(resp)
             all_logprobs.extend(decoded["logprobs"])
             all_token_ids.extend(decoded["logprob_token_ids"])
-            if "actual_logprobs" in decoded:
-                has_actual = True
+            has_actual = "actual_logprobs" in decoded
+            has_actual_flags.append(has_actual)
+            if has_actual:
                 all_actual_lps.extend(decoded["actual_logprobs"])
                 all_actual_ids.extend(decoded["actual_token_ids"])
+
+        if any(has_actual_flags) and not all(has_actual_flags):
+            raise ValueError(
+                "Inconsistent responses: some chunks contain 'actual_logprobs' while others do not. "
+                "All responses in a batch must either all include or all exclude actual token logprobs."
+            )
+
         result = {"logprobs": all_logprobs, "logprob_token_ids": all_token_ids}
-        if has_actual:
+        if all(has_actual_flags) and has_actual_flags:
             result["actual_logprobs"] = all_actual_lps
             result["actual_token_ids"] = all_actual_ids
         return result

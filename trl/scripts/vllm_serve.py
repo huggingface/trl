@@ -396,6 +396,8 @@ def chunk_list(lst: list, n: int) -> list[list]:
 
 
 def main(script_args: ScriptArguments):
+    import asyncio
+
     from packaging.version import Version
     from transformers import is_vision_available
 
@@ -454,8 +456,6 @@ def main(script_args: ScriptArguments):
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        import asyncio as _asyncio
-
         # Wait for all workers to send "ready"
         ready_connections = set()
         while len(ready_connections) < script_args.data_parallel_size:
@@ -465,7 +465,7 @@ def main(script_args: ScriptArguments):
                     ready_connections.add(connection)
 
         # Start the logprob request batcher background task
-        batcher_task = _asyncio.create_task(_logprob_batcher())
+        batcher_task = asyncio.create_task(_logprob_batcher())
 
         yield
 
@@ -694,8 +694,6 @@ def main(script_args: ScriptArguments):
     # Collects concurrent requests into batches and dispatches them together so that
     # all DP workers stay busy. Without this, async endpoint handlers block the event
     # loop during pipe I/O, serializing requests and leaving DP workers idle.
-    import asyncio
-
     _logprob_queue: asyncio.Queue = asyncio.Queue()
 
     # Maximum time (seconds) to wait for more requests before dispatching a batch.
@@ -710,7 +708,7 @@ def main(script_args: ScriptArguments):
 
     async def _logprob_batcher():
         """Background task that continuously drains the queue, batches requests, and dispatches."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         while True:
             # Wait for the first request
@@ -779,7 +777,7 @@ def main(script_args: ScriptArguments):
                     continue
 
                 # Split results back to individual requests
-                for (start, count), (_, prompt_lengths, response_format, future) in zip(offsets, items, strict=False):
+                for (start, count), (_, prompt_lengths, response_format, future) in zip(offsets, items, strict=True):
                     outputs_slice = all_outputs[start : start + count]
                     if not future.done():
                         future.set_result((outputs_slice, prompt_lengths, top_logprobs, response_format))
@@ -915,7 +913,7 @@ def main(script_args: ScriptArguments):
         prompts = [{"prompt_token_ids": seq} for seq in request.sequences]
 
         # Submit to the batching queue and await result
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         future = loop.create_future()
         await _logprob_queue.put(
             (
@@ -931,7 +929,7 @@ def main(script_args: ScriptArguments):
         # Wait for the batcher to process our request
         all_outputs, prompt_lengths, top_k, response_format = await future
 
-        return _format_logprob_response(all_outputs, prompt_lengths, top_k, response_format)
+        return await loop.run_in_executor(None, _format_logprob_response, all_outputs, prompt_lengths, top_k, response_format)
 
     class ChatRequest(BaseModel):
         messages: list[list[dict]]
