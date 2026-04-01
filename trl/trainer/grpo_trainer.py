@@ -1393,9 +1393,7 @@ class GRPOTrainer(_BaseTrainer):
         """Get token IDs for tool result formatting by using a minimal dummy conversation."""
         dummy_messages = [{"role": "user", "content": "dummy"}, {"role": "assistant", "content": "dummy"}]
         if self._is_vlm:
-            for message in dummy_messages:
-                if isinstance(message.get("content"), str):
-                    message["content"] = [{"type": "text", "text": message["content"]}]
+            dummy_messages = prepare_multimodal_messages(dummy_messages, [])
         prefix_ids = self.processing_class.apply_chat_template(
             dummy_messages,
             add_generation_prompt=False,
@@ -1405,7 +1403,7 @@ class GRPOTrainer(_BaseTrainer):
             **self.chat_template_kwargs,
         )
         # VLM processors return batched output (list of lists), unbatch for single conversation
-        if isinstance(prefix_ids, list) and len(prefix_ids) == 1 and isinstance(prefix_ids[0], list):
+        if self._is_vlm::
             prefix_ids = prefix_ids[0]
 
         # Check if tool messages contain images (multimodal tool responses)
@@ -1462,7 +1460,7 @@ class GRPOTrainer(_BaseTrainer):
                 return_dict=False,
                 **self.chat_template_kwargs,
             )
-            if isinstance(full_ids, list) and len(full_ids) == 1 and isinstance(full_ids[0], list):
+            if self._is_vlm:
                 full_ids = full_ids[0]
 
         # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
