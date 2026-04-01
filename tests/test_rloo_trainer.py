@@ -1314,7 +1314,14 @@ class TestRLOOTrainer(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__).is_devrelease,
+                    reason="Upstream issue with transformers 5.5.0.dev0, see #5425",
+                    strict=True,
+                ),
+            ),
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             pytest.param(
