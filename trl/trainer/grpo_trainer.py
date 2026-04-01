@@ -1460,7 +1460,7 @@ class GRPOTrainer(_BaseTrainer):
                 return_dict=False,
                 **self.chat_template_kwargs,
             )
-            if isinstance(full_ids, list) and len(full_ids) == 1 and isinstance(full_ids[0], list):
+            if self._is_vlm:
                 full_ids = full_ids[0]
 
         # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
