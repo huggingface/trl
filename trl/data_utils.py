@@ -40,8 +40,8 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list = N
             List of messages with a `"role"` key (`"system"`, `"user"`, `"assistant"`, or `"tool"`) and a `"content"` key containing
             either a string or a list of structured blocks if already prepared. Optionally, the `"content"` might
             be `None` or not provided in favour of `"tool_calls"` in the `"assistant"` turns if applicable.
-        images (`list`):
-            List of image objects to insert. Can be empty if no images are included in the messages.
+        images (`list`, *optional*):
+            List of image objects to insert in the messages.
 
     Returns:
         `list[dict[str, Any]]`: A deep-copied list of messages where every `"content"` value is a list of structured
