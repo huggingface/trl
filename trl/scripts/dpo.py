@@ -59,11 +59,6 @@ python trl/scripts/dpo.py \
 """
 
 import argparse
-import os
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args, dataset_args):

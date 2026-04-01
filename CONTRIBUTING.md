@@ -8,6 +8,12 @@ However you choose to contribute, please be mindful and respect our [code of con
 
 **This guide was heavily inspired by the awesome [scikit-learn guide to contributing](https://github.com/scikit-learn/scikit-learn/blob/main/CONTRIBUTING.md).**
 
+## AI usage policy
+
+We encourage using AI tools to help with contributions — they can be a great way to write better code, catch issues early, and navigate the codebase.
+
+That said, **we will not review fully AI-generated PRs from first-time contributors.** Our review resources are limited, and reviewing agent-generated code is especially costly when the contributor cannot engage meaningfully in the discussion or vouch for the correctness of the changes. We want to make sure that every PR we spend time on reflects a genuine understanding of what is being proposed.
+
 ## Ways to contribute
 
 There are several ways you can contribute to TRL:
@@ -96,6 +102,9 @@ Based on the community and maintainer feedback, the next step will be to impleme
 We're always looking for improvements to the documentation that make it more clear and accurate. Please let us know how the documentation can be improved, such as typos, dead links, and any missing, unclear, or inaccurate content... We'll be happy to make the changes or help you contribute if you're interested!
 
 ## Submitting a pull request (PR)
+
+> [!IMPORTANT]
+> **First-time contributors: you MUST fill out the [PR template](https://github.com/huggingface/trl/blob/main/.github/PULL_REQUEST_TEMPLATE.md) when opening a pull request.** PRs that do not follow the template (missing description, unchecked checklist, no linked issue) will be closed without review.
 
 Before writing code, we strongly advise you to search through the existing PRs or issues to make sure that nobody is already working on the same thing. If you are unsure, it is always a good idea to open an issue to get some feedback.
 

@@ -65,10 +65,6 @@ from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndByte
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
 
 
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
-
-
 def download_video(url: str, cache_dir: str) -> str:
     """Download video if not already present locally."""
     os.makedirs(cache_dir, exist_ok=True)  # Create cache dir if it doesn't exist
