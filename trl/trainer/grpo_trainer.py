@@ -2332,13 +2332,11 @@ class GRPOTrainer(_BaseTrainer):
         pg_losses2 = -weighted_advantages * torch.clamp(ratio, 1 - epsilon_low, 1 + epsilon_high)
         clip_pg_losses1 = torch.maximum(pg_losses1, pg_losses2)
         pg_losses3 = -weighted_advantages * clip_ratio_c
-        clip_pg_losses2 = torch.minimum(pg_losses3, clip_pg_losses1)
 
         lower_clip_mask = (advantages < 0) & (clip_pg_losses1 > pg_losses3) & mask_bool
         low_clip_token_counts = lower_clip_mask.sum(dim=1)
         seq_valid_mask = (low_clip_token_counts <= 1).unsqueeze(1)
         loss_mask = (mask_bool & seq_valid_mask).to(dtype=log_ratio_per_token.dtype)
-        per_token_loss = torch.where(weighted_advantages < 0, clip_pg_losses2, clip_pg_losses1)
 
         return {
             "loss_mask": loss_mask,
