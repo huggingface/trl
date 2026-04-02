@@ -2340,31 +2340,10 @@ class GRPOTrainer(_BaseTrainer):
         loss_mask = (mask_bool & seq_valid_mask).to(dtype=log_ratio_per_token.dtype)
         per_token_loss = torch.where(weighted_advantages < 0, clip_pg_losses2, clip_pg_losses1)
 
-        raw_valid_vals = raw_influence_weights[mask_bool]
-        valid_vals = influence_weights[mask_bool]
-        if raw_valid_vals.numel() == 0:
-            zero = torch.tensor(0.0, dtype=log_ratio_per_token.dtype, device=device)
-            raw_influence_weights_min = zero
-            raw_influence_weights_max = zero
-            influence_weights_min = zero
-            influence_weights_max = zero
-        else:
-            raw_influence_weights_min = raw_valid_vals.min()
-            raw_influence_weights_max = raw_valid_vals.max()
-            influence_weights_min = valid_vals.min()
-            influence_weights_max = valid_vals.max()
-
         return {
-            "ratio": ratio,
-            "per_token_loss": per_token_loss,
             "loss_mask": loss_mask,
             "influence_weights": influence_weights,
-            "influence_weights_mean": masked_mean(influence_weights),
-            "influence_weights_min": influence_weights_min,
-            "influence_weights_max": influence_weights_max,
             "influence_weights_mean_raw": masked_mean(raw_influence_weights),
-            "raw_influence_weights_min": raw_influence_weights_min,
-            "raw_influence_weights_max": raw_influence_weights_max,
             "influence_weight_clip_ratio_upper": masked_mean((influence_weights >= upper_bound - 1e-7).float()),
             "influence_weight_clip_ratio_lower": masked_mean((influence_weights <= lower_bound + 1e-7).float()),
             "sequence_drop_ratio": (~seq_valid_mask.squeeze(1)).float().mean(),
@@ -2570,12 +2549,7 @@ class GRPOTrainer(_BaseTrainer):
 
         if self.loss_type == "fipo":
             for key in [
-                "influence_weights_mean",
-                "influence_weights_min",
-                "influence_weights_max",
                 "influence_weights_mean_raw",
-                "raw_influence_weights_min",
-                "raw_influence_weights_max",
                 "influence_weight_clip_ratio_upper",
                 "influence_weight_clip_ratio_lower",
                 "sequence_drop_ratio",
