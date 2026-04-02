@@ -670,9 +670,9 @@ class JEPOConfig(TrainingArguments):
 
         if self.num_generations < 2:
             raise ValueError(
-                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
+                "JEPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
 
         if self.delta is not None and self.use_liger_loss:
-            raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
+            raise ValueError("Liger loss does not support two-sided JEPO loss yet.")
