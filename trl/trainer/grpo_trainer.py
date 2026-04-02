@@ -1917,6 +1917,8 @@ class GRPOTrainer(_BaseTrainer):
                     continue
                 if isinstance(observation, list) and isinstance(prompt[-1]["content"], str):
                     prompt[-1]["content"] = [{"type": "text", "text": prompt[-1]["content"]}]
+                if isinstance(observation, str) and isinstance(prompt[-1]["content"], list):
+                    observation = [{"type": "text", "text": observation}]
                 prompt[-1]["content"] += observation
 
         if "images" in inputs[0]:
