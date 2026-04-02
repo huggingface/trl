@@ -1509,9 +1509,9 @@ class GRPOTrainer(_BaseTrainer):
     def _get_vision_token_ids(self):
         """Get vision-related special token IDs from the processor's tokenizer.
 
-        Returns a dict with keys 'vision_start', 'vision_end', 'image_pad', 'video_pad'.
-        Values are None if the token doesn't exist in the vocabulary.
-        Supports multiple VLM families (e.g. Qwen uses <|vision_start|>, Gemma uses <|image>).
+        Returns a dict with keys 'vision_start', 'vision_end', 'image_pad', 'video_pad'. Values are None if the token
+        doesn't exist in the vocabulary. Supports multiple VLM families (e.g. Qwen uses <|vision_start|>, Gemma uses
+        <|image>).
         """
         if self._vision_token_ids_cache is None:
             cache = {"vision_start": None, "vision_end": None, "image_pad": None, "video_pad": None}

@@ -874,8 +874,8 @@ def identity(x):
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | list[torch.Tensor]]:
     """
     Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in `batch["image_grid_thw"]`
-    and batch["num_images"] while keeping other entries unchanged.
-    For models without `image_grid_thw` (e.g. Gemma), splits by `num_images` directly.
+    and batch["num_images"] while keeping other entries unchanged. For models without `image_grid_thw` (e.g. Gemma),
+    splits by `num_images` directly.
     """
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
