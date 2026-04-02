@@ -2082,7 +2082,7 @@ class GRPOTrainer(_BaseTrainer):
         # For VLM tool images: build mm_token_type_ids from the full prompt_completion_ids.
         # This must happen AFTER the mm_token_type_ids extension block above, because our version
         # already covers the full sequence (images are in the completion, not just the prompt).
-        if self.tools and any(imgs for imgs in tool_images) and self._is_vlm:  # noqa: F821
+        if self.tools and any(imgs for imgs in tool_images) and self._is_vlm:
             vtids = self._get_vision_token_ids()
             mm_ids = torch.zeros_like(prompt_completion_ids)
             if vtids["image_pad"] is not None:
