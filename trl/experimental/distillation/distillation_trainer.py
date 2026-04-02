@@ -1102,7 +1102,12 @@ class DistillationTrainer(_BaseTrainer):
             jsd = jsd[mask]
 
         if reduction == "batchmean":
-            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / jsd.size(0)
+            if labels is not None:
+                num_tokens = mask.sum()
+                if num_tokens == 0:
+                    return jsd.sum() * 0.0  # no completion tokens — return zero-grad scalar
+                return jsd.sum() / num_tokens
+            return jsd.sum() / jsd.size(0)
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":
