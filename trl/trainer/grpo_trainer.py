@@ -1087,11 +1087,6 @@ class GRPOTrainer(_BaseTrainer):
 
             model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
 
-            # Some models (e.g. Gemma) require cache_position for their masking logic
-            if "cache_position" not in model_inputs:
-                seq_len = model_inputs["input_ids"].shape[1]
-                model_inputs["cache_position"] = torch.arange(seq_len, device=model_inputs["input_ids"].device)
-
             logits = model(**model_inputs).logits
             # Exclude the last value: it corresponds to the next token pred
             logits = logits[:, :-1, :]  # (B, L-1, H)

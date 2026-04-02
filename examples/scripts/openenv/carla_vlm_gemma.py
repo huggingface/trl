@@ -95,7 +95,7 @@ SIM_TICKS = 10
 
 def reward_func(completions, environments, **kwargs):
     rewards = []
-    for i, (comp, env) in enumerate(zip(completions, environments, strict=False)):
+    for i, (comp, env) in enumerate(zip(completions, environments)):
         # Advance to episode end to capture rubric_reward
         try:
             final = env._advance_until_done()
