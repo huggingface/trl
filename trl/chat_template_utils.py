@@ -912,7 +912,9 @@ def parse_response(tokenizer_or_processor, ids: list[int]) -> dict:
         parsed = tokenizer.parse_response(ids)
         # Hotfix: remove incorrectly appended EOS token from tool calls
         # See https://github.com/huggingface/transformers/issues/42249
-        parsed["content"] = parsed["content"].removesuffix(tokenizer.eos_token)
+        # Gemma's parse_response may return content=None when only tool_calls are present
+        if "content" in parsed and isinstance(parsed["content"], str):
+            parsed["content"] = parsed["content"].removesuffix(tokenizer.eos_token)
         # Validate tool_calls to prevent Jinja2 Undefined errors when fields are missing
         if "tool_calls" in parsed:
             _validate_tool_calls(parsed["tool_calls"])
