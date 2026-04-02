@@ -570,9 +570,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def _streaming_iter(self):
         # Iterate parameters one at a time. For FSDP2 (DTensor), full_tensor() all-gathers just this parameter across
         # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
+        device = self.accelerator.device
         for name, param in self.model.named_parameters():
             name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
+            if full.device != device:
+                full = full.to(device)
             yield name, full
 
     def _sync_weight(self):
