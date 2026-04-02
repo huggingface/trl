@@ -17,8 +17,10 @@ import atexit
 import copy
 import importlib.resources as pkg_resources
 import inspect
+import json
 import math
 import os
+import re
 import sys
 import textwrap
 import time
@@ -507,7 +509,11 @@ class GRPOTrainer(_BaseTrainer):
         # While waiting for broader adoption, we provide this utility function to manually set the response schema for
         # known chat templates.
         # We need `getattr`` until the base class sets a default None value for response_schema
-        if self.tools and not getattr(processing_class, "response_schema", None):
+        # For VLM processors, check the inner tokenizer too (response_schema lives on the tokenizer)
+        has_response_schema = getattr(processing_class, "response_schema", None) or (
+            self._is_vlm and getattr(processing_class.tokenizer, "response_schema", None)
+        )
+        if self.tools and not has_response_schema:
             processing_class = add_response_schema(processing_class)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
@@ -930,6 +936,7 @@ class GRPOTrainer(_BaseTrainer):
         pixel_attention_mask=None,
         image_sizes=None,
         pixel_position_ids=None,
+        image_position_ids=None,
     ):
         if is_peft_model(unwrapped_model):
             unwrapped_model = unwrapped_model.base_model.model
@@ -951,6 +958,8 @@ class GRPOTrainer(_BaseTrainer):
             model_inputs["image_sizes"] = image_sizes
         if pixel_position_ids is not None:
             model_inputs["pixel_position_ids"] = pixel_position_ids
+        if image_position_ids is not None:
+            model_inputs["image_position_ids"] = image_position_ids
 
         # Only add logits_to_keep if the model supports it
         if "logits_to_keep" in self.model_kwarg_keys:
@@ -1021,6 +1030,7 @@ class GRPOTrainer(_BaseTrainer):
         token_type_ids=None,
         mm_token_type_ids=None,
         pixel_position_ids=None,
+        image_position_ids=None,
     ) -> dict[str, torch.Tensor | None]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -1043,7 +1053,16 @@ class GRPOTrainer(_BaseTrainer):
                 img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
                 model_inputs["image_grid_thw"] = image_grid_thw[img_start:img_end]
             elif pixel_values is not None:
-                model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
+                if num_images is not None:
+                    # pixel_values is indexed by image, not by sample — slice using cumulative image counts
+                    num_images_list = num_images.tolist() if isinstance(num_images, torch.Tensor) else list(num_images)
+                    cum_imgs = [0]
+                    for n in num_images_list:
+                        cum_imgs.append(cum_imgs[-1] + int(n))
+                    img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
+                    model_inputs["pixel_values"] = pixel_values[img_start:img_end]
+                else:
+                    model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
             if pixel_attention_mask is not None:
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
             if image_sizes is not None:
@@ -1054,6 +1073,12 @@ class GRPOTrainer(_BaseTrainer):
                 model_inputs["mm_token_type_ids"] = mm_token_type_ids[start : start + batch_size]
             if pixel_position_ids is not None:
                 model_inputs["pixel_position_ids"] = pixel_position_ids[start : start + batch_size]
+            if image_position_ids is not None:
+                # image_position_ids is indexed by image (like pixel_values), not by sample
+                if num_images is not None and pixel_values is not None:
+                    model_inputs["image_position_ids"] = image_position_ids[img_start:img_end]
+                else:
+                    model_inputs["image_position_ids"] = image_position_ids[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -1471,9 +1496,11 @@ class GRPOTrainer(_BaseTrainer):
 
         # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
         # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
-        # EOS (not EOS + newline).
-        last_eos_idx = max(i for i, tok_id in enumerate(prefix_ids) if tok_id == self.eos_token_id)
-        prefix_ids = prefix_ids[: last_eos_idx + 1]
+        # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
+        # <turn|>) skip this trimming.
+        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self.eos_token_id]
+        if eos_positions:
+            prefix_ids = prefix_ids[: eos_positions[-1] + 1]
 
         if full_ids[: len(prefix_ids)] != prefix_ids:
             raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
@@ -1484,20 +1511,24 @@ class GRPOTrainer(_BaseTrainer):
 
         Returns a dict with keys 'vision_start', 'vision_end', 'image_pad', 'video_pad'.
         Values are None if the token doesn't exist in the vocabulary.
+        Supports multiple VLM families (e.g. Qwen uses <|vision_start|>, Gemma uses <|image>).
         """
         if self._vision_token_ids_cache is None:
             cache = {"vision_start": None, "vision_end": None, "image_pad": None, "video_pad": None}
             if self._is_vlm:
                 tok = self.processing_class.tokenizer
-                for name, token_str in {
-                    "vision_start": "<|vision_start|>",
-                    "vision_end": "<|vision_end|>",
-                    "image_pad": "<|image_pad|>",
-                    "video_pad": "<|video_pad|>",
+                # Try multiple token strings per role to support different VLM families
+                for name, candidates in {
+                    "vision_start": ["<|vision_start|>", "<|image>"],
+                    "vision_end": ["<|vision_end|>", "<image|>"],
+                    "image_pad": ["<|image_pad|>", "<|image|>"],
+                    "video_pad": ["<|video_pad|>"],
                 }.items():
-                    tid = tok.convert_tokens_to_ids(token_str)
-                    if tid != tok.unk_token_id:
-                        cache[name] = tid
+                    for token_str in candidates:
+                        tid = tok.convert_tokens_to_ids(token_str)
+                        if tid != tok.unk_token_id:
+                            cache[name] = tid
+                            break
             self._vision_token_ids_cache = cache
         return self._vision_token_ids_cache
 
@@ -1563,11 +1594,31 @@ class GRPOTrainer(_BaseTrainer):
                     if tool_call["type"] == "function":
                         function = tool_call["function"]
                         name = function["name"]
+                        arguments = function["arguments"]
+                        # Some models (e.g. Gemma) return arguments as a string instead of a dict
+                        if isinstance(arguments, str):
+                            # Strip model-specific quote tokens (e.g. Gemma's <|"|>)
+                            arguments = arguments.replace('<|"|>', '"')
+                            if not arguments.strip():
+                                arguments = {}
+                            else:
+                                try:
+                                    arguments = json.loads(arguments)
+                                except json.JSONDecodeError:
+                                    try:
+                                        # Try wrapping in braces for key:value formats
+                                        arguments = json.loads("{" + arguments + "}")
+                                    except json.JSONDecodeError:
+                                        # Last resort: regex parsing
+                                        pairs = re.findall(r'(\w+):\s*"([^"]*)"', arguments)
+                                        if not pairs:
+                                            pairs = re.findall(r"(\w+):\s*([^,}\s]+)", arguments)
+                                        arguments = dict(pairs) if pairs else {}
                         try:
                             if name in sync_tool_dict:
-                                tool_call_results.append((name, sync_tool_dict[name](**function["arguments"])))
+                                tool_call_results.append((name, sync_tool_dict[name](**arguments)))
                             elif name in async_tool_dict:
-                                async_coros.append((name, async_tool_dict[name](**function["arguments"])))
+                                async_coros.append((name, async_tool_dict[name](**arguments)))
                             else:
                                 raise ValueError(f"Tool {name} not found.")
                         except Exception as e:
@@ -1679,9 +1730,19 @@ class GRPOTrainer(_BaseTrainer):
                         (existing or []) + new for existing, new in zip(merged_images, tool_images, strict=True)
                     ]
             loop_images = [merged_images[i] for i in idxs_with_tool] if merged_images else None
-            loop_multimodal_fields = (
-                {k: [v[i] for i in idxs_with_tool] for k, v in multimodal_fields.items()} if multimodal_fields else {}
-            )
+            if multimodal_fields:
+                loop_multimodal_fields = {}
+                for k, v in multimodal_fields.items():
+                    selected = [v[i] for i in idxs_with_tool]
+                    # Per-token fields (e.g. token_type_ids) need zero-padding to match extended prompt length
+                    if isinstance(selected[0], list):
+                        selected = [
+                            s + [0] * (len(pct) - len(s))
+                            for s, pct in zip(selected, prompt_completion_tool_ids, strict=True)
+                        ]
+                    loop_multimodal_fields[k] = selected
+            else:
+                loop_multimodal_fields = {}
 
             # Generate new completions after tool execution (using concatenated IDs, no re-tokenization)
             post_tool_ids, post_tool_logprobs = self._generate_single_turn(
@@ -2072,9 +2133,10 @@ class GRPOTrainer(_BaseTrainer):
                 [mm_token_type_ids, mm_token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
 
-        # For VLM tool images: build mm_token_type_ids from the full prompt_completion_ids.
-        # This must happen AFTER the mm_token_type_ids extension block above, because our version
-        # already covers the full sequence (images are in the completion, not just the prompt).
+        # For VLM tool images: build token type IDs from the full prompt_completion_ids.
+        # This must happen AFTER the token_type_ids/mm_token_type_ids extension blocks above,
+        # because our version already covers the full sequence (images are in the completion,
+        # not just the prompt).
         if self.tools and any(imgs for imgs in tool_images) and self._is_vlm:
             vtids = self._get_vision_token_ids()
             mm_ids = torch.zeros_like(prompt_completion_ids)
@@ -2082,12 +2144,19 @@ class GRPOTrainer(_BaseTrainer):
                 mm_ids[prompt_completion_ids == vtids["image_pad"]] = 1
             if vtids["video_pad"] is not None:
                 mm_ids[prompt_completion_ids == vtids["video_pad"]] = 2
-            forward_kwargs["mm_token_type_ids"] = mm_ids
 
-            # Truncation safety: if max_completion_length truncated some image tokens, the number
-            # of image pad tokens in input_ids won't match pixel_values features. Check per-sample
-            # and drop ALL images for any sample with a mismatch (safe fallback).
+            # Use the same key the model expects: token_type_ids for models like Gemma,
+            # mm_token_type_ids for models like Qwen.
             image_grid_thw = forward_kwargs.get("image_grid_thw")
+            if image_grid_thw is not None:
+                forward_kwargs["mm_token_type_ids"] = mm_ids
+            else:
+                forward_kwargs["token_type_ids"] = mm_ids
+
+            # Truncation safety (Qwen-style models with image_grid_thw only): if
+            # max_completion_length truncated some image tokens, the number of image pad tokens
+            # in input_ids won't match pixel_values features. Check per-sample and drop ALL
+            # images for any sample with a mismatch (safe fallback).
             if image_grid_thw is not None and num_images is not None:
                 merge_length = getattr(self.processing_class.image_processor, "merge_size", 2) ** 2
                 img_offset = 0
@@ -2134,7 +2203,7 @@ class GRPOTrainer(_BaseTrainer):
                     logits_to_keep,
                     batch_size,
                     num_images=num_images,
-                    **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, pixel_position_ids
+                    **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, pixel_position_ids, image_position_ids
                 )
             else:
                 old_per_token_logps = None
@@ -2180,7 +2249,7 @@ class GRPOTrainer(_BaseTrainer):
                         logits_to_keep,
                         batch_size=batch_size,
                         num_images=num_images,
-                        **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, pixel_position_ids
+                        **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, pixel_position_ids, image_position_ids
                     )
                 else:
                     # When training a PEFT adapter, how we obtain the reference depends on the setup:
@@ -2195,7 +2264,7 @@ class GRPOTrainer(_BaseTrainer):
                             logits_to_keep,
                             batch_size=batch_size,
                             num_images=num_images,
-                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, pixel_position_ids
+                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, pixel_position_ids, image_position_ids
                         )
             else:
                 ref_per_token_logps = None
@@ -2376,6 +2445,8 @@ class GRPOTrainer(_BaseTrainer):
             output["mm_token_type_ids"] = forward_kwargs["mm_token_type_ids"]
         if "pixel_position_ids" in forward_kwargs:
             output["pixel_position_ids"] = forward_kwargs["pixel_position_ids"]
+        if "image_position_ids" in forward_kwargs:
+            output["image_position_ids"] = forward_kwargs["image_position_ids"]
         if images is not None:
             output["num_images"] = num_images
         if tool_mask is not None:
@@ -2401,6 +2472,7 @@ class GRPOTrainer(_BaseTrainer):
             inputs.get("pixel_attention_mask"),
             inputs.get("image_sizes"),
             inputs.get("pixel_position_ids"),
+            inputs.get("image_position_ids"),
         )
 
         # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
@@ -2537,6 +2609,7 @@ class GRPOTrainer(_BaseTrainer):
             token_type_ids=inputs.get("token_type_ids"),
             mm_token_type_ids=inputs.get("mm_token_type_ids"),
             pixel_position_ids=inputs.get("pixel_position_ids"),
+            image_position_ids=inputs.get("image_position_ids"),
         )
 
         if self.top_entropy_quantile < 1.0:
