@@ -28,12 +28,16 @@ from transformers import (
 from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
+from trl.import_utils import _is_package_available
 
 from .testing_utils import TrlTestCase, require_peft, require_vision, require_vllm
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
+
+
+_peft_available, _peft_version = _is_package_available("peft", return_version=True)
 
 
 class TestRLOOTrainer(TrlTestCase):
@@ -1464,7 +1468,14 @@ class TestRLOOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                marks=pytest.mark.xfail(
+                    _peft_available and Version(_peft_version).is_devrelease,
+                    reason="Upstream issue with peft 0.18.2.dev0, see #5428",
+                    strict=True,
+                ),
+            ),
         ],
     )
     @require_vision

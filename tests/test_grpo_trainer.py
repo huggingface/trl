@@ -38,7 +38,7 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.import_utils import is_liger_kernel_available
+from trl.import_utils import _is_package_available, is_liger_kernel_available
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
@@ -57,6 +57,9 @@ from .testing_utils import (
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel, get_peft_model
+
+
+_peft_available, _peft_version = _is_package_available("peft", return_version=True)
 
 
 def multiply_tool(a: int, b: int) -> int:
@@ -2074,7 +2077,14 @@ class TestGRPOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                marks=pytest.mark.xfail(
+                    _peft_available and Version(_peft_version).is_devrelease,
+                    reason="Upstream issue with peft 0.18.2.dev0, see #5428",
+                    strict=True,
+                ),
+            ),
         ],
     )
     @require_vision
