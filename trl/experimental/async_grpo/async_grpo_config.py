@@ -185,6 +185,38 @@ class AsyncGRPOConfig(_BaseConfig):
         metadata={"help": "Number of training steps between weight synchronizations to the vLLM server."},
     )
 
+    # Delta weight sync
+    delta_sync_enabled: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable delta-compressed weight synchronization. Instead of transferring all "
+            "weights over NCCL, encode only changed bf16 weights as sparse safetensors patches, "
+            "upload them to HuggingFace Hub (Xet storage), and signal vLLM to fetch and apply them."
+        },
+    )
+    delta_sync_repo_id: str | None = field(
+        default=None,
+        metadata={
+            "help": "HuggingFace Hub repository for storing delta weight patches and anchor "
+            "checkpoints (e.g. 'user/training-run-xyz'). Required when delta_sync_enabled=True. "
+            "The repo is created automatically if it does not exist."
+        },
+    )
+    delta_sync_anchor_interval: int = field(
+        default=10,
+        metadata={
+            "help": "Save a full bf16 anchor checkpoint every N weight sync steps. Between anchors "
+            "only sparse delta patches are saved. Fireworks blog uses N=25, PULSE paper uses N=50."
+        },
+    )
+    delta_sync_verify_checksum: bool = field(
+        default=True,
+        metadata={
+            "help": "Verify SHA256 checksum after applying each delta patch on the vLLM server. "
+            "Adds overhead per sync but guarantees bit-exact reconstruction."
+        },
+    )
+
     # Parameters that control the logging
     log_completions: bool = field(
         default=False,
@@ -200,6 +232,9 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.delta_sync_enabled and self.delta_sync_repo_id is None:
+            raise ValueError("delta_sync_repo_id is required when delta_sync_enabled=True")
 
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader

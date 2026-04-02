@@ -14,6 +14,7 @@
 
 import asyncio
 import inspect
+import itertools
 import queue
 import threading
 import time
@@ -26,11 +27,14 @@ import numpy as np
 import requests
 from accelerate.logging import get_logger
 from datasets import Dataset
+from huggingface_hub import create_bucket
 from transformers import AutoTokenizer
 
 from trl.chat_template_utils import add_response_schema, get_training_chat_template, parse_response
 from trl.import_utils import is_vllm_available
 from trl.trainer.utils import print_prompt_completions_sample
+
+from .delta_engine import DeltaWeightTransferEngine
 
 
 if is_vllm_available(min_version="0.17.1"):
@@ -102,11 +106,15 @@ class AsyncRolloutWorker:
         weight_names: list[str] | None = None,
         weight_dtype_names: list[str] | None = None,
         weight_shapes: list[list[int]] | None = None,
+        delta_sync_enabled: bool = False,
+        delta_sync_repo_id: str | None = None,
+        delta_sync_anchor_interval: int = 10,
     ):
         if not is_vllm_available(min_version="0.17.1"):
             raise ImportError(
                 "vLLM >= 0.17.1 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.17.1'"
             )
+        self.delta_sync_enabled = delta_sync_enabled
         self.model_name = model_name
         self.max_tool_calling_iterations = max_tool_calling_iterations
         self.dataset = dataset
@@ -171,7 +179,10 @@ class AsyncRolloutWorker:
         self.model_version = 0
         self.session = None
 
-        # Wait for the vLLM server and initialize NCCL weight transfer.
+        self._delta_sync_repo_id = delta_sync_repo_id
+        self._delta_sync_anchor_interval = delta_sync_anchor_interval
+
+        # Wait for the vLLM server and initialize weight transfer.
         self._wait_for_server_ready_sync(timeout_s=self.server_timeout)
         self._init_weight_transfer()
 
@@ -199,6 +210,18 @@ class AsyncRolloutWorker:
             time.sleep(poll_interval_s)
 
     def _init_weight_transfer(self) -> None:
+        if self.delta_sync_enabled:
+            create_bucket(self._delta_sync_repo_id, exist_ok=True)
+            self._delta_model_version = 0
+            self._delta_pending_update_info: dict | None = None
+            requests.post(
+                f"{self.vllm_server_url}/init_weight_transfer_engine",
+                json={"init_info": {}},
+                timeout=120,
+            )
+            logger.info("Init delta weight transfer with HF Hub repo %s", self._delta_sync_repo_id)
+            return
+
         response = requests.get(f"{self.vllm_server_url}/get_world_size")
         inference_world_size = response.json()["world_size"]
         world_size = inference_world_size + 1
@@ -287,6 +310,58 @@ class AsyncRolloutWorker:
         logger.debug(f"[weight_sync] resume HTTP took {time.time() - t0:.1f}s")
 
     def send_weights(self, iterator) -> None:
+        if self.delta_sync_enabled:
+            self._send_weights_delta(iterator)
+        else:
+            self._send_weights_nccl(iterator)
+
+    def _send_weights_delta(self, iterator) -> None:
+        """Delta sync via HF Bucket.
+
+        - Non-empty iterator: upload (anchor or delta based on step count).
+        - Empty iterator + pending info: signal vLLM to apply.
+        - Empty iterator + nothing pending: no-op.
+        """
+        first = next(iterator, None)
+
+        # (empty iterator)
+        if first is None:
+            if self._delta_pending_update_info is not None:
+                resp = requests.post(
+                    f"{self.vllm_server_url}/update_weights",
+                    json={"update_info": self._delta_pending_update_info},
+                    timeout=300,
+                )
+                resp.raise_for_status()
+                self._delta_pending_update_info = None
+            return
+
+        # Upload phase
+        self._delta_model_version += 1
+        is_anchor = self._delta_model_version == 1 or self._delta_model_version % self._delta_sync_anchor_interval == 0
+
+        full_iter = itertools.chain([first], iterator)
+        if is_anchor:
+            # Force full tensors — strip masks
+            full_iter = ((name, tensor, None) for name, tensor, _mask in full_iter)
+
+        subdir = "anchors" if is_anchor else "deltas"
+        filename = f"{subdir}/step_{self._delta_model_version:06d}.safetensors"
+        meta = DeltaWeightTransferEngine.upload(
+            iterator=full_iter,
+            bucket_id=self._delta_sync_repo_id,
+            filename=filename,
+            model_version=self._delta_model_version,
+        )
+        if meta is not None:
+            self._delta_pending_update_info = {
+                "repo_id": self._delta_sync_repo_id,
+                "filename": filename,
+                "is_checkpoint_format": True,
+            }
+
+    def _send_weights_nccl(self, iterator) -> None:
+        """NCCL sync: broadcast all params via NCCL + signal /update_weights."""
         if self.model_update_group is None:
             return
         t0 = time.time()
@@ -299,7 +374,7 @@ class AsyncRolloutWorker:
         logger.debug(f"[weight_sync] /update_weights POST sent ({time.time() - t0:.1f}s)")
         t_nccl = time.time()
         NCCLWeightTransferEngine.trainer_send_weights(
-            iterator=iterator,
+            iterator=((name, tensor) for name, tensor, _mask in iterator),
             trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
         )
         logger.debug(f"[weight_sync] NCCL transfer took {time.time() - t_nccl:.1f}s")
@@ -356,7 +431,7 @@ class AsyncRolloutWorker:
                         # Current assumption: reset side effects matter, return value is ignored.
                         self.environments[slot].reset(**row)
 
-                    logger.info(f"[slot] assigned slot={slot} group={group_id} free_after={len(free_slots)}")
+                    logger.debug(f"[slot] assigned slot={slot} group={group_id} free_after={len(free_slots)}")
                     task = asyncio.create_task(
                         self._generate_one(pending_groups[group_id].prompt, tool_dict=self._sync_tool_dicts[slot])
                     )
