@@ -103,6 +103,8 @@ These scripts demonstrate how to train models with [OpenEnv](openenv) environmen
 | [`examples/scripts/openenv/browsergym.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/browsergym.py) | GRPO training with the BrowserGym environment for VLMs. |
 | [`examples/scripts/openenv/browsergym_llm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/browsergym_llm.py) | GRPO training with the BrowserGym environment for LLMs. |
 | [`examples/scripts/openenv/carla.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla.py) | GRPO training with the CARLA environment for autonomous driving. |
+| [`examples/scripts/openenv/carla_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla_vlm.py) | GRPO training with CARLA for VLMs with multimodal tool responses (camera images). |
+| [`examples/scripts/openenv/carla_vlm_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla_vlm_gemma.py) | GRPO training with CARLA for Gemma 4 with multimodal tool responses (camera images). |
 
 ## Distributed Training (for scripts)
 
