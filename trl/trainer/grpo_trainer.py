@@ -1751,14 +1751,10 @@ class GRPOTrainer(_BaseTrainer):
         for i in range(len(completion_ids)):
             if len(tool_mask[i]) > len(completion_ids[i]):
                 tool_mask[i] = tool_mask[i][: len(completion_ids[i])]
-            elif len(tool_mask[i]) < len(completion_ids[i]):
-                tool_mask[i] = tool_mask[i] + [1] * (len(completion_ids[i]) - len(tool_mask[i]))
         if logprobs is not None:
             for i in range(len(completion_ids)):
                 if len(logprobs[i]) > len(completion_ids[i]):
                     logprobs[i] = logprobs[i][: len(completion_ids[i])]
-                elif len(logprobs[i]) < len(completion_ids[i]):
-                    logprobs[i] = logprobs[i] + [0.0] * (len(completion_ids[i]) - len(logprobs[i]))
 
         # Sync tool_images: count complete images in completion_ids and trim tool_images to match.
         vtids = self._get_vision_token_ids()
