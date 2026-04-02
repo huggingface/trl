@@ -188,8 +188,16 @@ class JEPOTrainer(BaseTrainer):
     _name = "JEPO"
     _paper = {
         "title": "Beyond Verifiable Rewards: Scaling Reinforcement Learning for Language Models to Unverifiable Data",
+        "id": "2503.19618",
+        "citation": textwrap.dedent("""\
+            @article{tang2025beyond,
+                title        = {{Beyond Verifiable Rewards: Scaling Reinforcement Learning for Language Models to Unverifiable Data}},
+                author       = {Yunhao Tang, Sid Wang, Lovish Madaan, Rémi Munos},
+                year         = 2025,
+                eprint       = {arXiv:2503.19618},
+            }"""),
         }   
-
+    
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
