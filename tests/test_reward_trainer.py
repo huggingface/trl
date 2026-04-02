@@ -335,7 +335,7 @@ class TestRewardTrainer(TrlTestCase):
             model=model_id,
             args=training_args,
             train_dataset=dataset,
-            peft_config=LoraConfig(target_modules=["up_proj", "down_proj", "score"]),
+            peft_config=LoraConfig(target_modules=["gate_proj", "up_proj", "down_proj", "score"]),
         )
 
         # Save the initial parameters to compare them later

@@ -32,7 +32,6 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
-from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
 from torch.utils.data import Sampler
 from transformers import (
@@ -233,64 +232,6 @@ def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
     )
 
     return peft_config
-
-
-def prepare_deepspeed(
-    model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
-) -> torch.nn.Module:
-    """
-    Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based
-    on the model and batch size.
-
-    Args:
-        model (`torch.nn.Module`):
-            The model to be prepared for DeepSpeed training.
-        per_device_train_batch_size (`int`):
-            The training batch size per device.
-        fp16 (`bool`, defaults to `False`):
-            Whether to use FP16 precision.
-        bf16 (`bool`, defaults to `False`):
-            Whether to use BF16 precision.
-
-    Returns:
-        `torch.nn.Module`:
-            The model initialized and configured with DeepSpeed for training.
-    """
-    import deepspeed
-
-    deepspeed_plugin = AcceleratorState().deepspeed_plugin
-    config_kwargs = deepspeed_plugin.deepspeed_config
-    if config_kwargs["zero_optimization"]["stage"] != 3:
-        config_kwargs["train_micro_batch_size_per_gpu"] = per_device_train_batch_size
-        config_kwargs = {
-            "train_micro_batch_size_per_gpu": config_kwargs["train_micro_batch_size_per_gpu"],
-            "prescale_gradients": False,
-            "wall_clock_breakdown": False,
-        }
-        if bf16:
-            config_kwargs["bf16"] = {"enabled": True}
-        elif fp16:
-            config_kwargs["fp16"] = {"enabled": True}
-    else:
-        if hasattr(model, "config"):
-            hidden_size = (
-                max(model.config.hidden_sizes)
-                if getattr(model.config, "hidden_sizes", None)
-                else getattr(model.config, "hidden_size", None)
-            )
-            if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
-                # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
-                # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
-                config_kwargs.update(
-                    {
-                        "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
-                        "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
-                        "zero_optimization.stage3_prefetch_bucket_size": 0,
-                    }
-                )
-    model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
-    model.eval()
-    return model
 
 
 def generate_model_card(
