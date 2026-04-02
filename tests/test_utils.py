@@ -1150,8 +1150,20 @@ class _FakeCausalLM(nn.Module):
 _CHUNKED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-CohereForCausalLM",
     "trl-internal-testing/tiny-Cohere2ForCausalLM",
-    "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-    "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
     "trl-internal-testing/tiny-Gemma2ForCausalLM",
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
