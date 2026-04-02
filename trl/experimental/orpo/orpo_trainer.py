@@ -301,7 +301,6 @@ class ORPOTrainer(_BaseTrainer):
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
         self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
-        self.truncation_mode = args.truncation_mode
         self.processing_class = processing_class
 
         self.beta = args.beta

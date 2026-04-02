@@ -52,7 +52,7 @@ from ..data_utils import is_conversational
 from ..models import get_act_offloading_ctx_manager
 from .base_trainer import _BaseTrainer
 from .reward_config import RewardConfig
-from .utils import create_model_from_path, disable_dropout_in_model, get_config_model_id, pad, remove_none_values
+from .utils import create_model_from_path, disable_dropout_in_model, get_config_model_id, pad
 
 
 if is_peft_available():
@@ -541,11 +541,6 @@ class RewardTrainer(_BaseTrainer):
         args: RewardConfig,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
-        # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
-        # sampled data.
-        if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
-            dataset = dataset.with_transform(remove_none_values)
-
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = get_dataset_column_names(dataset)
         is_processed = "chosen_ids" in column_names and "rejected_ids" in column_names

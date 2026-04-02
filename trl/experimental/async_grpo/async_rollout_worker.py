@@ -402,7 +402,7 @@ class AsyncRolloutWorker:
                             prompt,
                             return_dict=False,
                             add_generation_prompt=True,
-                            tools=self.tools,
+                            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
                             chat_template=self.chat_template,
                             **self.chat_template_kwargs,
                         )
@@ -602,7 +602,7 @@ class AsyncRolloutWorker:
             prompt,
             return_dict=False,
             add_generation_prompt=True,
-            tools=self.tools,
+            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
             chat_template=self.chat_template,
             **self.chat_template_kwargs,
         )
@@ -637,7 +637,7 @@ class AsyncRolloutWorker:
         prefix_ids = self.tokenizer.apply_chat_template(
             dummy_messages,
             return_dict=False,
-            tools=self.tools,
+            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
             chat_template=self.chat_template,
             **self.chat_template_kwargs,
         )
@@ -646,7 +646,7 @@ class AsyncRolloutWorker:
             return_dict=False,
             chat_template=self.chat_template,
             add_generation_prompt=True,
-            tools=self.tools,
+            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
             **self.chat_template_kwargs,
         )
 
