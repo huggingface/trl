@@ -56,7 +56,7 @@ from trl import GRPOConfig, GRPOTrainer
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run GRPO VLM training with CARLA environment.")
-    parser.add_argument("--model", type=str, default="google/gemma-3-4b-it")
+    parser.add_argument("--model", type=str, default="google/gemma-4-E2B-it")
     parser.add_argument(
         "--env-urls",
         type=str,
