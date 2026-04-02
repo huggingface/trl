@@ -32,7 +32,6 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
-from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
 from torch.utils.data import Sampler
 from transformers import (
@@ -233,64 +232,6 @@ def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
     )
 
     return peft_config
-
-
-def prepare_deepspeed(
-    model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
-) -> torch.nn.Module:
-    """
-    Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based
-    on the model and batch size.
-
-    Args:
-        model (`torch.nn.Module`):
-            The model to be prepared for DeepSpeed training.
-        per_device_train_batch_size (`int`):
-            The training batch size per device.
-        fp16 (`bool`, defaults to `False`):
-            Whether to use FP16 precision.
-        bf16 (`bool`, defaults to `False`):
-            Whether to use BF16 precision.
-
-    Returns:
-        `torch.nn.Module`:
-            The model initialized and configured with DeepSpeed for training.
-    """
-    import deepspeed
-
-    deepspeed_plugin = AcceleratorState().deepspeed_plugin
-    config_kwargs = deepspeed_plugin.deepspeed_config
-    if config_kwargs["zero_optimization"]["stage"] != 3:
-        config_kwargs["train_micro_batch_size_per_gpu"] = per_device_train_batch_size
-        config_kwargs = {
-            "train_micro_batch_size_per_gpu": config_kwargs["train_micro_batch_size_per_gpu"],
-            "prescale_gradients": False,
-            "wall_clock_breakdown": False,
-        }
-        if bf16:
-            config_kwargs["bf16"] = {"enabled": True}
-        elif fp16:
-            config_kwargs["fp16"] = {"enabled": True}
-    else:
-        if hasattr(model, "config"):
-            hidden_size = (
-                max(model.config.hidden_sizes)
-                if getattr(model.config, "hidden_sizes", None)
-                else getattr(model.config, "hidden_size", None)
-            )
-            if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
-                # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
-                # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
-                config_kwargs.update(
-                    {
-                        "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
-                        "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
-                        "zero_optimization.stage3_prefetch_bucket_size": 0,
-                    }
-                )
-    model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
-    model.eval()
-    return model
 
 
 def generate_model_card(
@@ -946,22 +887,38 @@ def identity(x):
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | list[torch.Tensor]]:
     """
     Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in `batch["image_grid_thw"]`
-    and batch["num_images"] while keeping other entries unchanged.
+    and batch["num_images"] while keeping other entries unchanged. For models without `image_grid_thw` (e.g. Gemma),
+    splits by `num_images` directly.
     """
-    if "image_grid_thw" not in batch or "pixel_values" not in batch or "num_images" not in batch:
+    if "pixel_values" not in batch or "num_images" not in batch:
         return batch
 
-    lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
-    pixel_values = batch["pixel_values"]  # [total, feature_dim]
+    if "image_grid_thw" in batch:
+        lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
+        pixel_values = batch["pixel_values"]  # [total, feature_dim]
 
-    if sum(lengths) != pixel_values.size(0):
-        raise ValueError(f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}")
+        if sum(lengths) != pixel_values.size(0):
+            raise ValueError(
+                f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}"
+            )
 
-    boundaries = [0, *accumulate(batch["num_images"])]  # [3, 4, 5] -> [0, 3, 7, 12]
-    sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(batch["num_images"]))]
-    split_values = list(torch.split(batch["pixel_values"], sections, dim=0))
-    image_grid_thw = list(torch.split(batch["image_grid_thw"], batch["num_images"], dim=0))
-    return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
+        boundaries = [0, *accumulate(batch["num_images"])]  # [3, 4, 5] -> [0, 3, 7, 12]
+        sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(batch["num_images"]))]
+        split_values = list(torch.split(batch["pixel_values"], sections, dim=0))
+        image_grid_thw = list(torch.split(batch["image_grid_thw"], batch["num_images"], dim=0))
+        return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
+    else:
+        # Models without image_grid_thw (e.g. Gemma): split pixel_values by num_images per sample
+        num_images = batch["num_images"]
+        num_images_list = num_images.tolist() if isinstance(num_images, torch.Tensor) else list(num_images)
+        split_values = list(torch.split(batch["pixel_values"], [int(n) for n in num_images_list], dim=0))
+        result = {**batch, "pixel_values": split_values}
+        # Also split image_position_ids if present (indexed by image, same as pixel_values)
+        if "image_position_ids" in batch:
+            result["image_position_ids"] = list(
+                torch.split(batch["image_position_ids"], [int(n) for n in num_images_list], dim=0)
+            )
+        return result
 
 
 def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tensor]]) -> dict[str, torch.Tensor]:
@@ -978,6 +935,11 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
     if isinstance(image_grid_thw, list):
         merged = torch.cat(image_grid_thw, dim=0)
         batch = {**batch, "image_grid_thw": merged}
+
+    image_position_ids = batch.get("image_position_ids")
+    if isinstance(image_position_ids, list):
+        merged = torch.cat(image_position_ids, dim=0)
+        batch = {**batch, "image_position_ids": merged}
 
     return batch
 
