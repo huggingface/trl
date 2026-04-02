@@ -2033,7 +2033,7 @@ class GRPOTrainer(_BaseTrainer):
         # When tool images are present (from _tool_call_loop), use image_processor directly and build
         # mm_token_type_ids from prompt_completion_ids. Otherwise, use the full processor pipeline
         # which returns model-specific keys (image_sizes, pixel_attention_mask, etc.).
-        if self.tools and any(imgs for imgs in tool_images) and self._is_vlm:  # noqa: F821
+        if self.tools and any(imgs for imgs in tool_images) and self._is_vlm:
             flat_images = [img for img_list in images if img_list for img in img_list]
             image_inputs = self.processing_class.image_processor(images=flat_images, return_tensors="pt")
             image_inputs = super()._prepare_inputs(image_inputs)
