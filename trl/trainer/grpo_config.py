@@ -199,6 +199,23 @@ class GRPOConfig(_BaseConfig):
             lambda parameter for negative advantages, it is the exponential decay factor in the VESPO loss. Controls
             how aggressively we down-weight samples with high importance weights (when the importance sampling ratio >
             1).
+        fipo_decay_rate (`float`, *optional*, defaults to `32.0`):
+            Decay horizon for the discounted Future-KL accumulation used by the FIPO loss. The effective decay factor
+            is computed as `2 ** (-1 / fipo_decay_rate)`.
+        fipo_chunk_size (`int`, *optional*, defaults to `128`):
+            Chunk size used when accumulating the Future-KL signal in the FIPO loss. This affects memory/runtime but
+            not the mathematical objective.
+        fipo_clip_ratio_c (`float`, *optional*, defaults to `10.0`):
+            Dual-clip threshold used by the FIPO loss for negative-advantage tokens. This follows the upstream FIPO
+            implementation and should be greater than `1.0`.
+        fipo_influence_clip_ratio (`float`, *optional*, defaults to `0.2`):
+            Clipping ratio applied to FIPO's influence weights `exp(FutureKL_t)`.
+        fipo_influence_clip_high_only (`bool`, *optional*, defaults to `True`):
+            Whether FIPO clips only the upper bound of the influence weights. When `False`, both lower and upper
+            bounds are clipped symmetrically.
+        fipo_safety_threshold (`float`, *optional*, defaults to `10.0`):
+            Safety threshold used by FIPO to cap influence weights for negative-advantage tokens with large importance
+            ratios.
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
             Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
             keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
@@ -665,6 +682,45 @@ class GRPOConfig(_BaseConfig):
             "sampling ratio > 1)."
         },
     )
+    fipo_decay_rate: float = field(
+        default=32.0,
+        metadata={
+            "help": "Decay horizon for the discounted Future-KL accumulation used by the FIPO loss. The effective "
+            "decay factor is computed as `2 ** (-1 / fipo_decay_rate)`."
+        },
+    )
+    fipo_chunk_size: int = field(
+        default=128,
+        metadata={
+            "help": "Chunk size used when accumulating the Future-KL signal in the FIPO loss. This affects "
+            "memory/runtime but not the mathematical objective."
+        },
+    )
+    fipo_clip_ratio_c: float = field(
+        default=10.0,
+        metadata={
+            "help": "Dual-clip threshold used by the FIPO loss for negative-advantage tokens. This follows the "
+            "upstream FIPO implementation and should be greater than `1.0`."
+        },
+    )
+    fipo_influence_clip_ratio: float = field(
+        default=0.2,
+        metadata={"help": "Clipping ratio applied to FIPO's influence weights `exp(FutureKL_t)`."},
+    )
+    fipo_influence_clip_high_only: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether FIPO clips only the upper bound of the influence weights. When `False`, both lower and "
+            "upper bounds are clipped symmetrically."
+        },
+    )
+    fipo_safety_threshold: float = field(
+        default=10.0,
+        metadata={
+            "help": "Safety threshold used by FIPO to cap influence weights for negative-advantage tokens with large "
+            "importance ratios."
+        },
+    )
     importance_sampling_level: str = field(
         default="token",
         metadata={
@@ -709,8 +765,7 @@ class GRPOConfig(_BaseConfig):
     loss_type: str = field(
         default="dapo",
         metadata={
-            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'dapo', 'bnpo', and "
-            "'dr_grpo'. "
+            "help": "Specifies the loss formulation to use. "
             "'grpo': Aggregates token-level losses by normalizing over sequence length. Not recommended due to length "
             "bias—this approach tends to prefer shorter completions with positive advantages and longer ones with "
             "negative advantages. "
@@ -728,6 +783,9 @@ class GRPOConfig(_BaseConfig):
             "Individual token losses are aggregated by normalizing with the number of active tokens in "
             "the global accumulated batch. This method was introduced in the "
             "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585). "
+            "'fipo': Future-KL Influenced Policy Optimization. Reweights each token's advantage using a discounted "
+            "sum of future log-probability shifts before applying a DAPO-style clipped policy loss. Introduced in "
+            "the [FIPO paper](https://huggingface.co/papers/2603.19835). "
             "'sapo': Soft Adaptive Policy Optimization loss, as introduced in the "
             "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347). "
             "Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates "
@@ -926,3 +984,9 @@ class GRPOConfig(_BaseConfig):
 
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
+
+        if self.fipo_clip_ratio_c <= 1.0:
+            raise ValueError("fipo_clip_ratio_c must be greater than 1.0.")
+
+        if self.fipo_chunk_size <= 0:
+            raise ValueError("fipo_chunk_size must be strictly positive.")

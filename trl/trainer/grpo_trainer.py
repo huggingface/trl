@@ -581,6 +581,12 @@ class GRPOTrainer(_BaseTrainer):
                 "set to `'token'` (the default)."
             )
 
+        if args.loss_type == "fipo" and args.importance_sampling_level != "token":
+            logger.warning(
+                "FIPO computes token-level Future-KL weights internally. `importance_sampling_level` is ignored and "
+                "should be left at `'token'`."
+            )
+
         if self.loss_type == "vespo" and self.use_vllm and self.vllm_importance_sampling_correction:
             if self.vllm_importance_sampling_mode not in ["token_truncate", "token_mask"]:
                 raise ValueError(
@@ -676,6 +682,8 @@ class GRPOTrainer(_BaseTrainer):
 
         # Liger loss
         if self.use_liger_kernel:
+            if self.loss_type == "fipo":
+                raise NotImplementedError("Liger kernel does not support the FIPO loss yet.")
             if not is_liger_kernel_available():
                 raise ImportError(
                     "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
@@ -2255,6 +2263,113 @@ class GRPOTrainer(_BaseTrainer):
 
         return phi_seq  # (B, 1)
 
+    @staticmethod
+    @torch.no_grad()
+    def get_fipo_loss_components(
+        advantages: torch.Tensor,
+        log_ratio_per_token: torch.Tensor,
+        mask: torch.Tensor,
+        epsilon_low: float,
+        epsilon_high: float,
+        clip_ratio_c: float = 10.0,
+        decay_rate: float = 32.0,
+        chunk_size: int = 128,
+        influence_clip_ratio: float = 0.2,
+        influence_clip_high_only: bool = True,
+        safety_threshold: float = 10.0,
+    ) -> dict[str, torch.Tensor]:
+        """
+        Computes the Future-KL influence weights and token losses used by the FIPO loss.
+        """
+        log_ratio_per_token = torch.clamp(log_ratio_per_token, min=-20.0, max=20.0)
+        ratio = torch.exp(log_ratio_per_token)
+        batch_size, response_len = log_ratio_per_token.shape
+        device = log_ratio_per_token.device
+        mask_bool = mask.to(dtype=torch.bool)
+        mask_float = mask.to(dtype=log_ratio_per_token.dtype)
+        completion_token_count = mask_float.sum().clamp(min=1.0)
+
+        def masked_mean(values: torch.Tensor) -> torch.Tensor:
+            return (values * mask_float).sum() / completion_token_count
+
+        future_kl = torch.zeros((batch_size, response_len), device=device, dtype=log_ratio_per_token.dtype)
+        pos_i = torch.arange(response_len, device=device).unsqueeze(1)
+        filter_threshold = math.log(clip_ratio_c)
+        ignore_mask = log_ratio_per_token > filter_threshold
+        participation_mask = ~ignore_mask
+        kl_response = log_ratio_per_token * mask_float
+        kl_response = kl_response * participation_mask.to(dtype=log_ratio_per_token.dtype)
+
+        gamma_t = torch.tensor(2 ** (-1.0 / decay_rate), dtype=log_ratio_per_token.dtype, device=device)
+        for j_start in range(0, response_len, chunk_size):
+            j_end = min(response_len, j_start + chunk_size)
+            j_idx = torch.arange(j_start, j_end, device=device).unsqueeze(0)
+            distance = j_idx - pos_i
+            distance_mask = distance >= 0
+            distance_clamped = distance.clamp(min=0)
+            decay_block = torch.pow(gamma_t, distance_clamped) * distance_mask.to(dtype=log_ratio_per_token.dtype)
+            future_kl += torch.matmul(kl_response[:, j_start:j_end], decay_block.t())
+
+        raw_influence_weights = torch.exp(future_kl)
+        if influence_clip_ratio != 0.0:
+            if influence_clip_high_only:
+                lower_bound = 1.0
+                upper_bound = 1.0 + influence_clip_ratio
+            else:
+                lower_bound = 1.0 - influence_clip_ratio
+                upper_bound = 1.0 + influence_clip_ratio
+            influence_weights = torch.clamp(raw_influence_weights, min=lower_bound, max=upper_bound)
+        else:
+            lower_bound = 0.0
+            upper_bound = 10.0
+            influence_weights = torch.clamp(raw_influence_weights, max=10.0)
+
+        mask_neg_high_is = (advantages < 0) & (ratio > safety_threshold)
+        influence_weights = torch.where(mask_neg_high_is, torch.clamp(influence_weights, min=0.8, max=1.0), influence_weights)
+
+        weighted_advantages = advantages * influence_weights
+        pg_losses1 = -weighted_advantages * ratio
+        pg_losses2 = -weighted_advantages * torch.clamp(ratio, 1 - epsilon_low, 1 + epsilon_high)
+        clip_pg_losses1 = torch.maximum(pg_losses1, pg_losses2)
+        pg_losses3 = -weighted_advantages * clip_ratio_c
+        clip_pg_losses2 = torch.minimum(pg_losses3, clip_pg_losses1)
+
+        lower_clip_mask = (advantages < 0) & (clip_pg_losses1 > pg_losses3) & mask_bool
+        low_clip_token_counts = lower_clip_mask.sum(dim=1)
+        seq_valid_mask = (low_clip_token_counts <= 1).unsqueeze(1)
+        loss_mask = (mask_bool & seq_valid_mask).to(dtype=log_ratio_per_token.dtype)
+        per_token_loss = torch.where(weighted_advantages < 0, clip_pg_losses2, clip_pg_losses1)
+
+        raw_valid_vals = raw_influence_weights[mask_bool]
+        valid_vals = influence_weights[mask_bool]
+        if raw_valid_vals.numel() == 0:
+            zero = torch.tensor(0.0, dtype=log_ratio_per_token.dtype, device=device)
+            raw_influence_weights_min = zero
+            raw_influence_weights_max = zero
+            influence_weights_min = zero
+            influence_weights_max = zero
+        else:
+            raw_influence_weights_min = raw_valid_vals.min()
+            raw_influence_weights_max = raw_valid_vals.max()
+            influence_weights_min = valid_vals.min()
+            influence_weights_max = valid_vals.max()
+
+        return {
+            "ratio": ratio,
+            "per_token_loss": per_token_loss,
+            "loss_mask": loss_mask,
+            "influence_weights": influence_weights,
+            "influence_weights_mean": masked_mean(influence_weights),
+            "influence_weights_min": influence_weights_min,
+            "influence_weights_max": influence_weights_max,
+            "influence_weights_mean_raw": masked_mean(raw_influence_weights),
+            "raw_influence_weights_min": raw_influence_weights_min,
+            "raw_influence_weights_max": raw_influence_weights_max,
+            "influence_weight_clip_ratio_upper": masked_mean((influence_weights >= upper_bound - 1e-7).float()),
+            "influence_weight_clip_ratio_lower": masked_mean((influence_weights <= lower_bound + 1e-7).float()),
+            "sequence_drop_ratio": (~seq_valid_mask.squeeze(1)).float().mean(),
+        }
+
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -2328,6 +2443,7 @@ class GRPOTrainer(_BaseTrainer):
             )
 
         coef_1 = torch.exp(log_importance_weights)
+        loss_mask = mask
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
@@ -2353,6 +2469,30 @@ class GRPOTrainer(_BaseTrainer):
             per_token_loss1 = coef_1 * advantages
             per_token_loss2 = coef_2 * advantages
             per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        elif self.loss_type == "fipo":
+            fipo_outputs = self.get_fipo_loss_components(
+                advantages=advantages,
+                log_ratio_per_token=log_ratio,
+                mask=mask,
+                epsilon_low=self.epsilon_low,
+                epsilon_high=self.epsilon_high,
+                clip_ratio_c=self.args.fipo_clip_ratio_c,
+                decay_rate=self.args.fipo_decay_rate,
+                chunk_size=self.args.fipo_chunk_size,
+                influence_clip_ratio=self.args.fipo_influence_clip_ratio,
+                influence_clip_high_only=self.args.fipo_influence_clip_high_only,
+                safety_threshold=self.args.fipo_safety_threshold,
+            )
+            coef_1 = torch.exp(torch.clamp(log_ratio, min=-20.0, max=20.0))
+            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+            weighted_advantages = advantages * fipo_outputs["influence_weights"]
+            pg_losses1 = -weighted_advantages * coef_1
+            pg_losses2 = -weighted_advantages * coef_2
+            clip_pg_losses1 = torch.maximum(pg_losses1, pg_losses2)
+            pg_losses3 = -weighted_advantages * self.args.fipo_clip_ratio_c
+            clip_pg_losses2 = torch.minimum(pg_losses3, clip_pg_losses1)
+            per_token_loss = torch.where(weighted_advantages < 0, clip_pg_losses2, clip_pg_losses1)
+            loss_mask = fipo_outputs["loss_mask"]
         elif self.loss_type == "sapo":
             temperatures = torch.where(advantages > 0, self.args.sapo_temperature_pos, self.args.sapo_temperature_neg)
             soft_coef_1 = torch.sigmoid(temperatures * (coef_1 - 1)) * 4 / temperatures
@@ -2386,23 +2526,27 @@ class GRPOTrainer(_BaseTrainer):
 
         mode = "train" if self.model.training else "eval"
         if self.loss_type in ["grpo", "sapo"]:
-            loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
+            loss = ((per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
         elif self.loss_type == "bnpo":
-            loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
+            loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
         elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+            loss = (per_token_loss * loss_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+            loss = loss / normalizer
+        elif self.loss_type == "fipo":
+            loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
         elif self.loss_type in ["cispo", "dapo", "vespo"]:
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
-            loss = (per_token_loss * mask).sum() / normalizer
+            loss = (per_token_loss * loss_mask).sum() / normalizer
         elif self.loss_type == "luspo":
             # Unless importance_sampling_level="token" (not recommended here), per_token_loss is expected to be (B, 1)
-            loss = (per_token_loss * mask.sum(1, keepdim=True)).mean()
+            loss = (per_token_loss * loss_mask.sum(1, keepdim=True)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
             loss = loss / normalizer
         else:
@@ -2424,7 +2568,22 @@ class GRPOTrainer(_BaseTrainer):
         mean_entropy = masked_batch_mean(entropies)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
-        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
+        if self.loss_type == "fipo":
+            for key in [
+                "influence_weights_mean",
+                "influence_weights_min",
+                "influence_weights_max",
+                "influence_weights_mean_raw",
+                "raw_influence_weights_min",
+                "raw_influence_weights_max",
+                "influence_weight_clip_ratio_upper",
+                "influence_weight_clip_ratio_lower",
+                "sequence_drop_ratio",
+            ]:
+                gathered_metric = self.accelerator.gather(fipo_outputs[key])
+                self._metrics[mode][f"fipo/{key}"].append(gathered_metric.nanmean().item())
+
+        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "fipo", "luspo"]:
             # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)

@@ -165,6 +165,41 @@ trainer = GRPOTrainer(
 )
 ```
 
+### FIPO: Eliciting Deep Reasoning with Future-KL Influenced Policy Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2603.19835
+
+FIPO keeps the DAPO training scaffold but replaces the uniform token weighting with a discounted Future-KL influence
+weight. In TRL, this is available as an additional GRPO loss type. To mirror the upstream FIPO recipe, use:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+from trl.rewards import get_soft_overlong_punishment
+
+training_args = GRPOConfig(
+    mask_truncated_completions=True,
+    loss_type="fipo",
+    epsilon_high=0.28,
+    epsilon=0.2,
+    per_device_train_batch_size=512,
+    num_generations=16,
+    max_completion_length=20480,
+    beta=0.0,
+    fipo_clip_ratio_c=10.0,
+    fipo_decay_rate=32.0,
+    fipo_chunk_size=128,
+    fipo_influence_clip_ratio=0.2,
+    fipo_influence_clip_high_only=True,
+    fipo_safety_threshold=10.0,
+)
+sop_reward = get_soft_overlong_punishment(max_completion_len=20480, soft_punish_cache=4096)
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
+    reward_funcs=[..., sop_reward],
+)
+```
+
 ### INTELLECT-2: A Reasoning Model Trained Through Globally Decentralized Reinforcement Learning
 
 **📜 Paper**: https://huggingface.co/papers/2505.07291
