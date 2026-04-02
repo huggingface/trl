@@ -226,7 +226,9 @@ class GRPOTrainer(_BaseTrainer):
             Google-style docstring describing its purpose, arguments, and return value. For more details, see:
             https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
-            use and that it has been fine-tuned for tool calling.
+            use and that it has been fine-tuned for tool calling. If the dataset contains a `tools` column with a
+            list of tool names per sample, only those tools are exposed during that sample's rollout. If the column
+            value is missing or `None` for a sample, the full `tools` list is used.
         rollout_func (`RolloutFunc`, *optional*):
             Function to use for generating completions. It receives the list of prompts allocated to the current
             process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
@@ -625,6 +627,7 @@ class GRPOTrainer(_BaseTrainer):
 
         # Reference model
         self.beta = args.beta
+
         if self.beta == 0.0:
             # If beta is 0.0, the reference model is not needed
             self.ref_model = None
@@ -850,7 +853,7 @@ class GRPOTrainer(_BaseTrainer):
         # and "attention_mask"). In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't
         # work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt", "image", "images"]
+            self._signature_columns = ["prompt", "image", "images", "tools"]
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
@@ -1239,8 +1242,15 @@ class GRPOTrainer(_BaseTrainer):
         rewards_per_func = gather(rewards_per_func)
         return rewards_per_func
 
-    def _tokenize_prompts(self, prompts: list):
-        """Tokenize prompts and extract images/multimodal fields for generation."""
+    def _tokenize_prompts(self, prompts: list, per_sample_tools: "list[list[Callable]] | None" = None):
+        """Tokenize prompts and extract images/multimodal fields for generation.
+
+        Args:
+            prompts: List of prompts (conversational or plain text).
+            per_sample_tools: Optional list of per-sample tool lists. When provided, each prompt is tokenized
+                individually with its own tool list (needed because different samples may expose different tools
+                in the chat template). When ``None``, all prompts are batch-tokenized with ``self.tools``.
+        """
         if is_conversational({"prompt": prompts[0]}):
             # Extract images from messages for VLM support
             images = []
@@ -1256,26 +1266,58 @@ class GRPOTrainer(_BaseTrainer):
                 images.append(prompt_images if prompt_images else None)
             images = images if has_images else None
 
-            # We pass padding=True to work around a bug introduced in transformers 5.2.0 in some processors
-            # (e.g. Qwen2.5-VL) that crash on batched unpadded input. We then unpad input_ids using attention_mask.
-            # See: https://github.com/huggingface/transformers/issues/44514
-            tokenized = self.processing_class.apply_chat_template(
-                conversation=prompts,
-                tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
-                chat_template=self.chat_template,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                padding=True,
-                **self.chat_template_kwargs,
-            )
-            # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
-            prompt_ids = [
-                [tok for tok, m in zip(ids, mask, strict=True) if m]
-                for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
-            ]
-            # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
-            multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
+            # When per_sample_tools is provided, we must tokenize each prompt individually because
+            # apply_chat_template doesn't support varying tools across a batch.
+            if per_sample_tools is not None:
+                prompt_ids = []
+                all_multimodal_fields = {}
+                for i, (prompt, tools_for_sample) in enumerate(zip(prompts, per_sample_tools, strict=True)):
+                    tokenized = self.processing_class.apply_chat_template(
+                        conversation=[prompt],
+                        tools=tools_for_sample
+                        or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+                        chat_template=self.chat_template,
+                        add_generation_prompt=True,
+                        tokenize=True,
+                        return_dict=True,
+                        padding=False,
+                        **self.chat_template_kwargs,
+                    )
+                    prompt_ids.append(tokenized["input_ids"][0])
+                    for k, v in tokenized.items():
+                        if k not in ("input_ids", "attention_mask"):
+                            # apply_chat_template with conversation=[prompt] returns tensors with a leading
+                            # batch-of-1 dimension. Index with [0] for both lists and tensors so that
+                            # torch.stack below produces shape (N, ...) not (N, 1, ...).
+                            all_multimodal_fields.setdefault(k, []).append(
+                                v[0] if isinstance(v, (list, torch.Tensor)) else v
+                            )
+                # Normalize tensor fields so they are batched consistently with the non-per-sample path.
+                for k, values in all_multimodal_fields.items():
+                    if values and isinstance(values[0], torch.Tensor):
+                        all_multimodal_fields[k] = torch.stack(values, dim=0)
+                multimodal_fields = all_multimodal_fields
+            else:
+                # We pass padding=True to work around a bug introduced in transformers 5.2.0 in some processors
+                # (e.g. Qwen2.5-VL) that crash on batched unpadded input. We then unpad input_ids using attention_mask.
+                # See: https://github.com/huggingface/transformers/issues/44514
+                tokenized = self.processing_class.apply_chat_template(
+                    conversation=prompts,
+                    tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+                    chat_template=self.chat_template,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    padding=True,
+                    **self.chat_template_kwargs,
+                )
+                # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
+                prompt_ids = [
+                    [tok for tok, m in zip(ids, mask, strict=True) if m]
+                    for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
+                ]
+                # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
+                multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
             images = None
@@ -1407,8 +1449,37 @@ class GRPOTrainer(_BaseTrainer):
 
         return full_ids[len(prefix_ids) :]
 
-    def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields):
+    def _tool_call_loop(
+        self,
+        prompts,
+        prompt_ids,
+        completion_ids,
+        completions,
+        logprobs,
+        images,
+        multimodal_fields,
+        per_sample_tools=None,
+    ):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
+
+        # Build per-sample sync/async tool dicts from the provided callables.
+        if per_sample_tools is not None:
+            sync_tool_dicts = []
+            async_tool_dicts = []
+            for sample_tools in per_sample_tools:
+                sync_dict = {}
+                async_dict = {}
+                for tool in sample_tools:
+                    if inspect.iscoroutinefunction(tool):
+                        async_dict[tool.__name__] = tool
+                    else:
+                        sync_dict[tool.__name__] = tool
+                sync_tool_dicts.append(sync_dict)
+                async_tool_dicts.append(async_dict)
+        else:
+            sync_tool_dicts = self._sync_tool_dicts
+            async_tool_dicts = self._async_tool_dicts
+
         tool_calls = [completion[0].get("tool_calls") for completion in completions]
         idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
         tool_calls = [tool_calls[idx] for idx in idxs_with_tool]
@@ -1424,8 +1495,8 @@ class GRPOTrainer(_BaseTrainer):
                 idx_with_tool = idxs_with_tool[idx]
                 tool_call_list = tool_calls[idx]
                 prompt_completion_tool = prompt_completion_tools[idx]
-                sync_tool_dict = self._sync_tool_dicts[idx_with_tool]
-                async_tool_dict = self._async_tool_dicts[idx_with_tool]
+                sync_tool_dict = sync_tool_dicts[idx_with_tool]
+                async_tool_dict = async_tool_dicts[idx_with_tool]
                 # Append the last assistant message (which triggered tool_calls) to the prompt
                 prompt_completion_tool.append(completions[idx_with_tool][-1])
                 async_coros = []
@@ -1586,7 +1657,7 @@ class GRPOTrainer(_BaseTrainer):
 
         return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count
 
-    def _generate(self, prompts: list):
+    def _generate(self, prompts: list, per_sample_tools: "list[list[Callable]] | None" = None):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1612,7 +1683,7 @@ class GRPOTrainer(_BaseTrainer):
             extra_fields = {k: v for k, v in output.items() if k not in required_keys}
             prompt_ids, completion_ids, logprobs = output["prompt_ids"], output["completion_ids"], output["logprobs"]
         else:
-            prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
+            prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts, per_sample_tools=per_sample_tools)
             completion_ids, logprobs = self._generate_single_turn(prompt_ids, images, multimodal_fields)
             extra_fields = {}
 
@@ -1641,7 +1712,14 @@ class GRPOTrainer(_BaseTrainer):
                 tool_call_count,
                 tool_failure_count,
             ) = self._tool_call_loop(
-                prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields
+                prompts,
+                prompt_ids,
+                completion_ids,
+                completions,
+                logprobs,
+                images,
+                multimodal_fields,
+                per_sample_tools=per_sample_tools,
             )
         else:
             # Support custom env_mask from rollout_func (e.g., for environment feedback masking)
@@ -1742,6 +1820,23 @@ class GRPOTrainer(_BaseTrainer):
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
+        # If the dataset has a "tools" column, use it for per-sample tool filtering.
+        # Each sample lists the tool names it wants; missing/None falls back to all tools.
+        # Note: combining a `tools` column with `environment_factory` is not supported. When
+        # environments are used, `self.tools` holds environment 0's bound methods (representative
+        # for schema rendering), so all per-sample callables would resolve to environment 0's
+        # instance instead of each sample's own environment.
+        per_sample_tools = None
+        if self.tools and inputs and "tools" in inputs[0]:
+            tool_lookup = {tool.__name__: tool for tool in self.tools}
+            per_sample_tools = []
+            for example in inputs:
+                tool_names = example.get("tools")
+                if tool_names is not None:
+                    per_sample_tools.append([tool_lookup[name] for name in tool_names])
+                else:
+                    per_sample_tools.append(list(tool_lookup.values()))
+
         (
             prompt_ids_list,
             completion_ids_list,
@@ -1750,7 +1845,7 @@ class GRPOTrainer(_BaseTrainer):
             num_items_in_batch,
             sampling_per_token_logps_list,
             extra_fields,
-        ) = self._generate(prompts)
+        ) = self._generate(prompts, per_sample_tools=per_sample_tools)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]

@@ -39,6 +39,8 @@
     title: Distributing Training
   - local: use_model
     title: Using Trained Models
+  - local: per_sample_tools
+    title: Per-Sample Tool Filtering
   title: How-to guides
 - sections:
   - local: deepspeed_integration
