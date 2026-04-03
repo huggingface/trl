@@ -883,7 +883,7 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
 
-    num_images = batch["num_images"]
+    num_images = batch["num_images"].tolist()
     pixel_values = batch["pixel_values"]  # [total, feature_dim]
 
     if "image_grid_thw" in batch:
@@ -902,9 +902,8 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
 
     if "image_position_ids" in batch:
         image_position_ids = batch["image_position_ids"]  # [total]
-        sections = num_images.tolist()
-        split_pixel_values = list(torch.split(pixel_values, sections, dim=0))
-        split_image_position_ids = list(torch.split(image_position_ids, sections, dim=0))
+        split_pixel_values = list(torch.split(pixel_values, num_images, dim=0))
+        split_image_position_ids = list(torch.split(image_position_ids, num_images, dim=0))
         return {**batch, "pixel_values": split_pixel_values, "image_position_ids": split_image_position_ids}
 
     return batch
