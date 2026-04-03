@@ -1549,7 +1549,7 @@ class JEPOTrainer(_BaseTrainer):
             #fix: there is EOT_TOKEN at the end of the cot_text and cot_answer_text ship by one
             answer_mask = torch.cat([fabricated_completions_mask[:, 1:], torch.zeros((fabricated_completions_mask.shape[0], 1), dtype=torch.long, device=device)], dim=1)  - torch.cat([padded_cot_attention_mask[:, 1:], torch.zeros((padded_cot_attention_mask.shape[0], 1), dtype=torch.long, device=device)], dim=1)    
             #check the answer_mask is correct by decoding the tokens corresponding to the answer_mask and see if it matches with the cot_answer_texts using padding mask to ignore the padding tokens
-            answer_texts_from_mask = self.processing_class.batch_decode(fabricated_completions_ids * answer_mask, skip_special_tokens=True)
+            #answer_texts_from_mask = self.processing_class.batch_decode(fabricated_completions_ids * answer_mask, skip_special_tokens=True)
             #print(f"answer_texts_from_mask: {[answer_text.strip('!') for answer_text in answer_texts_from_mask]}")
 
             #compute answer log probabilities (i.e., p(A|Q,C)) and use it as JEPO rewards by per_token_logits over answer mask, then sum over the answer tokens to get the total log probability of the answer given the question and CoT. The intuition is that if the sampled CoT is helpful for generating the completion, then the log probability of the answer given the prompt and CoT should be high, resulting in a high JEPO reward
@@ -1722,9 +1722,9 @@ class JEPOTrainer(_BaseTrainer):
         
         # compute p(C|Q), fabricated_completions has the EOT_TOKEN at the end and answer_mask have that removed, need to align them first before applying the answer_mask
         cot_mask = torch.cat([fabricated_completions_mask[:, 1:], torch.zeros((fabricated_completions_mask.shape[0], 1), dtype=torch.long, device=device)], dim=1) - answer_mask  # this is the mask for the CoT part, which is p(C|x), we will use it to calculate the JEPO reward, the intuition is that if the sampled CoT is helpful for generating the completion, then p(C|x) should be high, resulting in a high JEPO reward. Note that we need to remove the EOT_TOKEN at the end of the fabricated_completions when calculating p(C|x) because the EOT_TOKEN is not part of the CoT, it's just a special token to indicate the end of the sequence. The answer_mask already has that removed, so we can use it to zero out the log probabilities for the answer part and keep only the log probabilities for the CoT part.
-        answer_texts_from_mask = self.processing_class.batch_decode(fabricated_completions_ids * answer_mask, skip_special_tokens=True)
+        #answer_texts_from_mask = self.processing_class.batch_decode(fabricated_completions_ids * answer_mask, skip_special_tokens=True)
 
-        cot_texts_from_mask = self.processing_class.batch_decode(fabricated_completions_ids * cot_mask, skip_special_tokens=True)
+        #cot_texts_from_mask = self.processing_class.batch_decode(fabricated_completions_ids * cot_mask, skip_special_tokens=True)
         cot_token_logps = per_token_logps * cot_mask  # this is the log probability of the CoT part, which is p(C|x), we will use it to calculate the JEPO reward, the intuition is that if the sampled CoT is helpful for generating the completion, then p(C|x) should be high, resulting in a high JEPO reward. Note that we need to remove the EOT_TOKEN at the end of the fabricated_completions when calculating p(C|x) because the EOT_TOKEN is not part of the CoT, it's just a special token to indicate the end of the sequence. The answer_mask already has that removed, so we can use it to zero out the log probabilities for the answer part and keep only the log probabilities for the CoT part.
 
         advantages = advantages.unsqueeze(1)  # (B, 1)
