@@ -15,11 +15,11 @@
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
-from transformers import TrainingArguments
+from .base_config import _BaseConfig
 
 
 @dataclass
-class JEPOConfig(TrainingArguments):
+class JEPOConfig(_BaseConfig):
     r"""
     Configuration class for the [`JEPOTrainer`], which serves as a variation of GRPO for unverifiable RL training.
     JEPO [https://arxiv.org/pdf/2503.19618]

@@ -52,7 +52,7 @@ from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
-from .base_trainer import BaseTrainer
+from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .jepo_config import JEPOConfig
 from .utils import (
@@ -97,7 +97,7 @@ RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 # What we call a CoT function is a callable that takes completion text and answer and returns CoT text and CoT+answer.
 CoTFunc = Callable[[str, str], [str, str]]
 
-class JEPOTrainer(BaseTrainer):
+class JEPOTrainer(_BaseTrainer):
     """
     Trainer for the Jensen’s Evidence lower bound Policy Optimization (JEPO) method. This algorithm was initially proposed in the
     paper: Beyond Verifiable Rewards: Scaling Reinforcement Learning for Language Models to Unverifiable Data [https://arxiv.org/pdf/2503.19618]
