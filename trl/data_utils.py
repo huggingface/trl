@@ -29,7 +29,7 @@ from transformers import PreTrainedTokenizerBase, ProcessorMixin
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
 
 
-def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list = None) -> list[dict[str, Any]]:
+def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | None = None) -> list[dict[str, Any]]:
     # docstyle-ignore  # because <Image> is not parsable in the code block
     """
     Convert messages into a structured multimodal format and inject the provided images into the message contents.
