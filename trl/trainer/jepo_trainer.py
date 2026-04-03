@@ -1374,7 +1374,7 @@ class JEPOTrainer(_BaseTrainer):
                 for j in range(start_idx, end_idx):  
                     if jepo_applicable_mask[j]:  
                         jepo_advantages[j] = torch.clamp( jepo_advantages[j]/(group_std + 1e-4) , -1, 1)
-                        
+        jepo_advantages = gather(jepo_advantages)  # gather the advantages across processes
         return jepo_advantages  
 
     def _generate_and_score_completions(
