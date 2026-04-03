@@ -25,12 +25,7 @@ class JEPOConfig(_BaseConfig):
     JEPO [https://arxiv.org/pdf/2503.19618]
 
     This class includes only the parameters that are specific to JEPO training. For a full list of training arguments,
-    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
-    differ from those in [`~transformers.TrainingArguments`].
 
-    Using [`~transformers.HfArgumentParser`] we can turn this class into
-    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
-    command line.
 
     Parameters:
         > Parameters that control the model and reference model
@@ -232,7 +227,7 @@ class JEPOConfig(_BaseConfig):
             are logged.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(

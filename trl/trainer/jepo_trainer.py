@@ -1707,7 +1707,7 @@ class JEPOTrainer(_BaseTrainer):
         )
 
         if self.top_entropy_quantile < 1.0:
-            entropy_mask = self.get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
+            entropy_mask = self.get_high_entropy_mask(entropies, fabricated_completions_mask, 1 - self.top_entropy_quantile)
         else:
             entropy_mask = None
 
