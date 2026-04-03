@@ -1725,10 +1725,8 @@ class JEPOTrainer(_BaseTrainer):
         # compute p(C|Q), fabricated_completions has the EOT_TOKEN at the end and answer_mask have that removed, need to align them first before applying the answer_mask
         cot_mask = torch.cat([fabricated_completions_mask[:, 1:], torch.zeros((fabricated_completions_mask.shape[0], 1), dtype=torch.long, device=device)], dim=1) - answer_mask  # this is the mask for the CoT part, which is p(C|x), we will use it to calculate the JEPO reward, the intuition is that if the sampled CoT is helpful for generating the completion, then p(C|x) should be high, resulting in a high JEPO reward. Note that we need to remove the EOT_TOKEN at the end of the fabricated_completions when calculating p(C|x) because the EOT_TOKEN is not part of the CoT, it's just a special token to indicate the end of the sequence. The answer_mask already has that removed, so we can use it to zero out the log probabilities for the answer part and keep only the log probabilities for the CoT part.
         answer_texts_from_mask = self.processing_class.batch_decode(fabricated_completions_ids * answer_mask, skip_special_tokens=True)
-        #print(f"answer_texts_from_mask: {[answer_text.strip('!') for answer_text in answer_texts_from_mask]}")
 
         cot_texts_from_mask = self.processing_class.batch_decode(fabricated_completions_ids * cot_mask, skip_special_tokens=True)
-        #print(f"cot_texts_from_mask: {[cot_text.strip('!') for cot_text in cot_texts_from_mask]}")
         cot_token_logps = per_token_logps * cot_mask  # this is the log probability of the CoT part, which is p(C|x), we will use it to calculate the JEPO reward, the intuition is that if the sampled CoT is helpful for generating the completion, then p(C|x) should be high, resulting in a high JEPO reward. Note that we need to remove the EOT_TOKEN at the end of the fabricated_completions when calculating p(C|x) because the EOT_TOKEN is not part of the CoT, it's just a special token to indicate the end of the sequence. The answer_mask already has that removed, so we can use it to zero out the log probabilities for the answer part and keep only the log probabilities for the CoT part.
 
         advantages = advantages.unsqueeze(1)  # (B, 1)
@@ -1739,7 +1737,6 @@ class JEPOTrainer(_BaseTrainer):
             loss = - per_token_adv.sum(dim=1).sum()/ (self.num_generations) # sum over the tokens and average over the batch
         else:
             loss = - (per_token_adv.sum(dim=1)/cot_mask.sum(dim=1)).sum()/ (self.num_generations) # sum over the tokens and average over the batch
-        print(f"advantages loss: {loss}")
 
         #compute P(A|Q,C) and use it as a supervised loss to encourage the model to generate answers 
         if self.supervised_loss_weight > 0.0:
@@ -1751,15 +1748,12 @@ class JEPOTrainer(_BaseTrainer):
                 supervised_loss= answer_token_logps.sum(dim=1)/answer_mask.sum(dim=1)
             # sum per number_generations to get the total log probability of the answer given the question and CoT, which is p(A|Q,C), we will use it as a supervised loss to encourage the model to generate answers that are likely under the reference model, which can help stabilize training and prevent divergence.
             supervised_loss = torch.log(supervised_loss.view(-1, self.num_generations).sum(dim=1)/self.num_generations + 1e-8) #average over the generations and take log to get the supervised loss for each sample in the batch, which is log(p(A|Q,C)), we will use it as a supervised loss to encourage the model to generate answers that are likely under the reference model, which can help stabilize training and prevent divergence.
-            #print(f"supervised_loss before weighting: {supervised_loss}")
             loss = loss - self.supervised_loss_weight * supervised_loss.sum()  # average over the batch
-            #print(f"supervised_loss loss: {loss}, supervised_loss_weight: {self.supervised_loss_weight}")
         if self.beta != 0.0:
             if self.loss_type == 'unnorm_jepo':
                 loss = loss + self.beta * (per_token_kl * fabricated_completions_mask).sum(dim=1).sum() / (self.num_generations)  # sum over the tokens and average over the batch
             else:    
                 loss = loss + self.beta * (((per_token_kl * fabricated_completions_mask).sum(dim=1)) / fabricated_completions_mask.sum(dim=1)).sum() / (self.num_generations)  # average over the batch and the tokens, note that we only calculate KL for the completion part, which is indicated by the fabricated_completions_mask. The intuition is that we want to regularize the model to not deviate too much from the reference model, which can help stabilize training and prevent divergence.
-            print(f" kl loss: {loss}, beta: {self.beta}")
 
 
         # Log the metrics
