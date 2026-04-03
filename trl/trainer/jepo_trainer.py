@@ -1374,7 +1374,6 @@ class JEPOTrainer(_BaseTrainer):
                 for j in range(start_idx, end_idx):  
                     if jepo_applicable_mask[j]:  
                         jepo_advantages[j] = torch.clamp( jepo_advantages[j]/(group_std + 1e-4) , -1, 1)
-        jepo_advantages = gather(jepo_advantages)  # gather the advantages across processes
         return jepo_advantages  
 
     def _generate_and_score_completions(
@@ -1562,6 +1561,8 @@ class JEPOTrainer(_BaseTrainer):
             #print(f"answer_mask: {answer_mask.sum(dim=1)}, fabricated_completions_mask: {fabricated_completions_mask.sum(dim=1)}, padded_cot_attention_mask: {padded_cot_attention_mask.sum(dim=1)}")
 
             jepo_rewards[jepo_applicable_mask == False] = 0.0  # if not applicable for JEPO, set reward to 0
+            jepo_rewards = gather(jepo_rewards)
+            jepo_applicable_mask = gather(jepo_applicable_mask)
             #calculate the mean of jepo rewards for each group of generations, based on the jepo_applicable_mask
             jepo_advantages = self._compute_jepo_advantages(jepo_rewards, jepo_applicable_mask, self.num_generations, device=device)
             #print(f"jepo_rewards: {jepo_rewards}, jepo_advantages: {jepo_advantages}")
@@ -1653,8 +1654,6 @@ class JEPOTrainer(_BaseTrainer):
             "advantages": advantages,
             "num_items_in_batch": num_items_in_batch,
         }
-        if self.use_vllm and self.vllm_importance_sampling_correction:
-            output["importance_sampling_ratio"] = importance_sampling_ratio
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
         if "pixel_values" in forward_kwargs:
