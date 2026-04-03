@@ -242,7 +242,7 @@ class TestDistributed(TrlTestCase):
             pytest.param(
                 "fsdp2",
                 marks=pytest.mark.skipif(
-                    Version(transformers.__version__) == Version("5.4.0"),
+                    Version(transformers.__version__) >= Version("5.4.0"),
                     reason="Upstream issue: NaN weights on non-rank-0 FSDP processes (see #5386 and transformers#45050)",
                 ),
             ),
