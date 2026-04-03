@@ -739,9 +739,19 @@ class KTOTrainer(_BaseTrainer):
                 self.train_dataset, self.args.per_device_train_batch_size, "Train dataset reference log probs"
             )
             if self.eval_dataset is not None:
-                self.eval_dataset = self._precompute_reference_log_probs(
-                    self.eval_dataset, self.args.per_device_eval_batch_size, "Eval dataset reference log probs"
-                )
+                if isinstance(self.eval_dataset, dict):
+                    self.eval_dataset = {
+                        name: self._precompute_reference_log_probs(
+                            dataset,
+                            self.args.per_device_eval_batch_size,
+                            f"Eval dataset ({name}) reference log probs",
+                        )
+                        for name, dataset in self.eval_dataset.items()
+                    }
+                else:
+                    self.eval_dataset = self._precompute_reference_log_probs(
+                        self.eval_dataset, self.args.per_device_eval_batch_size, "Eval dataset reference log probs"
+                    )
 
     @contextmanager
     def null_ref_context(self):
