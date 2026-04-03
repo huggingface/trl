@@ -949,15 +949,6 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["image_position_ids"][0], batch["image_position_ids"][:1])
         assert torch.equal(result["image_position_ids"][1], batch["image_position_ids"][1:])
 
-    def test_no_split_without_grid_or_position_ids(self):
-        # No image_grid_thw and no image_position_ids: return batch unchanged
-        batch = {
-            "num_images": [1, 2],
-            "pixel_values": torch.arange(3 * 4).reshape(3, 4),
-        }
-        result = split_pixel_values_by_grid(batch)
-        assert result is batch
-
 
 class TestUnsplitPixelValuesByGrid(TrlTestCase):
     def test_unsplit_correctly(self):

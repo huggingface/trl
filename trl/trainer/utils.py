@@ -876,9 +876,9 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
     """
     Splits `batch["pixel_values"]` into a list of tensors, one per sample, based on `batch["num_images"]`.
 
-    For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values`
-    belong to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed
-    directly by image count.
+    For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values` belong
+    to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
+    image count.
     """
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
