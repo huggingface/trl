@@ -730,9 +730,9 @@ class TestGRPOTrainer(TrlTestCase):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
 
@@ -1146,9 +1146,9 @@ class TestGRPOTrainer(TrlTestCase):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             use_liger_kernel=True,
             report_to="none",
             logging_strategy="no",
@@ -1229,9 +1229,9 @@ class TestGRPOTrainer(TrlTestCase):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
             cast_lm_head_to_fp32=True,
         )
@@ -1373,9 +1373,9 @@ class TestGRPOTrainer(TrlTestCase):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
             use_vllm=True,
             vllm_importance_sampling_correction=True,
@@ -1971,7 +1971,6 @@ class TestGRPOTrainer(TrlTestCase):
         params_to_skip = (
             "model.vision_tower.",
             "model.multi_modal_projector.",
-            "model.vision_model.",
             "model.visual.",
             "model.image_newline",
         )
@@ -2231,9 +2230,9 @@ class TestGRPOTrainer(TrlTestCase):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
             use_vllm=True,
             vllm_mode="server",
@@ -2334,9 +2333,9 @@ class TestGRPOTrainer(TrlTestCase):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
             chat_template_kwargs={"enable_thinking": False},
         )

@@ -15,7 +15,6 @@
 from typing import Any
 
 import torch
-from packaging.version import Version
 
 from ...data_utils import is_conversational
 from ...extras.profiling import profiling_context
@@ -23,17 +22,8 @@ from ...import_utils import is_vllm_available
 
 
 if is_vllm_available():
-    import vllm
     from vllm import SamplingParams
-
-    if Version(vllm.__version__) <= Version("0.10.2"):
-        from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
-
-        structured_outputs_key = "guided_decoding"
-    else:
-        from vllm.sampling_params import StructuredOutputsParams
-
-        structured_outputs_key = "structured_outputs"
+    from vllm.sampling_params import StructuredOutputsParams
 
 
 def _build_base_generation_kwargs(
@@ -78,7 +68,7 @@ def _build_colocate_sampling_params(
 
     # Add colocate-specific parameters
     if trainer.vllm_generation.structured_outputs_regex:
-        generation_kwargs[structured_outputs_key] = StructuredOutputsParams(
+        generation_kwargs["structured_outputs"] = StructuredOutputsParams(
             regex=trainer.vllm_generation.structured_outputs_regex
         )
     if logprobs:
