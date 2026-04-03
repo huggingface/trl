@@ -774,7 +774,7 @@ class KTOTrainer(_BaseTrainer):
         data_loader = self.accelerator.prepare(DataLoader(dataset, **dataloader_params))
         reference_completion_logps = []
         reference_KL_logps = []
-        for padded_batch in tqdm(iterable=data_loader, desc=desc):
+        for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
             reference_completion_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
             reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
             reference_completion_logps.append(reference_completion_logp.cpu())
