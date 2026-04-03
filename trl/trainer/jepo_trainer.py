@@ -1469,7 +1469,6 @@ class JEPOTrainer(_BaseTrainer):
         # Note the advantagees would be 0 if the sample does not following the format required by the format reward function;
         # get clone of rewards 
         jepo_rewards = rewards.clone()
-        logits_to_keep_answer = rewards.clone()
         with torch.no_grad():
             
             
