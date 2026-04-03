@@ -1424,7 +1424,7 @@ class GRPOTrainer(_BaseTrainer):
         """Get token IDs for tool result formatting by using a minimal dummy conversation."""
         dummy_messages = [{"role": "user", "content": "dummy"}, {"role": "assistant", "content": "dummy"}]
         if self._is_vlm:
-            dummy_messages = prepare_multimodal_messages(dummy_messages, [])
+            dummy_messages = prepare_multimodal_messages(dummy_messages)
         prefix_ids = self.processing_class.apply_chat_template(
             dummy_messages,
             add_generation_prompt=False,
@@ -1509,9 +1509,9 @@ class GRPOTrainer(_BaseTrainer):
     def _get_vision_token_ids(self):
         """Get vision-related special token IDs from the processor's tokenizer.
 
-        Returns a dict with keys 'vision_start', 'vision_end', 'image_pad', 'video_pad'.
-        Values are None if the token doesn't exist in the vocabulary.
-        Supports multiple VLM families (e.g. Qwen uses <|vision_start|>, Gemma uses <|image>).
+        Returns a dict with keys 'vision_start', 'vision_end', 'image_pad', 'video_pad'. Values are None if the token
+        doesn't exist in the vocabulary. Supports multiple VLM families (e.g. Qwen uses <|vision_start|>, Gemma uses
+        <|image>).
         """
         if self._vision_token_ids_cache is None:
             cache = {"vision_start": None, "vision_end": None, "image_pad": None, "video_pad": None}
@@ -1535,9 +1535,9 @@ class GRPOTrainer(_BaseTrainer):
     def _truncate_at_image_boundary(self, ids, max_length):
         """Truncate token ID list to max_length, ensuring we don't cut in the middle of an image.
 
-        If truncation would split an image token sequence (<|vision_start|>...<|vision_end|>),
-        backs up to the end of the last complete image. This prevents mismatches between
-        image placeholder tokens in input_ids and pixel_values in the forward pass.
+        If truncation would split an image token sequence (<|vision_start|>...<|vision_end|>), backs up to the end of
+        the last complete image. This prevents mismatches between image placeholder tokens in input_ids and
+        pixel_values in the forward pass.
         """
         max_length = max(max_length, 0)
         if len(ids) <= max_length:
@@ -2004,7 +2004,7 @@ class GRPOTrainer(_BaseTrainer):
                     "template internally."
                 )
             prompts = [
-                prepare_multimodal_messages(prompt, image_list)
+                prepare_multimodal_messages(prompt, images=image_list)
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
