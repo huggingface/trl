@@ -1036,6 +1036,7 @@ class DPOTrainer(_BaseTrainer):
             "image_grid_thw",
             "image_sizes",
             "pixel_position_ids",
+            "image_position_ids",
         ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
@@ -1162,6 +1163,7 @@ class DPOTrainer(_BaseTrainer):
             "image_grid_thw",
             "image_sizes",
             "pixel_position_ids",
+            "image_position_ids",
         ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]

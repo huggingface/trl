@@ -681,6 +681,7 @@ class RLOOTrainer(_BaseTrainer):
         token_type_ids=None,
         mm_token_type_ids=None,
         pixel_position_ids=None,
+        image_position_ids=None,
     ) -> dict[str, torch.Tensor | None]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -703,7 +704,15 @@ class RLOOTrainer(_BaseTrainer):
                 img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
                 model_inputs["image_grid_thw"] = image_grid_thw[img_start:img_end]
             elif pixel_values is not None:
-                model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
+                if num_images is not None:
+                    # pixel_values is indexed by image, not by sample — slice using cumulative image counts
+                    cum_imgs = [0]
+                    for n in num_images:
+                        cum_imgs.append(cum_imgs[-1] + int(n))
+                    img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
+                    model_inputs["pixel_values"] = pixel_values[img_start:img_end]
+                else:
+                    model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
             if pixel_attention_mask is not None:
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
             if image_sizes is not None:
@@ -714,6 +723,12 @@ class RLOOTrainer(_BaseTrainer):
                 model_inputs["mm_token_type_ids"] = mm_token_type_ids[start : start + batch_size]
             if pixel_position_ids is not None:
                 model_inputs["pixel_position_ids"] = pixel_position_ids[start : start + batch_size]
+            if image_position_ids is not None:
+                # image_position_ids is indexed by image (like pixel_values), not by sample
+                if num_images is not None and pixel_values is not None:
+                    model_inputs["image_position_ids"] = image_position_ids[img_start:img_end]
+                else:
+                    model_inputs["image_position_ids"] = image_position_ids[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -1363,6 +1378,8 @@ class RLOOTrainer(_BaseTrainer):
             output["mm_token_type_ids"] = forward_kwargs["mm_token_type_ids"]
         if "pixel_position_ids" in forward_kwargs:
             output["pixel_position_ids"] = forward_kwargs["pixel_position_ids"]
+        if "image_position_ids" in forward_kwargs:
+            output["image_position_ids"] = forward_kwargs["image_position_ids"]
         if images is not None:
             output["num_images"] = num_images
         return output
@@ -1396,6 +1413,7 @@ class RLOOTrainer(_BaseTrainer):
             token_type_ids=inputs.get("token_type_ids"),
             mm_token_type_ids=inputs.get("mm_token_type_ids"),
             pixel_position_ids=inputs.get("pixel_position_ids"),
+            image_position_ids=inputs.get("image_position_ids"),
         )
 
         logps = (per_token_logps * completion_mask).sum(1)  # mask out padding and tokens after EOS
