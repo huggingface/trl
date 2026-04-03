@@ -216,7 +216,7 @@ class JEPOTrainer(_BaseTrainer):
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
             model_name = model_name.split("/")[-1]
-            args = GRPOConfig(f"{model_name}-JEPO")
+            args = JEPOConfig(f"{model_name}-JEPO")
 
         # Models
         # Trained model
@@ -231,7 +231,7 @@ class JEPOTrainer(_BaseTrainer):
                 model_init_kwargs["dtype"] = dtype
             else:
                 raise ValueError(
-                    "Invalid `dtype` passed to `GRPOConfig`. Expected either 'auto' or a string representing "
+                    "Invalid `dtype` passed to `JEPOConfig`. Expected either 'auto' or a string representing "
                     f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
             # Disable caching if gradient checkpointing is enabled (not supported)
@@ -242,7 +242,7 @@ class JEPOTrainer(_BaseTrainer):
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
                 logger.warning(
-                    "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
+                    "You passed `model_init_kwargs` to the `JEPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
 
