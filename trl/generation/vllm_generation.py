@@ -35,6 +35,7 @@ from .vllm_client import VLLMClient
 
 if is_vllm_available():
     from vllm import LLM, RequestOutput, SamplingParams
+    from vllm.sampling_params import StructuredOutputsParams
 
 
 logger = logging.getLogger(__name__)
@@ -544,9 +545,6 @@ class VLLMGeneration:
             `num_logprobs` is 1 when `logprobs=0`, or up to N+1 when `logprobs=N` (the sampled token is always included
             and may fall outside the top-N).
         """
-
-        from vllm.sampling_params import StructuredOutputsParams
-
         profiler = profiler or nullcontext()
         accelerator = self.accelerator
         temperature = self.temperature

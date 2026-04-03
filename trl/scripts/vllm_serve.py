@@ -416,6 +416,7 @@ def main(script_args: ScriptArguments):
     from fastapi import FastAPI
     from pydantic import BaseModel
     from vllm import SamplingParams
+    from vllm.sampling_params import StructuredOutputsParams
 
     if Version(vllm.__version__) <= Version("0.11.0"):
         from vllm.utils import get_open_port
@@ -737,8 +738,6 @@ def main(script_args: ScriptArguments):
         generation_kwargs.update(request.generation_kwargs)
 
         # Structured outputs, if enabled
-        from vllm.sampling_params import StructuredOutputsParams
-
         if request.structured_outputs_regex is not None:
             if generation_kwargs.get("structured_outputs") is not None:
                 logger.warning(

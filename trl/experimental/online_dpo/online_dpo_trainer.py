@@ -87,6 +87,7 @@ if Version(transformers.__version__) >= Version("5.2.0"):
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+    from vllm.sampling_params import StructuredOutputsParams
 
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
@@ -446,8 +447,6 @@ class OnlineDPOTrainer(_BaseTrainer):
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
                     "`pip install trl[vllm]` to use it."
                 )
-
-            from vllm.sampling_params import StructuredOutputsParams
 
             if self.vllm_mode == "server":
                 if self.accelerator.is_main_process:
