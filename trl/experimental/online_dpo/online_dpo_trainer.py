@@ -449,8 +449,6 @@ class OnlineDPOTrainer(_BaseTrainer):
 
             from vllm.sampling_params import StructuredOutputsParams
 
-            structured_outputs_key = "structured_outputs"
-
             if self.vllm_mode == "server":
                 if self.accelerator.is_main_process:
                     if args.vllm_server_base_url is not None:
@@ -528,16 +526,14 @@ class OnlineDPOTrainer(_BaseTrainer):
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             if self.structured_outputs_regex is not None:
-                if generation_kwargs.get(structured_outputs_key) is not None:
+                if generation_kwargs.get("structured_outputs") is not None:
                     logger.warning(
-                        f"Both `vllm_structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
+                        "Both `vllm_structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
                         "`vllm_structured_outputs_regex` takes precedence."
                     )
-                generation_kwargs[structured_outputs_key] = StructuredOutputsParams(
-                    regex=self.structured_outputs_regex
-                )
-            elif isinstance(structured_outputs_kwargs := generation_kwargs.get(structured_outputs_key), dict):
-                generation_kwargs[structured_outputs_key] = StructuredOutputsParams(**structured_outputs_kwargs)
+                generation_kwargs["structured_outputs"] = StructuredOutputsParams(regex=self.structured_outputs_regex)
+            elif isinstance(structured_outputs_kwargs := generation_kwargs.get("structured_outputs"), dict):
+                generation_kwargs["structured_outputs"] = StructuredOutputsParams(**structured_outputs_kwargs)
             self.generation_config = SamplingParams(**generation_kwargs)
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process

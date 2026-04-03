@@ -25,8 +25,6 @@ if is_vllm_available():
     from vllm import SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
 
-    structured_outputs_key = "structured_outputs"
-
 
 def _build_base_generation_kwargs(
     trainer,
@@ -70,7 +68,7 @@ def _build_colocate_sampling_params(
 
     # Add colocate-specific parameters
     if trainer.vllm_generation.structured_outputs_regex:
-        generation_kwargs[structured_outputs_key] = StructuredOutputsParams(
+        generation_kwargs["structured_outputs"] = StructuredOutputsParams(
             regex=trainer.vllm_generation.structured_outputs_regex
         )
     if logprobs:
