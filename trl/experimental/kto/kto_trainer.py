@@ -736,21 +736,17 @@ class KTOTrainer(_BaseTrainer):
 
         if self.precompute_ref_log_probs:
             self.train_dataset = self._precompute_reference_log_probs(
-                self.train_dataset, self.args.per_device_train_batch_size, "Train dataset reference log probs"
+                self.train_dataset, "train", self.args.per_device_train_batch_size
             )
             if self.eval_dataset is not None:
                 if isinstance(self.eval_dataset, dict):
                     self.eval_dataset = {
-                        name: self._precompute_reference_log_probs(
-                            dataset,
-                            self.args.per_device_eval_batch_size,
-                            f"Eval dataset ({name}) reference log probs",
-                        )
+                        name: self._precompute_reference_log_probs(dataset, name, self.args.per_device_eval_batch_size)
                         for name, dataset in self.eval_dataset.items()
                     }
                 else:
                     self.eval_dataset = self._precompute_reference_log_probs(
-                        self.eval_dataset, self.args.per_device_eval_batch_size, "Eval dataset reference log probs"
+                        self.eval_dataset, "eval", self.args.per_device_eval_batch_size
                     )
 
     @contextmanager
@@ -767,7 +763,7 @@ class KTOTrainer(_BaseTrainer):
             if self.ref_adapter_name:
                 self.model.set_adapter(self.model_adapter_name or "default")
 
-    def _precompute_reference_log_probs(self, dataset: Dataset, batch_size: int, desc: str) -> Dataset:
+    def _precompute_reference_log_probs(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         dataloader_params = {
             "batch_size": batch_size,
             "collate_fn": self.data_collator,
