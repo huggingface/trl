@@ -19,6 +19,7 @@ import os
 import random
 import socket
 import threading
+import types
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -32,7 +33,6 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
-from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
 from torch.utils.data import Sampler
 from transformers import (
@@ -233,64 +233,6 @@ def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
     )
 
     return peft_config
-
-
-def prepare_deepspeed(
-    model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
-) -> torch.nn.Module:
-    """
-    Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based
-    on the model and batch size.
-
-    Args:
-        model (`torch.nn.Module`):
-            The model to be prepared for DeepSpeed training.
-        per_device_train_batch_size (`int`):
-            The training batch size per device.
-        fp16 (`bool`, defaults to `False`):
-            Whether to use FP16 precision.
-        bf16 (`bool`, defaults to `False`):
-            Whether to use BF16 precision.
-
-    Returns:
-        `torch.nn.Module`:
-            The model initialized and configured with DeepSpeed for training.
-    """
-    import deepspeed
-
-    deepspeed_plugin = AcceleratorState().deepspeed_plugin
-    config_kwargs = deepspeed_plugin.deepspeed_config
-    if config_kwargs["zero_optimization"]["stage"] != 3:
-        config_kwargs["train_micro_batch_size_per_gpu"] = per_device_train_batch_size
-        config_kwargs = {
-            "train_micro_batch_size_per_gpu": config_kwargs["train_micro_batch_size_per_gpu"],
-            "prescale_gradients": False,
-            "wall_clock_breakdown": False,
-        }
-        if bf16:
-            config_kwargs["bf16"] = {"enabled": True}
-        elif fp16:
-            config_kwargs["fp16"] = {"enabled": True}
-    else:
-        if hasattr(model, "config"):
-            hidden_size = (
-                max(model.config.hidden_sizes)
-                if getattr(model.config, "hidden_sizes", None)
-                else getattr(model.config, "hidden_size", None)
-            )
-            if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
-                # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
-                # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
-                config_kwargs.update(
-                    {
-                        "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
-                        "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
-                        "zero_optimization.stage3_prefetch_bucket_size": 0,
-                    }
-                )
-    model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
-    model.eval()
-    return model
 
 
 def generate_model_card(
@@ -933,22 +875,38 @@ def identity(x):
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | list[torch.Tensor]]:
     """
     Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in `batch["image_grid_thw"]`
-    and batch["num_images"] while keeping other entries unchanged.
+    and batch["num_images"] while keeping other entries unchanged. For models without `image_grid_thw` (e.g. Gemma),
+    splits by `num_images` directly.
     """
-    if "image_grid_thw" not in batch or "pixel_values" not in batch or "num_images" not in batch:
+    if "pixel_values" not in batch or "num_images" not in batch:
         return batch
 
-    lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
-    pixel_values = batch["pixel_values"]  # [total, feature_dim]
+    if "image_grid_thw" in batch:
+        lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
+        pixel_values = batch["pixel_values"]  # [total, feature_dim]
 
-    if sum(lengths) != pixel_values.size(0):
-        raise ValueError(f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}")
+        if sum(lengths) != pixel_values.size(0):
+            raise ValueError(
+                f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}"
+            )
 
-    boundaries = [0, *accumulate(batch["num_images"])]  # [3, 4, 5] -> [0, 3, 7, 12]
-    sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(batch["num_images"]))]
-    split_values = list(torch.split(batch["pixel_values"], sections, dim=0))
-    image_grid_thw = list(torch.split(batch["image_grid_thw"], batch["num_images"], dim=0))
-    return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
+        boundaries = [0, *accumulate(batch["num_images"])]  # [3, 4, 5] -> [0, 3, 7, 12]
+        sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(batch["num_images"]))]
+        split_values = list(torch.split(batch["pixel_values"], sections, dim=0))
+        image_grid_thw = list(torch.split(batch["image_grid_thw"], batch["num_images"], dim=0))
+        return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
+    else:
+        # Models without image_grid_thw (e.g. Gemma): split pixel_values by num_images per sample
+        num_images = batch["num_images"]
+        num_images_list = num_images.tolist() if isinstance(num_images, torch.Tensor) else list(num_images)
+        split_values = list(torch.split(batch["pixel_values"], [int(n) for n in num_images_list], dim=0))
+        result = {**batch, "pixel_values": split_values}
+        # Also split image_position_ids if present (indexed by image, same as pixel_values)
+        if "image_position_ids" in batch:
+            result["image_position_ids"] = list(
+                torch.split(batch["image_position_ids"], [int(n) for n in num_images_list], dim=0)
+            )
+        return result
 
 
 def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tensor]]) -> dict[str, torch.Tensor]:
@@ -965,6 +923,11 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
     if isinstance(image_grid_thw, list):
         merged = torch.cat(image_grid_thw, dim=0)
         batch = {**batch, "image_grid_thw": merged}
+
+    image_position_ids = batch.get("image_position_ids")
+    if isinstance(image_position_ids, list):
+        merged = torch.cat(image_position_ids, dim=0)
+        batch = {**batch, "image_position_ids": merged}
 
     return batch
 
@@ -1228,3 +1191,180 @@ def shutdown_event_loop_in_daemon(
         return
     loop.call_soon_threadsafe(loop.stop)
     thread.join(timeout=5)
+
+
+class _ChunkedLogProbFunction(torch.autograd.Function):
+    """Compute per-token log-probs and entropy without materializing [N, V] logits.
+
+    Processes the lm_head in chunks and uses online logsumexp
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        last_hidden: torch.Tensor,  # [N, H]
+        weight: torch.Tensor,  # [V, H]
+        targets: torch.Tensor,  # [N]
+        temperature: float,
+        chunk_size: int,
+        logit_scale: float = 1.0,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        device = last_hidden.device
+        N, _ = last_hidden.shape
+        vocab, _ = weight.shape
+        inv_t = logit_scale / temperature
+
+        # NOTE(@aminediro): always acc in fp32 for stability
+        max_old = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
+        sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
+        x_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
+        target_logit = torch.zeros((N,), device=device, dtype=torch.float32)
+
+        # Pre-allocate reusable buffers to avoid per-chunk allocation
+        mm_buf = torch.empty((N, chunk_size), device=device, dtype=last_hidden.dtype)
+        logits_buf = torch.empty((N, chunk_size), device=device, dtype=torch.float32)
+
+        for start in range(0, vocab, chunk_size):
+            end = min(start + chunk_size, vocab)
+            C = end - start
+            # using fp16=True, the model's hidden states get cast to float16 by autocast, but the mm_buf is allocated
+            # with last_hidden.dtype (float16) while w_chunk (the lm_head weights) is not auto casted
+            w_chunk = weight[start:end].to(last_hidden.dtype)  # [C, H]
+            torch.mm(last_hidden, w_chunk.t(), out=mm_buf[:, :C])
+            logits_chunk = logits_buf[:, :C]
+            logits_chunk.copy_(mm_buf[:, :C])
+            logits_chunk.mul_(inv_t)  # [N, C]
+
+            # Online logsumexp update
+            chunk_max = logits_chunk.amax(dim=-1)  # [N]
+            max_new = torch.maximum(max_old, chunk_max)
+            rescale = torch.exp(max_old - max_new)
+            chunk_exp = torch.exp(logits_chunk - max_new.unsqueeze(-1))  # [N, C]
+
+            sum_exp = sum_exp * rescale + chunk_exp.sum(dim=-1)
+            x_sum_exp = x_sum_exp * rescale + (chunk_exp * logits_chunk).sum(dim=-1)
+            max_old = max_new
+
+            # Gather target logits for labels in this chunk
+            in_chunk_cond = (targets >= start) & (targets < end)
+            local_idx = torch.clamp(targets - start, 0, end - start - 1)
+            # take the new logit if target_idx is in this chunk bounds else 0
+            target_logit += logits_chunk[torch.arange(N, device=device), local_idx] * in_chunk_cond
+
+        log_z = max_old + torch.log(sum_exp)
+        logprobs = target_logit - log_z
+        entropy = log_z - x_sum_exp / sum_exp
+
+        ctx.save_for_backward(last_hidden, weight, targets, log_z)
+        ctx.temperature = temperature
+        ctx.chunk_size = chunk_size
+        ctx.logit_scale = logit_scale
+
+        return logprobs, entropy
+
+    @staticmethod
+    def backward(ctx, grad_logprobs: torch.Tensor, grad_entropy: torch.Tensor):  # type: ignore
+        hidden, weight, labels, log_z = ctx.saved_tensors
+        temperature: float = ctx.temperature
+        chunk_size: int = ctx.chunk_size
+        logit_scale: float = ctx.logit_scale
+        inv_t = logit_scale / temperature
+
+        N, _ = hidden.shape
+        vocab = weight.shape[0]
+
+        # NOTE(@aminediro): always acc in fp32 even if input is not
+        grad_hidden = torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32)
+        grad_weight = torch.zeros(weight.shape, device=weight.device, dtype=torch.float32)
+
+        # Pre-allocate reusable buffers to avoid per-chunk allocation
+        mm_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=hidden.dtype)
+        logits_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=torch.float32)
+
+        g = grad_logprobs.to(torch.float32)  # [N]
+        row_idx = torch.arange(N, device=hidden.device)
+
+        for start in range(0, vocab, chunk_size):
+            end = min(start + chunk_size, vocab)
+            C = end - start
+            w_chunk = weight[start:end]  # [C, H]
+
+            torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
+            logits_chunk = logits_buf[:, :C]
+            logits_chunk.copy_(mm_buf[:, :C])
+            logits_chunk.mul_(inv_t)  # [N, C]
+            probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
+
+            # dL/d(logits) = g * (1_[label] - p)
+            grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
+
+            in_chunk_cond = (labels >= start) & (labels < end)
+            local_idx = torch.clamp(labels - start, 0, end - start - 1)
+            # If label in chunk add g to grad else it stays the same
+            grad_logits[row_idx, local_idx] += g * in_chunk_cond
+            grad_logits = grad_logits * inv_t
+
+            grad_hidden.add_(grad_logits @ w_chunk.float())
+            grad_weight[start:end].add_(grad_logits.t() @ hidden.float())
+
+        return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None
+
+
+def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: float) -> None:
+    if getattr(model.config, "final_logit_softcapping", None) is not None:
+        raise NotImplementedError(
+            "The model uses `final_logit_softcapping` which is not yet supported. Please open an issue if you "
+            "want your model to be supported."
+        )
+
+    def _chunked_forward(
+        self: torch.nn.Module,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        completion_mask: torch.Tensor | None = None,
+        use_cache: bool = False,
+        **kwargs,
+    ) -> dict[str, torch.Tensor]:
+        assert labels is not None, "requires labels to not be None for logprob computation"
+
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **kwargs)
+        # NOTE(@aminediro): supporting Cohere2 models
+        logit_scale = getattr(self.config, "logit_scale", 1.0)
+        hidden_states = outputs.last_hidden_state  # [B, S+1, H]
+
+        # Shift: predict next token
+        hidden_states = hidden_states[:, :-1, :]  # [B, S-1, H]
+        labels = labels[:, 1:]  # [B, S-1]
+
+        b, s, h = hidden_states.shape
+        hidden_flat = hidden_states.reshape(b * s, h).contiguous()
+        targets_flat = labels.reshape(b * s).contiguous()
+
+        # Filter to completion tokens only to avoid expensive matmuls on prompt tokens and tool results
+        valid_mask = None
+        if completion_mask is not None:
+            completion_mask = completion_mask[:, 1:]  # same shift as labels
+            valid_mask = completion_mask.bool().reshape(b * s)
+            hidden_flat = hidden_flat[valid_mask]  # [N_valid, H]
+            targets_flat = targets_flat[valid_mask]  # [N_valid]
+
+        logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
+            hidden_flat, self.lm_head.weight, targets_flat, temperature, chunk_size, logit_scale
+        )
+
+        if valid_mask is not None:
+            logprobs = torch.zeros(b * s, device=logprobs_valid.device, dtype=logprobs_valid.dtype)
+            entropy = torch.zeros(b * s, device=entropy_valid.device, dtype=entropy_valid.dtype)
+            logprobs[valid_mask] = logprobs_valid
+            entropy[valid_mask] = entropy_valid
+        else:
+            logprobs = logprobs_valid
+            entropy = entropy_valid
+
+        return {
+            "log_probs": logprobs.reshape(b, s),
+            "entropy": entropy.reshape(b, s),
+        }
+
+    model.forward = types.MethodType(_chunked_forward, model)
