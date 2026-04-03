@@ -446,16 +446,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
                     "`pip install trl[vllm]` to use it."
                 )
-            import vllm
 
-            if Version(vllm.__version__) <= Version("0.10.2"):
-                from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
+            from vllm.sampling_params import StructuredOutputsParams
 
-                structured_outputs_key = "guided_decoding"
-            else:
-                from vllm.sampling_params import StructuredOutputsParams
-
-                structured_outputs_key = "structured_outputs"
+            structured_outputs_key = "structured_outputs"
 
             if self.vllm_mode == "server":
                 if self.accelerator.is_main_process:

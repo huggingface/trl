@@ -590,14 +590,9 @@ def main(script_args: ScriptArguments):
         generation_kwargs.update(request.generation_kwargs)
 
         # Structured outputs, if enabled
-        if Version(vllm.__version__) <= Version("0.10.2"):
-            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
+        from vllm.sampling_params import StructuredOutputsParams
 
-            structured_outputs_key = "guided_decoding"
-        else:
-            from vllm.sampling_params import StructuredOutputsParams
-
-            structured_outputs_key = "structured_outputs"
+        structured_outputs_key = "structured_outputs"
         if request.structured_outputs_regex is not None:
             if generation_kwargs.get(structured_outputs_key) is not None:
                 logger.warning(
@@ -742,14 +737,9 @@ def main(script_args: ScriptArguments):
         generation_kwargs.update(request.generation_kwargs)
 
         # Structured outputs, if enabled
-        if Version(vllm.__version__) <= Version("0.10.2"):
-            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
+        from vllm.sampling_params import StructuredOutputsParams
 
-            structured_outputs_key = "guided_decoding"
-        else:
-            from vllm.sampling_params import StructuredOutputsParams
-
-            structured_outputs_key = "structured_outputs"
+        structured_outputs_key = "structured_outputs"
         if request.structured_outputs_regex is not None:
             if generation_kwargs.get(structured_outputs_key) is not None:
                 logger.warning(

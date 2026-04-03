@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING
 
 import torch
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
-from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
@@ -545,16 +544,10 @@ class VLLMGeneration:
             `num_logprobs` is 1 when `logprobs=0`, or up to N+1 when `logprobs=N` (the sampled token is always included
             and may fall outside the top-N).
         """
-        import vllm
 
-        if Version(vllm.__version__) <= Version("0.10.2"):
-            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
+        from vllm.sampling_params import StructuredOutputsParams
 
-            structured_outputs_key = "guided_decoding"
-        else:
-            from vllm.sampling_params import StructuredOutputsParams
-
-            structured_outputs_key = "structured_outputs"
+        structured_outputs_key = "structured_outputs"
 
         profiler = profiler or nullcontext()
         accelerator = self.accelerator
