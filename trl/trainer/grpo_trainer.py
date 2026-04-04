@@ -1657,7 +1657,7 @@ class GRPOTrainer(_BaseTrainer):
                     # Collect images from multimodal tool responses
                     if isinstance(content, list):
                         for part in content:
-                            if part["type"] == "image":
+                            if isinstance(part, dict) and part.get("type") == "image":
                                 tool_images[idx_with_tool].append(part["image"])
                     prompt_completion_tool.append(tool_message)
                     completions[idx_with_tool].append(tool_message)
