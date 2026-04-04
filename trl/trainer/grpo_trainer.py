@@ -1516,6 +1516,38 @@ class GRPOTrainer(_BaseTrainer):
             self._vision_token_ids_cache = cache
         return self._vision_token_ids_cache
 
+    def _truncate_at_image_boundary(self, ids, max_length):
+        """Truncate token ID list to max_length, ensuring we don't cut in the middle of an image.
+
+        If truncation would split an image token sequence (<|vision_start|>...<|vision_end|>), backs up to the end of
+        the last complete image. This prevents mismatches between image placeholder tokens in input_ids and
+        pixel_values in the forward pass.
+        """
+        max_length = max(max_length, 0)
+        if len(ids) <= max_length:
+            return ids
+
+        vtids = self._get_vision_token_ids()
+        vision_start_id = vtids["vision_start"]
+        vision_end_id = vtids["vision_end"]
+        if vision_start_id is not None and vision_end_id is not None:
+            truncated = ids[:max_length]
+            last_start = -1
+            last_end = -1
+            for i in range(len(truncated) - 1, -1, -1):
+                if truncated[i] == vision_end_id and last_end == -1:
+                    last_end = i
+                if truncated[i] == vision_start_id and last_start == -1:
+                    last_start = i
+                if last_start != -1 and last_end != -1:
+                    break
+
+            # If last vision_start > last vision_end, we're inside an incomplete image
+            if last_start > last_end:
+                return ids[:last_start]  # truncate before the incomplete image
+            return truncated
+        return ids[:max_length]
+
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
         tool_calls = [completion[0].get("tool_calls") for completion in completions]
@@ -1530,9 +1562,7 @@ class GRPOTrainer(_BaseTrainer):
         while idxs_with_tool and iteration_num < self.max_tool_calling_iterations:
             prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
 
-            # Call the tools, and build the new prompt for generation. Tool messages are collected
-            # per sample but not yet committed to `completions` — that happens after the length check.
-            pending_tool_messages = []  # list of list of tool messages, one per sample in idxs_with_tool
+            # Call the tools, and build the new prompt for generation
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
                 tool_call_list = tool_calls[idx]
@@ -1602,65 +1632,86 @@ class GRPOTrainer(_BaseTrainer):
                         else:
                             tool_call_results.append((name, result))
 
-                sample_tool_messages = []
-                sample_tool_images = []
                 for name, result in tool_call_results:
                     # Support multimodal tool responses: if the tool returns a list of content blocks
                     # (e.g., [{"type": "image", "image": ...}, {"type": "text", "text": "..."}]),
                     # pass them through directly so _tokenize_prompts can extract images for VLMs.
                     content = result if isinstance(result, list) else str(result)
                     tool_message = {"role": "tool", "name": name, "content": content}
+                    # Collect images from multimodal tool responses
                     if isinstance(content, list):
                         for part in content:
-                            if part["type"] == "image":
-                                sample_tool_images.append(part["image"])
-                    sample_tool_messages.append(tool_message)
+                            if isinstance(part, dict) and part.get("type") == "image":
+                                tool_images[idx_with_tool].append(part["image"])
                     prompt_completion_tool.append(tool_message)
-                pending_tool_messages.append((sample_tool_messages, sample_tool_images))
+                    completions[idx_with_tool].append(tool_message)
 
             # Build token IDs by concatenation: prompt + completion + tool_suffix.
             prompt_completion_tool_ids = []
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
-                msgs, _ = pending_tool_messages[idx]
-                suffix_ids = self._get_tool_suffix_ids(msgs)
+                # Extract trailing tool messages from completions
+                tool_messages = []
+                for message in reversed(completions[idx_with_tool]):
+                    if message["role"] == "tool":
+                        tool_messages.insert(0, message)
+                    else:
+                        break
+                suffix_ids = self._get_tool_suffix_ids(tool_messages)
                 prompt_completion_tool_ids.append(
                     prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids
                 )
 
-            # Drop samples whose length exceeds the model's max length. Instead of truncating (which
-            # risks cutting in the middle of image token sequences or JSON tool results), we simply stop
-            # the tool loop for those samples and keep their completion_ids as-is.
+            # Filter samples whose length exceeds max allowed length. This is important, because both
+            # vLLM and transformers will error out if the input is longer than the model's max length.
+            # Note: _truncate_at_image_boundary ensures we never cut in the middle of an image token
+            # sequence (vision_start...vision_end), which would cause pixel_values/input_ids mismatches.
             if self.use_vllm and self.vllm_mode == "colocate":
                 max_model_len = self.vllm_generation.llm.llm_engine.model_config.max_model_len
-            elif self._is_vlm:
-                max_model_len = self.model.config.text_config.max_position_embeddings
+            elif self.use_vllm and self.vllm_mode == "server":
+                if self._is_vlm:
+                    max_model_len = self.model.config.text_config.max_position_embeddings
+                else:
+                    max_model_len = self.model.config.max_position_embeddings
+            elif not self.use_vllm:
+                if self._is_vlm:
+                    max_model_len = self.model.config.text_config.max_position_embeddings
+                else:
+                    max_model_len = self.model.config.max_position_embeddings
             else:
-                max_model_len = self.model.config.max_position_embeddings
+                raise NotImplementedError(
+                    f"Unsupported mode detected: use_vllm={self.use_vllm}, vllm_mode={self.vllm_mode}"
+                )
             overlong = [len(pct) >= max_model_len for pct in prompt_completion_tool_ids]
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                if overlong[idx]:
+                    prompt_length = len(prompt_ids[idx_with_tool])
+                    ct = self._truncate_at_image_boundary(
+                        prompt_completion_tool_ids[idx][prompt_length:], self.max_completion_length
+                    )
+                    completion_ids[idx_with_tool] = ct
+                    tool_mask[idx_with_tool] += [1] * (len(ct) - len(tool_mask[idx_with_tool]))
+                    if logprobs is not None:
+                        logprobs[idx_with_tool] += [0.0] * (len(ct) - len(logprobs[idx_with_tool]))
+            # Keep only non-overlong items for further processing
             idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
             prompt_completion_tools = [pct for pct, o in zip(prompt_completion_tools, overlong, strict=True) if not o]
             prompt_completion_tool_ids = [
                 pct for pct, o in zip(prompt_completion_tool_ids, overlong, strict=True) if not o
             ]
-            pending_tool_messages = [m for m, o in zip(pending_tool_messages, overlong, strict=True) if not o]
             if not idxs_with_tool:
                 break  # all overlong, exit tool loop
 
             # Filter images and multimodal fields to match the current subset (index into full batch).
-            # Merge tool response images (both committed and pending) so the model can see visual
-            # feedback during generation.
+            # Merge tool response images so the model can see visual feedback during generation.
             merged_images = images
-            pending_images_by_idx = {
-                idxs_with_tool[idx]: pending_tool_messages[idx][1] for idx in range(len(idxs_with_tool))
-            }
-            all_tool_imgs = [tool_images[i] + pending_images_by_idx.get(i, []) for i in range(len(tool_images))]
-            if any(imgs for imgs in all_tool_imgs):
+            if any(imgs for imgs in tool_images):
                 if merged_images is None:
-                    merged_images = [imgs if imgs else None for imgs in all_tool_imgs]
+                    merged_images = [imgs if imgs else None for imgs in tool_images]
                 else:
                     merged_images = [
-                        (existing or []) + new for existing, new in zip(merged_images, all_tool_imgs, strict=True)
+                        (existing or []) + new for existing, new in zip(merged_images, tool_images, strict=True)
                     ]
             loop_images = [merged_images[i] for i in idxs_with_tool] if merged_images else None
             if multimodal_fields:
@@ -1682,42 +1733,81 @@ class GRPOTrainer(_BaseTrainer):
                 prompt_completion_tool_ids, loop_images, loop_multimodal_fields
             )
 
-            # Drop samples where adding the tool turn would exceed max_completion_length. This avoids
-            # truncating in the middle of image sequences or structured tool results.
-            surviving_idxs = []
-            surviving_tool_calls = []
+            # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
                 prompt_len = len(prompt_ids[idx_with_tool])
-                completion_tool_len = len(prompt_completion_tool_ids[idx]) - prompt_len
-                total_len = completion_tool_len + len(post_tool_ids[idx])
-                if total_len > self.max_completion_length:
-                    continue  # drop this turn, keep completion_ids as-is
+                completion_tool_ids = prompt_completion_tool_ids[idx][prompt_len:]
+                excess_length = len(completion_tool_ids) + len(post_tool_ids[idx]) - self.max_completion_length
+                if excess_length > 0:
+                    # If exceeding max length, truncate post_tool_ids (respecting image boundaries)
+                    truncated_post = self._truncate_at_image_boundary(
+                        post_tool_ids[idx], len(post_tool_ids[idx]) - excess_length
+                    )
+                    if logprobs is not None:
+                        post_tool_logprobs[idx] = post_tool_logprobs[idx][: len(truncated_post)]
+                    post_tool_ids[idx] = truncated_post
+                    excess_length = len(completion_tool_ids) + len(post_tool_ids[idx]) - self.max_completion_length
+                    if excess_length > 0:
+                        # If still exceeding, truncate completion_tool_ids (respecting image boundaries)
+                        truncated_pct = self._truncate_at_image_boundary(
+                            prompt_completion_tool_ids[idx], len(prompt_completion_tool_ids[idx]) - excess_length
+                        )
+                        prompt_completion_tool_ids[idx] = truncated_pct
 
-                # Fits: commit tool messages and images to completions
-                msgs, imgs = pending_tool_messages[idx]
-                completions[idx_with_tool].extend(msgs)
-                tool_images[idx_with_tool].extend(imgs)
-
-                # Update completion_ids, tool_mask, and logprobs with the new turn
-                tool_len = completion_tool_len - len(completion_ids[idx_with_tool])
-                post_tool_len = len(post_tool_ids[idx])
-                tool_mask[idx_with_tool] += [0] * tool_len + [1] * post_tool_len
+            # Update tool_mask: the tool result should be 0 and the post-tool 1
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                prompt_completion_tool_length = len(prompt_completion_tool_ids[idx])
+                prompt_length = len(prompt_ids[idx_with_tool])
+                completion_length = len(completion_ids[idx_with_tool])
+                post_tool_length = len(post_tool_ids[idx])
+                tool_length = prompt_completion_tool_length - prompt_length - completion_length
+                tool_mask[idx_with_tool] += [0] * tool_length + [1] * post_tool_length
                 if logprobs is not None:
-                    logprobs[idx_with_tool] += [0.0] * tool_len + post_tool_logprobs[idx]
-                completion_ids[idx_with_tool] = prompt_completion_tool_ids[idx][prompt_len:] + post_tool_ids[idx]
+                    logprobs[idx_with_tool] += [0.0] * tool_length + post_tool_logprobs[idx]
 
-                # Decode post-tool completion and check for further tool calls
-                parsed = parse_response(self.processing_class, post_tool_ids[idx])
-                completions[idx_with_tool].append(parsed)
-                tool_call = parsed.get("tool_calls")
-                if tool_call:
-                    surviving_idxs.append(idx_with_tool)
-                    surviving_tool_calls.append(tool_call)
+            # Update completion_ids with the new completions (after tool execution)
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                prompt_length = len(prompt_ids[idx_with_tool])
+                pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
+                completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
-            idxs_with_tool = surviving_idxs
-            tool_calls = surviving_tool_calls
+            # Decode post-tool completions.
+            post_tool_completions = [
+                parse_response(self.processing_class, ids) if ids else {} for ids in post_tool_ids
+            ]
+
+            # Add post-tool completions to the existing completions
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                if post_tool_completions[idx]:  # {} if post-tool completions completely truncated
+                    completions[idx_with_tool].append(post_tool_completions[idx])
+
+            # Check for further tool calls
+            tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
+            idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
+            tool_calls = [tool_call for tool_call in tool_calls if tool_call]
             iteration_num += 1
+
+        # Sync tool_mask and tool_images with completion_ids: after truncation by
+        # _truncate_at_image_boundary, completion_ids may be shorter than tool_mask.
+        for i in range(len(completion_ids)):
+            if len(tool_mask[i]) > len(completion_ids[i]):
+                tool_mask[i] = tool_mask[i][: len(completion_ids[i])]
+        if logprobs is not None:
+            for i in range(len(completion_ids)):
+                if len(logprobs[i]) > len(completion_ids[i]):
+                    logprobs[i] = logprobs[i][: len(completion_ids[i])]
+
+        # Sync tool_images: count complete images in completion_ids and trim tool_images to match.
+        vtids = self._get_vision_token_ids()
+        if vtids["vision_end"] is not None:
+            for i, ids in enumerate(completion_ids):
+                complete_images = sum(1 for t in ids if t == vtids["vision_end"])
+                if complete_images < len(tool_images[i]):
+                    tool_images[i] = tool_images[i][:complete_images]
 
         return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count, tool_images
 
