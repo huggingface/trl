@@ -131,6 +131,8 @@
     title: SDFT
   - local: sdpo_trainer
     title: SDPO
+  - local: ssd_trainer
+    title: SSD
   - local: winrate_callback
     title: WinRateCallback
   - local: xpo_trainer
