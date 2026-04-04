@@ -11,7 +11,7 @@ In the current TRL implementation:
 - training uses standard cross-entropy loss on the generated completions
 - empty or single-line stub completions are filtered by default (`filter_empty=True`)
 - the evaluation-time temperature and truncation are set independently at inference time
-- SSD currently supports text-only training
+- vLLM can be used for faster generation via `use_vllm=True` (see [vLLM integration](vllm_integration))
 
 ## Usage
 

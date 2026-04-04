@@ -65,6 +65,33 @@ class SSDConfig(_BaseConfig):
         generation_kwargs (`dict[str, Any]` or `None`, *optional*):
             Extra generation kwargs passed to `GenerationConfig`.
 
+        > Parameters that control vLLM generation
+
+        use_vllm (`bool`, *optional*, defaults to `False`):
+            Whether to use vLLM for generation instead of the training model.
+        vllm_mode (`str`, *optional*, defaults to `"colocate"`):
+            vLLM mode: `"colocate"` (shared GPU) or `"server"` (separate vLLM server).
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation for vLLM: `"vllm"`, `"transformers"`, or `"auto"`.
+        vllm_server_base_url (`str` or `None`, *optional*):
+            Base URL for the vLLM server. If provided, `vllm_server_host` and `vllm_server_port` are ignored.
+        vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+            Host of the vLLM server (server mode only).
+        vllm_server_port (`int`, *optional*, defaults to `8000`):
+            Port of the vLLM server (server mode only).
+        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
+            Timeout in seconds to wait for the vLLM server.
+        vllm_group_port (`int`, *optional*, defaults to `51216`):
+            Port for the weight update group (server mode only).
+        vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
+            Tensor parallel size for colocated vLLM.
+        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.3`):
+            GPU memory utilization ratio for colocated vLLM.
+        vllm_max_model_length (`int` or `None`, *optional*):
+            Model context length for vLLM. Inferred from model config if not set.
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Whether to enable sleep mode for colocated vLLM engine.
+
         > Parameters that control training behavior
 
         disable_dropout (`bool`, *optional*, defaults to `True`):
@@ -144,6 +171,54 @@ class SSDConfig(_BaseConfig):
     chat_template_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={"help": "Extra kwargs forwarded to chat template application."},
+    )
+    use_vllm: bool = field(
+        default=False,
+        metadata={"help": "Whether to use vLLM for generation."},
+    )
+    vllm_mode: str = field(
+        default="colocate",
+        metadata={"help": "vLLM mode: 'colocate' (shared GPU) or 'server' (separate vLLM server)."},
+    )
+    vllm_model_impl: str = field(
+        default="vllm",
+        metadata={"help": "Model implementation for vLLM: 'vllm', 'transformers', or 'auto'."},
+    )
+    vllm_server_base_url: str | None = field(
+        default=None,
+        metadata={"help": "Base URL for the vLLM server. If provided, vllm_server_host and vllm_server_port are ignored."},
+    )
+    vllm_server_host: str = field(
+        default="0.0.0.0",
+        metadata={"help": "Host of the vLLM server (server mode only)."},
+    )
+    vllm_server_port: int = field(
+        default=8000,
+        metadata={"help": "Port of the vLLM server (server mode only)."},
+    )
+    vllm_server_timeout: float = field(
+        default=240.0,
+        metadata={"help": "Timeout in seconds to wait for the vLLM server."},
+    )
+    vllm_group_port: int = field(
+        default=51216,
+        metadata={"help": "Port for the weight update group (server mode only)."},
+    )
+    vllm_tensor_parallel_size: int = field(
+        default=1,
+        metadata={"help": "Tensor parallel size for colocated vLLM."},
+    )
+    vllm_gpu_memory_utilization: float = field(
+        default=0.3,
+        metadata={"help": "GPU memory utilization ratio for colocated vLLM."},
+    )
+    vllm_max_model_length: int | None = field(
+        default=None,
+        metadata={"help": "Model context length for vLLM. Inferred from model config if not set."},
+    )
+    vllm_enable_sleep_mode: bool = field(
+        default=False,
+        metadata={"help": "Whether to enable sleep mode for colocated vLLM engine."},
     )
     disable_dropout: bool = field(
         default=True,

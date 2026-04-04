@@ -163,27 +163,29 @@ class SSDTrainer(_BaseTrainer):
         self.temperature = args.temperature
         self.shuffle_dataset = args.shuffle_dataset
         self.filter_empty = args.filter_empty
+        self.use_vllm = args.use_vllm
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self._step = 0
         self._buffered_inputs = None
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
 
-        generation_kwargs = {
-            "max_new_tokens": self.max_completion_length,
-            "do_sample": True,
-            "pad_token_id": tokenizer.pad_token_id,
-            "bos_token_id": tokenizer.bos_token_id,
-            "eos_token_id": tokenizer.eos_token_id,
-            "temperature": args.temperature,
-            "top_p": args.top_p,
-            "top_k": args.top_k,
-            "min_p": args.min_p,
-            "repetition_penalty": args.repetition_penalty,
-            "cache_implementation": args.cache_implementation,
-        }
-        if args.generation_kwargs is not None:
-            generation_kwargs.update(args.generation_kwargs)
-        self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
+        if not self.use_vllm:
+            generation_kwargs = {
+                "max_new_tokens": self.max_completion_length,
+                "do_sample": True,
+                "pad_token_id": tokenizer.pad_token_id,
+                "bos_token_id": tokenizer.bos_token_id,
+                "eos_token_id": tokenizer.eos_token_id,
+                "temperature": args.temperature,
+                "top_p": args.top_p,
+                "top_k": args.top_k,
+                "min_p": args.min_p,
+                "repetition_penalty": args.repetition_penalty,
+                "cache_implementation": args.cache_implementation,
+            }
+            if args.generation_kwargs is not None:
+                generation_kwargs.update(args.generation_kwargs)
+            self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
 
         if hasattr(model, "warnings_issued"):
             model.warnings_issued["estimate_tokens"] = True
@@ -207,6 +209,39 @@ class SSDTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self.model_accepts_loss_kwargs = False
+
+        if self.use_vllm:
+            from ...generation.vllm_generation import VLLMGeneration
+
+            self.vllm_generation = VLLMGeneration(
+                model=self.model,
+                accelerator=self.accelerator,
+                is_fsdp_enabled=self.is_fsdp_enabled,
+                processing_class=self.processing_class,
+                mode=args.vllm_mode,
+                server_base_url=args.vllm_server_base_url,
+                server_host=args.vllm_server_host,
+                server_port=args.vllm_server_port,
+                group_port=args.vllm_group_port,
+                server_timeout=args.vllm_server_timeout,
+                tensor_parallel_size=args.vllm_tensor_parallel_size,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                max_model_length=args.vllm_max_model_length,
+                max_num_seqs=args.per_device_train_batch_size
+                * args.vllm_tensor_parallel_size
+                * args.steps_per_generation,
+                enable_sleep_mode=args.vllm_enable_sleep_mode,
+                model_impl=args.vllm_model_impl,
+                repetition_penalty=args.repetition_penalty,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                min_p=args.min_p or 0.0,
+                max_completion_length=args.max_completion_length,
+                logprobs=None,
+                generation_kwargs=args.generation_kwargs,
+            )
+            self._last_loaded_step = -1
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:
@@ -293,6 +328,43 @@ class SSDTrainer(_BaseTrainer):
 
     def _generate_completion_ids(self, prompts: list[Any]) -> tuple[torch.Tensor, torch.Tensor]:
         """Generate completions from the model at the configured training-time temperature and truncation."""
+        if self.use_vllm:
+            return self._generate_completion_ids_vllm(prompts)
+        return self._generate_completion_ids_transformers(prompts)
+
+    def _generate_completion_ids_vllm(self, prompts: list[Any]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Generate completions using vLLM."""
+        if self.state.global_step != self._last_loaded_step:
+            self.vllm_generation.sync_weights()
+            self._last_loaded_step = self.state.global_step
+
+        prompts_text = self._apply_prompt_template(prompts)
+        tokenized = self.processing_class(
+            text=prompts_text,
+            return_tensors=None,
+            padding=False,
+            max_length=self.max_prompt_length,
+            truncation=True,
+            add_special_tokens=False,
+        )
+        prompt_ids = tokenized["input_ids"]
+
+        _, completion_ids_list, _, _ = self.vllm_generation.generate(
+            prompts=prompt_ids,
+            images=None,
+            num_generations=self.num_generations,
+        )
+
+        device = self.accelerator.device
+        completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
+        completion_mask = [torch.ones(len(ids), dtype=torch.long, device=device) for ids in completion_ids_list]
+        return (
+            pad(completion_ids, padding_value=self.pad_token_id, padding_side="right"),
+            pad(completion_mask, padding_value=0, padding_side="right"),
+        )
+
+    def _generate_completion_ids_transformers(self, prompts: list[Any]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Generate completions using the training model with transformers."""
         generate_inputs = self.processing_class(
             text=self._apply_prompt_template(prompts),
             return_tensors="pt",
