@@ -113,8 +113,6 @@ class SSDTrainer(_BaseTrainer):
             isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
         ):
             raise NotImplementedError("Iterable eval datasets are not yet supported in SSDTrainer.")
-        if args.use_vllm:
-            raise NotImplementedError("SSDTrainer does not support `use_vllm=True` yet.")
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
@@ -163,7 +161,6 @@ class SSDTrainer(_BaseTrainer):
         self.num_generations = args.num_generations
         self.num_iterations = args.num_iterations
         self.temperature = args.temperature
-        self.loss_type = args.loss_type
         self.shuffle_dataset = args.shuffle_dataset
         self.filter_empty = args.filter_empty
         self.chat_template_kwargs = args.chat_template_kwargs or {}

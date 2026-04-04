@@ -34,8 +34,10 @@ Example:
 
 ```bash
 python trl/experimental/ssd/ssd.py \
-    --model_name_or_path Qwen/Qwen3-4B-Instruct \
-    --dataset_name rstar-coder/rSTARCoder-seed \
+    --model_name_or_path Qwen/Qwen3-4B-Instruct-2507 \
+    --dataset_name microsoft/rStar-Coder \
+    --dataset_config seed_sft \
+    --prompt_column question \
     --output_dir outputs/ssd-qwen3-4b \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 32 \
@@ -44,10 +46,11 @@ python trl/experimental/ssd/ssd.py \
     --max_prompt_length 1024 \
     --max_completion_length 65536 \
     --num_generations 1 \
-    --temperature 0.6 \
+    --temperature 1.6 \
     --top_k 20 \
-    --top_p 0.95 \
+    --top_p 0.8 \
     --num_train_epochs 1 \
+    --bf16 \
     --report_to wandb
 ```
 """

@@ -13,12 +13,15 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Any
 
-from ..self_distillation.self_distillation_config import SelfDistillationConfig
+from transformers import TrainingArguments
+
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class SSDConfig(SelfDistillationConfig):
+class SSDConfig(_BaseConfig):
     r"""
     Configuration class for [`SSDTrainer`].
 
@@ -27,17 +30,121 @@ class SSDConfig(SelfDistillationConfig):
     temperature and truncation configuration, then fine-tunes on those raw, unverified samples with standard
     cross-entropy loss.
 
-    The inherited `temperature`, `top_k`, and `top_p` control the training-time sampling configuration (T_train,
+    The `temperature`, `top_k`, and `top_p` parameters control the training-time sampling configuration (T_train,
     rho_train in the paper). The evaluation-time configuration (T_eval, rho_eval) is set independently at inference
     time.
 
     Parameters:
+        > Parameters that control generation and rollout reuse
+
+        model_init_kwargs (`dict[str, Any]`, *optional*):
+            Keyword arguments used when the `model` argument is passed as a string.
+        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
+            Maximum prompt length. Longer prompts are truncated from the left.
+        max_completion_length (`int` or `None`, *optional*, defaults to `256`):
+            Maximum generated completion length.
+        num_generations (`int`, *optional*, defaults to `1`):
+            Number of sampled generations per prompt.
+        generation_batch_size (`int` or `None`, *optional*):
+            Global batch size used for generation. Mutually exclusive with `steps_per_generation`.
+        steps_per_generation (`int` or `None`, *optional*):
+            Number of optimizer steps that reuse one generated batch. Mutually exclusive with `generation_batch_size`.
+
+        > Parameters that control sampling
+
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Sampling temperature (T_train in the paper).
+        top_k (`int`, *optional*, defaults to `0`):
+            Top-k sampling parameter. `0` disables top-k filtering.
+        top_p (`float`, *optional*, defaults to `1.0`):
+            Top-p (nucleus) sampling parameter.
+        min_p (`float` or `None`, *optional*):
+            Minimum token probability for sampling.
+        repetition_penalty (`float`, *optional*, defaults to `1.0`):
+            Repetition penalty used during generation.
+        generation_kwargs (`dict[str, Any]` or `None`, *optional*):
+            Extra generation kwargs passed to `GenerationConfig`.
+
+        > Parameters that control training behavior
+
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model during training.
         filter_empty (`bool`, *optional*, defaults to `True`):
             Whether to filter out empty or single-line stub completions from the generated data.
+        num_iterations (`int`, *optional*, defaults to `1`):
+            Number of optimization iterations per generated batch.
+        shuffle_dataset (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the training dataset.
+        ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
+            Whether to gather ZeRO-3 weights for generation.
+        cache_implementation (`str` or `None`, *optional*):
+            Cache implementation used by transformers generation.
+        chat_template_kwargs (`dict[str, Any]` or `None`, *optional*):
+            Extra kwargs forwarded to chat template application.
     """
 
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    model_init_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={"help": "Keyword arguments for model initialization when `model` is passed as a string."},
+    )
+    remove_unused_columns: bool = field(
+        default=False,
+        metadata={"help": "Whether to drop dataset columns unused by the trainer."},
+    )
+    max_prompt_length: int | None = field(
+        default=512,
+        metadata={"help": "Maximum prompt length. Longer prompts are truncated from the left."},
+    )
+    max_completion_length: int | None = field(
+        default=256,
+        metadata={"help": "Maximum generated completion length."},
+    )
+    num_generations: int = field(
+        default=1,
+        metadata={"help": "Number of sampled generations per prompt."},
+    )
+    generation_batch_size: int | None = field(
+        default=None,
+        metadata={"help": "Global batch size used for generation. Mutually exclusive with `steps_per_generation`."},
+    )
+    steps_per_generation: int | None = field(
+        default=None,
+        metadata={"help": "Number of optimizer steps that reuse one generated batch."},
+    )
+    temperature: float = field(
+        default=1.0,
+        metadata={"help": "Sampling temperature (T_train in the paper)."},
+    )
+    top_k: int = field(
+        default=0,
+        metadata={"help": "Top-k sampling parameter. `0` disables top-k filtering."},
+    )
+    top_p: float = field(
+        default=1.0,
+        metadata={"help": "Top-p (nucleus) sampling parameter."},
+    )
+    min_p: float | None = field(
+        default=None,
+        metadata={"help": "Minimum token probability for sampling."},
+    )
+    repetition_penalty: float = field(
+        default=1.0,
+        metadata={"help": "Repetition penalty used during generation."},
+    )
+    generation_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={"help": "Extra generation kwargs passed to `GenerationConfig`."},
+    )
+    cache_implementation: str | None = field(
+        default=None,
+        metadata={"help": "Cache implementation used by transformers generation."},
+    )
+    chat_template_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={"help": "Extra kwargs forwarded to chat template application."},
+    )
     disable_dropout: bool = field(
         default=True,
         metadata={"help": "Whether to disable dropout in the model during training."},
@@ -46,6 +153,42 @@ class SSDConfig(SelfDistillationConfig):
         default=True,
         metadata={"help": "Whether to filter out empty or single-line stub completions."},
     )
+    num_iterations: int = field(
+        default=1,
+        metadata={"help": "Number of optimization iterations per generated batch."},
+    )
+    shuffle_dataset: bool = field(
+        default=True,
+        metadata={"help": "Whether to shuffle the training dataset."},
+    )
+    ds3_gather_for_generation: bool = field(
+        default=True,
+        metadata={"help": "Whether to gather ZeRO-3 weights for generation."},
+    )
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.num_generations < 1:
+            raise ValueError("num_generations must be at least 1")
+
+        num_processes = self.world_size
+        if self.generation_batch_size is None and self.steps_per_generation is None:
+            self.steps_per_generation = self.gradient_accumulation_steps
+            self.generation_batch_size = self.per_device_train_batch_size * num_processes * self.steps_per_generation
+        elif self.generation_batch_size is not None and self.steps_per_generation is None:
+            global_batch_size = self.per_device_train_batch_size * num_processes
+            if self.generation_batch_size % global_batch_size != 0:
+                raise ValueError(
+                    f"generation_batch_size ({self.generation_batch_size}) must be divisible by the global batch size ({global_batch_size})."
+                )
+            self.steps_per_generation = self.generation_batch_size // global_batch_size
+        elif self.generation_batch_size is None and self.steps_per_generation is not None:
+            self.generation_batch_size = self.per_device_train_batch_size * num_processes * self.steps_per_generation
+        else:
+            raise ValueError("'generation_batch_size' and 'steps_per_generation' can not both be configured")
+
+        if self.generation_batch_size % self.num_generations != 0:
+            raise ValueError(
+                f"generation_batch_size ({self.generation_batch_size}) must be divisible by num_generations ({self.num_generations})."
+            )
