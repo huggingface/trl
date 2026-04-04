@@ -512,7 +512,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
             # Set up vLLM generation config
-            generation_params = {
+            generation_kwargs = {
                 "n": 2,  # 2 generations per prompt for Online DPO
                 "repetition_penalty": self.repetition_penalty,
                 "temperature": self.temperature,
@@ -523,18 +523,17 @@ class OnlineDPOTrainer(_BaseTrainer):
                 "detokenize": False,  # to avoid vllm to decode (we don't need it)
             }
             if args.generation_kwargs is not None:
-                generation_params.update(args.generation_kwargs)
+                generation_kwargs.update(args.generation_kwargs)
             if self.structured_outputs_regex is not None:
-                if generation_params.get("structured_outputs") is not None:
+                if generation_kwargs.get("structured_outputs") is not None:
                     logger.warning(
                         "Both `vllm_structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
                         "`vllm_structured_outputs_regex` takes precedence."
                     )
-                generation_params["structured_outputs"] = StructuredOutputsParams(regex=self.structured_outputs_regex)
-            elif isinstance(generation_params.get("structured_outputs"), dict):
-                structured_outputs_dict = generation_params.get("structured_outputs")
-                generation_params["structured_outputs"] = StructuredOutputsParams(**structured_outputs_dict)
-            self.generation_config = SamplingParams(**generation_params)
+                generation_kwargs["structured_outputs"] = StructuredOutputsParams(regex=self.structured_outputs_regex)
+            elif isinstance(structured_outputs_kwargs := generation_kwargs.get("structured_outputs"), dict):
+                generation_kwargs["structured_outputs"] = StructuredOutputsParams(**structured_outputs_kwargs)
+            self.generation_config = SamplingParams(**generation_kwargs)
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we

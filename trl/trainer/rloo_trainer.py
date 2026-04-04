@@ -547,7 +547,7 @@ class RLOOTrainer(_BaseTrainer):
             }
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
-            self.generation_config = GenerationConfig(**generation_kwargs)
+            self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
             # Keep training-specific generation kwargs to overwrite model's original generation config
             self.generation_kwargs = generation_kwargs
 
@@ -1015,7 +1015,7 @@ class RLOOTrainer(_BaseTrainer):
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
                 prompt_completion_ids = unwrapped_model.generate(
-                    **generate_inputs, generation_config=self.generation_config, disable_compile=True
+                    **generate_inputs, generation_config=self.generation_config
                 )
             # Compute prompt length and extract completion ids
             prompt_length = generate_inputs["input_ids"].size(1)
@@ -1112,7 +1112,7 @@ class RLOOTrainer(_BaseTrainer):
                     "template internally."
                 )
             prompts = [
-                prepare_multimodal_messages(prompt, image_list)
+                prepare_multimodal_messages(prompt, images=image_list)
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
@@ -1156,7 +1156,7 @@ class RLOOTrainer(_BaseTrainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
-        num_images = [len(img_list) for img_list in images] if images is not None else None
+        num_images = [len(img_list) if img_list else 0 for img_list in images] if images is not None else None
 
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
@@ -1469,6 +1469,7 @@ class RLOOTrainer(_BaseTrainer):
                     self._logs["advantages"],
                     self.state.global_step,
                     self.num_completions_to_print,
+                    extra=dict(self._logs["extra"]),
                 )
 
             logging_backends = []
