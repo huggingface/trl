@@ -169,23 +169,22 @@ class SSDTrainer(_BaseTrainer):
         self._buffered_inputs = None
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
 
-        if not self.use_vllm:
-            generation_kwargs = {
-                "max_new_tokens": self.max_completion_length,
-                "do_sample": True,
-                "pad_token_id": tokenizer.pad_token_id,
-                "bos_token_id": tokenizer.bos_token_id,
-                "eos_token_id": tokenizer.eos_token_id,
-                "temperature": args.temperature,
-                "top_p": args.top_p,
-                "top_k": args.top_k,
-                "min_p": args.min_p,
-                "repetition_penalty": args.repetition_penalty,
-                "cache_implementation": args.cache_implementation,
-            }
-            if args.generation_kwargs is not None:
-                generation_kwargs.update(args.generation_kwargs)
-            self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
+        generation_kwargs = {
+            "max_new_tokens": self.max_completion_length,
+            "do_sample": True,
+            "pad_token_id": tokenizer.pad_token_id,
+            "bos_token_id": tokenizer.bos_token_id,
+            "eos_token_id": tokenizer.eos_token_id,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "top_k": args.top_k,
+            "min_p": args.min_p,
+            "repetition_penalty": args.repetition_penalty,
+            "cache_implementation": args.cache_implementation,
+        }
+        if args.generation_kwargs is not None:
+            generation_kwargs.update(args.generation_kwargs)
+        self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
 
         if hasattr(model, "warnings_issued"):
             model.warnings_issued["estimate_tokens"] = True
@@ -233,11 +232,11 @@ class SSDTrainer(_BaseTrainer):
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
                 repetition_penalty=args.repetition_penalty,
-                temperature=args.temperature,
+                temperature=self.temperature,
                 top_p=args.top_p,
                 top_k=args.top_k,
-                min_p=args.min_p or 0.0,
-                max_completion_length=args.max_completion_length,
+                min_p=args.min_p,
+                max_completion_length=self.max_completion_length,
                 logprobs=None,
                 generation_kwargs=args.generation_kwargs,
             )
