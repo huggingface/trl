@@ -935,7 +935,6 @@ class GRPOTrainer(_BaseTrainer):
         image_grid_thw=None,
         pixel_attention_mask=None,
         image_sizes=None,
-        pixel_position_ids=None,
         image_position_ids=None,
     ):
         if is_peft_model(unwrapped_model):
@@ -956,8 +955,6 @@ class GRPOTrainer(_BaseTrainer):
         # For LLaVa-Next
         if image_sizes is not None:
             model_inputs["image_sizes"] = image_sizes
-        if pixel_position_ids is not None:
-            model_inputs["pixel_position_ids"] = pixel_position_ids
         if image_position_ids is not None:
             model_inputs["image_position_ids"] = image_position_ids
 
@@ -1029,7 +1026,6 @@ class GRPOTrainer(_BaseTrainer):
         image_sizes=None,
         token_type_ids=None,
         mm_token_type_ids=None,
-        pixel_position_ids=None,
         image_position_ids=None,
     ) -> dict[str, torch.Tensor | None]:
         """Compute log-probs and (optionally) entropies for each token."""
@@ -1071,15 +1067,8 @@ class GRPOTrainer(_BaseTrainer):
                 model_inputs["token_type_ids"] = token_type_ids[start : start + batch_size]
             if mm_token_type_ids is not None:
                 model_inputs["mm_token_type_ids"] = mm_token_type_ids[start : start + batch_size]
-            if pixel_position_ids is not None:
-                model_inputs["pixel_position_ids"] = pixel_position_ids[start : start + batch_size]
             if image_position_ids is not None:
-                # image_position_ids is indexed by image (like pixel_values), not by sample
-                if num_images is not None and pixel_values is not None:
-                    model_inputs["image_position_ids"] = image_position_ids[img_start:img_end]
-                else:
-                    model_inputs["image_position_ids"] = image_position_ids[start : start + batch_size]
-
+                model_inputs["image_position_ids"] = image_position_ids[img_start:img_end]
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
                 # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
@@ -2113,7 +2102,7 @@ class GRPOTrainer(_BaseTrainer):
                     logits_to_keep,
                     batch_size,
                     num_images=num_images,
-                    **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, pixel_position_ids, image_position_ids
+                    **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
                 )
             else:
                 old_per_token_logps = None
@@ -2159,7 +2148,7 @@ class GRPOTrainer(_BaseTrainer):
                         logits_to_keep,
                         batch_size=batch_size,
                         num_images=num_images,
-                        **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, pixel_position_ids, image_position_ids
+                        **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
                     )
                 else:
                     # When training a PEFT adapter, how we obtain the reference depends on the setup:
@@ -2174,7 +2163,7 @@ class GRPOTrainer(_BaseTrainer):
                             logits_to_keep,
                             batch_size=batch_size,
                             num_images=num_images,
-                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, pixel_position_ids, image_position_ids
+                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
                         )
             else:
                 ref_per_token_logps = None
@@ -2353,8 +2342,6 @@ class GRPOTrainer(_BaseTrainer):
             output["token_type_ids"] = forward_kwargs["token_type_ids"]
         if "mm_token_type_ids" in forward_kwargs:
             output["mm_token_type_ids"] = forward_kwargs["mm_token_type_ids"]
-        if "pixel_position_ids" in forward_kwargs:
-            output["pixel_position_ids"] = forward_kwargs["pixel_position_ids"]
         if "image_position_ids" in forward_kwargs:
             output["image_position_ids"] = forward_kwargs["image_position_ids"]
         if images is not None:
@@ -2381,7 +2368,6 @@ class GRPOTrainer(_BaseTrainer):
             inputs.get("image_grid_thw"),
             inputs.get("pixel_attention_mask"),
             inputs.get("image_sizes"),
-            inputs.get("pixel_position_ids"),
             inputs.get("image_position_ids"),
         )
 
@@ -2518,7 +2504,6 @@ class GRPOTrainer(_BaseTrainer):
             image_sizes=inputs.get("image_sizes"),
             token_type_ids=inputs.get("token_type_ids"),
             mm_token_type_ids=inputs.get("mm_token_type_ids"),
-            pixel_position_ids=inputs.get("pixel_position_ids"),
             image_position_ids=inputs.get("image_position_ids"),
         )
 

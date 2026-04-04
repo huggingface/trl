@@ -231,7 +231,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
     - `"pixel_values"`: Tensor representing image pixel values.
 
-    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"pixel_position_ids"`.
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"image_position_ids"`.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
@@ -1035,7 +1035,6 @@ class DPOTrainer(_BaseTrainer):
             "pixel_attention_mask",
             "image_grid_thw",
             "image_sizes",
-            "pixel_position_ids",
             "image_position_ids",
         ):
             if key in inputs:
@@ -1162,7 +1161,6 @@ class DPOTrainer(_BaseTrainer):
             "pixel_attention_mask",
             "image_grid_thw",
             "image_sizes",
-            "pixel_position_ids",
             "image_position_ids",
         ):
             if key in inputs:
