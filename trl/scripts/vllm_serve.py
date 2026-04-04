@@ -416,6 +416,7 @@ def main(script_args: ScriptArguments):
     from fastapi import FastAPI
     from pydantic import BaseModel
     from vllm import SamplingParams
+    from vllm.sampling_params import StructuredOutputsParams
 
     if Version(vllm.__version__) <= Version("0.11.0"):
         from vllm.utils import get_open_port
@@ -590,23 +591,15 @@ def main(script_args: ScriptArguments):
         generation_kwargs.update(request.generation_kwargs)
 
         # Structured outputs, if enabled
-        if Version(vllm.__version__) <= Version("0.10.2"):
-            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
-
-            structured_outputs_key = "guided_decoding"
-        else:
-            from vllm.sampling_params import StructuredOutputsParams
-
-            structured_outputs_key = "structured_outputs"
         if request.structured_outputs_regex is not None:
-            if generation_kwargs.get(structured_outputs_key) is not None:
+            if generation_kwargs.get("structured_outputs") is not None:
                 logger.warning(
-                    f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
+                    "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
                     "`structured_outputs_regex` takes precedence."
                 )
-            generation_kwargs[structured_outputs_key] = StructuredOutputsParams(regex=request.structured_outputs_regex)
-        elif isinstance(structured_outputs_kwargs := generation_kwargs.get(structured_outputs_key), dict):
-            generation_kwargs[structured_outputs_key] = StructuredOutputsParams(**structured_outputs_kwargs)
+            generation_kwargs["structured_outputs"] = StructuredOutputsParams(regex=request.structured_outputs_regex)
+        elif isinstance(structured_outputs_kwargs := generation_kwargs.get("structured_outputs"), dict):
+            generation_kwargs["structured_outputs"] = StructuredOutputsParams(**structured_outputs_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks
@@ -742,23 +735,15 @@ def main(script_args: ScriptArguments):
         generation_kwargs.update(request.generation_kwargs)
 
         # Structured outputs, if enabled
-        if Version(vllm.__version__) <= Version("0.10.2"):
-            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
-
-            structured_outputs_key = "guided_decoding"
-        else:
-            from vllm.sampling_params import StructuredOutputsParams
-
-            structured_outputs_key = "structured_outputs"
         if request.structured_outputs_regex is not None:
-            if generation_kwargs.get(structured_outputs_key) is not None:
+            if generation_kwargs.get("structured_outputs") is not None:
                 logger.warning(
-                    f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
+                    "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
                     "`structured_outputs_regex` takes precedence."
                 )
-            generation_kwargs[structured_outputs_key] = StructuredOutputsParams(regex=request.structured_outputs_regex)
-        elif isinstance(structured_outputs_kwargs := generation_kwargs.get(structured_outputs_key), dict):
-            generation_kwargs[structured_outputs_key] = StructuredOutputsParams(**structured_outputs_kwargs)
+            generation_kwargs["structured_outputs"] = StructuredOutputsParams(regex=request.structured_outputs_regex)
+        elif isinstance(structured_outputs_kwargs := generation_kwargs.get("structured_outputs"), dict):
+            generation_kwargs["structured_outputs"] = StructuredOutputsParams(**structured_outputs_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks

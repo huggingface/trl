@@ -29,7 +29,7 @@ from transformers import PreTrainedTokenizerBase, ProcessorMixin
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
 
 
-def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) -> list[dict[str, Any]]:
+def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | None = None) -> list[dict[str, Any]]:
     # docstyle-ignore  # because <Image> is not parsable in the code block
     """
     Convert messages into a structured multimodal format and inject the provided images into the message contents.
@@ -40,8 +40,8 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
             List of messages with a `"role"` key (`"system"`, `"user"`, `"assistant"`, or `"tool"`) and a `"content"` key containing
             either a string or a list of structured blocks if already prepared. Optionally, the `"content"` might
             be `None` or not provided in favour of `"tool_calls"` in the `"assistant"` turns if applicable.
-        images (`list`):
-            List of image objects to insert. Can be empty if no images are included in the messages.
+        images (`list`, *optional*):
+            List of image objects to insert in the messages.
 
     Returns:
         `list[dict[str, Any]]`: A deep-copied list of messages where every `"content"` value is a list of structured
@@ -71,7 +71,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
     ]
     ```
     """
-
+    images = images or []
     messages = copy.deepcopy(messages)  # avoid modifying the original messages
 
     # First, convert all messages to the structured format if needed, and insert image placeholders if needed

@@ -1424,7 +1424,7 @@ class GRPOTrainer(_BaseTrainer):
         """Get token IDs for tool result formatting by using a minimal dummy conversation."""
         dummy_messages = [{"role": "user", "content": "dummy"}, {"role": "assistant", "content": "dummy"}]
         if self._is_vlm:
-            dummy_messages = prepare_multimodal_messages(dummy_messages, [])
+            dummy_messages = prepare_multimodal_messages(dummy_messages)
         prefix_ids = self.processing_class.apply_chat_template(
             dummy_messages,
             add_generation_prompt=False,
@@ -2004,7 +2004,7 @@ class GRPOTrainer(_BaseTrainer):
                     "template internally."
                 )
             prompts = [
-                prepare_multimodal_messages(prompt, image_list)
+                prepare_multimodal_messages(prompt, images=image_list)
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
