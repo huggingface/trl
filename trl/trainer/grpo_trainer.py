@@ -1036,7 +1036,7 @@ class GRPOTrainer(_BaseTrainer):
             input_ids_batch = input_ids[start : start + batch_size]
             attention_mask_batch = attention_mask[start : start + batch_size]
 
-            # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
+            # Build model inputs
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
             if image_grid_thw is not None and pixel_values is not None:
                 rows_per_image = image_grid_thw.prod(dim=-1)
@@ -1048,17 +1048,13 @@ class GRPOTrainer(_BaseTrainer):
                 cum_imgs = torch.tensor([0] + num_images).cumsum(0)
                 img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
                 model_inputs["image_grid_thw"] = image_grid_thw[img_start:img_end]
+            elif image_position_ids is not None and pixel_values is not None:
+                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
+                img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
+                model_inputs["pixel_values"] = pixel_values[img_start:img_end]
+                model_inputs["image_position_ids"] = image_position_ids[img_start:img_end]
             elif pixel_values is not None:
-                if num_images is not None:
-                    # pixel_values is indexed by image, not by sample — slice using cumulative image counts
-                    num_images_list = num_images.tolist() if isinstance(num_images, torch.Tensor) else list(num_images)
-                    cum_imgs = [0]
-                    for n in num_images_list:
-                        cum_imgs.append(cum_imgs[-1] + int(n))
-                    img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
-                    model_inputs["pixel_values"] = pixel_values[img_start:img_end]
-                else:
-                    model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
+                model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
             if pixel_attention_mask is not None:
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
             if image_sizes is not None:
@@ -1067,8 +1063,7 @@ class GRPOTrainer(_BaseTrainer):
                 model_inputs["token_type_ids"] = token_type_ids[start : start + batch_size]
             if mm_token_type_ids is not None:
                 model_inputs["mm_token_type_ids"] = mm_token_type_ids[start : start + batch_size]
-            if image_position_ids is not None:
-                model_inputs["image_position_ids"] = image_position_ids[img_start:img_end]
+
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
                 # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
