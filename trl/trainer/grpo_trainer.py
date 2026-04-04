@@ -1292,7 +1292,7 @@ class GRPOTrainer(_BaseTrainer):
                 for message in prompt:
                     if isinstance(message["content"], list):
                         for part in message["content"]:
-                            if isinstance(part, dict) and part.get("type") == "image":
+                            if part["type"] == "image":
                                 prompt_images.append(part["image"])
                                 has_images = True
                 images.append(prompt_images if prompt_images else None)
@@ -1442,7 +1442,7 @@ class GRPOTrainer(_BaseTrainer):
         for msg in tool_messages:
             if isinstance(msg.get("content"), list):
                 for part in msg["content"]:
-                    if isinstance(part, dict) and part.get("type") == "image":
+                    if part["type"] == "image":
                         tool_images.append(part["image"])
 
         # Normalize string content in tool messages for VLM processors before either path.
@@ -2824,6 +2824,7 @@ class GRPOTrainer(_BaseTrainer):
                     self._logs["advantages"],
                     self.state.global_step,
                     self.num_completions_to_print,
+                    extra=dict(self._logs["extra"]),
                 )
 
             logging_backends = []

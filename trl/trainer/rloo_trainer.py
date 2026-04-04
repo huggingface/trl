@@ -912,7 +912,7 @@ class RLOOTrainer(_BaseTrainer):
                 for message in prompt:
                     if isinstance(message["content"], list):
                         for part in message["content"]:
-                            if isinstance(part, dict) and part.get("type") == "image":
+                            if part["type"] == "image":
                                 prompt_images.append(part["image"])
                                 has_images = True
                 images.append(prompt_images if prompt_images else None)
@@ -1472,6 +1472,7 @@ class RLOOTrainer(_BaseTrainer):
                     self._logs["advantages"],
                     self.state.global_step,
                     self.num_completions_to_print,
+                    extra=dict(self._logs["extra"]),
                 )
 
             logging_backends = []

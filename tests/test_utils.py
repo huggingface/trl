@@ -545,6 +545,34 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         assert output == expected_output
 
     @patch("sys.stdout", new_callable=StringIO)
+    def test_extra_columns(self, mock_stdout):
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        extra = {"source": ["dataset_A", "dataset_B"]}
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step, extra=extra)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ source    ┃ │
+        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ dataset_A │ │
+        │ ├────────────┼──────────────┼─────────────┼────────┼───────────┼───────────┤ │
+        │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ dataset_B │ │
+        │ └────────────┴──────────────┴─────────────┴────────┴───────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
     def test_num_samples(self, mock_stdout):
         prompts = ["A", "B"]
         completions = ["1", "2"]
