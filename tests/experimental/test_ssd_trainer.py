@@ -26,6 +26,12 @@ if is_peft_available():
 
 
 class TestSSDTrainer(TrlTestCase):
+    def test_vllm_config_defaults_match_reference_trainers(self):
+        config = SSDConfig(output_dir=self.tmp_dir)
+
+        assert config.vllm_mode == "colocate"
+        assert config.vllm_model_impl == "vllm"
+
     def test_training_with_string_prompts(self):
         dataset = Dataset.from_dict(
             {
