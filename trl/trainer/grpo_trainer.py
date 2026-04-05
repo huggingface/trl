@@ -1406,7 +1406,13 @@ class GRPOTrainer(_BaseTrainer):
 
     def _get_tool_suffix_ids(self, tool_messages):
         """Get token IDs for tool result formatting by using a minimal dummy conversation."""
-        dummy_messages = [{"role": "user", "content": "dummy"}, {"role": "assistant", "content": "dummy"}]
+        dummy_messages = [
+            {"role": "user", "content": "dummy"},
+            {
+                "role": "assistant",
+                "tool_calls": [{"type": "function", "function": {"name": "dummy", "arguments": {}}}],
+            },
+        ]
         if self._is_vlm:
             dummy_messages = prepare_multimodal_messages(dummy_messages)
         prefix_ids = self.processing_class.apply_chat_template(

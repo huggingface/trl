@@ -16,6 +16,7 @@ from pathlib import Path
 
 from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 
+
 _CHAT_TEMPLATES_DIR = Path(__file__).parent / "chat_templates"
 
 
@@ -237,9 +238,9 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
     """
     Check whether the chat template preserves prefixes when applied.
 
-    A prefix-preserving chat template renders earlier messages identically regardless of what messages follow.
-    This property is required by `_get_tool_suffix_ids`, which extracts tool response formatting tokens by
-    comparing tokenizations with and without tool messages appended.
+    A prefix-preserving chat template renders earlier messages identically regardless of what messages follow. This
+    property is required by `_get_tool_suffix_ids`, which extracts tool response formatting tokens by comparing
+    tokenizations with and without tool messages appended.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -249,22 +250,16 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
         `bool`:
             `True` if the chat template preserves prefixes, `False` otherwise.
     """
+    # Use the same dummy messages as _get_tool_suffix_ids to test the exact property it relies on.
+    dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": {}}}]
     messages1 = [
-        {"role": "user", "content": "What is 2 * 3?"},
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 2, "b": 3}}}],
-        },
+        {"role": "user", "content": "dummy"},
+        {"role": "assistant", "tool_calls": dummy_tool_calls},
     ]
     messages2 = [
-        {"role": "user", "content": "What is 2 * 3?"},
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 2, "b": 3}}}],
-        },
-        {"role": "tool", "name": "multiply", "content": "6"},
+        {"role": "user", "content": "dummy"},
+        {"role": "assistant", "tool_calls": dummy_tool_calls},
+        {"role": "tool", "name": "dummy", "content": "dummy"},
     ]
 
     text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
@@ -300,7 +295,10 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
     >>> messages1 = [
     ...     {"role": "user", "content": "What is 2 * 3?"},
-    ...     {"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 2, "b": 3}}}]},
+    ...     {
+    ...         "role": "assistant",
+    ...         "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 2, "b": 3}}}],
+    ...     },
     ... ]
     >>> messages2 = messages1 + [
     ...     {"role": "tool", "name": "multiply", "content": "6"},
@@ -316,7 +314,9 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     >>> tokenizer.apply_chat_template(messages1, tokenize=False, chat_template=chat_template)
     '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n'
 
-    >>> tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True, chat_template=chat_template)
+    >>> tokenizer.apply_chat_template(
+    ...     messages2, tokenize=False, add_generation_prompt=True, chat_template=chat_template
+    ... )
     '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n6\n</tool_response><|im_end|>\n<|im_start|>assistant\n'
     ```
     """
