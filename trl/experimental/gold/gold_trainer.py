@@ -29,7 +29,7 @@ from accelerate import PartialState
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object
 from datasets import Dataset, IterableDataset
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, TrainerCallback
+from transformers import AutoProcessor, AutoTokenizer, TrainerCallback
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
@@ -58,10 +58,11 @@ from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
+    get_config_model_id,
     pad,
     split_tensor_dict,
 )
-from ..utils import DataCollatorForChatML, empty_cache, truncate_dataset
+from ..utils import DataCollatorForChatML, DataCollatorForVisionLanguageChatML, empty_cache, truncate_dataset
 from .gold_config import GOLDConfig
 
 
@@ -778,10 +779,51 @@ class GOLDTrainer(SFTTrainer):
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
         self.model_revision = (args.model_init_kwargs or {}).get("revision")
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+        dataset_sample = next(iter(train_dataset))
+        if processing_class is None:
+            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
+            # simplified logic from SFTTrainer
+        if isinstance(processing_class, ProcessorMixin):
+            self._is_vlm = True
+        else:
+            self._is_vlm = False
 
-        # Respect a user-provided data_collator; otherwise, provide a ChatML collator that
+        # VLM distillation: only VLM-to-VLM is supported. Both student and teacher must be
+        # VLMs so that both receive images and multimodal inputs.
+        if self._is_vlm and isinstance(teacher_model, str):
+            # Teacher not yet instantiated
+            teacher_proc = AutoProcessor.from_pretrained(teacher_model)
+            if not isinstance(teacher_proc, ProcessorMixin):
+                raise ValueError(
+                    "VLM distillation requires both student and teacher to be vision-language models. "
+                    "The student has a `ProcessorMixin` but the teacher does not."
+                )
+        elif self._is_vlm and not isinstance(teacher_model, str):
+            # Teacher already instantiated — check if it looks like a VLM by checking for a vision config
+            if not hasattr(teacher_model, "config") or not hasattr(teacher_model.config, "vision_config"):
+                raise ValueError(
+                    "VLM distillation requires both student and teacher to be vision-language models. "
+                    "The student has a `ProcessorMixin` but the teacher model does not appear to be a VLM "
+                    "(missing `vision_config`)."
+                )
+        self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
+        if self._is_vision_dataset and not self._is_vlm:
+            raise ValueError(
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
+                "model does not seem to be a vision-language model. Please check your model and dataset."
+            )
+
+        # Respect a user-provided data_collator; otherwise, pick the right collator based on modality
         if data_collator is None:
-            data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
+            if self._is_vision_dataset:
+                data_collator = DataCollatorForVisionLanguageChatML(
+                    processor=processing_class,
+                    max_length=args.max_length,
+                )
+            else:
+                data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
 
         # Liger fused GKD loss (JSD)
         self.use_liger_gkd_loss = False
@@ -974,6 +1016,15 @@ class GOLDTrainer(SFTTrainer):
             "tools",
             "original_prompt_text",
             "original_completion_text",
+            "images",
+            "image",
+            "pixel_values",
+            "image_grid_thw",
+            "image_position_ids",
+            "pixel_attention_mask",
+            "image_sizes",
+            "token_type_ids",
+            "mm_token_type_ids",
         ]
         if self._signature_columns is None:
             self._signature_columns = required_columns
@@ -1190,6 +1241,9 @@ class GOLDTrainer(SFTTrainer):
             self.vllm_generation.sync_weights()
             self._last_vllm_sync_step = self.state.global_step
 
+        # TODO: pass raw images from the dataset to vLLM for VLM on-policy generation.
+        # Currently, the collated batch only contains processed pixel_values, not raw images.
+        # vLLM generation with VLMs requires raw images which are lost after collation.
         _, completion_ids, _, _ = self.vllm_generation.generate(
             prompts=prompt_ids_list,
             images=None,
@@ -1367,6 +1421,11 @@ class GOLDTrainer(SFTTrainer):
         dataset_name: str,
     ) -> Dataset | IterableDataset:
         """Preserve original text fields for ULD when needed."""
+        # For VLM datasets, skip dataset preparation entirely — the VLM collator handles tokenization
+        # and image processing on the fly, similar to how SFTTrainer skips prep for vision datasets.
+        if self._is_vision_dataset:
+            return dataset
+
         column_names = list(next(iter(dataset)).keys())
         is_processed = "input_ids" in column_names
 
@@ -1689,7 +1748,20 @@ class GOLDTrainer(SFTTrainer):
         else:
             return jsd
 
+    _MULTIMODAL_KEYS = (
+        "pixel_values",
+        "image_grid_thw",
+        "image_position_ids",
+        "pixel_attention_mask",
+        "image_sizes",
+        "token_type_ids",
+        "mm_token_type_ids",
+    )
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # Extract multimodal fields for VLM forward passes
+        forward_kwargs = {k: inputs[k] for k in self._MULTIMODAL_KEYS if k in inputs}
+
         if self.use_uld_loss and self.teacher_tokenizer is not None:
             if "original_prompt_text" in inputs and "original_completion_text" in inputs:
                 prompt_texts = inputs["original_prompt_text"]
@@ -1727,6 +1799,7 @@ class GOLDTrainer(SFTTrainer):
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
                 use_cache=False,
+                **forward_kwargs,
             )
 
             self.teacher_model.eval()
@@ -1734,6 +1807,7 @@ class GOLDTrainer(SFTTrainer):
                 outputs_teacher = self.teacher_model(
                     input_ids=teacher_input_ids,
                     attention_mask=teacher_attention_mask,
+                    **forward_kwargs,
                 )
 
             # These are not used for ULD loss but are needed if JSD loss were to be used in this branch
@@ -1756,6 +1830,7 @@ class GOLDTrainer(SFTTrainer):
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
                     use_cache=False,
+                    **forward_kwargs,
                 )
 
                 self.teacher_model.eval()
@@ -1771,6 +1846,7 @@ class GOLDTrainer(SFTTrainer):
                         input_ids=inputs["input_ids"],
                         attention_mask=inputs["attention_mask"],
                         use_cache=False,
+                        **forward_kwargs,
                     )
 
                 student_hidden = student_outputs.last_hidden_state[:, :-1]
@@ -1805,6 +1881,7 @@ class GOLDTrainer(SFTTrainer):
                 outputs_student = model(
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
+                    **forward_kwargs,
                 )
 
                 self.teacher_model.eval()
@@ -1812,6 +1889,7 @@ class GOLDTrainer(SFTTrainer):
                     outputs_teacher = self.teacher_model(
                         input_ids=inputs["input_ids"],
                         attention_mask=inputs["attention_mask"],
+                        **forward_kwargs,
                     )
 
                 prompt_lengths = inputs["prompts"].shape[1]
@@ -1898,11 +1976,13 @@ class GOLDTrainer(SFTTrainer):
             completion_ids = [output.generated_tokens for output in generated_outputs.values()]
             generated_tokens = torch.stack([torch.tensor(ids, device=model.device) for ids in completion_ids])
         else:
+            generate_kwargs = {k: inputs[k] for k in self._MULTIMODAL_KEYS if k in inputs}
             generated_outputs = model.generate(
                 input_ids=inputs["prompts"],
                 attention_mask=inputs.get("prompt_attention_mask", None),
                 generation_config=generation_config,
                 return_dict_in_generate=True,
+                **generate_kwargs,
             )
             # Get the generated token IDs
             generated_tokens = generated_outputs.sequences

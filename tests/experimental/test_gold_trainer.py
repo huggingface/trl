@@ -16,12 +16,12 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from datasets import load_dataset
-from transformers import AutoTokenizer
+from datasets import Dataset, load_dataset
+from transformers import AutoProcessor, AutoTokenizer
 
 from trl.experimental.gold import gold_trainer as gold_trainer_module
 from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, build_teacher_inputs_from_texts
-from trl.experimental.utils import DataCollatorForChatML
+from trl.experimental.utils import DataCollatorForChatML, DataCollatorForVisionLanguageChatML
 
 
 @pytest.fixture(scope="module")
@@ -269,6 +269,35 @@ def smollm_tokenizer():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
+
+
+@pytest.fixture(scope="session")
+def smolvlm_processor():
+    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
+    if processor.tokenizer.pad_token is None:
+        processor.tokenizer.pad_token = processor.tokenizer.eos_token
+    return processor
+
+
+@pytest.fixture(scope="session")
+def qwen3_vl_processor():
+    processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-2B-Instruct")
+    if processor.tokenizer.pad_token is None:
+        processor.tokenizer.pad_token = processor.tokenizer.eos_token
+    return processor
+
+
+@pytest.fixture(scope="module")
+def vlm_examples():
+    try:
+        dataset = load_dataset(
+            "trl-internal-testing/zen-image",
+            "conversational_prompt_completion",
+            split="train[:3]",
+        )
+    except Exception as exc:  # pragma: no cover - network/environment dependent
+        pytest.skip(f"zen-image dataset unavailable: {exc}")
+    return [dict(row) for row in dataset]
 
 
 def encode_prompt_completion(tokenizer, prompt, completion):
@@ -575,12 +604,17 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
         vllm_sync_frequency=1,
     )
 
+    # A minimal dataset is required because GOLDTrainer inspects the first example at init
+    # to detect whether the dataset contains images for VLM, so None dosn't pass
+    dummy_dataset = Dataset.from_dict({"messages": [["dummy"]]})
+
     teacher_model = DummyTeacherModel()
     GOLDTrainer(
         model=DummyStudentModel(),
         teacher_model=teacher_model,
         args=args,
         data_collator=object(),
+        train_dataset=dummy_dataset,
         processing_class=DummyProcessingClass(),
     )
 
@@ -942,3 +976,355 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
 
     expected = config.uld_hybrid_unmatched_weight * loss_fn.last_unmatched_loss
     torch.testing.assert_close(loss, expected, atol=1e-6, rtol=1e-5)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# VLM tests
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_vlm_alignment_groups_cover_all_tokens_smolvlm_qwen3vl(smolvlm_processor, qwen3_vl_processor, vlm_examples):
+    student_tokenizer = smolvlm_processor.tokenizer
+    teacher_tokenizer = qwen3_vl_processor.tokenizer
+
+    collator = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=2048)
+    batch = collator(vlm_examples)
+
+    config = build_config()
+    loss = ULDLoss(config, student_tokenizer=student_tokenizer, teacher_tokenizer=teacher_tokenizer)
+
+    teacher_input_ids, teacher_labels, _ = _teacher_inputs_from_collator(student_tokenizer, teacher_tokenizer, batch)
+
+    _assert_alignment_covers_completion(loss, batch, teacher_input_ids, teacher_labels)
+
+
+def test_gold_trainer_init_rejects_llm_with_vision_dataset(monkeypatch):
+    """GOLDTrainer should raise ValueError when a text-only model receives a vision dataset."""
+
+    class DummyStudentModel:
+        def __init__(self):
+            self.config = SimpleNamespace(_name_or_path="student", vocab_size=17)
+            self.generation_config = SimpleNamespace(eos_token_id=2)
+            self.name_or_path = "student"
+
+    class DummyTeacherModel:
+        def __init__(self):
+            self.resized_to = None
+
+        def resize_token_embeddings(self, vocab_size):
+            self.resized_to = vocab_size
+
+    def fake_sft_init(
+        self,
+        model,
+        args=None,
+        data_collator=None,
+        train_dataset=None,
+        eval_dataset=None,
+        processing_class=None,
+        compute_metrics=None,
+        callbacks=None,
+        optimizers=None,
+        preprocess_logits_for_metrics=None,
+        peft_config=None,
+    ):
+        del data_collator, train_dataset, eval_dataset, compute_metrics, callbacks, optimizers
+        del preprocess_logits_for_metrics, peft_config
+        self.model = model
+        self.args = args
+        self.processing_class = processing_class
+        self.accelerator = SimpleNamespace(
+            device=torch.device("cpu"),
+            num_processes=1,
+            prepare_model=lambda module, evaluation_mode=True: module,
+        )
+        self.is_deepspeed_enabled = False
+        self.is_fsdp_enabled = False
+
+    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
+
+    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM3-3B")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # Dataset with an "image" key triggers vision detection
+    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
+
+    args = SimpleNamespace(
+        model_init_kwargs=None,
+        max_length=128,
+        use_liger_kernel=False,
+        teacher_model_init_kwargs=None,
+        use_uld_loss=False,
+        teacher_tokenizer_name_or_path=None,
+        teacher_model_revision=None,
+        disable_dropout=False,
+        lmbda=1.0,
+        beta=0.5,
+        temperature=1.0,
+        top_p=1.0,
+        seq_kd=False,
+        num_generations=1,
+        use_transformers_paged=False,
+        max_completion_length=16,
+        top_k=0,
+        log_completions=False,
+        log_completions_steps=100,
+        wandb_log_unique_prompts=True,
+        num_completions_to_print=None,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=1,
+        use_vllm=False,
+    )
+
+    with pytest.raises(ValueError, match="vision-related"):
+        GOLDTrainer(
+            model=DummyStudentModel(),
+            teacher_model=DummyTeacherModel(),
+            args=args,
+            train_dataset=vision_dataset,
+            processing_class=tokenizer,
+        )
+
+
+def _get_assistant_texts(examples):
+    """Extract assistant text content from examples, handling both plain string and multimodal format."""
+    texts = []
+    for example in examples:
+        content = example["completion"][-1]["content"]
+        if isinstance(content, list):
+            texts.append("".join(part["text"] for part in content if "text" in part))
+        else:
+            texts.append(content)
+    return texts
+
+
+def test_vlm_chatml_collator_preserves_completion_smolvlm(smolvlm_processor, qwen3_vl_processor, vlm_examples):
+    # 2048 to not truncate the completion tokens
+    collator = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=2048)
+    batch = collator(vlm_examples)
+
+    # Verify basic batch structure
+    assert "input_ids" in batch
+    assert "labels" in batch
+    assert "prompts" in batch
+    assert "prompt_attention_mask" in batch
+    assert "pixel_values" in batch
+    assert "original_prompt_text" in batch
+    assert "original_completion_text" in batch
+
+    # Verify completions are preserved in decoded output
+    assistant_texts = _get_assistant_texts(vlm_examples)
+    decoded_batch = smolvlm_processor.tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
+    for decoded, assistant in zip(decoded_batch, assistant_texts, strict=True):
+        assert assistant in decoded
+
+    # Verify ULD cross-tokenizer distillation with teacher inputs
+    student_tokenizer = smolvlm_processor.tokenizer
+    teacher_tokenizer = qwen3_vl_processor.tokenizer
+
+    teacher_input_ids, teacher_labels, completion_texts = _teacher_inputs_from_collator(
+        student_tokenizer, teacher_tokenizer, batch
+    )
+    for completion, assistant in zip(completion_texts, assistant_texts, strict=True):
+        assert assistant.strip() in completion
+        assert completion.strip()
+
+    config = build_config(
+        uld_use_hybrid_loss=True,
+        uld_hybrid_matched_weight=0.6,
+        uld_hybrid_unmatched_weight=0.4,
+    )
+    loss_fn = ULDLoss(config, student_tokenizer=student_tokenizer, teacher_tokenizer=teacher_tokenizer)
+
+    _assert_alignment_covers_completion(loss_fn, batch, teacher_input_ids, teacher_labels)
+
+    torch.manual_seed(42)
+    student_vocab = len(student_tokenizer)
+    teacher_vocab = len(teacher_tokenizer)
+    batch_size, seq_len = batch["input_ids"].shape
+    student_logits = torch.randn(batch_size, seq_len, student_vocab)
+    teacher_logits = torch.randn(batch_size, teacher_input_ids.shape[1], teacher_vocab)
+
+    loss = loss_fn(
+        student_logits=student_logits,
+        teacher_logits=teacher_logits,
+        student_labels=batch["labels"],
+        teacher_labels=teacher_labels,
+        student_input_ids=batch["input_ids"],
+        teacher_input_ids=teacher_input_ids,
+    )
+
+    assert torch.isfinite(loss)
+
+
+@pytest.mark.slow
+def test_vlm_chatml_collator_preserves_completion_qwen3vl(smolvlm_processor, qwen3_vl_processor, vlm_examples):
+    collator = DataCollatorForVisionLanguageChatML(processor=qwen3_vl_processor, max_length=2048)
+    batch = collator(vlm_examples)
+
+    # Verify basic batch structure
+    assert "input_ids" in batch
+    assert "labels" in batch
+    assert "prompts" in batch
+    assert "pixel_values" in batch
+
+    # Verify completions are preserved in decoded output
+    assistant_texts = _get_assistant_texts(vlm_examples)
+    decoded_batch = qwen3_vl_processor.tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
+    for decoded, assistant in zip(decoded_batch, assistant_texts, strict=True):
+        assert assistant in decoded
+
+    # Verify ULD cross-tokenizer distillation with teacher inputs
+    student_tokenizer = qwen3_vl_processor.tokenizer
+    teacher_tokenizer = smolvlm_processor.tokenizer
+
+    teacher_input_ids, teacher_labels, completion_texts = _teacher_inputs_from_collator(
+        student_tokenizer, teacher_tokenizer, batch
+    )
+    for completion, assistant in zip(completion_texts, assistant_texts, strict=True):
+        assert assistant.strip() in completion
+        assert completion.strip()
+
+    config = build_config(
+        uld_use_hybrid_loss=True,
+        uld_hybrid_matched_weight=0.6,
+        uld_hybrid_unmatched_weight=0.4,
+    )
+    loss_fn = ULDLoss(config, student_tokenizer=student_tokenizer, teacher_tokenizer=teacher_tokenizer)
+
+    _assert_alignment_covers_completion(loss_fn, batch, teacher_input_ids, teacher_labels)
+
+    torch.manual_seed(43)
+    student_vocab = len(student_tokenizer)
+    teacher_vocab = len(teacher_tokenizer)
+    batch_size, seq_len = batch["input_ids"].shape
+    student_logits = torch.randn(batch_size, seq_len, student_vocab)
+    teacher_logits = torch.randn(batch_size, teacher_input_ids.shape[1], teacher_vocab)
+
+    loss = loss_fn(
+        student_logits=student_logits,
+        teacher_logits=teacher_logits,
+        student_labels=batch["labels"],
+        teacher_labels=teacher_labels,
+        student_input_ids=batch["input_ids"],
+        teacher_input_ids=teacher_input_ids,
+    )
+
+    assert torch.isfinite(loss)
+
+
+def test_vlm_collator_label_masking(smolvlm_processor, vlm_examples):
+    """Verify that the VLM collator masks prompt and padding tokens in labels and leaves completion tokens unmasked."""
+    collator = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=2048)
+    batch = collator(vlm_examples)
+
+    input_ids = batch["input_ids"]
+    labels = batch["labels"]
+    attention_mask = batch["attention_mask"]
+
+    for i in range(input_ids.shape[0]):
+        # Padding tokens (attention_mask == 0) must be masked in labels
+        padding_positions = attention_mask[i] == 0
+        assert (labels[i][padding_positions] == -100).all(), "Padding tokens should be masked with -100"
+
+        # There must be at least one non-masked label (completion token)
+        completion_positions = labels[i] != -100
+        assert completion_positions.any(), "Each example must have at least one completion token in labels"
+
+        # Completion labels must match the corresponding input_ids
+        assert (labels[i][completion_positions] == input_ids[i][completion_positions]).all(), (
+            "Unmasked labels must match input_ids"
+        )
+
+        # Prompt tokens (attended but masked in labels) must exist — the prompt is never empty
+        prompt_positions = (attention_mask[i] == 1) & (labels[i] == -100)
+        assert prompt_positions.any(), "Each example must have masked prompt tokens"
+
+
+def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
+    """GOLDTrainer should raise ValueError when the student is a VLM but the teacher is not."""
+
+    class DummyStudentModel:
+        def __init__(self):
+            self.config = SimpleNamespace(_name_or_path="student", vocab_size=17)
+            self.generation_config = SimpleNamespace(eos_token_id=2)
+            self.name_or_path = "student"
+
+    class DummyTeacherModel:
+        def __init__(self):
+            # No vision_config — looks like a text-only model
+            self.config = SimpleNamespace()
+            self.resized_to = None
+
+        def resize_token_embeddings(self, vocab_size):
+            self.resized_to = vocab_size
+
+    def fake_sft_init(
+        self,
+        model,
+        args=None,
+        data_collator=None,
+        train_dataset=None,
+        eval_dataset=None,
+        processing_class=None,
+        compute_metrics=None,
+        callbacks=None,
+        optimizers=None,
+        preprocess_logits_for_metrics=None,
+        peft_config=None,
+    ):
+        del data_collator, train_dataset, eval_dataset, compute_metrics, callbacks, optimizers
+        del preprocess_logits_for_metrics, peft_config
+        self.model = model
+        self.args = args
+        self.processing_class = processing_class
+        self.accelerator = SimpleNamespace(
+            device=torch.device("cpu"),
+            num_processes=1,
+            prepare_model=lambda module, evaluation_mode=True: module,
+        )
+        self.is_deepspeed_enabled = False
+        self.is_fsdp_enabled = False
+
+    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
+
+    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
+
+    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
+
+    args = SimpleNamespace(
+        model_init_kwargs=None,
+        max_length=128,
+        use_liger_kernel=False,
+        teacher_model_init_kwargs=None,
+        use_uld_loss=False,
+        teacher_tokenizer_name_or_path=None,
+        teacher_model_revision=None,
+        disable_dropout=False,
+        lmbda=1.0,
+        beta=0.5,
+        temperature=1.0,
+        top_p=1.0,
+        seq_kd=False,
+        num_generations=1,
+        use_transformers_paged=False,
+        max_completion_length=16,
+        top_k=0,
+        log_completions=False,
+        log_completions_steps=100,
+        wandb_log_unique_prompts=True,
+        num_completions_to_print=None,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=1,
+        use_vllm=False,
+    )
+
+    with pytest.raises(ValueError, match="VLM distillation requires both student and teacher"):
+        GOLDTrainer(
+            model=DummyStudentModel(),
+            teacher_model=DummyTeacherModel(),
+            args=args,
+            train_dataset=vision_dataset,
+            processing_class=processor,
+        )

@@ -29,7 +29,9 @@ from pyarrow import compute as pc
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, TrainingArguments
+from transformers.data.data_collator import DataCollatorMixin
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+from transformers.processing_utils import ProcessorMixin
 from transformers.utils import (
     is_peft_available,
     is_torch_mlu_available,
@@ -37,8 +39,14 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
-from ..data_utils import DatasetType, _get_dataset_format
-from ..trainer.utils import pad
+from ..data_utils import (
+    DatasetType,
+    _get_dataset_format,
+    apply_chat_template,
+    is_conversational,
+    prepare_multimodal_messages,
+)
+from ..trainer.utils import flush_left, pad
 
 
 if is_peft_available():
@@ -259,6 +267,155 @@ class DataCollatorForChatML:
             "prompts": prompts_input_ids,
             "prompt_attention_mask": prompt_attention_mask,
         }
+
+
+@dataclass
+class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
+    """
+    Data collator for GOLD VLM training.
+
+    Combines image processing from [`~trainer.sft_trainer.DataCollatorForVisionLanguageModeling`] with the
+    prompt-separation logic that GOLD needs for on-policy generation. Each input example should be a dictionary
+    containing at least:
+    - An `"images"` key holding a list of images, or an `"image"` key holding a single image.
+    - Keys `"prompt"` and `"completion"` for the prompt and completion (conversational or plain text).
+
+    The collator outputs a dictionary including:
+    - `"input_ids"`: Tensor of token IDs (prompt + completion, concatenated).
+    - `"attention_mask"`: Tensor indicating attention mask.
+    - `"labels"`: Tensor for training labels (prompt tokens masked with -100).
+    - `"prompts"`: Tensor of prompt-only token IDs (left-padded), used for on-policy generation.
+    - `"prompt_attention_mask"`: Attention mask for prompts.
+    - `"original_prompt_text"`: List of raw prompt text strings, used for ULD cross-tokenizer distillation.
+    - `"original_completion_text"`: List of raw completion text strings, used for ULD cross-tokenizer distillation.
+    - `"pixel_values"`: Tensor representing image pixel values.
+
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"image_position_ids"`.
+
+    Args:
+        processor ([`~transformers.ProcessorMixin`]):
+            The processor used to tokenize text and process images.
+        max_length (`int` or `None`, *optional*):
+            Maximum sequence length for input tokens. If `None`, no truncation is applied.
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
+            The tensor type to return.
+    """
+
+    processor: ProcessorMixin
+    max_length: int | None = None
+    return_tensors: str = "pt"
+
+    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        if "prompt" not in examples[0] or "completion" not in examples[0]:
+            raise KeyError(
+                "DataCollatorForVisionLanguageChatML requires 'prompt' and 'completion' keys in examples. "
+                f"Got keys: {list(examples[0].keys())}."
+            )
+
+        # Normalize single image to list
+        if "image" in examples[0]:
+            for example in examples:
+                example["images"] = [example.pop("image")]
+        images = [example.get("images", []) for example in examples]
+        if all(img_list == [] for img_list in images):
+            images = None
+
+        # Apply chat template for conversational data
+        if is_conversational(examples[0]):
+            for example in examples:
+                example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
+                example["completion"] = prepare_multimodal_messages(example["completion"])
+            examples = [apply_chat_template(example, self.processor) for example in examples]
+
+        prompts = [example["prompt"] for example in examples]
+        completions = [example["completion"] for example in examples]
+
+        # Process prompts (with images) and completions (text only) separately
+        processed_prompts = self.processor(
+            images=images,
+            text=prompts,
+            padding=True,
+            padding_side="left",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,
+        )
+        processed_completions = self.processor(
+            text=completions,
+            padding=True,
+            padding_side="right",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,
+        )
+
+        # Concatenate prompts and completions
+        prompt_ids, prompt_mask = processed_prompts["input_ids"], processed_prompts["attention_mask"]
+        completion_ids, completion_mask = processed_completions["input_ids"], processed_completions["attention_mask"]
+        input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
+        attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
+        completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
+        if "token_type_ids" in processed_prompts:
+            prompt_token_type_ids = processed_prompts["token_type_ids"]
+            completion_token_type_ids = processed_completions["token_type_ids"]
+            token_type_ids = torch.cat((prompt_token_type_ids, completion_token_type_ids), dim=1)
+        if "mm_token_type_ids" in processed_prompts:
+            prompt_mm_token_type_ids = processed_prompts["mm_token_type_ids"]
+            completion_mm_token_type_ids = processed_completions.get(
+                "mm_token_type_ids", torch.zeros_like(completion_ids)
+            )
+            mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, completion_mm_token_type_ids), dim=1)
+
+        # Flush left to reduce padding
+        if "token_type_ids" in processed_prompts and "mm_token_type_ids" in processed_prompts:
+            attention_mask, input_ids, completion_mask, token_type_ids, mm_token_type_ids = flush_left(
+                attention_mask, input_ids, completion_mask, token_type_ids, mm_token_type_ids
+            )
+        elif "token_type_ids" in processed_prompts:
+            attention_mask, input_ids, completion_mask, token_type_ids = flush_left(
+                attention_mask, input_ids, completion_mask, token_type_ids
+            )
+        elif "mm_token_type_ids" in processed_prompts:
+            attention_mask, input_ids, completion_mask, mm_token_type_ids = flush_left(
+                attention_mask, input_ids, completion_mask, mm_token_type_ids
+            )
+        else:
+            attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+
+        # Truncate if necessary
+        if self.max_length is not None:
+            input_ids = input_ids[:, : self.max_length]
+            attention_mask = attention_mask[:, : self.max_length]
+            completion_mask = completion_mask[:, : self.max_length]
+            if "token_type_ids" in processed_prompts:
+                token_type_ids = token_type_ids[:, : self.max_length]
+            if "mm_token_type_ids" in processed_prompts:
+                mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
+
+        # Create labels: mask padding and prompt tokens
+        labels = input_ids.clone()
+        labels[attention_mask == 0] = -100
+        labels[completion_mask == 0] = -100
+
+        # Build output with vision keys from processed_prompts (pixel_values, image_grid_thw, etc.)
+        output = processed_prompts
+        output["input_ids"] = input_ids
+        output["attention_mask"] = attention_mask
+        output["labels"] = labels
+        if "token_type_ids" in processed_prompts:
+            output["token_type_ids"] = token_type_ids
+        if (
+            "mm_token_type_ids" in processed_prompts
+        ):  # special case for ERNIE-VL from class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
+            output["mm_token_type_ids"] = mm_token_type_ids
+
+        # GOLD-specific: separate prompt tensors for on-policy generation
+        output["prompts"] = prompt_ids
+        output["prompt_attention_mask"] = prompt_mask
+
+        # GOLD-specific: raw text for ULD cross-tokenizer distillation
+        output["original_prompt_text"] = prompts
+        output["original_completion_text"] = completions
+
+        return output
 
 
 def truncate_right(
