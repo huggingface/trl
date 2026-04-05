@@ -22,6 +22,7 @@ from transformers import AutoProcessor, AutoTokenizer
 from trl.experimental.gold import gold_trainer as gold_trainer_module
 from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, build_teacher_inputs_from_texts
 from trl.experimental.utils import DataCollatorForChatML, DataCollatorForVisionLanguageChatML
+from trl.trainer.utils import identity
 
 
 @pytest.fixture(scope="module")
@@ -331,6 +332,7 @@ def test_process_completions_to_buffer_left_pads_prompt_ids():
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
     trainer.processing_class = RecordingTokenizer()
+    trainer.pad_token_id = RecordingTokenizer.pad_token_id  # __new__ bypasses __init__, set manually
     trainer.args = SimpleNamespace(max_length=None)
     trainer._buffered_inputs = [None]
     trainer._buffered_text_logs = [None]
@@ -478,6 +480,7 @@ def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens()
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
     trainer.processing_class = RecordingTokenizer()
+    trainer.pad_token_id = RecordingTokenizer.pad_token_id  # __new__ bypasses __init__, set manually
     trainer.args = SimpleNamespace(max_length=None, report_to=[])
     trainer.use_vllm = True
     trainer.vllm_generation = RecordingVLLMGeneration()
@@ -527,6 +530,9 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
             self.resized_to = vocab_size
 
     class DummyProcessingClass:
+        # GOLDTrainer.__init__ extracts tokenizer pad token (like GRPOTrainer),
+        # so the dummy must provide both pad_token and pad_token_id.
+        pad_token = "<pad>"
         pad_token_id = 0
 
     def fake_sft_init(
@@ -1328,3 +1334,123 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
             train_dataset=vision_dataset,
             processing_class=processor,
         )
+
+
+def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
+    """When a VLM processor is used with lmbda > 0 and use_vllm=True, GOLDTrainer should use the identity collator
+    and store a _vlm_collator for on-the-fly collation. vLLM should be initialized with max_model_length from args."""
+    captured = {}
+
+    class DummyStudentModel:
+        def __init__(self):
+            self.config = SimpleNamespace(_name_or_path="student", vocab_size=17, vision_config=True)
+            self.generation_config = SimpleNamespace(eos_token_id=2)
+            self.name_or_path = "student"
+
+    class DummyTeacherModel:
+        def __init__(self):
+            self.config = SimpleNamespace(vision_config=True)
+            self.resized_to = None
+
+        def resize_token_embeddings(self, vocab_size):
+            self.resized_to = vocab_size
+
+    def fake_sft_init(
+        self,
+        model,
+        args=None,
+        data_collator=None,
+        train_dataset=None,
+        eval_dataset=None,
+        processing_class=None,
+        compute_metrics=None,
+        callbacks=None,
+        optimizers=None,
+        preprocess_logits_for_metrics=None,
+        peft_config=None,
+    ):
+        self.data_collator = data_collator
+        del train_dataset, eval_dataset, compute_metrics, callbacks, optimizers
+        del preprocess_logits_for_metrics, peft_config
+        self.model = model
+        self.args = args
+        self.processing_class = processing_class
+        self.accelerator = SimpleNamespace(
+            device=torch.device("cpu"),
+            num_processes=1,
+            prepare_model=lambda module, evaluation_mode=True: module,
+        )
+        self.is_deepspeed_enabled = False
+        self.is_fsdp_enabled = False
+
+    class CapturingVLLMGeneration:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
+    monkeypatch.setattr(gold_trainer_module, "is_vllm_available", lambda: True)
+    monkeypatch.setattr(gold_trainer_module, "VLLMGeneration", CapturingVLLMGeneration)
+
+    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
+    if processor.tokenizer.pad_token is None:
+        processor.tokenizer.pad_token = processor.tokenizer.eos_token
+
+    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
+
+    args = SimpleNamespace(
+        model_init_kwargs=None,
+        max_length=128,
+        use_liger_kernel=False,
+        teacher_model_init_kwargs=None,
+        use_uld_loss=False,
+        teacher_tokenizer_name_or_path=None,
+        teacher_model_revision=None,
+        disable_dropout=False,
+        lmbda=1.0,
+        beta=0.5,
+        temperature=1.0,
+        top_p=1.0,
+        seq_kd=False,
+        num_generations=1,
+        use_transformers_paged=False,
+        max_completion_length=16,
+        top_k=0,
+        log_completions=False,
+        log_completions_steps=100,
+        wandb_log_unique_prompts=True,
+        num_completions_to_print=None,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=1,
+        use_vllm=True,
+        vllm_mode="colocate",
+        vllm_structured_outputs_regex=None,
+        vllm_server_base_url=None,
+        vllm_server_host="0.0.0.0",
+        vllm_server_port=8001,
+        vllm_group_port=51216,
+        vllm_server_timeout=240.0,
+        vllm_tensor_parallel_size=1,
+        vllm_gpu_memory_utilization=0.2,
+        vllm_max_model_length=None,
+        vllm_enable_sleep_mode=False,
+        vllm_model_impl="vllm",
+        vllm_sync_frequency=1,
+    )
+
+    teacher_model = DummyTeacherModel()
+    trainer = GOLDTrainer(
+        model=DummyStudentModel(),
+        teacher_model=teacher_model,
+        args=args,
+        train_dataset=vision_dataset,
+        processing_class=processor,
+    )
+
+    # Same assertions as text-only vLLM test
+    assert teacher_model.resized_to == 17
+    assert captured["max_model_length"] == 128
+
+    # VLM-specific: identity collator + _vlm_collator for on-the-fly use
+    assert trainer.data_collator is identity
+    assert trainer._vlm_collator is not None
+    assert isinstance(trainer._vlm_collator, DataCollatorForVisionLanguageChatML)

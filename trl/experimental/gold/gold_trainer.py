@@ -47,7 +47,12 @@ from transformers.utils import (
     is_rich_available,
 )
 
-from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset
+from ...data_utils import (
+    is_conversational,
+    maybe_convert_to_chatml,
+    pack_dataset,
+    prepare_multimodal_messages,
+)
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
@@ -59,6 +64,7 @@ from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
     get_config_model_id,
+    identity,
     pad,
     split_tensor_dict,
 )
@@ -785,10 +791,18 @@ class GOLDTrainer(SFTTrainer):
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
             # simplified logic from SFTTrainer
+        # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
+            tokenizer = processing_class.tokenizer
             self._is_vlm = True
         else:
+            tokenizer = processing_class
             self._is_vlm = False
+
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        self.pad_token_id = tokenizer.pad_token_id
 
         # VLM distillation: only VLM-to-VLM is supported. Both student and teacher must be
         # VLMs so that both receive images and multimodal inputs.
@@ -815,9 +829,19 @@ class GOLDTrainer(SFTTrainer):
                 "model does not seem to be a vision-language model. Please check your model and dataset."
             )
 
-        # Respect a user-provided data_collator; otherwise, pick the right collator based on modality
+        # Respect a user-provided data_collator; otherwise, pick the right collator based on modality.
+        # For VLMs with lmbda > 0, use identity collator to preserver raw PIL images in the dataloader.
+        # Because vLLM requires raw images, not processed pixel_values tensors.
+        # A separate _vlm_collator is stored for on-the-fly collation inside _fill_buffer.
+        self._vlm_collator = None
         if data_collator is None:
-            if self._is_vision_dataset:
+            if self._is_vision_dataset and args.lmbda > 0:
+                self._vlm_collator = DataCollatorForVisionLanguageChatML(
+                    processor=processing_class,
+                    max_length=args.max_length,
+                )
+                data_collator = identity
+            elif self._is_vision_dataset:
                 data_collator = DataCollatorForVisionLanguageChatML(
                     processor=processing_class,
                     max_length=args.max_length,
@@ -942,7 +966,7 @@ class GOLDTrainer(SFTTrainer):
             "top_p": args.top_p,
             "do_sample": True,
             "top_k": args.top_k,
-            "pad_token_id": self.processing_class.pad_token_id,
+            "pad_token_id": self.pad_token_id,
         }
         self.generation_config = GenerationConfig(**generation_kwargs)
         # Keep training-specific generation kwargs to overwrite model's original generation config
@@ -1109,8 +1133,8 @@ class GOLDTrainer(SFTTrainer):
         decoded_completion_tokens: list[list[int]] = []
         for row in labels_cpu:
             token_ids = row[row != -100].tolist()
-            if self.processing_class.pad_token_id is not None:
-                token_ids = [tok for tok in token_ids if tok != self.processing_class.pad_token_id]
+            if self.pad_token_id is not None:
+                token_ids = [tok for tok in token_ids if tok != self.pad_token_id]
             decoded_completion_tokens.append(token_ids)
 
         return self.processing_class.batch_decode(
@@ -1173,8 +1197,16 @@ class GOLDTrainer(SFTTrainer):
         return new_attention_mask, new_labels
 
     @profiling_decorator
-    def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any], buffer_steps: int):
-        slices = split_tensor_dict(generation_batch, buffer_steps)
+    def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any] | list[dict], buffer_steps: int):
+        if self._vlm_collator is not None:
+            # Identity collator path: generation_batch is list[dict] with raw PIL images.
+            # Split into chunks via list slicing, then collate on-the-fly per slice.
+            chunk_size = len(generation_batch) // buffer_steps
+            raw_slices = [generation_batch[i * chunk_size : (i + 1) * chunk_size] for i in range(buffer_steps)]
+            slices = None  # not used in this path
+        else:
+            raw_slices = None  # not used in this path
+            slices = split_tensor_dict(generation_batch, buffer_steps)
 
         if self.accelerator.is_main_process:
             on_policy_flags = [random.random() <= self.lmbda for _ in range(buffer_steps)]
@@ -1190,7 +1222,15 @@ class GOLDTrainer(SFTTrainer):
 
         for i, flag in enumerate(on_policy_flags):
             if not flag:
-                slice_inputs = slices[i]
+                if self._vlm_collator is not None:
+                    # Collate raw examples on-the-fly for off-policy slices
+                    slice_inputs = self._vlm_collator(raw_slices[i])
+                    slice_inputs = {
+                        k: v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v
+                        for k, v in slice_inputs.items()
+                    }
+                else:
+                    slice_inputs = slices[i]
 
                 if self.use_uld_loss and self.teacher_tokenizer is not None:
                     slice_inputs = self._ensure_original_text_fields(slice_inputs)
@@ -1204,7 +1244,10 @@ class GOLDTrainer(SFTTrainer):
                 self._buffered_inputs[i] = slice_inputs
 
         if on_policy_indices:
-            self._generate_on_policy_for_slices(slices, on_policy_indices)
+            if self._vlm_collator is not None:
+                self._generate_on_policy_vlm_raw(raw_slices, on_policy_indices)
+            else:
+                self._generate_on_policy_for_slices(slices, on_policy_indices)
 
     @profiling_decorator
     def _generate_on_policy_for_slices(
@@ -1241,9 +1284,8 @@ class GOLDTrainer(SFTTrainer):
             self.vllm_generation.sync_weights()
             self._last_vllm_sync_step = self.state.global_step
 
-        # TODO: pass raw images from the dataset to vLLM for VLM on-policy generation.
-        # Currently, the collated batch only contains processed pixel_values, not raw images.
-        # vLLM generation with VLMs requires raw images which are lost after collation.
+        # Text-only vLLM generation. VLM on-policy generation with raw images
+        # is handled by _generate_on_policy_vlm_raw (routed from _fill_buffer).
         _, completion_ids, _, _ = self.vllm_generation.generate(
             prompts=prompt_ids_list,
             images=None,
@@ -1274,7 +1316,7 @@ class GOLDTrainer(SFTTrainer):
                     unwrapped_model,
                     slice_inputs,
                     self.generation_config,
-                    self.processing_class.pad_token_id,
+                    self.pad_token_id,
                 )
                 new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
 
@@ -1287,6 +1329,127 @@ class GOLDTrainer(SFTTrainer):
 
                 self._buffered_inputs[slice_idx] = updated_slice
                 self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
+
+    def _generate_on_policy_vlm_raw(self, raw_slices: list[list[dict]], on_policy_indices: list[int]):
+        """On-policy generation from raw VLM examples, preserving PIL images for vLLM."""
+        device = self.accelerator.device
+
+        for slice_idx in on_policy_indices:
+            raw_examples = raw_slices[slice_idx]
+
+            # Extract raw PIL images from examples (like GRPOTrainer)
+            if "images" in raw_examples[0]:
+                images = [example.get("images") for example in raw_examples]
+            elif "image" in raw_examples[0]:
+                images = [
+                    [example.get("image")] if example.get("image") is not None else None for example in raw_examples
+                ]
+            else:
+                images = None
+            if images is not None and all(img_list is None or img_list == [] for img_list in images):
+                images = None
+
+            # Extract prompts and prepare multimodal messages
+            prompts = [example["prompt"] for example in raw_examples]
+            if images is not None:
+                prompts = [
+                    prepare_multimodal_messages(prompt, images=img_list)
+                    for prompt, img_list in zip(prompts, images, strict=True)
+                ]
+
+            # Normalize string content to content blocks for VLM processors that don't handle plain strings
+            # copied from GRPOTrainer
+            prompts = [
+                [
+                    {**msg, "content": [{"type": "text", "text": msg["content"]}]}
+                    if isinstance(msg.get("content"), str)
+                    else msg
+                    for msg in prompt
+                ]
+                for prompt in prompts
+            ]
+
+            # Tokenize prompts to get prompt token IDs
+            # TODO: add self.tools support
+            tokenized = self.processing_class.apply_chat_template(
+                conversation=prompts,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                padding=True,
+            )
+            prompt_ids_list = [
+                [tok for tok, m in zip(ids, mask, strict=True) if m]
+                for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
+            ]
+
+            prompts_text = self.processing_class.batch_decode(prompt_ids_list, skip_special_tokens=True)
+            prompts_text_with_special = self.processing_class.batch_decode(prompt_ids_list, skip_special_tokens=False)
+
+            if not self.use_vllm:
+                # Non-vLLM path: collate raw examples to get pixel_values, then generate
+                collated = self._vlm_collator(raw_examples)
+                collated = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in collated.items()}
+                with unwrap_model_for_generation(
+                    self.model, self.accelerator, generation_kwargs=self.generation_kwargs
+                ) as unwrapped_model:
+                    result = self.generate_on_policy_outputs(
+                        unwrapped_model, collated, self.generation_config, self.pad_token_id
+                    )
+                new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
+
+                updated_slice = dict(collated)
+                updated_slice["input_ids"] = new_input_ids
+                updated_slice["attention_mask"] = new_attention_mask
+                updated_slice["labels"] = new_labels
+                updated_slice["original_prompt_text"] = prompt_texts
+                updated_slice["original_completion_text"] = completion_texts
+
+                self._buffered_inputs[slice_idx] = updated_slice
+                self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
+                continue
+
+            # vLLM path: pass raw PIL images to vLLM
+            if (
+                self.state.global_step != self._last_vllm_sync_step
+                and self.state.global_step >= self._last_vllm_sync_step + self.vllm_sync_frequency
+            ):
+                self.vllm_generation.sync_weights()
+                self._last_vllm_sync_step = self.state.global_step
+
+            _, completion_ids, _, _ = self.vllm_generation.generate(
+                prompts=prompt_ids_list,
+                images=images,
+                num_generations=self.num_generations,
+            )
+
+            # Decode completions and build synthetic examples for collation
+            max_completion_length = self.generation_config.max_new_tokens
+            completion_texts = []
+            for comp_ids in completion_ids:
+                if len(comp_ids) > max_completion_length:
+                    comp_ids = comp_ids[:max_completion_length]
+                completion_texts.append(
+                    self.processing_class.decode(
+                        comp_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+                    )
+                )
+
+            # Build synthetic examples: original prompt + generated completion
+            synthetic_examples = []
+            for i, example in enumerate(raw_examples):
+                synthetic = dict(example)
+                synthetic["completion"] = [{"role": "assistant", "content": completion_texts[i]}]
+                synthetic_examples.append(synthetic)
+
+            # Collate synthetic examples to get pixel_values + properly tokenized input_ids/labels
+            collated = self._vlm_collator(synthetic_examples)
+            collated = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in collated.items()}
+            collated["original_prompt_text"] = prompts_text_with_special
+            collated["original_completion_text"] = completion_texts
+
+            self._buffered_inputs[slice_idx] = collated
+            self._buffered_text_logs[slice_idx] = (prompts_text, completion_texts)
 
     def _process_completions_to_buffer(
         self,
@@ -1303,7 +1466,7 @@ class GOLDTrainer(SFTTrainer):
         Process vLLM completions and update buffered inputs for on-policy slices.
         """
         device = self.accelerator.device
-        pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
+        pad_token_id = self.pad_token_id if self.pad_token_id is not None else 0
 
         slice_completions = {idx: [] for idx in on_policy_indices}
         slice_prompt_ids = {idx: [] for idx in on_policy_indices}
@@ -1911,8 +2074,8 @@ class GOLDTrainer(SFTTrainer):
             teacher_input_ids_for_loss = teacher_input_ids if "teacher_input_ids" in locals() else inputs["input_ids"]
 
             student_labels = inputs["labels"].clone()
-            if hasattr(self.processing_class, "pad_token_id") and self.processing_class.pad_token_id is not None:
-                student_labels[student_labels == self.processing_class.pad_token_id] = -100
+            if self.pad_token_id is not None:
+                student_labels[student_labels == self.pad_token_id] = -100
 
             if (
                 hasattr(self, "teacher_tokenizer")
@@ -1991,7 +2154,7 @@ class GOLDTrainer(SFTTrainer):
         device = generated_tokens.device
 
         prompt_mask = inputs.get("prompt_attention_mask")
-        pad_token_id = pad_token_id if pad_token_id is not None else self.processing_class.pad_token_id
+        pad_token_id = pad_token_id if pad_token_id is not None else self.pad_token_id
 
         if self.use_transformers_paged:
             # generate_batch() returns completion-only tokens, so the entire tensor is completion.
