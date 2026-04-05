@@ -643,13 +643,13 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
             `True` if the chat template preserves prefixes, `False` otherwise.
     """
     messages1 = [
-        {"role": "user", "content": "What color is the sky?"},
-        {"role": "assistant", "content": "It is blue."},
+        {"role": "user", "content": "What is 2 * 3?"},
+        {"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 2, "b": 3}}}]},
     ]
     messages2 = [
-        {"role": "user", "content": "What color is the sky?"},
-        {"role": "assistant", "content": "It is blue."},
-        {"role": "tool", "name": "say_hi", "content": "Hi!"},
+        {"role": "user", "content": "What is 2 * 3?"},
+        {"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 2, "b": 3}}}]},
+        {"role": "tool", "name": "multiply", "content": "6"},
     ]
 
     text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
@@ -772,27 +772,25 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
     >>> messages1 = [
-    ...     {"role": "user", "content": "What color is the sky?"},
-    ...     {"role": "assistant", "content": "It is blue."},
+    ...     {"role": "user", "content": "What is 2 * 3?"},
+    ...     {"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 2, "b": 3}}}]},
     ... ]
-    >>> messages2 = [
-    ...     {"role": "user", "content": "What color is the sky?"},
-    ...     {"role": "assistant", "content": "It is blue."},
-    ...     {"role": "tool", "name": "say_hi", "content": "Hi!"},
+    >>> messages2 = messages1 + [
+    ...     {"role": "tool", "name": "multiply", "content": "6"},
     ... ]
     >>> tokenizer.apply_chat_template(messages1, tokenize=False)
-    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n'
+    '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n'
 
     >>> tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
-    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\nIt is blue.<|im_end|>\n<|im_start|>user\n<tool_response>\nHi!\n</tool_response><|im_end|>\n<|im_start|>assistant\n'
+    '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n6\n</tool_response><|im_end|>\n<|im_start|>assistant\n'
 
-    >>> #                                                                       ^ think tags missing
+    >>> #                                                        ^ think tags missing
     >>> chat_template = get_training_chat_template(tokenizer)
     >>> tokenizer.apply_chat_template(messages1, tokenize=False, chat_template=chat_template)
-    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n'
+    '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n'
 
     >>> tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True, chat_template=chat_template)
-    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n<|im_start|>user\n<tool_response>\nHi!\n</tool_response><|im_end|>\n<|im_start|>assistant\n'
+    '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n6\n</tool_response><|im_end|>\n<|im_start|>assistant\n'
     ```
     """
     # First check if patching is needed
