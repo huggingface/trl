@@ -558,29 +558,32 @@ class AsyncRolloutWorker:
         dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": {}}}]
         dummy_messages = [
             {"role": "user", "content": "dummy"},
-            {"role": "assistant", "content": "dummy", "tool_calls": dummy_tool_calls},
+            {"role": "assistant", "tool_calls": dummy_tool_calls},
         ]
         prefix_ids = self.tokenizer.apply_chat_template(
             dummy_messages,
-            return_dict=False,
-            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+            add_generation_prompt=False,
+            tokenize=True,
             chat_template=self.chat_template,
+            return_dict=False,
             **self.chat_template_kwargs,
         )
         full_ids = self.tokenizer.apply_chat_template(
             dummy_messages + tool_messages,
-            return_dict=False,
-            chat_template=self.chat_template,
             add_generation_prompt=True,
-            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+            tokenize=True,
+            chat_template=self.chat_template,
+            return_dict=False,
             **self.chat_template_kwargs,
         )
 
         # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
         # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
-        # EOS (not EOS + newline).
-        last_eos_idx = max(i for i, tok_id in enumerate(prefix_ids) if tok_id == self.tokenizer.eos_token_id)
-        prefix_ids = prefix_ids[: last_eos_idx + 1]
+        # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
+        # <turn|>) skip this trimming.
+        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self.tokenizer.eos_token_id]
+        if eos_positions:
+            prefix_ids = prefix_ids[: eos_positions[-1] + 1]
 
         if full_ids[: len(prefix_ids)] != prefix_ids:
             raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
