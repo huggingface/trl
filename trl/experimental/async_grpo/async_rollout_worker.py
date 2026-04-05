@@ -555,9 +555,10 @@ class AsyncRolloutWorker:
 
     def _get_tool_suffix_ids(self, tool_messages: list[dict[str, Any]]) -> list[int]:
         """Get token IDs for tool result formatting by using a minimal dummy conversation."""
+        dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": {}}}]
         dummy_messages = [
-            {"role": "user", "content": ""},
-            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "dummy"},
+            {"role": "assistant", "content": "dummy", "tool_calls": dummy_tool_calls},
         ]
         prefix_ids = self.tokenizer.apply_chat_template(
             dummy_messages,

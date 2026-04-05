@@ -148,13 +148,23 @@ class TestIsChatTemplatePrefixPreserving:
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
         tokenizer.chat_template = textwrap.dedent(r"""
         {%- for message in messages %}
+        {%- set content = message.content if message.content is string else '' %}
 
         {%- if message.role == 'user' %}
-            {{- '<|im_start|>user\n' + message.content + '<|im_end|>\n' }}
+            {{- '<|im_start|>user\n' + content + '<|im_end|>\n' }}
         {%- elif message.role == 'assistant' %}
-            {{- '<|im_start|>assistant\n' + message.content + '<|im_end|>\n' }}
+            {{- '<|im_start|>assistant\n' + content }}
+            {%- if message.tool_calls %}
+                {%- for tool_call in message.tool_calls %}
+                    {%- if tool_call.function %}
+                        {%- set tool_call = tool_call.function %}
+                    {%- endif %}
+                    {{- '<tool_call>' + tool_call.name + '</tool_call>' }}
+                {%- endfor %}
+            {%- endif %}
+            {{- '<|im_end|>\n' }}
         {%- elif message.role == 'tool' %}
-            {{- '<|im_start|>tool\n' + message.content + '<|im_end|>\n' }}
+            {{- '<|im_start|>tool\n' + content + '<|im_end|>\n' }}
         {%- endif %}
 
         {%- endfor %}
@@ -204,6 +214,14 @@ class TestIsChatTemplatePrefixPreserving:
                     {%- endif %}
                 {%- else %}
                     {{- '<|im_start|>' + message.role + '\n' + content }}
+                {%- endif %}
+                {%- if message.tool_calls %}
+                    {%- for tool_call in message.tool_calls %}
+                        {%- if tool_call.function %}
+                            {%- set tool_call = tool_call.function %}
+                        {%- endif %}
+                        {{- '<tool_call>' + tool_call.name + '</tool_call>' }}
+                    {%- endfor %}
                 {%- endif %}
                 {{- '<|im_end|>\n' }}
             {%- elif message.role == "tool" %}
