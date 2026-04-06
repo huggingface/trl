@@ -31,6 +31,7 @@ requires-python = ">=3.10"
 dependencies = [
     "accelerate>=1.4.0",
     "datasets>=4.7.0",  # Support Json type and on_mixed_types="use_json"
+    "jinja2",
     "packaging>20.0",
     "transformers>=4.56.2",
 ]
