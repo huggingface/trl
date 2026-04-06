@@ -148,12 +148,11 @@ class TestIsChatTemplatePrefixPreserving:
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
         tokenizer.chat_template = textwrap.dedent(r"""
         {%- for message in messages %}
-        {%- set content = message.content if message.content is string else '' %}
 
         {%- if message.role == 'user' %}
-            {{- '<|im_start|>user\n' + content + '<|im_end|>\n' }}
+            {{- '<|im_start|>user\n' + message.content + '<|im_end|>\n' }}
         {%- elif message.role == 'assistant' %}
-            {{- '<|im_start|>assistant\n' + content }}
+            {{- '<|im_start|>assistant\n' + message.content }}
             {%- if message.tool_calls %}
                 {%- for tool_call in message.tool_calls %}
                     {%- if tool_call.function %}
@@ -164,7 +163,7 @@ class TestIsChatTemplatePrefixPreserving:
             {%- endif %}
             {{- '<|im_end|>\n' }}
         {%- elif message.role == 'tool' %}
-            {{- '<|im_start|>tool\n' + content + '<|im_end|>\n' }}
+            {{- '<|im_start|>tool\n' + message.content + '<|im_end|>\n' }}
         {%- endif %}
 
         {%- endfor %}
@@ -471,7 +470,7 @@ class TestParseResponse:
         tool_calls = [{"type": "function", "function": {"name": "ping", "arguments": {}}}]
         messages = [
             {"role": "user", "content": "Ping the service."},
-            {"role": "assistant", "tool_calls": tool_calls},
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
         ]
         prefix = tokenizer.apply_chat_template(messages[:1], add_generation_prompt=True).input_ids
         text = tokenizer.apply_chat_template(messages).input_ids
