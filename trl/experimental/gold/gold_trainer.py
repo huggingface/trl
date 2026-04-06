@@ -986,7 +986,7 @@ class GOLDTrainer(SFTTrainer):
         if self.use_uld_loss:
             self.uld_loss_fn = ULDLoss(
                 config=args,
-                student_tokenizer=processing_class,
+                student_tokenizer=tokenizer,
                 teacher_tokenizer=self.teacher_tokenizer,
                 device=self.accelerator.device,
             )
