@@ -740,6 +740,7 @@ The returned images are automatically injected into the conversation and passed 
 
 Tested with:
 
+- [**GLM-4-MoE**](https://huggingface.co/collections/THUDM/glm-4-moe) — e.g., `THUDM/GLM-4-MoE-A2B8`
 - [**Qwen3**](https://huggingface.co/collections/Qwen/qwen3) — e.g., `Qwen/Qwen3-0.6B`
 - [**Qwen3.5**](https://huggingface.co/collections/Qwen/qwen35) — e.g., `Qwen/Qwen3.5-2B`
 

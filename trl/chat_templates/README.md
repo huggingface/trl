@@ -11,6 +11,10 @@ Jinja2 chat templates stored here serve two purposes:
 
 Used for identity comparison only.
 
+### `glm4moe.jinja`
+
+Original GLM-4-MoE chat template.
+
 ### `qwen3.jinja`
 
 Original Qwen3 chat template.
