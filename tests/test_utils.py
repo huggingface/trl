@@ -960,6 +960,23 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 1, 2]]))
         assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2], [1, 2, 1]]))
 
+    def test_split_by_image_position_ids(self):
+        # Gemma-style: no image_grid_thw, split by num_images using image_position_ids
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(3 * 4).reshape(3, 4),
+            "image_position_ids": torch.tensor([[0, 1], [2, 3], [4, 5]]),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:1])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][1:])
+        assert isinstance(result["image_position_ids"], list)
+        assert len(result["image_position_ids"]) == 2
+        assert torch.equal(result["image_position_ids"][0], batch["image_position_ids"][:1])
+        assert torch.equal(result["image_position_ids"][1], batch["image_position_ids"][1:])
+
 
 class TestUnsplitPixelValuesByGrid(TrlTestCase):
     def test_unsplit_correctly(self):
@@ -974,6 +991,15 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         assert isinstance(result["image_grid_thw"], torch.Tensor)
         assert torch.equal(result["image_grid_thw"], image_grid_thw_merged)
         assert "other_key" in result
+
+    def test_unsplit_image_position_ids(self):
+        image_position_ids = [torch.tensor([[0, 1]]), torch.tensor([[2, 3], [4, 5]])]
+        image_position_ids_merged = torch.cat(image_position_ids, dim=0)
+        pixel_values = [torch.randn(1, 4), torch.randn(2, 4)]
+        batch = {"pixel_values": pixel_values, "image_position_ids": image_position_ids}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["image_position_ids"], torch.Tensor)
+        assert torch.equal(result["image_position_ids"], image_position_ids_merged)
 
     def test_no_op_if_not_list(self):
         original = torch.randn(5, 3)
