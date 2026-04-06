@@ -887,39 +887,39 @@ def identity(x):
 
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | list[torch.Tensor]]:
     """
-    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in `batch["image_grid_thw"]`
-    and batch["num_images"] while keeping other entries unchanged. For models without `image_grid_thw` (e.g. Gemma),
-    splits by `num_images` directly.
+    Splits `batch["pixel_values"]` into a list of tensors, one per sample, based on `batch["num_images"]`.
+
+    For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values` belong
+    to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
+    image count.
     """
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
 
+    num_images = batch["num_images"]
+    pixel_values = batch["pixel_values"]  # [total, feature_dim]
+
     if "image_grid_thw" in batch:
         lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
-        pixel_values = batch["pixel_values"]  # [total, feature_dim]
-
         if sum(lengths) != pixel_values.size(0):
             raise ValueError(
                 f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}"
             )
 
-        boundaries = [0, *accumulate(batch["num_images"])]  # [3, 4, 5] -> [0, 3, 7, 12]
-        sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(batch["num_images"]))]
-        split_values = list(torch.split(batch["pixel_values"], sections, dim=0))
-        image_grid_thw = list(torch.split(batch["image_grid_thw"], batch["num_images"], dim=0))
-        return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
-    else:
-        # Models without image_grid_thw (e.g. Gemma): split pixel_values by num_images per sample
-        num_images = batch["num_images"]
-        num_images_list = num_images.tolist() if isinstance(num_images, torch.Tensor) else list(num_images)
-        split_values = list(torch.split(batch["pixel_values"], [int(n) for n in num_images_list], dim=0))
-        result = {**batch, "pixel_values": split_values}
-        # Also split image_position_ids if present (indexed by image, same as pixel_values)
-        if "image_position_ids" in batch:
-            result["image_position_ids"] = list(
-                torch.split(batch["image_position_ids"], [int(n) for n in num_images_list], dim=0)
-            )
-        return result
+        boundaries = [0, *accumulate(num_images)]
+        image_grid_thw = batch["image_grid_thw"]  # [total, 3]
+        sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(num_images))]
+        split_pixel_values = list(torch.split(pixel_values, sections, dim=0))
+        split_image_grid_thw = list(torch.split(image_grid_thw, num_images, dim=0))
+        return {**batch, "pixel_values": split_pixel_values, "image_grid_thw": split_image_grid_thw}
+
+    if "image_position_ids" in batch:
+        image_position_ids = batch["image_position_ids"]  # [total]
+        split_pixel_values = list(torch.split(pixel_values, num_images, dim=0))
+        split_image_position_ids = list(torch.split(image_position_ids, num_images, dim=0))
+        return {**batch, "pixel_values": split_pixel_values, "image_position_ids": split_image_position_ids}
+
+    return batch
 
 
 def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tensor]]) -> dict[str, torch.Tensor]:
