@@ -557,8 +557,7 @@ class AsyncRolloutWorker:
         """Get token IDs for tool result formatting by using a minimal dummy conversation."""
         # Use the real tool name instead of a dummy: some templates (e.g. GPT-OSS) derive the tool response
         # header from the assistant's tool call name.
-        tool_name = tool_messages[0]["name"]
-        dummy_tool_calls = [{"type": "function", "function": {"name": tool_name, "arguments": {}}}]
+        dummy_tool_calls = [{"type": "function", "function": {"name": tool_messages[0]["name"], "arguments": {}}}]
         dummy_messages = [
             {"role": "user", "content": "dummy"},
             {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
