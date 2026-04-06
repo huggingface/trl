@@ -17,10 +17,8 @@ import atexit
 import copy
 import importlib.resources as pkg_resources
 import inspect
-import json
 import math
 import os
-import re
 import sys
 import textwrap
 import time
@@ -1578,31 +1576,11 @@ class GRPOTrainer(_BaseTrainer):
                     if tool_call["type"] == "function":
                         function = tool_call["function"]
                         name = function["name"]
-                        arguments = function["arguments"]
-                        # Some models (e.g. Gemma) return arguments as a string instead of a dict
-                        if isinstance(arguments, str):
-                            # Strip model-specific quote tokens (e.g. Gemma's <|"|>)
-                            arguments = arguments.replace('<|"|>', '"')
-                            if not arguments.strip():
-                                arguments = {}
-                            else:
-                                try:
-                                    arguments = json.loads(arguments)
-                                except json.JSONDecodeError:
-                                    try:
-                                        # Try wrapping in braces for key:value formats
-                                        arguments = json.loads("{" + arguments + "}")
-                                    except json.JSONDecodeError:
-                                        # Last resort: regex parsing
-                                        pairs = re.findall(r'(\w+):\s*"([^"]*)"', arguments)
-                                        if not pairs:
-                                            pairs = re.findall(r"(\w+):\s*([^,}\s]+)", arguments)
-                                        arguments = dict(pairs) if pairs else {}
                         try:
                             if name in sync_tool_dict:
-                                tool_call_results.append((name, sync_tool_dict[name](**arguments)))
+                                tool_call_results.append((name, sync_tool_dict[name](**function["arguments"])))
                             elif name in async_tool_dict:
-                                async_coros.append((name, async_tool_dict[name](**arguments)))
+                                async_coros.append((name, async_tool_dict[name](**function["arguments"])))
                             else:
                                 raise ValueError(f"Tool {name} not found.")
                         except Exception as e:
