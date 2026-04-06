@@ -47,9 +47,6 @@ class ORPOConfig(_BaseConfig):
             Whether to disable dropout in the model.
         padding_value (`int`, *optional*):
             Padding value to use. If `None`, the padding value of the tokenizer is used.
-        truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
-            Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
-            This argument is required if you want to use the default data collator.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             If `True`, generates and logs completions from the model to W&B or Comet during evaluation.
         is_encoder_decoder (`bool`, *optional*):
@@ -102,13 +99,6 @@ class ORPOConfig(_BaseConfig):
     padding_value: int | None = field(
         default=None,
         metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
-    )
-    truncation_mode: str = field(
-        default="keep_end",
-        metadata={
-            "help": "Truncation mode to use when the prompt is too long.",
-            "choices": ["keep_end", "keep_start"],
-        },
     )
     generate_during_eval: bool = field(
         default=False,

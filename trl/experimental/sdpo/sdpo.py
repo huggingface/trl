@@ -60,7 +60,6 @@ already contains textual environment feedback, pass the column name via `--feedb
 `privileged_context` for SDPO reprompting.
 """
 
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -80,9 +79,6 @@ from trl import (
 )
 from trl.data_utils import maybe_apply_chat_template
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
-
-
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 SYSTEM_PROMPT = (

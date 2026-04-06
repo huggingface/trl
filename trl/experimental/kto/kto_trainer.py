@@ -495,11 +495,6 @@ class KTOTrainer(_BaseTrainer):
         if self.loss_type in ["apo_zero_unpaired"]:
             self.calculate_KL = False
 
-        # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
-        # keep track of first called to avoid computation of future calls
-        self._precomputed_train_ref_log_probs = False
-        self._precomputed_eval_ref_log_probs = False
-
         # metric
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -739,6 +734,21 @@ class KTOTrainer(_BaseTrainer):
                 )
             self.kto_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
+        if self.precompute_ref_log_probs:
+            self.train_dataset = self._precompute_reference_log_probs(
+                self.train_dataset, "train", self.args.per_device_train_batch_size
+            )
+            if self.eval_dataset is not None:
+                if isinstance(self.eval_dataset, dict):
+                    self.eval_dataset = {
+                        name: self._precompute_reference_log_probs(dataset, name, self.args.per_device_eval_batch_size)
+                        for name, dataset in self.eval_dataset.items()
+                    }
+                else:
+                    self.eval_dataset = self._precompute_reference_log_probs(
+                        self.eval_dataset, "eval", self.args.per_device_eval_batch_size
+                    )
+
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
@@ -753,104 +763,32 @@ class KTOTrainer(_BaseTrainer):
             if self.ref_adapter_name:
                 self.model.set_adapter(self.model_adapter_name or "default")
 
-    def get_train_dataloader(self) -> DataLoader:
-        """
-        Returns the training [`~torch.utils.data.DataLoader`].
-
-        Subclass of transformers.src.transformers.trainer.get_train_dataloader to precompute `ref_log_probs`.
-        """
-
-        if self.precompute_ref_log_probs and not self._precomputed_train_ref_log_probs:
-            dataloader_params = {
-                "batch_size": self.args.per_device_train_batch_size,
-                "collate_fn": self.data_collator,
-                "num_workers": self.args.dataloader_num_workers,
-                "pin_memory": self.args.dataloader_pin_memory,
-                "shuffle": False,
-            }
-
-            # prepare dataloader
-            data_loader = self.accelerator.prepare(DataLoader(self.train_dataset, **dataloader_params))
-            reference_completion_logps = []
-            reference_KL_logps = []
-
-            for padded_batch in tqdm(iterable=data_loader, desc="Train dataset reference log probs"):
-                reference_completion_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
-
-                reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
-                reference_completion_logps.append(reference_completion_logp.cpu())
-
-                if self.calculate_KL:
-                    reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
-                    reference_KL_logps.append(reference_KL_logp.cpu())
-
-            self.train_dataset = self.train_dataset.add_column(
-                name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
-            )
-
+    def _precompute_reference_log_probs(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
+        dataloader_params = {
+            "batch_size": batch_size,
+            "collate_fn": self.data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "shuffle": False,
+        }
+        data_loader = self.accelerator.prepare(DataLoader(dataset, **dataloader_params))
+        reference_completion_logps = []
+        reference_KL_logps = []
+        for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
+            reference_completion_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
+            reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
+            reference_completion_logps.append(reference_completion_logp.cpu())
             if self.calculate_KL:
-                self.train_dataset = self.train_dataset.add_column(
-                    name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
-                )
-
-            self._precomputed_train_ref_log_probs = True
-
-        return super().get_train_dataloader()
-
-    def get_eval_dataloader(self, eval_dataset: Dataset | None = None) -> DataLoader:
-        """
-        Returns the evaluation [`~torch.utils.data.DataLoader`].
-
-        Subclass of transformers.src.transformers.trainer.get_eval_dataloader to precompute `ref_log_probs`.
-
-        Args:
-            eval_dataset (`torch.utils.data.Dataset`, *optional*):
-                If provided, will override `self.eval_dataset`. If it is a [`~datasets.Dataset`], columns not accepted
-                by the `model.forward()` method are automatically removed. It must implement `__len__`.
-        """
-        if eval_dataset is None and self.eval_dataset is None:
-            raise ValueError("Trainer: evaluation requires an eval_dataset.")
-        eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
-
-        if self.precompute_ref_log_probs and not self._precomputed_eval_ref_log_probs:
-            dataloader_params = {
-                "batch_size": self.args.per_device_eval_batch_size,
-                "collate_fn": self.data_collator,
-                "num_workers": self.args.dataloader_num_workers,
-                "pin_memory": self.args.dataloader_pin_memory,
-                "shuffle": False,
-            }
-
-            # prepare dataloader
-            data_loader = self.accelerator.prepare(DataLoader(eval_dataset, **dataloader_params))
-
-            reference_completion_logps = []
-            reference_KL_logps = []
-
-            for padded_batch in tqdm(iterable=data_loader, desc="Eval dataset reference log probs"):
-                reference_completion_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
-
-                reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
-                reference_completion_logps.append(reference_completion_logp.cpu())
-
-                if self.calculate_KL:
-                    reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
-                    reference_KL_logps.append(reference_KL_logp.cpu())
-
-            eval_dataset = eval_dataset.add_column(
-                name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
+                reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
+                reference_KL_logps.append(reference_KL_logp.cpu())
+        dataset = dataset.add_column(
+            name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
+        )
+        if self.calculate_KL:
+            dataset = dataset.add_column(
+                name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
             )
-            if self.calculate_KL:
-                eval_dataset = eval_dataset.add_column(
-                    name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
-                )
-
-            # Save calculated reference_chosen_logps and reference_rejected_logps to the eval_dataset for subsequent runs
-            if self.eval_dataset is not None:
-                self.eval_dataset = eval_dataset
-            self._precomputed_eval_ref_log_probs = True
-
-        return super().get_eval_dataloader(eval_dataset=eval_dataset)
+        return dataset
 
     def compute_reference_log_probs(self, padded_batch: dict) -> dict:
         """Computes log probabilities of the reference model for a single padded batch of a KTO specific dataset."""

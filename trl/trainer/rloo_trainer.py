@@ -546,7 +546,7 @@ class RLOOTrainer(_BaseTrainer):
             }
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
-            self.generation_config = GenerationConfig(**generation_kwargs)
+            self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
             # Keep training-specific generation kwargs to overwrite model's original generation config
             self.generation_kwargs = generation_kwargs
 
@@ -680,6 +680,7 @@ class RLOOTrainer(_BaseTrainer):
         image_sizes=None,
         token_type_ids=None,
         mm_token_type_ids=None,
+        image_position_ids=None,
     ) -> dict[str, torch.Tensor | None]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -689,7 +690,7 @@ class RLOOTrainer(_BaseTrainer):
             input_ids_batch = input_ids[start : start + batch_size]
             attention_mask_batch = attention_mask[start : start + batch_size]
 
-            # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
+            # Build model inputs
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
             if image_grid_thw is not None and pixel_values is not None:
                 rows_per_image = image_grid_thw.prod(dim=-1)
@@ -701,6 +702,11 @@ class RLOOTrainer(_BaseTrainer):
                 cum_imgs = torch.tensor([0] + num_images).cumsum(0)
                 img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
                 model_inputs["image_grid_thw"] = image_grid_thw[img_start:img_end]
+            elif image_position_ids is not None and pixel_values is not None:
+                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
+                img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
+                model_inputs["pixel_values"] = pixel_values[img_start:img_end]
+                model_inputs["image_position_ids"] = image_position_ids[img_start:img_end]
             elif pixel_values is not None:
                 model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
             if pixel_attention_mask is not None:
@@ -726,7 +732,7 @@ class RLOOTrainer(_BaseTrainer):
             logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
+            logits.div_(self.temperature)
             completion_ids = input_ids_batch[:, -logits_to_keep:]
             logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
@@ -1011,7 +1017,7 @@ class RLOOTrainer(_BaseTrainer):
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
                 prompt_completion_ids = unwrapped_model.generate(
-                    **generate_inputs, generation_config=self.generation_config, disable_compile=True
+                    **generate_inputs, generation_config=self.generation_config
                 )
             # Compute prompt length and extract completion ids
             prompt_length = generate_inputs["input_ids"].size(1)
@@ -1108,7 +1114,7 @@ class RLOOTrainer(_BaseTrainer):
                     "template internally."
                 )
             prompts = [
-                prepare_multimodal_messages(prompt, image_list)
+                prepare_multimodal_messages(prompt, images=image_list)
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
@@ -1124,10 +1130,7 @@ class RLOOTrainer(_BaseTrainer):
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
         prompt_mask = pad(
-            prompt_mask,
-            padding_value=0,
-            padding_side="left",
-            pad_to_multiple_of=self.pad_to_multiple_of,
+            prompt_mask, padding_value=0, padding_side="left", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
         completion_ids = [torch.tensor(ids) for ids in completion_ids_list]
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
@@ -1138,15 +1141,13 @@ class RLOOTrainer(_BaseTrainer):
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
         completion_mask = pad(
-            completion_mask,
-            padding_value=0,
-            padding_side="right",
-            pad_to_multiple_of=self.pad_to_multiple_of,
+            completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
             eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            # Mask completion_mask for attention masking
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
@@ -1157,7 +1158,7 @@ class RLOOTrainer(_BaseTrainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
-        num_images = [len(img_list) for img_list in images] if images is not None else None
+        num_images = [len(img_list) if img_list else 0 for img_list in images] if images is not None else None
 
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
@@ -1211,7 +1212,7 @@ class RLOOTrainer(_BaseTrainer):
                 logits_to_keep,
                 batch_size,
                 num_images=num_images,
-                **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask and image_sizes
+                **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
             )
             old_logps = (old_per_token_logps * completion_mask).sum(1)  # mask out padding and tokens after EOS
 
@@ -1225,7 +1226,7 @@ class RLOOTrainer(_BaseTrainer):
                         logits_to_keep,
                         batch_size=batch_size,
                         num_images=num_images,
-                        **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask and image_sizes
+                        **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
                     )
                 else:
                     # When training a PEFT adapter, how we obtain the reference depends on the setup:
@@ -1240,7 +1241,7 @@ class RLOOTrainer(_BaseTrainer):
                             logits_to_keep,
                             batch_size=batch_size,
                             num_images=num_images,
-                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask and image_sizes
+                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
                         )
             else:
                 ref_per_token_logps = None
@@ -1363,6 +1364,8 @@ class RLOOTrainer(_BaseTrainer):
             output["token_type_ids"] = forward_kwargs["token_type_ids"]
         if "mm_token_type_ids" in forward_kwargs:
             output["mm_token_type_ids"] = forward_kwargs["mm_token_type_ids"]
+        if "image_position_ids" in forward_kwargs:
+            output["image_position_ids"] = forward_kwargs["image_position_ids"]
         if images is not None:
             output["num_images"] = num_images
         return output
@@ -1395,6 +1398,7 @@ class RLOOTrainer(_BaseTrainer):
             image_sizes=inputs.get("image_sizes"),
             token_type_ids=inputs.get("token_type_ids"),
             mm_token_type_ids=inputs.get("mm_token_type_ids"),
+            image_position_ids=inputs.get("image_position_ids"),
         )
 
         logps = (per_token_logps * completion_mask).sum(1)  # mask out padding and tokens after EOS
@@ -1471,6 +1475,7 @@ class RLOOTrainer(_BaseTrainer):
                     self._logs["advantages"],
                     self.state.global_step,
                     self.num_completions_to_print,
+                    extra=dict(self._logs["extra"]),
                 )
 
             logging_backends = []
@@ -1480,7 +1485,7 @@ class RLOOTrainer(_BaseTrainer):
                 logging_backends.append(trackio)
 
             table = {
-                "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
+                "step": [self.state.global_step] * len(self._logs["prompt"]),
                 "prompt": self._logs["prompt"],
                 "completion": self._logs["completion"],
                 **self._logs["rewards"],

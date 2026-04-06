@@ -61,7 +61,6 @@ from .utils import (
     flush_left,
     get_config_model_id,
     pad,
-    remove_none_values,
     selective_log_softmax,
 )
 
@@ -308,7 +307,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     - `"pixel_values"`: Tensor representing image pixel values.
     - `"labels"`: Tensor for training labels.
 
-    Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"image_position_ids"`.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
@@ -394,7 +393,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             images = None
 
         if "messages" in examples[0]:  # conversational case
-            messages = [prepare_multimodal_messages(example["messages"], example["images"]) for example in examples]
+            messages = [
+                prepare_multimodal_messages(example["messages"], images=example["images"]) for example in examples
+            ]
             texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
             texts = [example[self.dataset_text_field] for example in examples]
@@ -439,7 +440,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
                 example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
-                example["completion"] = prepare_multimodal_messages(example["completion"], images=[])
+                example["completion"] = prepare_multimodal_messages(example["completion"])
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples]
@@ -1036,7 +1037,7 @@ class SFTTrainer(_BaseTrainer):
         """
         if isinstance(input, list):  # conversational: list of message dicts
             if self._is_vlm:
-                input = prepare_multimodal_messages(input, images=[])
+                input = prepare_multimodal_messages(input)
             result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
         else:  # non-conversational: plain text string
             result = processing_class(text=input)
@@ -1054,11 +1055,6 @@ class SFTTrainer(_BaseTrainer):
         formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
-        # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
-        # sampled data.
-        if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
-            dataset = dataset.with_transform(remove_none_values)
-
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = get_dataset_column_names(dataset)
         is_processed = "input_ids" in column_names

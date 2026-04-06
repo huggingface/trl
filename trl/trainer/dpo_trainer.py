@@ -59,7 +59,6 @@ from .utils import (
     get_config_model_id,
     hash_module,
     pad,
-    remove_none_values,
     selective_log_softmax,
     use_adapter,
 )
@@ -221,7 +220,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
     - `"pixel_values"`: Tensor representing image pixel values.
 
-    Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"image_position_ids"`.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
@@ -305,8 +304,8 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
                 example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
-                example["chosen"] = prepare_multimodal_messages(example["chosen"], images=[])
-                example["rejected"] = prepare_multimodal_messages(example["rejected"], images=[])
+                example["chosen"] = prepare_multimodal_messages(example["chosen"])
+                example["rejected"] = prepare_multimodal_messages(example["rejected"])
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples] * 2  # repeat for chosen and rejected
@@ -828,7 +827,7 @@ class DPOTrainer(_BaseTrainer):
         """
         if isinstance(input, list):  # conversational: list of message dicts
             if self._is_vlm:
-                input = prepare_multimodal_messages(input, images=[])
+                input = prepare_multimodal_messages(input)
             result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
         else:  # non-conversational: plain text string
             result = processing_class(text=input)
@@ -844,11 +843,6 @@ class DPOTrainer(_BaseTrainer):
         args: DPOConfig,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
-        # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
-        # sampled data.
-        if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
-            dataset = dataset.with_transform(remove_none_values)
-
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
@@ -1022,6 +1016,7 @@ class DPOTrainer(_BaseTrainer):
             "pixel_attention_mask",
             "image_grid_thw",
             "image_sizes",
+            "image_position_ids",
         ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
@@ -1147,6 +1142,7 @@ class DPOTrainer(_BaseTrainer):
             "pixel_attention_mask",
             "image_grid_thw",
             "image_sizes",
+            "image_position_ids",
         ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]

@@ -251,7 +251,7 @@ class DPPOTrainer(GRPOTrainer):
             # See: https://github.com/huggingface/transformers/issues/44514
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
-                tools=self.tools,
+                tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
                 chat_template=self.chat_template,
                 add_generation_prompt=True,
                 tokenize=True,
@@ -355,9 +355,7 @@ class DPPOTrainer(GRPOTrainer):
                 torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
-                gen_output = unwrapped_model.generate(
-                    **generate_inputs, generation_config=gen_config, disable_compile=True
-                )
+                gen_output = unwrapped_model.generate(**generate_inputs, generation_config=gen_config)
 
             prompt_ids_tensor, prompt_mask = generate_inputs["input_ids"], generate_inputs["attention_mask"]
             prompt_length = prompt_ids_tensor.size(1)
@@ -491,7 +489,7 @@ class DPPOTrainer(GRPOTrainer):
             # Tokenize and filter samples whose length exceeds max allowed length
             pct_ids = self.processing_class.apply_chat_template(
                 prompt_completion_tools,
-                tools=self.tools,
+                tools=self.tools or None,  #  `or None`: Llama bug: it renders tool boilerplate for tools=[]
                 chat_template=self.chat_template,
                 add_generation_prompt=True,
                 tokenize=True,
@@ -874,7 +872,7 @@ class DPPOTrainer(GRPOTrainer):
                     "template internally."
                 )
             prompts = [
-                prepare_multimodal_messages(prompt, image_list)
+                prepare_multimodal_messages(prompt, images=image_list)
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 

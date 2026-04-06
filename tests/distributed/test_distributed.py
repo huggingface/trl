@@ -41,9 +41,7 @@ def get_config_path(lazy_shared_datadir):
 
 
 @require_torch_multi_accelerator
-class TestDistributed(
-    TrlTestCase
-):  # pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899"))
+class TestDistributed(TrlTestCase):
     @pytest.mark.parametrize(
         "config",
         [
@@ -158,15 +156,17 @@ class TestDistributed(
             pytest.param(
                 "zero2",
                 marks=pytest.mark.xfail(
-                    condition=Version("2.10") <= Version(torch.__version__),
-                    reason="ZeRO 2 + PEFT is failing on torch 2.10; see #4884",
+                    condition=Version("2.10") <= Version(torch.__version__)
+                    and Version(transformers.__version__) < Version("5.1.0"),
+                    reason="ZeRO 2 + PEFT was failing before transformers 5.1.0 on torch 2.10; see #4884",
                 ),
             ),
             pytest.param(
                 "zero3",
                 marks=pytest.mark.xfail(
-                    condition=Version("2.10") <= Version(torch.__version__),
-                    reason="ZeRO 3 + PEFT is failing on torch 2.10; see #4884",
+                    condition=Version("2.10") <= Version(torch.__version__)
+                    and Version(transformers.__version__) < Version("5.1.0"),
+                    reason="ZeRO 3 + PEFT was failing before transformers 5.1.0 on torch 2.10; see #4884",
                 ),
             ),
             "fsdp2",
@@ -233,8 +233,21 @@ class TestDistributed(
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
                 ),
             ),
-            pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899")),
-            "fsdp2",
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) >= Version("5.0.0"),
+                    reason="ZeRO-3 fails with transformers >= 5.0.0, see #4899",
+                    strict=True,
+                ),
+            ),
+            pytest.param(
+                "fsdp2",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) >= Version("5.4.0"),
+                    reason="Upstream issue: NaN weights on non-rank-0 FSDP processes (see #5386 and transformers#45050)",
+                ),
+            ),
         ],
     )
     def test_rloo(self, config, get_config_path):
@@ -263,7 +276,14 @@ class TestDistributed(
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
                 ),
             ),
-            pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899")),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) >= Version("5.0.0"),
+                    reason="ZeRO-3 fails with transformers >= 5.0.0, see #4899",
+                    strict=True,
+                ),
+            ),
             "fsdp2",
         ],
     )
