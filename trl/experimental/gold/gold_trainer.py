@@ -875,6 +875,12 @@ class GOLDTrainer(SFTTrainer):
         # Liger fused GKD loss (JSD)
         self.use_liger_gkd_loss = False
         if args.use_liger_kernel:
+            if self._is_vlm:
+                raise ValueError(
+                    "Liger fused GKD loss is not supported with VLMs. The fused kernel operates on base decoder "
+                    "hidden states, which is incompatible with VLM multimodal inputs (pixel_values, etc.). "
+                    "Please set `use_liger_kernel=False`."
+                )
             self.liger_jsd_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
@@ -1248,6 +1254,15 @@ class GOLDTrainer(SFTTrainer):
         for i, flag in enumerate(on_policy_flags):
             if not flag:
                 if self._vlm_collator is not None:
+                    # Extract raw images and prompts BEFORE collation, since the collator
+                    # mutates examples in place (pops "image", overwrites "prompt").
+                    raw_images = None
+                    raw_prompts = None
+                    if self._teacher_processor is not None:
+                        raw_images = [
+                            ex.get("images") or ([ex["image"]] if "image" in ex else None) for ex in raw_slices[i]
+                        ]
+                        raw_prompts = [ex.get("prompt") for ex in raw_slices[i]]
                     # Collate raw examples on-the-fly for off-policy slices
                     slice_inputs = self._vlm_collator(raw_slices[i])
                     slice_inputs = {
@@ -1256,10 +1271,8 @@ class GOLDTrainer(SFTTrainer):
                     }
                     # Preserve raw PIL images and prompts for cross-architecture teacher processing
                     if self._teacher_processor is not None:
-                        slice_inputs["_raw_images"] = [
-                            ex.get("images") or ([ex["image"]] if "image" in ex else None) for ex in raw_slices[i]
-                        ]
-                        slice_inputs["_raw_prompts"] = [ex.get("prompt") for ex in raw_slices[i]]
+                        slice_inputs["_raw_images"] = raw_images
+                        slice_inputs["_raw_prompts"] = raw_prompts
                 else:
                     slice_inputs = slices[i]
 
