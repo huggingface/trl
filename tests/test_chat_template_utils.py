@@ -400,6 +400,14 @@ class TestGetTrainingChatTemplate:
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
+        pytest.param(
+            "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+            id="gemma4",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.5.0"),
+                reason="Gemma4 models were introduced in transformers-5.5.0",
+            ),
+        ),
     ],
 )
 @pytest.mark.xfail(
@@ -411,7 +419,8 @@ class TestGetTrainingChatTemplate:
 class TestParseResponse:
     def test_parse_response(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        tokenizer = add_response_schema(tokenizer)
+        if getattr(tokenizer, "response_schema", None) is None:
+            tokenizer = add_response_schema(tokenizer)
         messages = [
             {"role": "user", "content": "What is 3*4?"},
             {"role": "assistant", "content": "12"},
@@ -423,8 +432,11 @@ class TestParseResponse:
         assert parsed == messages[-1]
 
     def test_parse_response_with_reasoning_content(self, tokenizer_name):
+        if tokenizer_name == "trl-internal-testing/tiny-Gemma4ForConditionalGeneration":
+            pytest.skip("Gemma4 doesn't support inline reasoning_content.")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        tokenizer = add_response_schema(tokenizer)
+        if getattr(tokenizer, "response_schema", None) is None:
+            tokenizer = add_response_schema(tokenizer)
         messages = [
             {"role": "user", "content": "What is 3*4?"},
             {"role": "assistant", "reasoning_content": "Hmmm.", "content": "12"},
@@ -441,7 +453,8 @@ class TestParseResponse:
 
     def test_parse_response_tool_call(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        tokenizer = add_response_schema(tokenizer)
+        if getattr(tokenizer, "response_schema", None) is None:
+            tokenizer = add_response_schema(tokenizer)
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         messages = [
             {"role": "user", "content": "What is 3*4?"},
@@ -454,8 +467,13 @@ class TestParseResponse:
         assert parsed == messages[-1]
 
     def test_parse_response_tool_call_with_content(self, tokenizer_name):
+        if tokenizer_name == "trl-internal-testing/tiny-Gemma4ForConditionalGeneration":
+            # Gemma4 response_schema regex doesn't capture content after tool calls.
+            # Remove once https://huggingface.co/google/gemma-4-31B-it/discussions/19 is merged.
+            pytest.xfail("Gemma4 response_schema regex bug.")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        tokenizer = add_response_schema(tokenizer)
+        if getattr(tokenizer, "response_schema", None) is None:
+            tokenizer = add_response_schema(tokenizer)
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         messages = [
             {"role": "user", "content": "What is 3*4?"},
@@ -469,7 +487,8 @@ class TestParseResponse:
 
     def test_parse_response_tool_call_without_arguments(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        tokenizer = add_response_schema(tokenizer)
+        if getattr(tokenizer, "response_schema", None) is None:
+            tokenizer = add_response_schema(tokenizer)
         tool_calls = [{"type": "function", "function": {"name": "ping", "arguments": {}}}]
         messages = [
             {"role": "user", "content": "Ping the service."},
@@ -483,7 +502,8 @@ class TestParseResponse:
 
     def test_parse_response_multiple_tool_calls(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        tokenizer = add_response_schema(tokenizer)
+        if getattr(tokenizer, "response_schema", None) is None:
+            tokenizer = add_response_schema(tokenizer)
         tool_calls = [
             {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}},
             {"type": "function", "function": {"name": "addition", "arguments": {"a": 4, "b": 3}}},
@@ -502,7 +522,8 @@ class TestParseResponse:
         if tokenizer_name != "trl-internal-testing/tiny-Qwen3MoeForSequenceClassification":
             pytest.skip("For simplicity, we only test the malformed tool call case on one tokenizer.")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        tokenizer = add_response_schema(tokenizer)
+        if getattr(tokenizer, "response_schema", None) is None:
+            tokenizer = add_response_schema(tokenizer)
         text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call><|im_end|>'
         assistant_text = tokenizer(text)["input_ids"]
         parsed = parse_response(tokenizer, assistant_text)
