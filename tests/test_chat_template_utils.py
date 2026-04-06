@@ -148,13 +148,27 @@ class TestSupportsToolCalling:
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                id="glm4moe",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="GLM4 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
             pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", id="qwen3"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3moe"),
-            pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                id="qwen35",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
         ],
     )
     def test_supports_tool_calling(self, model_id):
