@@ -525,6 +525,7 @@ def print_prompt_completions_sample(
     advantages: list[float],
     step: int,
     num_samples: int = None,
+    extra: dict[str, list] | None = None,
 ) -> None:
     """
     Print out a sample of model completions to the console with multiple reward metrics.
@@ -545,6 +546,10 @@ def print_prompt_completions_sample(
             Current training step number, used in the output title.
         num_samples (`int`, *optional*):
             Number of random samples to display. If `None` (default), all items will be displayed.
+        extra (`dict[str, list]`, *optional*):
+            Additional columns to display after the advantage column. Keys are column names and values are lists of
+            per-completion data (strings or any value convertible to string). Typically populated via `log_extra` in
+            reward functions. If `None` (default), no extra columns are shown.
 
     Example:
     ```python
@@ -554,16 +559,17 @@ def print_prompt_completions_sample(
     >>> completions = [" blue.", " in the sky."]
     >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
     >>> advantages = [0.987, 0.654]
-    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42)
-    ╭──────────────────────────── Step 42 ─────────────────────────────╮
-    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
-    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
-    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
-    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
-    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
-    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
-    │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
-    ╰──────────────────────────────────────────────────────────────────╯
+    >>> extra = {"source": ["dataset_A", "dataset_B"]}
+    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42, extra=extra)
+    ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ source    ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ dataset_A │ │
+    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┼───────────┤ │
+    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ dataset_B │ │
+    │ └────────────┴──────────────┴─────────────┴────────┴───────────┴───────────┘ │
+    ╰──────────────────────────────────────────────────────────────────────────────╯
     ```
     """
     if not is_rich_available():
@@ -574,12 +580,16 @@ def print_prompt_completions_sample(
     console = Console()
     table = Table(show_header=True, header_style="bold white", expand=True)
 
+    extra = extra or {}
+
     # Add columns
     table.add_column("Prompt", style="bright_yellow")
     table.add_column("Completion", style="bright_green")
     for reward_name in rewards.keys():
         table.add_column(reward_name, style="bold cyan", justify="right")
     table.add_column("Advantage", style="bold magenta", justify="right")
+    for extra_name in extra.keys():
+        table.add_column(extra_name, style="bright_white")
 
     def format_entry(entry) -> Text:
         t = Text()
@@ -622,14 +632,17 @@ def print_prompt_completions_sample(
         completions = [completions[i] for i in indices]
         rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
         advantages = [advantages[i] for i in indices]
+        extra = {key: [val[i] for i in indices] for key, val in extra.items()}
 
     for i in range(len(prompts)):
         reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
+        extra_values = [format_entry(extra[key][i]) for key in extra.keys()]
         table.add_row(
             format_entry(prompts[i]),
             format_entry(completions[i]),
             *reward_values,
             f"{advantages[i]:.2f}",
+            *extra_values,
         )
         table.add_section()  # Adds a separator between rows
 
