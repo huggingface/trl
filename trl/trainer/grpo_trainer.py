@@ -1409,7 +1409,7 @@ class GRPOTrainer(_BaseTrainer):
         dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": {}}}]
         dummy_messages = [
             {"role": "user", "content": "dummy"},
-            {"role": "assistant", "tool_calls": dummy_tool_calls},
+            {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
         ]
         if self._is_vlm:
             dummy_messages = prepare_multimodal_messages(dummy_messages)

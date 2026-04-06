@@ -254,11 +254,11 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
     dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": {}}}]
     messages1 = [
         {"role": "user", "content": "dummy"},
-        {"role": "assistant", "tool_calls": dummy_tool_calls},
+        {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
     ]
     messages2 = [
         {"role": "user", "content": "dummy"},
-        {"role": "assistant", "tool_calls": dummy_tool_calls},
+        {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
         {"role": "tool", "name": "dummy", "content": "dummy"},
     ]
 
@@ -297,6 +297,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     ...     {"role": "user", "content": "What is 2 * 3?"},
     ...     {
     ...         "role": "assistant",
+    ...         "content": "",
     ...         "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 2, "b": 3}}}],
     ...     },
     ... ]
