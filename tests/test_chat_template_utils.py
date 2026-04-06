@@ -146,6 +146,7 @@ class TestAddResponseSchema:
 class TestIsChatTemplatePrefixPreserving:
     def test_prefix_preserving_template(self):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        # docstyle-ignore
         tokenizer.chat_template = textwrap.dedent(r"""
         {%- for message in messages %}
 
