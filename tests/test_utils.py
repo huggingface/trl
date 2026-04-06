@@ -545,6 +545,34 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         assert output == expected_output
 
     @patch("sys.stdout", new_callable=StringIO)
+    def test_extra_columns(self, mock_stdout):
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        extra = {"source": ["dataset_A", "dataset_B"]}
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step, extra=extra)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ source    ┃ │
+        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ dataset_A │ │
+        │ ├────────────┼──────────────┼─────────────┼────────┼───────────┼───────────┤ │
+        │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ dataset_B │ │
+        │ └────────────┴──────────────┴─────────────┴────────┴───────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
     def test_num_samples(self, mock_stdout):
         prompts = ["A", "B"]
         completions = ["1", "2"]
@@ -932,6 +960,23 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 1, 2]]))
         assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2], [1, 2, 1]]))
 
+    def test_split_by_image_position_ids(self):
+        # Gemma-style: no image_grid_thw, split by num_images using image_position_ids
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(3 * 4).reshape(3, 4),
+            "image_position_ids": torch.tensor([[0, 1], [2, 3], [4, 5]]),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:1])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][1:])
+        assert isinstance(result["image_position_ids"], list)
+        assert len(result["image_position_ids"]) == 2
+        assert torch.equal(result["image_position_ids"][0], batch["image_position_ids"][:1])
+        assert torch.equal(result["image_position_ids"][1], batch["image_position_ids"][1:])
+
 
 class TestUnsplitPixelValuesByGrid(TrlTestCase):
     def test_unsplit_correctly(self):
@@ -946,6 +991,15 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         assert isinstance(result["image_grid_thw"], torch.Tensor)
         assert torch.equal(result["image_grid_thw"], image_grid_thw_merged)
         assert "other_key" in result
+
+    def test_unsplit_image_position_ids(self):
+        image_position_ids = [torch.tensor([[0, 1]]), torch.tensor([[2, 3], [4, 5]])]
+        image_position_ids_merged = torch.cat(image_position_ids, dim=0)
+        pixel_values = [torch.randn(1, 4), torch.randn(2, 4)]
+        batch = {"pixel_values": pixel_values, "image_position_ids": image_position_ids}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["image_position_ids"], torch.Tensor)
+        assert torch.equal(result["image_position_ids"], image_position_ids_merged)
 
     def test_no_op_if_not_list(self):
         original = torch.randn(5, 3)
