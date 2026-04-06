@@ -716,6 +716,26 @@ trainer.train()
 
 `reset` can return either `None` or a string. In GRPO, when it returns a string, that string is appended to the last user message before generation.
 
+### Multimodal Tool Responses
+
+Tools can return images alongside text by returning a list of content blocks. This is useful for VLM agent training where the tool provides visual feedback (e.g., screenshots, plots, camera captures).
+
+```python
+from PIL import Image
+
+def take_screenshot() -> list:
+    """
+    Takes a screenshot of the current screen.
+
+    Returns:
+        The screenshot image with a description.
+    """
+    img = Image.open("screenshot.png")
+    return [{"type": "image", "image": img}, {"type": "text", "text": "Here is the screenshot."}]
+```
+
+The returned images are automatically injected into the conversation and passed to the VLM for subsequent generation turns.
+
 ### Supported Models
 
 Tested with:
