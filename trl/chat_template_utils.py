@@ -200,7 +200,10 @@ gptoss_schema = {
                 # Convert "to=functions.NAME<|channel|>commentary json<|message|>ARGS<|call|>"
                 # into '{"name": "NAME", "arguments": ARGS}' so it can be parsed as JSON.
                 "x-regex-substitutions": [
-                    [r"to=functions\.(\S+)<\|channel\|>commentary json<\|message\|>(.*?)<\|call\|>", r'{"name": "\1", "arguments": \2}'],
+                    [
+                        r"to=functions\.(\S+)<\|channel\|>commentary json<\|message\|>(.*?)<\|call\|>",
+                        r'{"name": "\1", "arguments": \2}',
+                    ],
                 ],
                 "x-parser": "json",
                 "x-parser-args": {"transform": "{type: 'function', function: @}"},
