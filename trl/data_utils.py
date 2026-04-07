@@ -91,9 +91,8 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
             if message.get("content") and isinstance(message["content"], str):
                 message["content"] = [{"type": "text", "text": message["content"]}]
         elif message["role"] == "tool":
-            # NOTE: `tool` contains `name` (name of the tool used) and `content` (output of the tool call as a string)
-            # but there's no need to prepare it for multimodal specifically but rather leave it as-is
-            continue
+            if message.get("content") and isinstance(message["content"], str):
+                message["content"] = [{"type": "text", "text": message["content"]}]
         else:
             raise ValueError(
                 f"Invalid role in message: {message['role']}. Expected 'system', 'user', 'assistant', or 'tool'."
@@ -103,7 +102,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
     num_placeholders = sum(
         sum(1 for part in message["content"] if part["type"] == "image")
         for message in messages
-        if message.get("content") and message["role"] != "tool"
+        if message.get("content") and isinstance(message["content"], list)
     )
     if num_placeholders != len(images):
         raise ValueError(
@@ -113,7 +112,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
     # Then, fill in the actual images in the placeholders
     img_idx = 0
     for message in messages:
-        if not message.get("content") or message["role"] == "tool":
+        if not message.get("content") or not isinstance(message["content"], list):
             continue
         for part in message["content"]:
             if part["type"] == "image":

@@ -1407,6 +1407,7 @@ class GRPOTrainer(_BaseTrainer):
         dummy_messages = [{"role": "user", "content": "dummy"}, {"role": "assistant", "content": "dummy"}]
         if self._is_vlm:
             dummy_messages = prepare_multimodal_messages(dummy_messages)
+            tool_messages = prepare_multimodal_messages(tool_messages)
 
         prefix_ids = self.processing_class.apply_chat_template(
             dummy_messages,
