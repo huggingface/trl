@@ -14,7 +14,6 @@
 
 
 from jinja2 import TemplateError
-from jinja2.exceptions import UndefinedError
 from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, ProcessorMixin
 
 from .data_utils import prepare_multimodal_messages
@@ -667,9 +666,9 @@ def supports_tool_calling(processing_class) -> bool:
 
     try:
         rendered = processing_class.apply_chat_template(messages, tokenize=False)
-    except (TemplateError, UndefinedError):
+    except TemplateError:
         # TemplateError: template rejects the role sequence (Cohere, FalconMamba, Gemma, Gemma2, Gemma3)
-        # UndefinedError: template indexes into content as a list for all roles, including tool
+        # UndefinedError (subclass): template indexes into content as a list for all roles, including tool
         #   (Idefics2, Idefics3, LlavaNext, SmolVLM)
         return False
     # Some templates (e.g. Cohere2, Phi3) accept tool messages without error but silently ignore them.
