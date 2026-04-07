@@ -53,8 +53,10 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
           the function transforms them into the structured format by wrapping text in `{"type": "text", "text": ...}`
           and inserting `{"type": "image"}` placeholders for the images *before* the first user message.
           If the number of placeholders does not match the number of provided images, an error is raised.
-        - When the input `messages` contains either `"tool_calls"` in the `"assistant"` turns, or `"tool"` roles with
-          `"content"` and `"name"` those are left as-is, since those don't require any specific handling for multimodal data.
+        - When the input `messages` contains `"tool_calls"` in the `"assistant"` turns, it is left as-is, since this
+          does not require any specific handling for multimodal data.
+        - Existing image blocks that already include an `"image"` payload are preserved as-is. Only unfilled image
+          placeholders are counted and populated from `images`.
 
     Example:
     ```python
