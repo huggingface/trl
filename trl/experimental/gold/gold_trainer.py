@@ -1064,6 +1064,8 @@ class GOLDTrainer(SFTTrainer):
     def _set_signature_columns_if_needed(self):
         super()._set_signature_columns_if_needed()
         required_columns = [
+            "prompt",
+            "completion",
             "prompts",
             "prompt_attention_mask",
             "messages",
@@ -1378,6 +1380,14 @@ class GOLDTrainer(SFTTrainer):
         """On-policy generation from raw VLM examples, preserving PIL images for vLLM."""
         device = self.accelerator.device
 
+        # Phase 1: Collect prompts, images, and raw examples across all on-policy slices
+        all_prompt_ids = []
+        all_images = []
+        all_prompts = []  # prepared multimodal messages
+        all_raw_examples = []
+        local_slice_indices = []
+        slice_raw_data = {}  # per-slice raw data for non-vLLM path
+
         for slice_idx in on_policy_indices:
             raw_examples = raw_slices[slice_idx]
 
@@ -1427,11 +1437,22 @@ class GOLDTrainer(SFTTrainer):
                 for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
             ]
 
-            prompts_text = self.processing_class.batch_decode(prompt_ids_list, skip_special_tokens=True)
-            prompts_text_with_special = self.processing_class.batch_decode(prompt_ids_list, skip_special_tokens=False)
+            slice_raw_data[slice_idx] = (raw_examples, images, prompts, prompt_ids_list)
 
-            if not self.use_vllm:
-                # Non-vLLM path: collate raw examples to get pixel_values, then generate
+            for i, example in enumerate(raw_examples):
+                all_prompt_ids.append(prompt_ids_list[i])
+                all_images.append(images[i] if images is not None else None)
+                all_prompts.append(prompts[i])
+                all_raw_examples.append(example)
+                local_slice_indices.append(slice_idx)
+
+        all_prompts_text = self.processing_class.batch_decode(all_prompt_ids, skip_special_tokens=True)
+        all_prompts_text_with_special = self.processing_class.batch_decode(all_prompt_ids, skip_special_tokens=False)
+
+        if not self.use_vllm:
+            # Non-vLLM path: generate per-slice using model.generate
+            for slice_idx in on_policy_indices:
+                raw_examples, images, prompts, _ = slice_raw_data[slice_idx]
                 collated = self._vlm_collator(raw_examples)
                 collated = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in collated.items()}
                 with unwrap_model_for_generation(
@@ -1454,37 +1475,62 @@ class GOLDTrainer(SFTTrainer):
 
                 self._buffered_inputs[slice_idx] = updated_slice
                 self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
-                continue
+            return
 
-            # vLLM path: pass raw PIL images to vLLM
-            if (
-                self.state.global_step != self._last_vllm_sync_step
-                and self.state.global_step >= self._last_vllm_sync_step + self.vllm_sync_frequency
-            ):
-                self.vllm_generation.sync_weights()
-                self._last_vllm_sync_step = self.state.global_step
+        # vLLM path: one batched generate call across all slices
+        if (
+            self.state.global_step != self._last_vllm_sync_step
+            and self.state.global_step >= self._last_vllm_sync_step + self.vllm_sync_frequency
+        ):
+            self.vllm_generation.sync_weights()
+            self._last_vllm_sync_step = self.state.global_step
 
-            _, completion_ids, _, _ = self.vllm_generation.generate(
-                prompts=prompt_ids_list,
-                images=images,
-                num_generations=self.num_generations,
+        # Pass None for images if all entries are None
+        generate_images = all_images if any(img is not None for img in all_images) else None
+        _, completion_ids, _, _ = self.vllm_generation.generate(
+            prompts=all_prompt_ids,
+            images=generate_images,
+            num_generations=self.num_generations,
+        )
+
+        # Decode completions
+        max_completion_length = self.generation_config.max_new_tokens
+        all_completion_texts = []
+        for comp_ids in completion_ids:
+            if len(comp_ids) > max_completion_length:
+                comp_ids = comp_ids[:max_completion_length]
+            all_completion_texts.append(
+                self.processing_class.decode(comp_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
             )
 
-            # Decode completions and build synthetic examples for collation
-            max_completion_length = self.generation_config.max_new_tokens
-            completion_texts = []
-            for comp_ids in completion_ids:
-                if len(comp_ids) > max_completion_length:
-                    comp_ids = comp_ids[:max_completion_length]
-                completion_texts.append(
-                    self.processing_class.decode(
-                        comp_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
-                    )
-                )
+        # Redistribute completions to slices. With num_generations > 1, each prompt produces
+        # multiple completions, so we repeat each raw example/prompt/image to match.
+        slice_completions = {idx: [] for idx in on_policy_indices}
+        slice_raw = {idx: [] for idx in on_policy_indices}
+        slice_images = {idx: [] for idx in on_policy_indices}
+        slice_prompts = {idx: [] for idx in on_policy_indices}
+        slice_prompts_text = {idx: [] for idx in on_policy_indices}
+        slice_prompts_text_special = {idx: [] for idx in on_policy_indices}
+
+        for i, slice_idx in enumerate(local_slice_indices):
+            for g in range(self.num_generations):
+                comp_idx = i * self.num_generations + g
+                slice_completions[slice_idx].append(all_completion_texts[comp_idx])
+                slice_raw[slice_idx].append(all_raw_examples[i])
+                slice_images[slice_idx].append(all_images[i])
+                slice_prompts[slice_idx].append(all_prompts[i])
+                slice_prompts_text[slice_idx].append(all_prompts_text[i])
+                slice_prompts_text_special[slice_idx].append(all_prompts_text_with_special[i])
+
+        for slice_idx in on_policy_indices:
+            completion_texts = slice_completions[slice_idx]
+            raw_for_slice = slice_raw[slice_idx]
+            images_for_slice = slice_images[slice_idx]
+            prompts_for_slice = slice_prompts[slice_idx]
 
             # Build synthetic examples: original prompt + generated completion
             synthetic_examples = []
-            for i, example in enumerate(raw_examples):
+            for i, example in enumerate(raw_for_slice):
                 synthetic = dict(example)
                 synthetic["completion"] = [{"role": "assistant", "content": completion_texts[i]}]
                 synthetic_examples.append(synthetic)
@@ -1492,14 +1538,15 @@ class GOLDTrainer(SFTTrainer):
             # Collate synthetic examples to get pixel_values + properly tokenized input_ids/labels
             collated = self._vlm_collator(synthetic_examples)
             collated = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in collated.items()}
-            collated["original_prompt_text"] = prompts_text_with_special
+            collated["original_prompt_text"] = slice_prompts_text_special[slice_idx]
             collated["original_completion_text"] = completion_texts
             if self._teacher_processor is not None:
-                collated["_raw_images"] = images
-                collated["_raw_prompts"] = prompts
+                has_images = any(img is not None for img in images_for_slice)
+                collated["_raw_images"] = images_for_slice if has_images else None
+                collated["_raw_prompts"] = prompts_for_slice
 
             self._buffered_inputs[slice_idx] = collated
-            self._buffered_text_logs[slice_idx] = (prompts_text, completion_texts)
+            self._buffered_text_logs[slice_idx] = (slice_prompts_text[slice_idx], completion_texts)
 
     def _process_completions_to_buffer(
         self,

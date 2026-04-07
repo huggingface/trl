@@ -119,6 +119,15 @@ class GOLDConfig(SFTConfig):
         default=1e-7,
         metadata={"help": "The initial learning rate for AdamW."},
     )
+    # The default value remove_unused_columns is overwritten from the parent class, because in GOLD we usually rely on
+    # additional columns to compute the loss
+    remove_unused_columns: bool | None = field(
+        default=False,
+        metadata={
+            "help": "Whether to only keep the columns 'prompt' and 'completion' in the dataset. If you use a custom "
+            "dataset that requires additional columns, you should keep this to `False`."
+        },
+    )
 
     # GOLD-specific parameters
     temperature: float = field(
