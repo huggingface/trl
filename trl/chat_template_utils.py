@@ -630,6 +630,10 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
     """
     Check whether the chat template preserves prefixes when applied.
 
+    A prefix-preserving chat template renders earlier messages identically regardless of what messages follow. This
+    property is required by `_get_tool_suffix_ids`, which extracts tool response formatting tokens by comparing
+    tokenizations with and without tool messages appended.
+
     Args:
         tokenizer (`PreTrainedTokenizer`):
             Tokenizer instance to check.
@@ -638,24 +642,22 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
         `bool`:
             `True` if the chat template preserves prefixes, `False` otherwise.
     """
+    # Use the same dummy messages as _get_tool_suffix_ids to test the exact property it relies on.
+    dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": {}}}]
     messages1 = [
-        {"role": "user", "content": "What color is the sky?"},
+        {"role": "user", "content": "dummy"},
+        {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
     ]
     messages2 = [
-        {"role": "user", "content": "What color is the sky?"},
-        {"role": "assistant", "content": "It is blue."},
-    ]
-    messages3 = [
-        {"role": "user", "content": "What color is the sky?"},
-        {"role": "assistant", "content": "It is blue."},
-        {"role": "user", "content": "And at night?"},
+        {"role": "user", "content": "dummy"},
+        {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
+        {"role": "tool", "name": "dummy", "content": "dummy"},
     ]
 
-    text1 = tokenizer.apply_chat_template(messages1, tokenize=False, add_generation_prompt=True)
-    text2 = tokenizer.apply_chat_template(messages2, tokenize=False)
-    text3 = tokenizer.apply_chat_template(messages3, tokenize=False)
+    text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
+    text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
 
-    return text2.startswith(text1) and text3.startswith(text2)
+    return text2.startswith(text1)
 
 
 # Modifications:
@@ -749,33 +751,12 @@ qwen3_training_chat_template = r"""{%- if tools %}
 {%- endif %}"""
 
 
-# Modifications:
-# - {%- if '</think>' in content %}
-# + {%- if '<think>' in content and '</think>' in content %}
-#   Always check for both tags to avoid edge cases where the model generates only one tag, which would otherwise be parsed incorrectly
-# - {{- '<|im_start|>' + message.role + '\n' + content }}
-# + {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content + '\n</think>\n\n' + content }}
-#   Always include thinking block during training. It's important to have a prefix-preserving template.
-def _patch_qwen3_5_training_template(template: str) -> str:
-    return template.replace(
-        "{%- if '</think>' in content %}",
-        "{%- if '<think>' in content and '</think>' in content %}",
-    ).replace(
-        "{{- '<|im_start|>' + message.role + '\\n' + content }}",
-        "{{- '<|im_start|>' + message.role + '\\n<think>\\n' + reasoning_content + '\\n</think>\\n\\n' + content }}",
-    )
-
-
-qwen3_5_training_chat_template_2b_and_below = _patch_qwen3_5_training_template(qwen3_5_chat_template_2b_and_below)
-qwen3_5_training_chat_template_4b_and_above = _patch_qwen3_5_training_template(qwen3_5_chat_template_4b_and_above)
-
-
 def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     r"""
     Get a prefix-preserving chat template for training, if needed.
 
-    If the tokenizer's template isn't prefix-preserving, returns a training-compatible template (currently Qwen3 and
-    Qwen3.5 supported). Otherwise, returns `None`.
+    If the tokenizer's template isn't prefix-preserving, returns a training-compatible template (currently Qwen3
+    supported). Otherwise, returns `None`.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -793,27 +774,31 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
     >>> messages1 = [
-    ...     {"role": "user", "content": "What color is the sky?"},
-    ...     {"role": "assistant", "content": "It is blue."},
+    ...     {"role": "user", "content": "What is 2 * 3?"},
+    ...     {
+    ...         "role": "assistant",
+    ...         "content": "",
+    ...         "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 2, "b": 3}}}],
+    ...     },
     ... ]
-    >>> messages2 = [
-    ...     {"role": "user", "content": "What color is the sky?"},
-    ...     {"role": "assistant", "content": "It is blue."},
-    ...     {"role": "user", "content": "And at night?"},
+    >>> messages2 = messages1 + [
+    ...     {"role": "tool", "name": "multiply", "content": "6"},
     ... ]
     >>> tokenizer.apply_chat_template(messages1, tokenize=False)
-    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n'
+    '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n'
 
-    >>> tokenizer.apply_chat_template(messages2, tokenize=False)
-    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\nIt is blue.<|im_end|>\n<|im_start|>user\nAnd at night?<|im_end|>\n'
+    >>> tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+    '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n6\n</tool_response><|im_end|>\n<|im_start|>assistant\n'
 
-    >>> #                                                                       ^ think tags missing
+    >>> #                                                        ^ think tags missing
     >>> chat_template = get_training_chat_template(tokenizer)
     >>> tokenizer.apply_chat_template(messages1, tokenize=False, chat_template=chat_template)
-    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n'
+    '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n'
 
-    >>> tokenizer.apply_chat_template(messages2, tokenize=False, chat_template=chat_template)
-    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n<|im_start|>user\nAnd at night?<|im_end|>\n'
+    >>> tokenizer.apply_chat_template(
+    ...     messages2, tokenize=False, add_generation_prompt=True, chat_template=chat_template
+    ... )
+    '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n6\n</tool_response><|im_end|>\n<|im_start|>assistant\n'
     ```
     """
     # First check if patching is needed
@@ -822,10 +807,6 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     if tokenizer.chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
-    if tokenizer.chat_template == qwen3_5_chat_template_2b_and_below:
-        return qwen3_5_training_chat_template_2b_and_below
-    if tokenizer.chat_template == qwen3_5_chat_template_4b_and_above:
-        return qwen3_5_training_chat_template_4b_and_above
     else:
         raise ValueError(
             "The tokenizer's chat template is not prefix-preserving and patching is not supported for this template. "
