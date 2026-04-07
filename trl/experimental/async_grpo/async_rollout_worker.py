@@ -167,11 +167,12 @@ class AsyncRolloutWorker:
         self.num_completions_to_print = num_completions_to_print
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.tokenizer = add_response_schema(self.tokenizer)
-        self.chat_template = (
-            get_training_chat_template(self.tokenizer)
-            if not is_chat_template_prefix_preserving(self.tokenizer)
-            else None
-        )
+        # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
+        # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
+        if self.tools and not is_chat_template_prefix_preserving(self.tokenizer):
+            self.chat_template = get_training_chat_template(self.tokenizer)
+        else:
+            self.chat_template = None
 
         self._groups_to_score: asyncio.Queue[RolloutGroup | None] = asyncio.Queue(maxsize=16)
         self._total_completion_tokens = 0

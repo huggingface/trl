@@ -927,7 +927,8 @@ class SFTTrainer(_BaseTrainer):
         if args.assistant_only_loss and "{% generation %}" not in processing_class.chat_template:
             self.chat_template = get_training_chat_template(processing_class)
         else:
-            self.chat_template = processing_class.chat_template
+            self.chat_template = None
+
         # Dataset
         if self.padding_free and not args.packing and args.max_length is not None and not self._is_vision_dataset:
             raise ValueError(
