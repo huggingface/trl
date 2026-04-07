@@ -273,10 +273,11 @@ qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").re
 
 def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     r"""
-    Get a prefix-preserving chat template for training, if needed.
+    Get a training-compatible chat template, if needed.
 
-    If the tokenizer's template isn't prefix-preserving, returns a training-compatible template (currently Qwen3
-    supported). Otherwise, returns `None`.
+    Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
+    %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
+    requirements. Currently Qwen3 is supported.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -329,7 +330,8 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
         return qwen3_training_chat_template
     else:
         raise ValueError(
-            "The tokenizer's chat template is not prefix-preserving and patching is not supported for this template. "
+            "The tokenizer's chat template is not training-compatible (missing prefix-preservation or "
+            "`{% generation %}` markers) and patching is not supported for this template. "
             "Please manually modify the tokenizer's chat template for training."
         )
 

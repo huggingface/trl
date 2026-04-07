@@ -56,7 +56,12 @@ from transformers import (
 )
 from transformers.utils import is_peft_available, is_rich_available
 
-from ..chat_template_utils import add_response_schema, get_training_chat_template, parse_response
+from ..chat_template_utils import (
+    add_response_schema,
+    get_training_chat_template,
+    is_chat_template_prefix_preserving,
+    parse_response,
+)
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
@@ -515,7 +520,7 @@ class GRPOTrainer(_BaseTrainer):
             processing_class = add_response_schema(processing_class)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
-        if self.tools:
+        if self.tools and not is_chat_template_prefix_preserving(processing_class):
             self.chat_template = get_training_chat_template(processing_class)
         else:
             self.chat_template = None
