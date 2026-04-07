@@ -1264,7 +1264,12 @@ class GOLDTrainer(SFTTrainer):
                         raw_images = [
                             ex.get("images") or ([ex["image"]] if "image" in ex else None) for ex in raw_slices[i]
                         ]
-                        raw_prompts = [ex.get("prompt") for ex in raw_slices[i]]
+                        raw_prompts = [
+                            prepare_multimodal_messages(ex["prompt"], images=imgs)
+                            if imgs is not None
+                            else ex.get("prompt")
+                            for ex, imgs in zip(raw_slices[i], raw_images, strict=True)
+                        ]
                     # Collate raw examples on-the-fly for off-policy slices
                     slice_inputs = self._vlm_collator(raw_slices[i])
                     slice_inputs = {
@@ -1500,7 +1505,7 @@ class GOLDTrainer(SFTTrainer):
             if len(comp_ids) > max_completion_length:
                 comp_ids = comp_ids[:max_completion_length]
             all_completion_texts.append(
-                self.processing_class.decode(comp_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
+                self.processing_class.decode(comp_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
             )
 
         # Redistribute completions to slices. With num_generations > 1, each prompt produces
