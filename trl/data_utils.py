@@ -100,7 +100,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
 
     # Then, check that the number of image placeholders matches the number of images provided
     num_placeholders = sum(
-        sum(1 for part in message["content"] if part["type"] == "image")
+        sum(1 for part in message["content"] if part["type"] == "image" and "image" not in part)
         for message in messages
         if message.get("content") and message["role"] != "tool"
     )
