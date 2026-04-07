@@ -6,6 +6,10 @@ TRL is a comprehensive library for post-training foundation models using techniq
 
 Get started instantly with TRL's most popular trainers. Each example uses compact models for quick experimentation.
 
+> [!TIP]
+> These examples require a GPU with at least 40 GB of VRAM (e.g., A100) to run with default settings. For GPUs with
+> 24 GB (e.g., L4, A10G) or less, see the [Out of Memory?](#out-of-memory) section below.
+
 ### Supervised Fine-Tuning
 
 ```python
@@ -103,7 +107,15 @@ trl reward --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
 
 ### Out of Memory?
 
-Reduce batch size and enable optimizations:
+The default training settings (e.g., `per_device_train_batch_size=8`, `max_length=1024`) use approximately 24 GB of VRAM. If you encounter out-of-memory errors, try the following options depending on your GPU:
+
+**For GPUs with 24 GB (e.g., L4, A10G):** CUDA memory fragmentation may cause OOM even though the peak usage fits. Set this environment variable before training:
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+```
+
+**For GPUs with 16 GB or less (e.g., T4):** reduce batch size, sequence length, and use a memory-efficient optimizer:
 
 <hfoptions id="batch_size">
 <hfoption id="SFT">
