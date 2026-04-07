@@ -53,8 +53,8 @@ class DPOConfig(_BaseConfig):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left or
             right depending on the `truncation_mode`. If `None`, no truncation is applied.
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
-            Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
-            `"keep_start"`.
+            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is
+            `"keep_start"`. The `"keep_end"` value is deprecated and will be removed in v2.0.0.
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
@@ -171,8 +171,8 @@ class DPOConfig(_BaseConfig):
     truncation_mode: str = field(
         default="keep_start",
         metadata={
-            "help": "Truncation mode to use when the sequence exceeds `max_length`. Possible values are `'keep_end'` "
-            "and `'keep_start'`.",
+            "help": "Truncation mode to use when the sequence exceeds `max_length`. The only supported value is "
+            "`'keep_start'`. The `'keep_end'` value is deprecated and will be removed in v2.0.0.",
             "choices": ["keep_end", "keep_start"],
         },
     )
