@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -314,6 +315,14 @@ class DPOConfig(_BaseConfig):
             raise ValueError(
                 "`loss_weights` must have the same length as `loss_type` when combining multiple losses. "
                 f"Got {len(self.loss_weights)} weights for {len(self.loss_type)} loss types."
+            )
+
+        if self.truncation_mode == "keep_end":
+            warnings.warn(
+                "The `'keep_end'` truncation mode is deprecated and will be removed in v2.0.0. "
+                "Use `truncation_mode='keep_start'` (the default) instead.",
+                FutureWarning,
+                stacklevel=3,
             )
 
         super().__post_init__()
