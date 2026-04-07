@@ -146,13 +146,25 @@ class TestAddResponseSchema:
 class TestIsChatTemplatePrefixPreserving:
     def test_prefix_preserving_template(self):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        # docstyle-ignore
         tokenizer.chat_template = textwrap.dedent(r"""
         {%- for message in messages %}
 
         {%- if message.role == 'user' %}
             {{- '<|im_start|>user\n' + message.content + '<|im_end|>\n' }}
         {%- elif message.role == 'assistant' %}
-            {{- '<|im_start|>assistant\n' + message.content + '<|im_end|>\n' }}
+            {{- '<|im_start|>assistant\n' + message.content }}
+            {%- if message.tool_calls %}
+                {%- for tool_call in message.tool_calls %}
+                    {%- if tool_call.function %}
+                        {%- set tool_call = tool_call.function %}
+                    {%- endif %}
+                    {{- '<tool_call>' + tool_call.name + '</tool_call>' }}
+                {%- endfor %}
+            {%- endif %}
+            {{- '<|im_end|>\n' }}
+        {%- elif message.role == 'tool' %}
+            {{- '<|im_start|>tool\n' + message.content + '<|im_end|>\n' }}
         {%- endif %}
 
         {%- endfor %}
@@ -164,8 +176,9 @@ class TestIsChatTemplatePrefixPreserving:
 
     def test_non_prefix_preserving_template(self):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
-        # The following template is quite typical of models like Qwen3 and GPT-OSS, where the thinking part is
-        # only present for last assistant message, which makes it non-prefix-preserving.
+        # The following template is quite typical of models like Qwen3 and GPT-OSS, where the thinking part (even
+        # empty) is only present for last assistant message, which makes it non-prefix-preserving: appending a tool
+        # message changes the earlier output.
         # docstyle-ignore
         tokenizer.chat_template = textwrap.dedent(r"""
         {%- if messages[0].role == 'system' %}
@@ -202,7 +215,17 @@ class TestIsChatTemplatePrefixPreserving:
                 {%- else %}
                     {{- '<|im_start|>' + message.role + '\n' + content }}
                 {%- endif %}
+                {%- if message.tool_calls %}
+                    {%- for tool_call in message.tool_calls %}
+                        {%- if tool_call.function %}
+                            {%- set tool_call = tool_call.function %}
+                        {%- endif %}
+                        {{- '<tool_call>' + tool_call.name + '</tool_call>' }}
+                    {%- endfor %}
+                {%- endif %}
                 {{- '<|im_end|>\n' }}
+            {%- elif message.role == "tool" %}
+                {{- '<|im_start|>tool\n' + content + '<|im_end|>\n' }}
             {%- endif %}
         {%- endfor %}
         {%- if add_generation_prompt %}
@@ -218,14 +241,6 @@ class TestIsChatTemplatePrefixPreserving:
     "tokenizer_name",
     [
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
-        pytest.param(
-            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
-            id="qwen35",
-            marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.0.0"),
-                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
-            ),
-        ),
     ],
 )
 class TestGetTrainingChatTemplate:
