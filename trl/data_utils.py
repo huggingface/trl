@@ -115,7 +115,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
         if not message.get("content") or message["role"] == "tool":
             continue
         for part in message["content"]:
-            if part["type"] == "image":
+            if part["type"] == "image" and "image" not in part:
                 part["image"] = images[img_idx]
                 img_idx += 1
 
