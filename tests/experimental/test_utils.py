@@ -158,29 +158,3 @@ class TestTruncateExamples(TrlTestCase):
         }
         dataset = truncate_dataset(dataset, max_length)
         assert dataset.to_dict() == expected_output
-
-    def test_with_keep_end(self):
-        examples = {
-            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
-        }
-        dataset = Dataset.from_dict(examples)
-        expected_output = {
-            "input_ids": [[2, 3], [6, 7], [8]],
-            "attention_mask": [[1, 1], [1, 1], [1]],
-        }
-        dataset = truncate_dataset(dataset, max_length=2, truncation_mode="keep_end")
-        assert dataset.to_dict() == expected_output
-
-    def test_with_keep_end_and_zero_max_length(self):
-        examples = {
-            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
-        }
-        dataset = Dataset.from_dict(examples)
-        expected_output = {
-            "input_ids": [[], [], []],
-            "attention_mask": [[], [], []],
-        }
-        dataset = truncate_dataset(dataset, max_length=0, truncation_mode="keep_end")
-        assert dataset.to_dict() == expected_output

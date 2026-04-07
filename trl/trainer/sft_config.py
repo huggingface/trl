@@ -68,8 +68,8 @@ class SFTConfig(_BaseConfig):
             or right depending on `truncation_mode`. If `None`, no truncation is applied. When packing is enabled,
             this value sets the sequence length.
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
-            Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
-            `"keep_start"`.
+            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is
+            `"keep_start"`. The `"keep_end"` value is deprecated and will be removed in v2.0.0.
         shuffle_dataset (`bool`, *optional*, defaults to `False`):
             Whether to shuffle the dataset.
         packing (`bool`, *optional*, defaults to `False`):
@@ -185,8 +185,8 @@ class SFTConfig(_BaseConfig):
     truncation_mode: str = field(
         default="keep_start",
         metadata={
-            "help": "Truncation mode to use when the sequence exceeds `max_length`. Possible values are `'keep_end'` "
-            "and `'keep_start'`.",
+            "help": "Truncation mode to use when the sequence exceeds `max_length`. The only supported value is "
+            "`'keep_start'`. The `'keep_end'` value is deprecated and will be removed in v2.0.0.",
             "choices": ["keep_end", "keep_start"],
         },
     )
@@ -269,10 +269,19 @@ class SFTConfig(_BaseConfig):
     def __post_init__(self):
         super().__post_init__()
 
+        if self.truncation_mode == "keep_end":
+            warnings.warn(
+                "The `'keep_end'` truncation mode is deprecated and will be removed in v2.0.0. "
+                "Use `truncation_mode='keep_start'` (the default) instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+
         if self.packing_strategy == "bfd-requeue":
             warnings.warn(
                 "The `bfd-requeue` packing strategy has been renamed to `bfd_split`. Please update your configuration accordingly. "
-                "The `bfd-requeue` strategy is deprecated and will be removed in a future version.",
+                "The `bfd-requeue` strategy is deprecated and will be removed in v2.0.0.",
                 FutureWarning,
+                stacklevel=3,
             )
             self.packing_strategy = "bfd_split"

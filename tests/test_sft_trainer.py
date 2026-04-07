@@ -987,13 +987,14 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_skip_prepare_dataset_passes_truncation_to_text_collator(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            max_length=16,
-            truncation_mode="keep_end",
-            dataset_kwargs={"skip_prepare_dataset": True},
-            report_to="none",
-        )
+        with pytest.warns(FutureWarning, match="keep_end.*deprecated"):
+            training_args = SFTConfig(
+                output_dir=self.tmp_dir,
+                max_length=16,
+                truncation_mode="keep_end",
+                dataset_kwargs={"skip_prepare_dataset": True},
+                report_to="none",
+            )
 
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
