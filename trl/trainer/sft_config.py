@@ -272,7 +272,7 @@ class SFTConfig(_BaseConfig):
         if self.packing_strategy == "bfd-requeue":
             warnings.warn(
                 "The `bfd-requeue` packing strategy has been renamed to `bfd_split`. Please update your configuration accordingly. "
-                "The `bfd-requeue` strategy is deprecated and will be removed in a future version.",
+                "The `bfd-requeue` strategy is deprecated and will be removed in v2.0.0.",
                 FutureWarning,
             )
             self.packing_strategy = "bfd_split"
