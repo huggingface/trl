@@ -229,9 +229,7 @@ class DistillationConfig(_BaseConfig):
     # Teacher model (external vLLM server)
     use_teacher_server: bool = field(
         default=False,
-        metadata={
-            "help": "Whether to use an external vLLM teacher server instead of a local teacher model."
-        },
+        metadata={"help": "Whether to use an external vLLM teacher server instead of a local teacher model."},
     )
     teacher_model_server_url: str | None = field(
         default=None,

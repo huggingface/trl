@@ -1193,7 +1193,9 @@ class DistillationTrainer(_BaseTrainer):
         teacher_log_probs = F.log_softmax(teacher_logits / self.temperature, dim=-1)
 
         teacher_top1_token_ids = teacher_logits.argmax(dim=-1)
-        teacher_top1_logprobs = teacher_log_probs.gather(dim=-1, index=teacher_top1_token_ids.unsqueeze(-1)).squeeze(-1)
+        teacher_top1_logprobs = teacher_log_probs.gather(dim=-1, index=teacher_top1_token_ids.unsqueeze(-1)).squeeze(
+            -1
+        )
         reverse_token_ids = self._get_reverse_kl_top_1_tokens(student_logits, completion_tokens)
         reverse_teacher_logprobs = teacher_log_probs.gather(dim=-1, index=reverse_token_ids.unsqueeze(-1)).squeeze(-1)
 
