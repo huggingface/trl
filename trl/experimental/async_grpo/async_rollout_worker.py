@@ -560,7 +560,13 @@ class AsyncRolloutWorker:
         dummy_tool_calls = [{"type": "function", "function": {"name": tool_messages[0]["name"], "arguments": {}}}]
         dummy_messages = [
             {"role": "user", "content": "dummy"},
-            {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
+                        {
+                "role": "assistant",
+                # "content" is required here because VLM processors crash on tokenize=True without it
+                # (KeyError in processing_utils.py). See huggingface/transformers#45290.
+                "content": "",
+                "tool_calls": dummy_tool_calls,
+            },
         ]
         prefix_ids = self.tokenizer.apply_chat_template(
             dummy_messages,

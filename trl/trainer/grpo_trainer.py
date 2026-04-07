@@ -1409,7 +1409,13 @@ class GRPOTrainer(_BaseTrainer):
         dummy_tool_calls = [{"type": "function", "function": {"name": tool_messages[0]["name"], "arguments": {}}}]
         dummy_messages = [
             {"role": "user", "content": "dummy"},
-            {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
+            {
+                "role": "assistant",
+                # "content" is required here because VLM processors crash on tokenize=True without it
+                # (KeyError in processing_utils.py). See huggingface/transformers#45290.
+                "content": "",
+                "tool_calls": dummy_tool_calls,
+            },
         ]
         if self._is_vlm:
             dummy_messages = prepare_multimodal_messages(dummy_messages)
