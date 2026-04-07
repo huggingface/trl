@@ -235,7 +235,7 @@ class TestPrepareMultimodalMessages:
                     }
                 ],
             },
-            {"role": "tool", "name": "get_current_weather", "content": "22.0"},
+            {"role": "tool", "name": "get_current_weather", "content": [{"type": "text", "text": "22.0"}]},
             {
                 "role": "assistant",
                 "content": [{"type": "text", "text": "The current weather in New York is 22.0 degrees Celsius."}],
