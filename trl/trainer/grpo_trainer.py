@@ -1421,12 +1421,7 @@ class GRPOTrainer(_BaseTrainer):
         # Normalize string content in tool messages for VLM processors before either path.
         # Use copies to avoid mutating the original completions data.
         if self._is_vlm:
-            tool_messages = [
-                {**msg, "content": [{"type": "text", "text": msg["content"]}]}
-                if isinstance(msg.get("content"), str)
-                else msg
-                for msg in tool_messages
-            ]
+            tool_messages = prepare_multimodal_messages(tool_messages)
 
         if tool_images and self._is_vlm:
             # For VLMs with images: use processor.__call__ to get correctly expanded image tokens.
