@@ -156,15 +156,17 @@ class TestDistributed(TrlTestCase):
             pytest.param(
                 "zero2",
                 marks=pytest.mark.xfail(
-                    condition=Version("2.10") <= Version(torch.__version__),
-                    reason="ZeRO 2 + PEFT is failing on torch 2.10; see #4884",
+                    condition=Version("2.10") <= Version(torch.__version__)
+                    and Version(transformers.__version__) < Version("5.1.0"),
+                    reason="ZeRO 2 + PEFT was failing before transformers 5.1.0 on torch 2.10; see #4884",
                 ),
             ),
             pytest.param(
                 "zero3",
                 marks=pytest.mark.xfail(
-                    condition=Version("2.10") <= Version(torch.__version__),
-                    reason="ZeRO 3 + PEFT is failing on torch 2.10; see #4884",
+                    condition=Version("2.10") <= Version(torch.__version__)
+                    and Version(transformers.__version__) < Version("5.1.0"),
+                    reason="ZeRO 3 + PEFT was failing before transformers 5.1.0 on torch 2.10; see #4884",
                 ),
             ),
             "fsdp2",
