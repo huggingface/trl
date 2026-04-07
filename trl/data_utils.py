@@ -91,9 +91,8 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
             if message.get("content") and isinstance(message["content"], str):
                 message["content"] = [{"type": "text", "text": message["content"]}]
         elif message["role"] == "tool":
-            # NOTE: `tool` contains `name` (name of the tool used) and `content` (output of the tool call as a string)
-            # but there's no need to prepare it for multimodal specifically but rather leave it as-is
-            continue
+            if message.get("content") and isinstance(message["content"], str):
+                message["content"] = [{"type": "text", "text": message["content"]}]
         else:
             raise ValueError(
                 f"Invalid role in message: {message['role']}. Expected 'system', 'user', 'assistant', or 'tool'."
