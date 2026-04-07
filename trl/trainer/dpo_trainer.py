@@ -1021,24 +1021,9 @@ class DPOTrainer(_BaseTrainer):
         """Computes reference log probabilities for a single padded batch."""
         device = self.accelerator.device
 
-        input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
-        completion_mask = inputs["completion_mask"]
-        shift_labels = input_ids[..., 1:].contiguous()
-        shift_completion_mask = completion_mask[..., 1:].contiguous()
-
-        model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key in (
-            "token_type_ids",
-            "mm_token_type_ids",
-            "pixel_values",
-            "pixel_attention_mask",
-            "image_grid_thw",
-            "image_sizes",
-            "image_position_ids",
-        ):
-            if key in inputs:
-                model_kwargs[key] = inputs[key]
+        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
+        model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
+        model_kwargs["use_cache"] = False
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             if is_peft_model(self.model) and self.ref_model is None:
@@ -1048,6 +1033,10 @@ class DPOTrainer(_BaseTrainer):
             else:
                 ref_outputs = self.ref_model(**model_kwargs)
 
+        input_ids = inputs["input_ids"]
+        completion_mask = inputs["completion_mask"]
+        shift_labels = input_ids[..., 1:].contiguous()
+        shift_completion_mask = completion_mask[..., 1:].contiguous()
         ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
         ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
         ref_per_token_logps[shift_completion_mask == 0] = 0.0
@@ -1150,23 +1139,13 @@ class DPOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         device = self.accelerator.device
 
-        input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
-        completion_mask = inputs["completion_mask"]
-        model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key in (
-            "token_type_ids",
-            "mm_token_type_ids",
-            "pixel_values",
-            "pixel_attention_mask",
-            "image_grid_thw",
-            "image_sizes",
-            "image_position_ids",
-        ):
-            if key in inputs:
-                model_kwargs[key] = inputs[key]
-
+        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
+        model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
+        model_kwargs["use_cache"] = False
         outputs = model(**model_kwargs)
+
+        input_ids = inputs["input_ids"]
+        completion_mask = inputs["completion_mask"]
         shift_logits = outputs.logits[..., :-1, :].contiguous()
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()
