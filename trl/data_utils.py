@@ -111,14 +111,15 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
         )
 
     # Then, fill in the actual images in the placeholders
-    img_idx = 0
-    for message in messages:
-        if not message.get("content") or message["role"] == "tool":
-            continue
-        for part in message["content"]:
-            if part["type"] == "image" and "image" not in part:
-                part["image"] = images[img_idx]
-                img_idx += 1
+    if images:
+        img_idx = 0
+        for message in messages:
+            if not message.get("content") or message["role"] == "tool":
+                continue
+            for part in message["content"]:
+                if part["type"] == "image" and "image" not in part:
+                    part["image"] = images[img_idx]
+                    img_idx += 1
 
     return messages
 
