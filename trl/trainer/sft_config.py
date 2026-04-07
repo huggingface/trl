@@ -269,6 +269,14 @@ class SFTConfig(_BaseConfig):
     def __post_init__(self):
         super().__post_init__()
 
+        if self.truncation_mode == "keep_end":
+            warnings.warn(
+                "The `'keep_end'` truncation mode is deprecated and will be removed in v2.0.0. "
+                "Use `truncation_mode='keep_start'` (the default) instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+
         if self.packing_strategy == "bfd-requeue":
             warnings.warn(
                 "The `bfd-requeue` packing strategy has been renamed to `bfd_split`. Please update your configuration accordingly. "
