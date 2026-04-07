@@ -453,11 +453,13 @@ class DistillationTrainer(_BaseTrainer):
 
         # ── Teacher model setup ──
         self.teacher_client = None
+        self.use_teacher_server = args.use_teacher_server
+        self.teacher_model_server_url = args.teacher_model_server_url
         self._local_teacher_tokenizer_matches_student = True
-        if args.teacher_model_server_url is not None:
+        if self.use_teacher_server:
             from ...generation.vllm_client import VLLMClient
 
-            self.teacher_client = VLLMClient(base_url=args.teacher_model_server_url, connection_timeout=60.0)
+            self.teacher_client = VLLMClient(base_url=self.teacher_model_server_url, connection_timeout=60.0)
             teacher_model = None
         elif teacher_model is not None:
             if args.teacher_model_init_kwargs is not None and not isinstance(teacher_model, str):
@@ -552,6 +554,7 @@ class DistillationTrainer(_BaseTrainer):
         self.temperature = args.temperature
         self.top_p = args.top_p
         self.num_generations = args.num_generations
+        self.reverse_kl_top_1_mode = args.reverse_kl_top_1_mode
         self.loss_top_k = args.loss_top_k
         self.loss_add_tail = args.loss_add_tail
 
@@ -644,7 +647,7 @@ class DistillationTrainer(_BaseTrainer):
         if self.teacher_model is not None and not self._local_teacher_tokenizer_matches_student:
             raise ValueError(
                 "DistillationTrainer's built-in local-teacher loss only supports student/teacher pairs that use "
-                "the same tokenizer. Use a same-tokenizer local teacher, use `teacher_model_server_url`, or "
+                "the same tokenizer. Use a same-tokenizer local teacher, set `use_teacher_server=True`, or "
                 "override the local teacher loss path in a subclass."
             )
 
@@ -1014,6 +1017,28 @@ class DistillationTrainer(_BaseTrainer):
     # ──────────────────────────────────────────────────────────────────────
 
     @staticmethod
+    def _reduce_divergence_loss(jsd, labels=None, reduction="batchmean"):
+        """Reduce a per-token divergence tensor using the trainer's label mask semantics."""
+        mask = None
+        if labels is not None:
+            mask = labels != -100
+            jsd = jsd[mask]
+
+        if reduction == "batchmean":
+            if labels is not None:
+                num_tokens = mask.sum()
+                if num_tokens == 0:
+                    return jsd.sum() * 0.0  # no completion tokens — return zero-grad scalar
+                return jsd.sum() / num_tokens
+            return jsd.sum() / jsd.size(0)
+        elif reduction == "sum":
+            return jsd.sum()
+        elif reduction == "mean":
+            return jsd.mean()
+        else:
+            return jsd
+
+    @staticmethod
     def generalized_jsd_loss(
         student_logits,
         teacher_logits,
@@ -1096,24 +1121,90 @@ class DistillationTrainer(_BaseTrainer):
             teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
 
         jsd = _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask)
+        return DistillationTrainer._reduce_divergence_loss(jsd, labels=labels, reduction=reduction)
 
-        if labels is not None:
-            mask = labels != -100
-            jsd = jsd[mask]
+    def _get_reverse_kl_top_1_tokens(
+        self, student_scores: torch.Tensor, completion_tokens: torch.Tensor
+    ) -> torch.Tensor:
+        """Return the reverse-KL top-1 token IDs for the mixed top-1 loss path.
 
-        if reduction == "batchmean":
-            if labels is not None:
-                num_tokens = mask.sum()
-                if num_tokens == 0:
-                    return jsd.sum() * 0.0  # no completion tokens — return zero-grad scalar
-                return jsd.sum() / num_tokens
-            return jsd.sum() / jsd.size(0)
-        elif reduction == "sum":
-            return jsd.sum()
-        elif reduction == "mean":
-            return jsd.mean()
+        Args:
+            student_scores: Any (B, T, V) tensor whose argmax selects the student's top token
+                (logits or log-probs — both are order-preserving).
+            completion_tokens: (B, T) actual token IDs in the completion.
+        """
+        if self.reverse_kl_top_1_mode == "argmax":
+            return student_scores.argmax(dim=-1)
+        return completion_tokens
+
+    def _compute_sparse_top_1_divergence_loss(
+        self,
+        student_log_probs: torch.Tensor,
+        teacher_top1_token_ids: torch.Tensor,
+        teacher_top1_logprobs: torch.Tensor,
+        reverse_token_ids: torch.Tensor,
+        reverse_teacher_logprobs: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute exact generalized JSD/KL on top-1 support for the mixed beta>0 path."""
+        neg_inf = torch.full((), float("-inf"), dtype=student_log_probs.dtype, device=student_log_probs.device)
+
+        if self.beta == 1:
+            support = reverse_token_ids.unsqueeze(-1)
+            support_mask = torch.ones_like(support, dtype=torch.bool)
+            teacher_support_logprobs = reverse_teacher_logprobs.unsqueeze(-1)
         else:
-            return jsd
+            teacher_support = teacher_top1_token_ids.unsqueeze(-1)
+            reverse_support = reverse_token_ids.unsqueeze(-1)
+            support = torch.cat([teacher_support, reverse_support], dim=-1)
+            support_mask = torch.ones_like(support, dtype=torch.bool)
+            support_mask[..., 1] = support[..., 1] != support[..., 0]
+            teacher_support_logprobs = torch.stack([teacher_top1_logprobs, reverse_teacher_logprobs], dim=-1)
+            support = torch.where(support_mask, support, torch.zeros_like(support))
+
+        student_support_logprobs = student_log_probs.gather(-1, support)
+        student_support_logprobs = torch.where(support_mask, student_support_logprobs, neg_inf)
+        teacher_support_logprobs = torch.where(support_mask, teacher_support_logprobs, neg_inf)
+
+        if self.loss_add_tail:
+            base_support_mask = support_mask
+            student_sparse_log_probs, support_mask = _add_tail_bucket(student_support_logprobs, base_support_mask)
+            teacher_sparse_log_probs, _ = _add_tail_bucket(teacher_support_logprobs, base_support_mask)
+        else:
+            student_sparse_log_probs = student_support_logprobs - torch.logsumexp(
+                student_support_logprobs, dim=-1, keepdim=True
+            )
+            teacher_sparse_log_probs = teacher_support_logprobs - torch.logsumexp(
+                teacher_support_logprobs, dim=-1, keepdim=True
+            )
+
+        jsd = _jsd_divergence(student_sparse_log_probs, teacher_sparse_log_probs, self.beta, support_mask)
+        return self._reduce_divergence_loss(jsd, labels=labels, reduction="batchmean")
+
+    def _compute_local_sparse_top_1_divergence_loss(
+        self,
+        student_logits: torch.Tensor,
+        teacher_logits: torch.Tensor,
+        completion_tokens: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute the mixed top-1 loss for a local teacher using gathered full-logit probabilities."""
+        student_log_probs = F.log_softmax(student_logits / self.temperature, dim=-1)
+        teacher_log_probs = F.log_softmax(teacher_logits / self.temperature, dim=-1)
+
+        teacher_top1_token_ids = teacher_logits.argmax(dim=-1)
+        teacher_top1_logprobs = teacher_log_probs.gather(dim=-1, index=teacher_top1_token_ids.unsqueeze(-1)).squeeze(-1)
+        reverse_token_ids = self._get_reverse_kl_top_1_tokens(student_logits, completion_tokens)
+        reverse_teacher_logprobs = teacher_log_probs.gather(dim=-1, index=reverse_token_ids.unsqueeze(-1)).squeeze(-1)
+
+        return self._compute_sparse_top_1_divergence_loss(
+            student_log_probs=student_log_probs,
+            teacher_top1_token_ids=teacher_top1_token_ids,
+            teacher_top1_logprobs=teacher_top1_logprobs,
+            reverse_token_ids=reverse_token_ids,
+            reverse_teacher_logprobs=reverse_teacher_logprobs,
+            labels=labels,
+        )
 
     def _get_teacher_logits(self, inputs: dict[str, torch.Tensor | Any]) -> torch.Tensor:
         """Get teacher logits — dispatches between local model and external server."""
@@ -1124,9 +1215,9 @@ class DistillationTrainer(_BaseTrainer):
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
                 ).logits
-        elif self.teacher_client is not None:
+        elif self.use_teacher_server:
             raise NotImplementedError(
-                "Fetching full teacher logits from `teacher_model_server_url` is not supported. "
+                "Fetching full teacher logits with use_teacher_server=True is not supported. "
                 "Server-backed distillation only supports per-token logprobs via "
                 "`_get_teacher_token_logprobs_from_server`."
             )
@@ -1158,11 +1249,9 @@ class DistillationTrainer(_BaseTrainer):
             labels=inputs.get("labels"),
         )
 
-        # The external-teacher path can use the teacher's configured top-k support for
-        # pure forward KL. Once a reverse component is present, the reverse term only
-        # has access to the realized token's logprob, so we also limit the forward term
-        # to top-1 teacher support to keep the mixed objective balanced.
-        requested_top_k = self.loss_top_k if self.beta == 0 else 1
+        # The pure forward server path can use the requested teacher top-k support.
+        # When beta > 0, config validation restricts the server-backed path to top-1.
+        requested_top_k = self.loss_top_k
         result = self.teacher_client.get_sequence_logprobs(
             sequences=sequences,
             prompt_lengths=prompt_lengths,
@@ -1221,23 +1310,14 @@ class DistillationTrainer(_BaseTrainer):
             "topk_token_ids": _topk_to_tensor("logprob_token_ids", K, np.int64, 0),
         }
 
-    def _compute_server_divergence_loss(
+    def _compute_server_sparse_top_1_divergence_loss(
         self,
         teacher_result: dict[str, torch.Tensor],
         student_log_probs: torch.Tensor,
         completion_tokens: torch.Tensor,
         labels: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute sparse server-side forward/reverse KL surrogates using teacher logprobs from the server.
-
-        The forward KL term uses the teacher's top-k support for pure forward KL and top-1 teacher support whenever a
-        reverse component is present, optionally collapsed with a tail bucket. The reverse KL term uses the actual
-        completion token only, because the server cannot provide teacher logprobs at arbitrary student-selected token
-        IDs. When `self.loss_add_tail` is enabled, the reverse term becomes a two-bucket KL over `{actual_token,
-        residual_tail}`. This matches `generalized_jsd_loss(..., beta=1, top_k=1, add_tail=True)` when the sampled
-        token is the same token used in the top-1 support and the logprob values agree. For `0 < beta < 1`, this method
-        still returns a weighted combination of the forward and reverse surrogates rather than the exact generalized
-        JSD used by the local-teacher path.
+        """Compute exact sparse top-1 generalized JSD/KL from server-provided teacher logprobs.
 
         Args:
             teacher_result: dict with ``actual_logprobs`` (B, T), ``topk_logprobs`` (B, T, K),
@@ -1246,37 +1326,11 @@ class DistillationTrainer(_BaseTrainer):
             completion_tokens: (B, T) actual token IDs in the completion.
             labels: (B, T) with -100 for positions to ignore.
         """
-        topk_teacher_lps = teacher_result["topk_logprobs"]  # (B, T, K)
-        topk_token_ids = teacher_result["topk_token_ids"]  # (B, T, K)
+        topk_teacher_lps = teacher_result["topk_logprobs"]  # (B, T, 1)
+        topk_token_ids = teacher_result["topk_token_ids"]  # (B, T, 1)
         actual_teacher_lps = teacher_result["actual_logprobs"]  # (B, T)
-
-        # ── Forward KL term: sum over teacher's top-k tokens ──
-        # Gather student logprobs for each of the teacher's top-k tokens.
-        student_topk_lps = student_log_probs.gather(dim=-1, index=topk_token_ids)  # (B, T, K)
-
-        # Mask out -inf padding (positions where top-k slot was not filled).
-        valid = topk_teacher_lps > float("-inf")
-        if self.loss_add_tail:
-            neg_inf = torch.full((), float("-inf"), dtype=student_log_probs.dtype, device=student_log_probs.device)
-            student_topk_lps = torch.where(valid, student_topk_lps, neg_inf)
-            teacher_topk_lps = torch.where(valid, topk_teacher_lps, neg_inf)
-            forward_student_log_probs, forward_support_mask = _add_tail_bucket(student_topk_lps, valid)
-            forward_teacher_log_probs, _ = _add_tail_bucket(teacher_topk_lps, valid)
-            fwd_per_token = _jsd_divergence(
-                forward_student_log_probs,
-                forward_teacher_log_probs,
-                beta=0.0,
-                support_mask=forward_support_mask,
-            ).sum(dim=-1)
-        else:
-            fwd_per_k = torch.exp(topk_teacher_lps) * (topk_teacher_lps - student_topk_lps)  # (B, T, K)
-            fwd_per_token = (fwd_per_k * valid).sum(dim=-1)  # (B, T)
-
-        # ── Reverse KL term: actual token only ──
-        student_actual_lps = student_log_probs.gather(dim=-1, index=completion_tokens.unsqueeze(-1)).squeeze(
-            -1
-        )  # (B, T)
         required = labels != -100
+
         missing_actual = required & ~torch.isfinite(actual_teacher_lps)
         if missing_actual.any():
             missing_count = int(missing_actual.sum().item())
@@ -1285,35 +1339,70 @@ class DistillationTrainer(_BaseTrainer):
                 "Teacher server is missing actual-token logprobs for required reverse-KL positions: "
                 f"{missing_count}/{total_required}."
             )
+        if self.beta < 1:
+            teacher_top1_logprobs = topk_teacher_lps.squeeze(-1)
+            missing_top1 = required & ~torch.isfinite(teacher_top1_logprobs)
+            if missing_top1.any():
+                missing_count = int(missing_top1.sum().item())
+                total_required = int(required.sum().item())
+                raise ValueError(
+                    "Teacher server is missing top-1 logprobs for required forward-KL positions: "
+                    f"{missing_count}/{total_required}."
+                )
+
+        # Server path only supports "sampled" mode — config validation enforces this, but we guard
+        # explicitly so future relaxations of the config check don't silently change behaviour.
+        reverse_token_ids = self._get_reverse_kl_top_1_tokens(student_log_probs, completion_tokens)
+        return self._compute_sparse_top_1_divergence_loss(
+            student_log_probs=student_log_probs,
+            teacher_top1_token_ids=topk_token_ids.squeeze(-1),
+            teacher_top1_logprobs=topk_teacher_lps.squeeze(-1),
+            reverse_token_ids=reverse_token_ids,
+            reverse_teacher_logprobs=actual_teacher_lps,
+            labels=labels,
+        )
+
+    def _compute_server_forward_kl_loss(
+        self,
+        teacher_result: dict[str, torch.Tensor],
+        student_log_probs: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute sparse forward KL from server-provided teacher top-k logprobs (beta==0 path).
+
+        Args:
+            teacher_result: dict with ``topk_logprobs`` (B, T, K) and ``topk_token_ids`` (B, T, K).
+            student_log_probs: (B, T, V) student log-softmax over vocabulary.
+            labels: (B, T) with -100 for positions to ignore.
+        """
+        teacher_topk_logprobs = teacher_result["topk_logprobs"]
+        teacher_topk_token_ids = teacher_result["topk_token_ids"]
+        valid = teacher_topk_logprobs > float("-inf")
+        neg_inf = torch.full((), float("-inf"), dtype=student_log_probs.dtype, device=student_log_probs.device)
+        student_topk_logprobs = student_log_probs.gather(dim=-1, index=teacher_topk_token_ids)
+        student_topk_logprobs = torch.where(valid, student_topk_logprobs, neg_inf)
+        teacher_topk_logprobs = torch.where(valid, teacher_topk_logprobs, neg_inf)
+
         if self.loss_add_tail:
-            rev_student_lps = student_actual_lps.unsqueeze(-1)  # (B, T, 1)
-            rev_teacher_lps = actual_teacher_lps.unsqueeze(-1)  # (B, T, 1)
-            rev_valid = torch.ones_like(rev_student_lps, dtype=torch.bool)
-            rev_student_log_probs, rev_support_mask = _add_tail_bucket(rev_student_lps, rev_valid)
-            rev_teacher_log_probs, _ = _add_tail_bucket(rev_teacher_lps, rev_valid)
-            rev_per_token = _jsd_divergence(
-                rev_student_log_probs,
-                rev_teacher_log_probs,
-                beta=1.0,
-                support_mask=rev_support_mask,
-            ).sum(dim=-1)
+            base_support_mask = valid
+            student_sparse_log_probs, support_mask = _add_tail_bucket(student_topk_logprobs, base_support_mask)
+            teacher_sparse_log_probs, _ = _add_tail_bucket(teacher_topk_logprobs, base_support_mask)
         else:
-            student_actual_ps = torch.exp(student_actual_lps)
-            rev_per_token = student_actual_ps * (student_actual_lps - actual_teacher_lps)  # (B, T)
+            support_mask = valid
+            student_sparse_log_probs = student_topk_logprobs - torch.logsumexp(
+                student_topk_logprobs, dim=-1, keepdim=True
+            )
+            teacher_sparse_log_probs = teacher_topk_logprobs - torch.logsumexp(
+                teacher_topk_logprobs, dim=-1, keepdim=True
+            )
 
-        # ── Combine according to beta ──
-        if self.beta == 0:
-            loss_per_token = fwd_per_token
-        elif self.beta == 1:
-            loss_per_token = rev_per_token
-        else:
-            loss_per_token = (1 - self.beta) * fwd_per_token + self.beta * rev_per_token
-
-        mask = labels != -100
-        num_tokens = mask.sum()
-        if num_tokens == 0:
-            return loss_per_token.sum() * 0.0  # no completion tokens — return zero-grad scalar
-        return loss_per_token[mask].sum() / num_tokens
+        jsd = _jsd_divergence(
+            student_sparse_log_probs,
+            teacher_sparse_log_probs,
+            beta=0.0,
+            support_mask=support_mask,
+        )
+        return self._reduce_divergence_loss(jsd, labels=labels, reduction="batchmean")
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         self._raise_if_local_teacher_tokenizer_mismatch()
@@ -1329,8 +1418,9 @@ class DistillationTrainer(_BaseTrainer):
         )
         prompt_length = self._compute_prompt_length(inputs)
         labels = inputs["labels"][:, prompt_length:]
+        completion_tokens = inputs["input_ids"][:, prompt_length:]
 
-        if self.teacher_client is not None:
+        if self.use_teacher_server:
             # Server path: token-level divergence using teacher logprobs.
             # The server returns:
             #   actual_logprobs  – (B, T)    teacher log p(x_actual)  (for reverse KL)
@@ -1340,33 +1430,46 @@ class DistillationTrainer(_BaseTrainer):
 
             student_logits = student_outputs.logits[:, prompt_length - 1 : -1, :]
             student_log_probs = F.log_softmax(student_logits / self.temperature, dim=-1)
-            completion_tokens = inputs["input_ids"][:, prompt_length:]
 
             comp_len = teacher_result["actual_logprobs"].shape[1]
             completion_tokens = completion_tokens[:, :comp_len]
             trimmed_labels = labels[:, :comp_len]
 
-            loss = self._compute_server_divergence_loss(
-                teacher_result=teacher_result,
-                student_log_probs=student_log_probs[:, :comp_len, :],
-                completion_tokens=completion_tokens,
-                labels=trimmed_labels,
-            )
+            if self.beta > 0:
+                loss = self._compute_server_sparse_top_1_divergence_loss(
+                    teacher_result=teacher_result,
+                    student_log_probs=student_log_probs[:, :comp_len, :],
+                    completion_tokens=completion_tokens,
+                    labels=trimmed_labels,
+                )
+            else:
+                loss = self._compute_server_forward_kl_loss(
+                    teacher_result=teacher_result,
+                    student_log_probs=student_log_probs[:, :comp_len, :],
+                    labels=trimmed_labels,
+                )
         else:
-            # Local teacher: full-vocabulary generalized JSD
+            # Local teacher: exact full-vocabulary loss except for the shared mixed top-1 path.
             teacher_logits = self._get_teacher_logits(inputs)
             student_logits = student_outputs.logits[:, prompt_length - 1 : -1, :]
             teacher_logits = teacher_logits[:, prompt_length - 1 : -1, :]
-
-            loss = self.generalized_jsd_loss(
-                student_logits=student_logits,
-                teacher_logits=teacher_logits,
-                labels=labels,
-                beta=self.beta,
-                temperature=self.temperature,
-                top_k=self.loss_top_k,
-                add_tail=self.loss_add_tail,
-            )
+            if self.beta > 0 and self.loss_top_k == 1:
+                loss = self._compute_local_sparse_top_1_divergence_loss(
+                    student_logits=student_logits,
+                    teacher_logits=teacher_logits,
+                    completion_tokens=completion_tokens,
+                    labels=labels,
+                )
+            else:
+                loss = self.generalized_jsd_loss(
+                    student_logits=student_logits,
+                    teacher_logits=teacher_logits,
+                    labels=labels,
+                    beta=self.beta,
+                    temperature=self.temperature,
+                    top_k=self.loss_top_k,
+                    add_tail=self.loss_add_tail,
+                )
 
         return (loss, student_outputs) if return_outputs else loss
 
