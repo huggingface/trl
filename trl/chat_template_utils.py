@@ -322,7 +322,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     ```
     """
     # First check if patching is needed
-    if is_chat_template_prefix_preserving(tokenizer):
+    if is_chat_template_prefix_preserving(tokenizer) and "{% generation %}" in tokenizer.chat_template:
         return None  # No patching needed
 
     if tokenizer.chat_template == qwen3_chat_template:
