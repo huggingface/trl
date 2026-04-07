@@ -17,10 +17,8 @@ import atexit
 import copy
 import importlib.resources as pkg_resources
 import inspect
-import json
 import math
 import os
-import re
 import sys
 import textwrap
 import time
@@ -1027,7 +1025,7 @@ class GRPOTrainer(_BaseTrainer):
         token_type_ids=None,
         mm_token_type_ids=None,
         image_position_ids=None,
-    ) -> dict[str, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
@@ -1406,9 +1404,21 @@ class GRPOTrainer(_BaseTrainer):
 
     def _get_tool_suffix_ids(self, tool_messages):
         """Get token IDs for tool result formatting by using a minimal dummy conversation."""
-        dummy_messages = [{"role": "user", "content": "dummy"}, {"role": "assistant", "content": "dummy"}]
+        dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": {}}}]
+        dummy_messages = [
+            {"role": "user", "content": "dummy"},
+            {
+                "role": "assistant",
+                # "content" is required here because VLM processors crash on tokenize=True without it
+                # (KeyError in processing_utils.py). See huggingface/transformers#45290.
+                "content": "",
+                "tool_calls": dummy_tool_calls,
+            },
+        ]
         if self._is_vlm:
             dummy_messages = prepare_multimodal_messages(dummy_messages)
+            tool_messages = prepare_multimodal_messages(tool_messages)
+
         prefix_ids = self.processing_class.apply_chat_template(
             dummy_messages,
             add_generation_prompt=False,
@@ -1417,66 +1427,18 @@ class GRPOTrainer(_BaseTrainer):
             return_dict=False,
             **self.chat_template_kwargs,
         )
+        full_ids = self.processing_class.apply_chat_template(
+            dummy_messages + tool_messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            chat_template=self.chat_template,
+            return_dict=False,
+            **self.chat_template_kwargs,
+        )
         # VLM processors return batched output (list of lists), unbatch for single conversation
         if self._is_vlm:
             prefix_ids = prefix_ids[0]
-
-        # Check if tool messages contain images (multimodal tool responses)
-        tool_images = []
-        for msg in tool_messages:
-            if isinstance(msg.get("content"), list):
-                for part in msg["content"]:
-                    if part["type"] == "image":
-                        tool_images.append(part["image"])
-
-        # Normalize string content in tool messages for VLM processors before either path.
-        # Use copies to avoid mutating the original completions data.
-        if self._is_vlm:
-            tool_messages = [
-                {**msg, "content": [{"type": "text", "text": msg["content"]}]}
-                if isinstance(msg.get("content"), str)
-                else msg
-                for msg in tool_messages
-            ]
-
-        if tool_images and self._is_vlm:
-            # For VLMs with images: use processor.__call__ to get correctly expanded image tokens.
-            # apply_chat_template only inserts a single <|image_pad|> placeholder per image,
-            # but the model needs N tokens per image (based on resolution). The processor's
-            # __call__ handles this expansion.
-            # Use the same tokenization method (processor.__call__) for both prefix and full to
-            # avoid mismatches from different tokenization paths.
-            prefix_text = self.processing_class.apply_chat_template(
-                dummy_messages,
-                add_generation_prompt=False,
-                tokenize=False,
-                chat_template=self.chat_template,
-                **self.chat_template_kwargs,
-            )
-            prefix_ids = self.processing_class(text=prefix_text, return_tensors="pt")["input_ids"][0].tolist()
-            full_text = self.processing_class.apply_chat_template(
-                dummy_messages + tool_messages,
-                add_generation_prompt=True,
-                tokenize=False,
-                chat_template=self.chat_template,
-                **self.chat_template_kwargs,
-            )
-            # We only need input_ids (for suffix token extraction). pixel_values and image_grid_thw
-            # are computed separately in the forward pass via image_processor to avoid mismatches.
-            full_ids = self.processing_class(text=full_text, images=tool_images, return_tensors="pt")["input_ids"][
-                0
-            ].tolist()
-        else:
-            full_ids = self.processing_class.apply_chat_template(
-                dummy_messages + tool_messages,
-                add_generation_prompt=True,
-                tokenize=True,
-                chat_template=self.chat_template,
-                return_dict=False,
-                **self.chat_template_kwargs,
-            )
-            if self._is_vlm:
-                full_ids = full_ids[0]
+            full_ids = full_ids[0]
 
         # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
         # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
@@ -1578,31 +1540,11 @@ class GRPOTrainer(_BaseTrainer):
                     if tool_call["type"] == "function":
                         function = tool_call["function"]
                         name = function["name"]
-                        arguments = function["arguments"]
-                        # Some models (e.g. Gemma) return arguments as a string instead of a dict
-                        if isinstance(arguments, str):
-                            # Strip model-specific quote tokens (e.g. Gemma's <|"|>)
-                            arguments = arguments.replace('<|"|>', '"')
-                            if not arguments.strip():
-                                arguments = {}
-                            else:
-                                try:
-                                    arguments = json.loads(arguments)
-                                except json.JSONDecodeError:
-                                    try:
-                                        # Try wrapping in braces for key:value formats
-                                        arguments = json.loads("{" + arguments + "}")
-                                    except json.JSONDecodeError:
-                                        # Last resort: regex parsing
-                                        pairs = re.findall(r'(\w+):\s*"([^"]*)"', arguments)
-                                        if not pairs:
-                                            pairs = re.findall(r"(\w+):\s*([^,}\s]+)", arguments)
-                                        arguments = dict(pairs) if pairs else {}
                         try:
                             if name in sync_tool_dict:
-                                tool_call_results.append((name, sync_tool_dict[name](**arguments)))
+                                tool_call_results.append((name, sync_tool_dict[name](**function["arguments"])))
                             elif name in async_tool_dict:
-                                async_coros.append((name, async_tool_dict[name](**arguments)))
+                                async_coros.append((name, async_tool_dict[name](**function["arguments"])))
                             else:
                                 raise ValueError(f"Tool {name} not found.")
                         except Exception as e:
