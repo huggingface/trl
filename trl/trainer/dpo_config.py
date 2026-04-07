@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -52,8 +53,8 @@ class DPOConfig(_BaseConfig):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left or
             right depending on the `truncation_mode`. If `None`, no truncation is applied.
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
-            Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
-            `"keep_start"`.
+            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is
+            `"keep_start"`. The `"keep_end"` value is deprecated and will be removed in v2.0.0.
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
@@ -170,8 +171,8 @@ class DPOConfig(_BaseConfig):
     truncation_mode: str = field(
         default="keep_start",
         metadata={
-            "help": "Truncation mode to use when the sequence exceeds `max_length`. Possible values are `'keep_end'` "
-            "and `'keep_start'`.",
+            "help": "Truncation mode to use when the sequence exceeds `max_length`. The only supported value is "
+            "`'keep_start'`. The `'keep_end'` value is deprecated and will be removed in v2.0.0.",
             "choices": ["keep_end", "keep_start"],
         },
     )
@@ -314,6 +315,14 @@ class DPOConfig(_BaseConfig):
             raise ValueError(
                 "`loss_weights` must have the same length as `loss_type` when combining multiple losses. "
                 f"Got {len(self.loss_weights)} weights for {len(self.loss_type)} loss types."
+            )
+
+        if self.truncation_mode == "keep_end":
+            warnings.warn(
+                "The `'keep_end'` truncation mode is deprecated and will be removed in v2.0.0. "
+                "Use `truncation_mode='keep_start'` (the default) instead.",
+                FutureWarning,
+                stacklevel=3,
             )
 
         super().__post_init__()
