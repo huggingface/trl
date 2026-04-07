@@ -226,7 +226,7 @@ def build_teacher_inputs_from_texts(
                 last_idx = valid.nonzero(as_tuple=True)[0][-1]
                 teacher_attention_mask[row, last_idx + 1 :] = False
 
-    teacher_prompt_length = max(prompt_lengths) if prompt_lengths else 0
+    teacher_prompt_length = min(prompt_lengths) if prompt_lengths else 0
 
     return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_prompt_length
 
@@ -2032,7 +2032,7 @@ class GOLDTrainer(SFTTrainer):
                 teacher_labels[teacher_attention_mask == 0] = -100
                 for i, pl in enumerate(teacher_prompt_token_lengths):
                     teacher_labels[i, :pl] = -100
-                teacher_prompt_length = max(teacher_prompt_token_lengths)
+                teacher_prompt_length = min(teacher_prompt_token_lengths)
                 # Override teacher_forward_kwargs with all multimodal keys from teacher processing
                 teacher_forward_kwargs = {
                     k: teacher_full_processed[k].to(self.accelerator.device)
@@ -2071,7 +2071,12 @@ class GOLDTrainer(SFTTrainer):
                 )
 
             # These are not used for ULD loss but are needed if JSD loss were to be used in this branch
-            student_prompt_length = inputs["prompts"].shape[1]
+            # For VLMs, prompts are left-padded but input_ids are flushed left, so prompts.shape[1]
+            # would overcount. Derive prompt length from the flushed labels instead.
+            if self._is_vlm:
+                student_prompt_length = (inputs["labels"] != -100).long().argmax(dim=1).min().item()
+            else:
+                student_prompt_length = inputs["prompts"].shape[1]
             shifted_student_logits = outputs_student.logits[:, student_prompt_length - 1 : -1, :]
             shifted_teacher_logits = outputs_teacher.logits[:, teacher_prompt_length - 1 : -1, :]
             shifted_labels = inputs["labels"][:, student_prompt_length:]
@@ -2151,7 +2156,6 @@ class GOLDTrainer(SFTTrainer):
                         attention_mask=inputs["attention_mask"],
                         **teacher_forward_kwargs,
                     )
-
                 prompt_lengths = inputs["prompts"].shape[1]
                 shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
                 shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1 : -1, :]
