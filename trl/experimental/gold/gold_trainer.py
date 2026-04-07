@@ -2156,7 +2156,12 @@ class GOLDTrainer(SFTTrainer):
                         attention_mask=inputs["attention_mask"],
                         **teacher_forward_kwargs,
                     )
-                prompt_lengths = inputs["prompts"].shape[1]
+                # Using the same prompt_lengths for teacher and student, since JSD can only be
+                # used with same-family VLMs (shared tokenizer).
+                if self._is_vlm:
+                    prompt_lengths = (inputs["labels"] != -100).long().argmax(dim=1).min().item()
+                else:
+                    prompt_lengths = inputs["prompts"].shape[1]
                 shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
                 shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1 : -1, :]
                 shifted_labels = inputs["labels"][:, prompt_lengths:]
