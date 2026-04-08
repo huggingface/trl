@@ -554,8 +554,6 @@ class DPOTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
-
-        # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
             tokenizer = processing_class.tokenizer
             self._is_vlm = True
@@ -565,6 +563,7 @@ class DPOTrainer(_BaseTrainer):
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
+        # Handle pad token for processors or tokenizers
         if args.pad_token is not None:
             tokenizer.pad_token = args.pad_token
             tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(args.pad_token)
