@@ -1375,6 +1375,19 @@ class GOLDTrainer(SFTTrainer):
                 updated_slice["input_ids"] = new_input_ids
                 updated_slice["attention_mask"] = new_attention_mask
                 updated_slice["labels"] = new_labels
+                # Rebuild sequence-length-dependent keys to match new input_ids shape
+                new_seq_len = new_input_ids.shape[1]
+                prompt_seq_len = slice_inputs["prompts"].shape[1]
+                for k in ("token_type_ids", "mm_token_type_ids"):
+                    if k in updated_slice:
+                        prompt_part = updated_slice[k][:, :prompt_seq_len]
+                        comp_part = torch.zeros(
+                            new_input_ids.shape[0],
+                            new_seq_len - prompt_seq_len,
+                            dtype=updated_slice[k].dtype,
+                            device=new_input_ids.device,
+                        )
+                        updated_slice[k] = torch.cat([prompt_part, comp_part], dim=1)
                 updated_slice["original_prompt_text"] = prompt_texts
                 updated_slice["original_completion_text"] = completion_texts
 
@@ -1472,6 +1485,19 @@ class GOLDTrainer(SFTTrainer):
                 updated_slice["input_ids"] = new_input_ids
                 updated_slice["attention_mask"] = new_attention_mask
                 updated_slice["labels"] = new_labels
+                # Rebuild sequence-length-dependent keys to match new input_ids shape
+                new_seq_len = new_input_ids.shape[1]
+                prompt_seq_len = collated["prompts"].shape[1]
+                for k in ("token_type_ids", "mm_token_type_ids"):
+                    if k in updated_slice:
+                        prompt_part = updated_slice[k][:, :prompt_seq_len]
+                        comp_part = torch.zeros(
+                            new_input_ids.shape[0],
+                            new_seq_len - prompt_seq_len,
+                            dtype=updated_slice[k].dtype,
+                            device=new_input_ids.device,
+                        )
+                        updated_slice[k] = torch.cat([prompt_part, comp_part], dim=1)
                 updated_slice["original_prompt_text"] = prompt_texts
                 updated_slice["original_completion_text"] = completion_texts
                 if self._teacher_processor is not None:
@@ -2298,6 +2324,12 @@ class GOLDTrainer(SFTTrainer):
             generated_tokens = torch.stack([torch.tensor(ids, device=model.device) for ids in completion_ids])
         else:
             generate_kwargs = {k: inputs[k] for k in self._MULTIMODAL_KEYS if k in inputs}
+            # Slice sequence-length-dependent keys to prompt-only length (e.g. token_type_ids for Gemma,
+            # mm_token_type_ids for ERNIE-VL) since model.generate receives prompt-only input_ids
+            prompt_seq_len = inputs["prompts"].shape[1]
+            for k in ("token_type_ids", "mm_token_type_ids"):
+                if k in generate_kwargs:
+                    generate_kwargs[k] = generate_kwargs[k][:, :prompt_seq_len]
             generated_outputs = model.generate(
                 input_ids=inputs["prompts"],
                 attention_mask=inputs.get("prompt_attention_mask", None),
