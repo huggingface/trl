@@ -114,6 +114,49 @@ def clone_chat_template(
     return model, tokenizer, added_tokens
 
 
+gptoss_schema = {
+    # Normalize final content to analysis format so both map to the same "content" group.
+    "x-regex-substitutions": [
+        [r"<\|channel\|>final<\|message\|>(.*?)<\|return\|>", r"<|channel|>analysis<|message|>\1<|end|>"],
+    ],
+    "x-regex": r"^(?:<\|channel\|>analysis<\|message\|>(?P<content>.*?)<\|end\|>(?:<\|start\|>assistant)?)?\s*(?P<tool_calls>to=functions\.\S+<\|channel\|>commentary json<\|message\|>.*?<\|call\|>)?$",
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "tool_calls": {
+            "type": "array",
+            "x-regex-iterator": r"(to=functions\.\S+<\|channel\|>commentary json<\|message\|>.*?<\|call\|>)",
+            "items": {
+                # Convert "to=functions.NAME<|channel|>commentary json<|message|>ARGS<|call|>"
+                # into '{"name": "NAME", "arguments": ARGS}' so it can be parsed as JSON.
+                "x-regex-substitutions": [
+                    [
+                        r"to=functions\.(\S+)<\|channel\|>commentary json<\|message\|>(.*?)<\|call\|>",
+                        r'{"name": "\1", "arguments": \2}',
+                    ],
+                ],
+                "x-parser": "json",
+                "x-parser-args": {"transform": "{type: 'function', function: @}"},
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "arguments": {
+                                "type": "object",
+                                "additionalProperties": {},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
 # Adapted and corrected versions of the schemas from:
 # https://github.com/huggingface/transformers/blob/main/tests/utils/test_chat_parsing_utils.py
 qwen3_schema = {
@@ -183,55 +226,12 @@ qwen3_5_schema = {
     },
 }
 
-gptoss_schema = {
-    # Normalize final content to analysis format so both map to the same "content" group.
-    "x-regex-substitutions": [
-        [r"<\|channel\|>final<\|message\|>(.*?)<\|return\|>", r"<|channel|>analysis<|message|>\1<|end|>"],
-    ],
-    "x-regex": r"^(?:<\|channel\|>analysis<\|message\|>(?P<content>.*?)<\|end\|>(?:<\|start\|>assistant)?)?\s*(?P<tool_calls>to=functions\.\S+<\|channel\|>commentary json<\|message\|>.*?<\|call\|>)?$",
-    "type": "object",
-    "properties": {
-        "role": {"const": "assistant"},
-        "content": {"type": "string"},
-        "tool_calls": {
-            "type": "array",
-            "x-regex-iterator": r"(to=functions\.\S+<\|channel\|>commentary json<\|message\|>.*?<\|call\|>)",
-            "items": {
-                # Convert "to=functions.NAME<|channel|>commentary json<|message|>ARGS<|call|>"
-                # into '{"name": "NAME", "arguments": ARGS}' so it can be parsed as JSON.
-                "x-regex-substitutions": [
-                    [
-                        r"to=functions\.(\S+)<\|channel\|>commentary json<\|message\|>(.*?)<\|call\|>",
-                        r'{"name": "\1", "arguments": \2}',
-                    ],
-                ],
-                "x-parser": "json",
-                "x-parser-args": {"transform": "{type: 'function', function: @}"},
-                "type": "object",
-                "properties": {
-                    "type": {"const": "function"},
-                    "function": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "arguments": {
-                                "type": "object",
-                                "additionalProperties": {},
-                            },
-                        },
-                    },
-                },
-            },
-        },
-    },
-}
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text()
 
 qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text()
 
 qwen3_5_chat_template_2b_and_below = (_CHAT_TEMPLATES_DIR / "qwen3_5_2b_and_below.jinja").read_text()
-
 
 qwen3_5_chat_template_4b_and_above = (_CHAT_TEMPLATES_DIR / "qwen3_5_4b_and_above.jinja").read_text()
 
