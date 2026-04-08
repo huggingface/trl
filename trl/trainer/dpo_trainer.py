@@ -641,7 +641,7 @@ class DPOTrainer(_BaseTrainer):
             )
         if data_collator is None and not self._is_vision_dataset:
             data_collator = DataCollatorForPreference(
-                pad_token_id=self.pad_token_id,
+                pad_token_id=tokenizer.pad_token_id,
                 max_length=args.max_length,
                 truncation_mode=args.truncation_mode,
                 pad_to_multiple_of=args.pad_to_multiple_of,
