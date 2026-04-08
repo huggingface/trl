@@ -75,7 +75,12 @@ def is_joblib_available() -> bool:
 
 def is_liger_kernel_available(min_version: str = LIGER_KERNEL_MIN_VERSION) -> bool:
     _liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
-    return _liger_kernel_available and Version(_liger_kernel_version) >= Version(min_version)
+    if not _liger_kernel_available or _liger_kernel_version == "N/A":
+        return False
+    # Use base_version to handle dev/nightly builds (e.g. liger-kernel-nightly).
+    # Per PEP 440, `0.7.0.dev20260403 < 0.7.0`, so a nightly build of 0.7.0 would
+    # incorrectly fail the `>= 0.7.0` check without this.
+    return Version(Version(_liger_kernel_version).base_version) >= Version(min_version)
 
 
 def is_llm_blender_available() -> bool:
