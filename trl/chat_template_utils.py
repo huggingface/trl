@@ -12,14 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
 
 from jinja2 import TemplateError
 from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, ProcessorMixin
 
 from .data_utils import prepare_multimodal_messages
-from pathlib import Path
-
-from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 
 
 _CHAT_TEMPLATES_DIR = Path(__file__).parent / "chat_templates"
