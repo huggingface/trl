@@ -95,7 +95,7 @@ def is_ampere_or_newer(device_index=0):
 
 
 require_flash_attn_accelerator = pytest.mark.skipif(
-    not (is_ampere_or_newer() or (hasattr(torch, "xpu") and torch.xpu.is_available())),
+    not (is_ampere_or_newer() or torch_device == "xpu"),
     reason="test requires an accelerator supporting flash attention (Ampere or newer GPU, or XPU)",
 )
 
