@@ -44,7 +44,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
             List of image objects to insert in the messages.
 
     Returns:
-        `list[dict[str, Any]]`: A deep-copied list of messages where every `"content"` value is a list of structured
+        `list[dict[str, Any]]`: A new list of messages where every `"content"` value is a list of structured
         content blocks, and all `"image"` placeholders are populated with the corresponding image objects. If the
         assistant turns contains `"tool_calls"`, then the `"content"` might be empty.
 
