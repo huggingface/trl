@@ -46,9 +46,6 @@ class DPOConfig(_BaseConfig):
 
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
-        pad_token (`str`, *optional*):
-            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
-            it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left or
             right depending on the `truncation_mode`. If `None`, no truncation is applied.
@@ -153,13 +150,6 @@ class DPOConfig(_BaseConfig):
     dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
-    )
-    pad_token: str | None = field(
-        default=None,
-        metadata={
-            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
-            "is also `None`, it falls back to `processing_class.eos_token`."
-        },
     )
     max_length: int | None = field(
         default=1024,
