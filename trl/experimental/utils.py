@@ -73,9 +73,7 @@ class DPODataCollatorWithPadding:
         # first, pad everything to the same length
         padded_batch = {}
         for k in features[0].keys():
-            if k.endswith(
-                ("_input_ids", "_attention_mask", "_labels", "_pixel_values")
-            ):
+            if k.endswith(("_input_ids", "_attention_mask", "_labels", "_pixel_values")):
                 if self.is_encoder_decoder:
                     to_pad = [torch.LongTensor(ex[k]) for ex in features]
 
@@ -89,15 +87,11 @@ class DPODataCollatorWithPadding:
                         padding_value = self.pad_token_id
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
-                    elif k.startswith(("chosen", "rejected", "completion")) or (
-                        "decoder" in k
-                    ):
+                    elif k.startswith(("chosen", "rejected", "completion")) or ("decoder" in k):
                         padding_value = -100
                     else:
                         raise ValueError(f"Unexpected key in batch '{k}'")
-                    padded_batch[k] = pad_sequence(
-                        to_pad, batch_first=True, padding_value=padding_value
-                    )
+                    padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
                 else:
                     # Set padding value based on the key
                     if k.endswith("_input_ids"):
@@ -125,17 +119,13 @@ class DPODataCollatorWithPadding:
 
                     # Set the dtype
                     if k.endswith("_pixel_values"):
-                        dtype = (
-                            torch.float32
-                        )  # will be downcasted if necessary by the Trainer
+                        dtype = torch.float32  # will be downcasted if necessary by the Trainer
                     else:
                         dtype = torch.int64
 
                     # Convert to tensor and pad
                     to_pad = [torch.tensor(ex[k], dtype=dtype) for ex in features]
-                    padded_batch[k] = pad(
-                        to_pad, padding_value=padding_value, padding_side=padding_side
-                    )
+                    padded_batch[k] = pad(to_pad, padding_value=padding_value, padding_side=padding_side)
             elif k.endswith("_logps"):
                 # the cached reference model logprobs
                 padded_batch[k] = torch.tensor([ex[k] for ex in features])
@@ -159,9 +149,7 @@ class DataCollatorForChatML:
 
     def __post_init__(self):
         if self.tokenizer.pad_token_id is None:
-            raise ValueError(
-                "The tokenizer does not have a pad token. Please set `pad_token_id` in the tokenizer."
-            )
+            raise ValueError("The tokenizer does not have a pad token. Please set `pad_token_id` in the tokenizer.")
         if self.max_length is None:
             # set a sensible default
             self.max_length = min(self.tokenizer.model_max_length, 1024)
@@ -201,11 +189,7 @@ class DataCollatorForChatML:
                 if offsets is not None:
                     prompt_char_len = len(formatted_prompt)
                     completion_start_idx_full = next(
-                        (
-                            idx
-                            for idx, (start, _) in enumerate(offsets)
-                            if start >= prompt_char_len
-                        ),
+                        (idx for idx, (start, _) in enumerate(offsets) if start >= prompt_char_len),
                         len(message_input_ids_full),
                     )
                 else:
@@ -219,25 +203,16 @@ class DataCollatorForChatML:
                     completion_start_idx_full = len(tokenized_prompt_full["input_ids"])
 
                 prompt_tokens_full = message_input_ids_full[:completion_start_idx_full]
-                completion_input_ids_full = message_input_ids_full[
-                    completion_start_idx_full:
-                ]
+                completion_input_ids_full = message_input_ids_full[completion_start_idx_full:]
 
-                if (
-                    self.max_length is not None
-                    and len(message_input_ids_full) > self.max_length
-                ):
+                if self.max_length is not None and len(message_input_ids_full) > self.max_length:
                     completion_ids = completion_input_ids_full
                     if len(completion_ids) >= self.max_length:
                         completion_ids = completion_ids[-self.max_length :]
                         prompt_ids = []
                     else:
                         max_prompt_tokens = self.max_length - len(completion_ids)
-                        prompt_ids = (
-                            prompt_tokens_full[-max_prompt_tokens:]
-                            if max_prompt_tokens > 0
-                            else []
-                        )
+                        prompt_ids = prompt_tokens_full[-max_prompt_tokens:] if max_prompt_tokens > 0 else []
                     message_input_ids = prompt_ids + completion_ids
                 else:
                     message_input_ids = message_input_ids_full
@@ -274,30 +249,20 @@ class DataCollatorForChatML:
 
         # convert to list of tensors and pad
         input_ids = [torch.tensor(ids, dtype=torch.long) for ids in input_ids]
-        attention_mask = [
-            torch.tensor(mask, dtype=torch.long) for mask in attention_mask
-        ]
+        attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in attention_mask]
         labels = [torch.tensor(label, dtype=torch.long) for label in labels]
-        input_ids = pad(
-            input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id
-        )
+        input_ids = pad(input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
         attention_mask = pad(attention_mask, padding_side="left", padding_value=0)
         labels = pad(labels, padding_side="left", padding_value=self.ignore_index)
 
-        prompts_input_ids = [
-            torch.tensor(ids, dtype=torch.long) for ids in prompts_input_ids
-        ]
-        prompt_attention_mask = [
-            torch.tensor(mask, dtype=torch.long) for mask in prompt_attention_mask
-        ]
+        prompts_input_ids = [torch.tensor(ids, dtype=torch.long) for ids in prompts_input_ids]
+        prompt_attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in prompt_attention_mask]
         prompts_input_ids = pad(
             prompts_input_ids,
             padding_side="left",
             padding_value=self.tokenizer.pad_token_id,
         )
-        prompt_attention_mask = pad(
-            prompt_attention_mask, padding_side="left", padding_value=0
-        )
+        prompt_attention_mask = pad(prompt_attention_mask, padding_side="left", padding_value=0)
 
         return {
             "input_ids": input_ids,
@@ -362,15 +327,9 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         # Apply chat template for conversational data
         if is_conversational(examples[0]):
             for example in examples:
-                example["prompt"] = prepare_multimodal_messages(
-                    example["prompt"], images=example["images"]
-                )
-                example["completion"] = prepare_multimodal_messages(
-                    example["completion"]
-                )
-            examples = [
-                apply_chat_template(example, self.processor) for example in examples
-            ]
+                example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
+                example["completion"] = prepare_multimodal_messages(example["completion"])
+            examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples]
         completions = [example["completion"] for example in examples]
@@ -403,29 +362,20 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         )
         input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
-        completion_mask = torch.cat(
-            (torch.zeros_like(prompt_mask), completion_mask), dim=1
-        )
+        completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
         if "token_type_ids" in processed_prompts:
             prompt_token_type_ids = processed_prompts["token_type_ids"]
             completion_token_type_ids = processed_completions["token_type_ids"]
-            token_type_ids = torch.cat(
-                (prompt_token_type_ids, completion_token_type_ids), dim=1
-            )
+            token_type_ids = torch.cat((prompt_token_type_ids, completion_token_type_ids), dim=1)
         if "mm_token_type_ids" in processed_prompts:
             prompt_mm_token_type_ids = processed_prompts["mm_token_type_ids"]
             completion_mm_token_type_ids = processed_completions.get(
                 "mm_token_type_ids", torch.zeros_like(completion_ids)
             )
-            mm_token_type_ids = torch.cat(
-                (prompt_mm_token_type_ids, completion_mm_token_type_ids), dim=1
-            )
+            mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, completion_mm_token_type_ids), dim=1)
 
         # Flush left to reduce padding
-        if (
-            "token_type_ids" in processed_prompts
-            and "mm_token_type_ids" in processed_prompts
-        ):
+        if "token_type_ids" in processed_prompts and "mm_token_type_ids" in processed_prompts:
             (
                 attention_mask,
                 input_ids,
@@ -448,9 +398,7 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
                 attention_mask, input_ids, completion_mask, mm_token_type_ids
             )
         else:
-            attention_mask, input_ids, completion_mask = flush_left(
-                attention_mask, input_ids, completion_mask
-            )
+            attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
 
         # Truncate if necessary
         if self.max_length is not None:
@@ -532,36 +480,15 @@ def add_bos_token_if_needed(
     rejected_tokens: dict[str, list[int]],
 ):
     if bos_token_id is not None:
-        if (
-            prompt_len_input_ids == 0
-            or bos_token_id != prompt_tokens["prompt_input_ids"][0]
-        ):
-            prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens[
-                "prompt_input_ids"
-            ]
-            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens[
-                "prompt_attention_mask"
-            ]
-        if (
-            chosen_prompt_len_input_ids == 0
-            or bos_token_id != chosen_tokens["prompt_input_ids"][0]
-        ):
-            chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens[
-                "prompt_input_ids"
-            ]
-            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens[
-                "prompt_attention_mask"
-            ]
-        if (
-            rejected_prompt_len_input_ids == 0
-            or bos_token_id != rejected_tokens["prompt_input_ids"][0]
-        ):
-            rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens[
-                "prompt_input_ids"
-            ]
-            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens[
-                "prompt_attention_mask"
-            ]
+        if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
+            prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
+            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
+        if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
+            chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
+            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
+        if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
+            rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
+            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
     return prompt_tokens, chosen_tokens, rejected_tokens
 
 
@@ -570,16 +497,10 @@ def add_eos_token_if_needed(
     chosen_tokens: dict[str, list[int]],
     rejected_tokens: dict[str, list[int]],
 ):
-    if (
-        len(chosen_tokens["input_ids"]) == 0
-        or eos_token_id != chosen_tokens["input_ids"][-1]
-    ):
+    if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
         chosen_tokens["input_ids"].append(eos_token_id)
         chosen_tokens["attention_mask"].append(1)
-    if (
-        len(rejected_tokens["input_ids"]) == 0
-        or eos_token_id != rejected_tokens["input_ids"][-1]
-    ):
+    if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
         rejected_tokens["input_ids"].append(eos_token_id)
         rejected_tokens["attention_mask"].append(1)
     return chosen_tokens, rejected_tokens
@@ -604,9 +525,7 @@ def first_true_indices(bools: torch.Tensor, dtype=torch.long) -> torch.Tensor:
             value is found in a row, returns the length of the row.
     """
     row_len = bools.size(-1)
-    zero_or_index = row_len * (~bools).type(dtype) + torch.arange(
-        row_len, dtype=dtype, device=bools.device
-    )
+    zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
     return torch.min(zero_or_index, dim=-1).values
 
 
@@ -651,11 +570,7 @@ def get_reward(
         use_cache=False,  # otherwise mistral-based RM would error out
     )
     reward_logits = model.score(output.hidden_states[-1])
-    sequence_lengths = (
-        first_true_indices(query_responses[:, context_length:] == pad_token_id)
-        - 1
-        + context_length
-    )
+    sequence_lengths = first_true_indices(query_responses[:, context_length:] == pad_token_id) - 1 + context_length
     # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
     return (
         reward_logits,
@@ -667,19 +582,15 @@ def get_reward(
     )
 
 
-def prepare_model_for_kbit_training(
-    model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs=None
-):
+def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs=None):
     r"""
     Prepare a k-bit quantized transformers model for training (PEFT/QLoRA).
     """
-    loaded_in_kbit = getattr(model, "is_loaded_in_8bit", False) or getattr(
-        model, "is_loaded_in_4bit", False
-    )
+    loaded_in_kbit = getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False)
     quant_methods = ["gptq", "aqlm", "eetq", "torchao", "hqq"]
-    is_quantized = getattr(
-        model, "quantization_method", None
-    ) in quant_methods or getattr(model, "hqq_quantized", False)
+    is_quantized = getattr(model, "quantization_method", None) in quant_methods or getattr(
+        model, "hqq_quantized", False
+    )
 
     if gradient_checkpointing_kwargs is None:
         gradient_checkpointing_kwargs = {}
@@ -702,11 +613,7 @@ def prepare_model_for_kbit_training(
         supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
             inspect.signature(model.gradient_checkpointing_enable).parameters
         )
-        gc_kwargs = (
-            {"gradient_checkpointing_kwargs": gradient_checkpointing_kwargs}
-            if supports_gc_kwargs
-            else {}
-        )
+        gc_kwargs = {"gradient_checkpointing_kwargs": gradient_checkpointing_kwargs} if supports_gc_kwargs else {}
         model.gradient_checkpointing_enable(**gc_kwargs)
 
     return model
@@ -725,8 +632,7 @@ def enable_gradient_checkpointing(
 
     gradient_checkpointing_kwargs = gradient_checkpointing_kwargs or {}
     use_reentrant = (
-        "use_reentrant" not in gradient_checkpointing_kwargs
-        or gradient_checkpointing_kwargs["use_reentrant"]
+        "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
     )
 
     if use_reentrant:
@@ -747,9 +653,7 @@ def prepare_peft_model(
 ) -> PreTrainedModel:
     """Prepares a model for PEFT training."""
     if not is_peft_available():
-        raise ImportError(
-            "PEFT is required to use a peft model. Run `pip install peft`."
-        )
+        raise ImportError("PEFT is required to use a peft model. Run `pip install peft`.")
 
     if isinstance(model, PeftModel) and peft_config is not None:
         raise ValueError(
@@ -759,9 +663,7 @@ def prepare_peft_model(
         )
 
     # Handle quantized models (QLoRA)
-    is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(
-        model, "is_loaded_in_8bit", False
-    )
+    is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
     is_sharded_qlora = False
     if getattr(model, "is_loaded_in_4bit", False):
@@ -786,8 +688,7 @@ def prepare_peft_model(
     # Create PEFT model
     if peft_config is not None:
         if (
-            Version(peft.__version__)
-            >= Version("0.12")  # autocast_adapter_dtype introduced in 0.12
+            Version(peft.__version__) >= Version("0.12")  # autocast_adapter_dtype introduced in 0.12
             and getattr(model, "is_loaded_in_4bit", False)
             and is_sharded_qlora
         ):
@@ -796,19 +697,13 @@ def prepare_peft_model(
             model = get_peft_model(model, peft_config)
 
     # Handle bf16 casting for 4-bit models
-    if (
-        args.bf16
-        and getattr(model, "is_loaded_in_4bit", False)
-        and not is_sharded_qlora
-    ):
+    if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
         peft_module_casting_to_bf16(model)
 
     return model
 
 
-def pad_to_length(
-    tensor: torch.Tensor, length: int, pad_value: int | float, dim: int = -1
-) -> torch.Tensor:
+def pad_to_length(tensor: torch.Tensor, length: int, pad_value: int | float, dim: int = -1) -> torch.Tensor:
     if tensor.size(dim) >= length:
         return tensor
     else:
@@ -817,8 +712,7 @@ def pad_to_length(
         return torch.cat(
             [
                 tensor,
-                pad_value
-                * torch.ones(*pad_size, dtype=tensor.dtype, device=tensor.device),
+                pad_value * torch.ones(*pad_size, dtype=tensor.dtype, device=tensor.device),
             ],
             dim=dim,
         )
@@ -930,9 +824,7 @@ def create_reference_model(
         param.requires_grad = False
 
     if pattern is not None and len(unshared_param_list) == 0:
-        logging.warning(
-            "Pattern passed or found, but no layers matched in the model. Check for a typo."
-        )
+        logging.warning("Pattern passed or found, but no layers matched in the model. Check for a typo.")
 
     return ref_model.eval()
 
@@ -977,9 +869,7 @@ def truncate_dataset(
     def truncate(examples):
         truncated_columns = []
         for column in examples.columns:
-            if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(
-                column.type
-            ):
+            if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
                 column = pc.list_slice(column, 0, max_length)
             truncated_columns.append(column)
         return pa.Table.from_arrays(truncated_columns, names=examples.column_names)
