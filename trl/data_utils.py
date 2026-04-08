@@ -55,6 +55,8 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
           If the number of placeholders does not match the number of provided images, an error is raised.
         - When the input `messages` contains either `"tool_calls"` in the `"assistant"` turns, or `"tool"` roles with
           `"content"` and `"name"` those are left as-is, since those don't require any specific handling for multimodal data.
+        - Existing image blocks that already include an `"image"` payload are preserved as-is. Only unfilled image
+          placeholders are counted and populated from `images`.
 
     Example:
     ```python
