@@ -34,7 +34,7 @@ from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, dft_loss
 from .testing_utils import (
     TrlTestCase,
     ignore_warnings,
-    require_ampere_or_newer,
+    require_flash_attn_accelerator,
     require_bitsandbytes,
     require_kernels,
     require_liger_kernel,
@@ -1043,7 +1043,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_kernels
-    @require_ampere_or_newer  # Flash attention 2 requires Ampere or newer GPUs
+    @require_flash_attn_accelerator # Flash attention 2 requires Ampere or newer GPU, or XPU
     def test_train_padding_free(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1052,7 +1052,8 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             padding_free=True,
-            model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"},
+            max_length=None,
+            model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2", "dtype": "bfloat16"},
             bf16=True,  # flash_attention_2 only supports bf16 and fp16
             report_to="none",
         )

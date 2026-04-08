@@ -26,7 +26,7 @@ from trl.trainer.dpo_trainer import DataCollatorForPreference, DataCollatorForVi
 
 from .testing_utils import (
     TrlTestCase,
-    require_ampere_or_newer,
+    require_flash_attn_accelerator,
     require_bitsandbytes,
     require_kernels,
     require_liger_kernel,
@@ -777,7 +777,7 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_kernels
-    @require_ampere_or_newer  # Flash attention 2 requires Ampere or newer GPUs
+    @require_flash_attn_accelerator # Flash attention 2 requires Ampere or newer GPU, or XPU
     def test_train_padding_free(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -787,7 +787,7 @@ class TestDPOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             padding_free=True,
-            model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"},
+            model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2", "dtype": "bfloat16"},
             bf16=True,  # flash_attention_2 only supports bf16 and fp16
             report_to="none",
         )

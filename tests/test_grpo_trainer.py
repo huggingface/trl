@@ -43,7 +43,7 @@ from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
     TrlTestCase,
-    require_ampere_or_newer,
+    require_flash_attn_accelerator,
     require_bitsandbytes,
     require_jmespath,
     require_kernels,
@@ -2983,7 +2983,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         ],
     )
     @require_kernels
-    @require_ampere_or_newer  # Flash attention 2 requires Ampere or newer GPUs
+    @require_flash_attn_accelerator # Flash attention 2 requires Ampere or newer GPU, or XPU
     @require_bitsandbytes
     @require_peft
     def test_vlm_training(self, model_name):
@@ -3012,20 +3012,19 @@ class TestGRPOTrainerSlow(TrlTestCase):
                 ],
             },
         ]
-        prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
-        def data_gen(num_samples):
-            for _ in range(num_samples):
-                yield {
-                    "prompt": prompt,
-                    "image": np.random.uniform(low=0.0, high=255.0, size=(64, 64, 3)).astype(
-                        np.uint8
-                    ),  # Much smaller images
-                }
+        from PIL import Image as PILImage
 
-        dataset = Dataset.from_generator(
-            data_gen, gen_kwargs={"num_samples": 4}, features=Features(image=Image(), prompt=Value(dtype="string"))
+        images = [
+            PILImage.fromarray(
+                np.random.uniform(low=0.0, high=255.0, size=(64, 64, 3)).astype(np.uint8)
+            )
+            for _ in range(4)
+        ]
+        dataset = Dataset.from_dict(
+            {"prompt": [conversation] * 4, "image": images}
         )
+        dataset = dataset.cast_column("image", Image())
         # reduce memory requirements as much as possible
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -3037,14 +3036,14 @@ class TestGRPOTrainerSlow(TrlTestCase):
         model = AutoModelForImageTextToText.from_pretrained(
             model_name,
             attn_implementation="kernels-community/flash-attn2",
-            dtype="float32",
+            dtype="bfloat16",
             device_map=get_kbit_device_map(),
             quantization_config=quantization_config,
         )
 
         def reward_func(prompts, completions, **kwargs):
-            # simple nonsensical reward
-            return [-((len(c) - 25) ** 2) + 100 for c in completions]
+            # simple nonsensical reward based on content to ensure variance across completions
+            return [float(len(str(c)) % 100) for c in completions]
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,

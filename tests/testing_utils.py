@@ -94,7 +94,10 @@ def is_ampere_or_newer(device_index=0):
     return (major, minor) >= (8, 0)
 
 
-require_ampere_or_newer = pytest.mark.skipif(not is_ampere_or_newer(), reason="test requires Ampere or newer GPU")
+require_flash_attn_accelerator = pytest.mark.skipif(
+    not (is_ampere_or_newer() or (hasattr(torch, "xpu") and torch.xpu.is_available())),
+    reason="test requires an accelerator supporting flash attention (Ampere or newer GPU, or XPU)",
+)
 
 
 class TrlTestCase:
