@@ -575,7 +575,6 @@ class DPOTrainer(_BaseTrainer):
                 )
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-            tokenizer.pad_token_id = tokenizer.eos_token_id
 
         if is_peft_available() and is_peft_model(model) and peft_config is not None:
             raise ValueError(
