@@ -563,7 +563,7 @@ class TestParseResponse:
         tool_calls = [{"type": "function", "function": {"name": "ping", "arguments": {}}}]
         messages = [
             {"role": "user", "content": "Ping the service."},
-            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+            {"role": "assistant", "tool_calls": tool_calls},
         ]
         prefix = tokenizer.apply_chat_template(messages[:1], add_generation_prompt=True).input_ids
         text = tokenizer.apply_chat_template(messages).input_ids
