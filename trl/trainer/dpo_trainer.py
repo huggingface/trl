@@ -565,14 +565,13 @@ class DPOTrainer(_BaseTrainer):
 
         # Handle pad token for processors or tokenizers
         if args.pad_token is not None:
-            tokenizer.pad_token = args.pad_token
-            tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(args.pad_token)
-            if tokenizer.pad_token_id is None:
+            if args.pad_token not in tokenizer.get_vocab():
                 raise ValueError(
                     f"The specified `pad_token` ('{args.pad_token}') is not found in the vocabulary of the given "
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
+            tokenizer.pad_token = args.pad_token
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
