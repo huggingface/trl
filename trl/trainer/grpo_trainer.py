@@ -1414,7 +1414,9 @@ class GRPOTrainer(_BaseTrainer):
 
     def _get_tool_suffix_ids(self, tool_messages):
         """Get token IDs for tool result formatting by using a minimal dummy conversation."""
-        dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": {}}}]
+        # Use the real tool name instead of a dummy: some templates (e.g. GPT-OSS) derive the tool response
+        # header from the assistant's tool call name.
+        dummy_tool_calls = [{"type": "function", "function": {"name": tool_messages[0]["name"], "arguments": {}}}]
         dummy_messages = [
             {"role": "user", "content": "dummy"},
             {
