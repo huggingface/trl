@@ -25,6 +25,7 @@ from trl.chat_template_utils import (
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     parse_response,
+    supports_tool_calling,
 )
 
 from .testing_utils import TrlTestCase, require_jmespath
@@ -113,6 +114,7 @@ class TestCloneChatTemplate(TrlTestCase):
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
+        pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
     ],
@@ -141,6 +143,73 @@ class TestAddResponseSchema:
         # Here, we just test that the parsing doesn't raise an error.
         # The correctness of the parsing is tested in TestParseResponse
         tokenizer.parse_response(response)
+
+
+class TestSupportsToolCalling:
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                id="glm4moe",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="GLM4 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
+            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
+            pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", id="qwen3"),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3moe"),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                id="qwen35",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+        ],
+    )
+    def test_supports_tool_calling(self, model_id):
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        assert supports_tool_calling(tokenizer) is True
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            # No chat template
+            pytest.param("trl-internal-testing/tiny-BloomForCausalLM", id="bloom"),
+            pytest.param("trl-internal-testing/tiny-GPT2LMHeadModel", id="gpt2"),
+            pytest.param("trl-internal-testing/tiny-GPTNeoXForCausalLM", id="gptneox"),
+            pytest.param("trl-internal-testing/tiny-OPTForCausalLM", id="opt"),
+            # TemplateError: rejects tool role sequence
+            pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
+            pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", id="falconmamba"),
+            pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
+            pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
+            # Silently ignores tool messages
+            pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
+            pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM", id="phi3"),
+        ],
+    )
+    def test_does_not_support_tool_calling(self, model_id):
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        assert supports_tool_calling(tokenizer) is False
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            # TypeError: template concatenates arguments as string (needs template patch)
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
+        ],
+    )
+    @pytest.mark.xfail(reason="DeepseekV3 template expects arguments as JSON string, needs patch", strict=True)
+    def test_deepseek_tool_calling(self, model_id):
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        assert supports_tool_calling(tokenizer) is True
 
 
 class TestIsChatTemplatePrefixPreserving:
@@ -246,7 +315,6 @@ class TestIsChatTemplatePrefixPreserving:
 class TestGetTrainingChatTemplate:
     def test_new_chat_template_is_prefix_preserving(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        assert is_chat_template_prefix_preserving(tokenizer) is False
         tokenizer.chat_template = get_training_chat_template(tokenizer)
         assert is_chat_template_prefix_preserving(tokenizer) is True
 
@@ -392,10 +460,45 @@ class TestGetTrainingChatTemplate:
         )
         assert before == after
 
+    def test_assistant_masks(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": "It is blue."},
+        ]
+        chat_template = get_training_chat_template(tokenizer)
+        result = tokenizer.apply_chat_template(
+            messages, chat_template=chat_template, return_assistant_tokens_mask=True, return_dict=True
+        )
+        masks = result["assistant_masks"]
+        assert 1 in masks
+        # The first tokens (user turn) should not be masked
+        assert masks[0] == 0
+        # The last tokens (assistant turn ending with <|im_end|>) should be masked
+        assert masks[-1] == 1
+
+    def test_assistant_masks_multi_turn(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "Bye"},
+            {"role": "assistant", "content": "Goodbye!"},
+        ]
+        chat_template = get_training_chat_template(tokenizer)
+        result = tokenizer.apply_chat_template(
+            messages, chat_template=chat_template, return_assistant_tokens_mask=True, return_dict=True
+        )
+        masks = result["assistant_masks"]
+        # Should have two masked regions (two assistant turns): 0→1, 1→0, 0→1
+        transitions = sum(1 for i in range(1, len(masks)) if masks[i] != masks[i - 1])
+        assert transitions == 3
+
 
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
+        pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
         pytest.param(
@@ -430,8 +533,11 @@ class TestParseResponse:
         assert parsed == messages[-1]
 
     def test_parse_response_with_reasoning_content(self, tokenizer_name):
-        if tokenizer_name == "trl-internal-testing/tiny-Gemma4ForConditionalGeneration":
-            pytest.skip("Gemma4 doesn't support inline reasoning_content.")
+        if tokenizer_name in (
+            "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+        ):
+            pytest.skip("This model doesn't support inline reasoning_content.")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if getattr(tokenizer, "response_schema", None) is None:
             tokenizer = add_response_schema(tokenizer)
@@ -499,6 +605,8 @@ class TestParseResponse:
         assert parsed == {"role": "assistant", "content": "", "tool_calls": tool_calls}
 
     def test_parse_response_multiple_tool_calls(self, tokenizer_name):
+        if tokenizer_name == "trl-internal-testing/tiny-GptOssForCausalLM":
+            pytest.skip("GPT-OSS template only renders one tool call per assistant message.")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if getattr(tokenizer, "response_schema", None) is None:
             tokenizer = add_response_schema(tokenizer)

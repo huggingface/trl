@@ -1052,6 +1052,13 @@ class TestForwardMaskedLogits:
         "model_id",
         [
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
             "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
             "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",

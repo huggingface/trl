@@ -36,6 +36,7 @@ from transformers import (
     Gemma2Config,
     Gemma2ForCausalLM,
     Gemma3ForConditionalGeneration,
+    Gemma4ForConditionalGeneration,
     GemmaConfig,
     GemmaForCausalLM,
     GenerationConfig,
@@ -316,6 +317,7 @@ for model_id, model_class, dtype, suffix in [
 # Vision Language Models
 for model_id, model_class, dtype in [
     ("google/gemma-3-4b-it", Gemma3ForConditionalGeneration, torch.bfloat16),
+    ("google/gemma-4-E2B-it", Gemma4ForConditionalGeneration, torch.bfloat16),
     ("google/paligemma-3b-pt-224", PaliGemmaForConditionalGeneration, torch.float32),
     ("HuggingFaceM4/idefics2-8b", Idefics2ForConditionalGeneration, torch.float32),
     ("HuggingFaceM4/Idefics3-8B-Llama3", Idefics3ForConditionalGeneration, torch.bfloat16),
@@ -394,7 +396,20 @@ for model_id, model_class, dtype in [
         # See https://huggingface.co/llava-hf/llava-v1.6-mistral-7b-hf/discussions/46
         text_config["dtype"] = None
 
-    config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
+    if model_class is Gemma4ForConditionalGeneration:
+        # Gemma4 rope validation fails when passing text_config as a dict, so we mutate the config directly.
+        config = AutoConfig.from_pretrained(model_id)
+        for k, v in text_config.items():
+            setattr(config.text_config, k, v)
+        for k, v in vision_config.items():
+            setattr(config.vision_config, k, v)
+        config.text_config.layer_types = ["sliding_attention", "full_attention"]
+        config.text_config.num_kv_shared_layers = 0
+        config.text_config.global_head_dim = 8
+        config.text_config.hidden_size_per_layer_input = 16
+        config.audio_config = None
+    else:
+        config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
     model = model_class(config).to(dtype=dtype)
 
     if issubclass(model_class.config_class, Qwen3_5Config):
