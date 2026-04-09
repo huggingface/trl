@@ -1471,7 +1471,6 @@ class GRPOTrainer(_BaseTrainer):
         if self._vision_token_ids_cache is None:
             cache = {"vision_start": None, "vision_end": None, "image_pad": None, "video_pad": None}
             if self._is_vlm:
-                tok = self.processing_class.tokenizer
                 # Try multiple token strings per role to support different VLM families
                 for name, candidates in {
                     "vision_start": ["<|vision_start|>", "<|image>"],
@@ -1480,8 +1479,8 @@ class GRPOTrainer(_BaseTrainer):
                     "video_pad": ["<|video_pad|>"],
                 }.items():
                     for token_str in candidates:
-                        tid = tok.convert_tokens_to_ids(token_str)
-                        if tid != tok.unk_token_id:
+                        tid = self._tokenizer.convert_tokens_to_ids(token_str)
+                        if tid != self._tokenizer.unk_token_id:
                             cache[name] = tid
                             break
             self._vision_token_ids_cache = cache
@@ -1796,7 +1795,6 @@ class GRPOTrainer(_BaseTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
-            parsing_class = self.processing_class
             # For VLM processors, propagate response_schema to the inner tokenizer if needed
             if self._is_vlm:
                 if getattr(self.processing_class, "response_schema", None) and not getattr(
@@ -1804,14 +1802,13 @@ class GRPOTrainer(_BaseTrainer):
                 ):
                     self.processing_class.tokenizer.response_schema = self.processing_class.response_schema
             # parse_response handles VLM processors internally (uses inner tokenizer)
-            tokenizer = getattr(parsing_class, "tokenizer", parsing_class)
             if (
                 Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
-                and isinstance(tokenizer, PreTrainedTokenizerBase)
-                and hasattr(tokenizer, "response_schema")  # attribute not set by default for now
-                and tokenizer.response_schema is not None  # only works if the tokenizer has a schema
+                and isinstance(self._tokenizer, PreTrainedTokenizerBase)
+                and hasattr(self._tokenizer, "response_schema")  # attribute not set by default for now
+                and self._tokenizer.response_schema is not None  # only works if the tokenizer has a schema
             ):
-                completions = [[parse_response(parsing_class, ids)] for ids in completion_ids]
+                completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
