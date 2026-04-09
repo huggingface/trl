@@ -43,7 +43,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..chat_template_utils import clone_chat_template
+from ..chat_template_utils import clone_chat_template, get_training_chat_template
 from ..data_utils import (
     apply_chat_template,
     is_conversational,
@@ -922,6 +922,13 @@ class SFTTrainer(_BaseTrainer):
                 "supported for conversational datasets."
             )
 
+        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers
+        # if the current template doesn't already have them.
+        if args.assistant_only_loss and "{% generation %}" not in processing_class.chat_template:
+            self.chat_template = get_training_chat_template(processing_class)
+        else:
+            self.chat_template = None
+
         # Dataset
         if self.padding_free and not args.packing and args.max_length is not None and not self._is_vision_dataset:
             raise ValueError(
@@ -1038,7 +1045,9 @@ class SFTTrainer(_BaseTrainer):
         if isinstance(input, list):  # conversational: list of message dicts
             if self._is_vlm:
                 input = prepare_multimodal_messages(input)
-            result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
+            result = processing_class.apply_chat_template(
+                input, tokenize=True, return_dict=True, chat_template=self.chat_template, **kwargs
+            )
         else:  # non-conversational: plain text string
             result = processing_class(text=input)
         # VLMs emit a batch dimension even for single examples; unwrap it

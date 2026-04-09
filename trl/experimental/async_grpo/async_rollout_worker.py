@@ -28,7 +28,12 @@ from accelerate.logging import get_logger
 from datasets import Dataset
 from transformers import AutoTokenizer
 
-from trl.chat_template_utils import add_response_schema, get_training_chat_template, parse_response
+from trl.chat_template_utils import (
+    add_response_schema,
+    get_training_chat_template,
+    is_chat_template_prefix_preserving,
+    parse_response,
+)
 from trl.import_utils import is_vllm_available
 from trl.trainer.utils import print_prompt_completions_sample
 
@@ -162,7 +167,12 @@ class AsyncRolloutWorker:
         self.num_completions_to_print = num_completions_to_print
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.tokenizer = add_response_schema(self.tokenizer)
-        self.chat_template = get_training_chat_template(self.tokenizer)
+        # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
+        # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
+        if self.tools and not is_chat_template_prefix_preserving(self.tokenizer):
+            self.chat_template = get_training_chat_template(self.tokenizer)
+        else:
+            self.chat_template = None
 
         self._groups_to_score: asyncio.Queue[RolloutGroup | None] = asyncio.Queue(maxsize=16)
         self._total_completion_tokens = 0
@@ -555,7 +565,9 @@ class AsyncRolloutWorker:
 
     def _get_tool_suffix_ids(self, tool_messages: list[dict[str, Any]]) -> list[int]:
         """Get token IDs for tool result formatting by using a minimal dummy conversation."""
-        dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": {}}}]
+        # Use the real tool name instead of a dummy: some templates (e.g. GPT-OSS) derive the tool response
+        # header from the assistant's tool call name.
+        dummy_tool_calls = [{"type": "function", "function": {"name": tool_messages[0]["name"], "arguments": {}}}]
         dummy_messages = [
             {"role": "user", "content": "dummy"},
             {
