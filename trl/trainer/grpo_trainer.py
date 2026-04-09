@@ -515,15 +515,13 @@ class GRPOTrainer(_BaseTrainer):
         # known chat templates.
         # We need `getattr`` until the base class sets a default None value for response_schema
         # For VLM processors, check the inner tokenizer too (response_schema lives on the tokenizer)
-        has_response_schema = getattr(processing_class, "response_schema", None) or (
-            self._is_vlm and getattr(processing_class.tokenizer, "response_schema", None)
-        )
+        has_response_schema = getattr(self._tokenizer, "response_schema", None)
         if self.tools and not has_response_schema:
-            processing_class = add_response_schema(processing_class)
+            processing_class = add_response_schema(self._tokenizer)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
-        if self.tools and not is_chat_template_prefix_preserving(processing_class):
-            self.chat_template = get_training_chat_template(processing_class)
+        if self.tools and not is_chat_template_prefix_preserving(self._tokenizer):
+            self.chat_template = get_training_chat_template(self._tokenizer)
         else:
             self.chat_template = None
 
@@ -1725,9 +1723,7 @@ class GRPOTrainer(_BaseTrainer):
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
             # Decode post-tool completions.
-            post_tool_completions = [
-                parse_response(self.processing_class, ids) if ids else {} for ids in post_tool_ids
-            ]
+            post_tool_completions = [parse_response(self._tokenizer, ids) if ids else {} for ids in post_tool_ids]
 
             # Add post-tool completions to the existing completions
             for idx in range(len(idxs_with_tool)):
@@ -1795,20 +1791,13 @@ class GRPOTrainer(_BaseTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
-            # For VLM processors, propagate response_schema to the inner tokenizer if needed
-            if self._is_vlm:
-                if getattr(self.processing_class, "response_schema", None) and not getattr(
-                    self.processing_class.tokenizer, "response_schema", None
-                ):
-                    self.processing_class.tokenizer.response_schema = self.processing_class.response_schema
-            # parse_response handles VLM processors internally (uses inner tokenizer)
             if (
                 Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
                 and isinstance(self._tokenizer, PreTrainedTokenizerBase)
                 and hasattr(self._tokenizer, "response_schema")  # attribute not set by default for now
                 and self._tokenizer.response_schema is not None  # only works if the tokenizer has a schema
             ):
-                completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
+                completions = [[parse_response(self._tokenizer, ids)] for ids in completion_ids]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
