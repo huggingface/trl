@@ -14,7 +14,10 @@
 
 from pathlib import Path
 
-from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
+from jinja2 import TemplateError
+from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, ProcessorMixin
+
+from .data_utils import prepare_multimodal_messages
 
 
 _CHAT_TEMPLATES_DIR = Path(__file__).parent / "chat_templates"
@@ -232,6 +235,52 @@ def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
         "[docs](https://huggingface.co/docs/transformers/main/en/chat_response_parsing#response-parsing) for more "
         "details on response parsing."
     )
+
+
+def supports_tool_calling(processing_class) -> bool:
+    """
+    Check if the processing class's chat template can render a full tool-calling conversation.
+
+    This tests two things: (1) the template doesn't error when rendering a conversation with ``user → assistant (with
+    tool_calls) → tool`` roles, and (2) the tool message content actually appears in the rendered output (some
+    templates silently swallow tool messages).
+
+    For VLMs (processors), the messages are converted to multimodal format via
+    [`~trl.data_utils.prepare_multimodal_messages`] before rendering.
+
+    Args:
+        processing_class (`PreTrainedTokenizer` or `ProcessorMixin`):
+            Tokenizer or processor instance to check.
+
+    Returns:
+        `bool`:
+            `True` if the chat template supports tool-calling conversations, `False` otherwise.
+    """
+    if processing_class.chat_template is None:
+        return False
+
+    is_vlm = isinstance(processing_class, ProcessorMixin)
+    _sentinel = "TOOL_CONTENT_c4f9a8e2"
+    tool_calls = [{"type": "function", "function": {"name": "test", "arguments": {}}}]
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        {"role": "tool", "name": "test", "content": _sentinel},
+    ]
+    # VLMs expect content as [{"type": "text", "text": "..."}] instead of plain strings
+    if is_vlm:
+        messages = prepare_multimodal_messages(messages)
+
+    try:
+        rendered = processing_class.apply_chat_template(messages, tokenize=False)
+    except TemplateError:
+        # TemplateError: template rejects the role sequence (Cohere, FalconMamba, Gemma, Gemma2, Gemma3)
+        # UndefinedError (subclass): template indexes into content as a list for all roles, including tool
+        #   (Idefics2, Idefics3, LlavaNext, SmolVLM)
+        return False
+    # Some templates (e.g. Cohere2, Phi3) accept tool messages without error but silently ignore them.
+    # Check that the tool content actually appears in the rendered output.
+    return _sentinel in rendered
 
 
 def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:

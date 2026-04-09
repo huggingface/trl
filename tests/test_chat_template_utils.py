@@ -25,6 +25,7 @@ from trl.chat_template_utils import (
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     parse_response,
+    supports_tool_calling,
 )
 
 from .testing_utils import TrlTestCase, require_jmespath
@@ -141,6 +142,73 @@ class TestAddResponseSchema:
         # Here, we just test that the parsing doesn't raise an error.
         # The correctness of the parsing is tested in TestParseResponse
         tokenizer.parse_response(response)
+
+
+class TestSupportsToolCalling:
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                id="glm4moe",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="GLM4 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
+            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
+            pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", id="qwen3"),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3moe"),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                id="qwen35",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+        ],
+    )
+    def test_supports_tool_calling(self, model_id):
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        assert supports_tool_calling(tokenizer) is True
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            # No chat template
+            pytest.param("trl-internal-testing/tiny-BloomForCausalLM", id="bloom"),
+            pytest.param("trl-internal-testing/tiny-GPT2LMHeadModel", id="gpt2"),
+            pytest.param("trl-internal-testing/tiny-GPTNeoXForCausalLM", id="gptneox"),
+            pytest.param("trl-internal-testing/tiny-OPTForCausalLM", id="opt"),
+            # TemplateError: rejects tool role sequence
+            pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
+            pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", id="falconmamba"),
+            pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
+            pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
+            # Silently ignores tool messages
+            pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
+            pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM", id="phi3"),
+        ],
+    )
+    def test_does_not_support_tool_calling(self, model_id):
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        assert supports_tool_calling(tokenizer) is False
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            # TypeError: template concatenates arguments as string (needs template patch)
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
+        ],
+    )
+    @pytest.mark.xfail(reason="DeepseekV3 template expects arguments as JSON string, needs patch", strict=True)
+    def test_deepseek_tool_calling(self, model_id):
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        assert supports_tool_calling(tokenizer) is True
 
 
 class TestIsChatTemplatePrefixPreserving:
