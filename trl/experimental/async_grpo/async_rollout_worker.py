@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import copy
 import inspect
 import itertools
 import queue
@@ -60,6 +61,7 @@ class RolloutGroup:
     tool_mask: list[list[int]]
     tool_call_counts: list[int]
     tool_failure_counts: list[int]
+    environments: list[object]
     model_version: int
     queued_at: float = 0.0
 
@@ -327,12 +329,27 @@ class AsyncRolloutWorker:
         # (empty iterator)
         if first is None:
             if self._delta_pending_update_info is not None:
-                resp = requests.post(
-                    f"{self.vllm_server_url}/update_weights",
-                    json={"update_info": self._delta_pending_update_info},
-                    timeout=300,
-                )
-                resp.raise_for_status()
+                for attempt in range(5):
+                    try:
+                        resp = requests.post(
+                            f"{self.vllm_server_url}/update_weights",
+                            json={"update_info": self._delta_pending_update_info},
+                            timeout=300,
+                        )
+                        if resp.status_code < 429:
+                            break
+                    except requests.RequestException as e:
+                        resp = None
+                        logger.warning(f"[weight_sync] /update_weights request failed: {e}")
+                    wait = min(2**attempt, 30)
+                    status = resp.status_code if resp is not None else "connection error"
+                    logger.warning(
+                        f"[weight_sync] /update_weights returned {status}, "
+                        f"retrying in {wait}s (attempt {attempt + 1}/5)"
+                    )
+                    time.sleep(wait)
+                if resp is not None:
+                    resp.raise_for_status()
                 self._delta_pending_update_info = None
             return
 
@@ -421,6 +438,7 @@ class AsyncRolloutWorker:
                             tool_mask=[],
                             tool_call_counts=[],
                             tool_failure_counts=[],
+                            environments=[],
                             model_version=self.model_version,
                         )
                         pending_completed[group_id] = 0
@@ -428,8 +446,12 @@ class AsyncRolloutWorker:
 
                     slot = free_slots.pop()
                     if self.environments is not None:
-                        # Current assumption: reset side effects matter, return value is ignored.
-                        self.environments[slot].reset(**row)
+                        try:
+                            self.environments[slot].reset(**row)
+                        except Exception as e:
+                            logger.warning(f"[slot={slot}] env.reset() failed: {e}, skipping generation")
+                            free_slots.add(slot)
+                            continue
 
                     logger.debug(f"[slot] assigned slot={slot} group={group_id} free_after={len(free_slots)}")
                     task = asyncio.create_task(
@@ -457,7 +479,27 @@ class AsyncRolloutWorker:
                     free_slots.add(slot)
                     logger.debug(f"[slot] freed   slot={slot} group={group_id} free_after={len(free_slots)}")
                     if task.exception() is not None:
-                        raise task.exception()
+                        logger.warning(
+                            f"[slot={slot}] generation failed for group {group_id}: {task.exception()}, skipping"
+                        )
+                        pending_completed[group_id] += 1
+                        if pending_completed[group_id] == self.num_generations:
+                            # All generations attempted but some failed — drop the group
+                            group = pending_groups[group_id]
+                            if group.completions:
+                                # Score whatever we have
+                                group.queued_at = time.monotonic()
+                                try:
+                                    self._groups_to_score.put_nowait(group)
+                                except asyncio.QueueFull:
+                                    pass
+                            logger.warning(
+                                f"Group {group_id} had failures, got {len(pending_groups[group_id].completions)}"
+                                f"/{self.num_generations} completions"
+                            )
+                            del pending_groups[group_id]
+                            del pending_completed[group_id]
+                        continue
 
                     (
                         completion,
@@ -474,6 +516,8 @@ class AsyncRolloutWorker:
                     group.tool_mask.append(tool_mask)
                     group.tool_call_counts.append(tool_call_count)
                     group.tool_failure_counts.append(tool_failure_count)
+                    if self.environments is not None:
+                        group.environments.append(copy.copy(self.environments[slot]))
                     # TODO: move this in generation task, shouldn't matter but is correct
                     self._total_completion_tokens += sum(tool_mask)
                     pending_completed[group_id] += 1
@@ -711,6 +755,8 @@ class AsyncRolloutWorker:
             completion_ids=group.completions_ids,
             **group.reward_kwargs,
         )
+        if group.environments:
+            kwargs["environments"] = group.environments
         all_rewards = await asyncio.gather(
             *[
                 reward_func(**kwargs)

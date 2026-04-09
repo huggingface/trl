@@ -653,7 +653,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # Phase 3: Signal vLLM to fetch the already-uploaded weights
             logger.info(f"Weight sync: signaling vLLM to apply... (pause took {t_pause - t_upload:.1f}s)")
             if self.accelerator.is_main_process and self.rollout_worker:
-                self.rollout_worker.send_weights(iter([]))
+                try:
+                    self.rollout_worker.send_weights(iter([]))
+                except Exception as e:
+                    logger.warning(f"Weight sync: apply failed ({e}), skipping — vLLM will use stale weights")
         else:
             # NCCL: transfer all weights directly
             logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")

@@ -108,6 +108,9 @@ class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo
                 else:
                     changed_names = json.loads(meta.changed_params)
                     for name in changed_names:
+                        if name not in self._bf16_snapshot:
+                            logger.warning("Skipping delta for %s: not in snapshot (missing from anchor)", name)
+                            continue
                         indices = f.get_tensor(f"{name}.indices").long()
                         values = f.get_tensor(f"{name}.values")
                         snap = self._bf16_snapshot[name].flatten()
