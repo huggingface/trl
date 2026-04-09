@@ -634,15 +634,15 @@ class DPOTrainer(_BaseTrainer):
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
             pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
-            pad_token_id = tokenizer.convert_tokens_to_ids(pad_token)
-            if pad_token_id is None:
+            if pad_token not in tokenizer.get_vocab():
                 raise ValueError(
                     f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
+            tokenizer.pad_token = pad_token
             data_collator = DataCollatorForPreference(
-                pad_token_id=pad_token_id,
+                pad_token_id=tokenizer.pad_token_id,
                 max_length=args.max_length,
                 truncation_mode=args.truncation_mode,
                 pad_to_multiple_of=args.pad_to_multiple_of,
