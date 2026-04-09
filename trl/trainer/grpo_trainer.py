@@ -517,7 +517,7 @@ class GRPOTrainer(_BaseTrainer):
         # For VLM processors, check the inner tokenizer too (response_schema lives on the tokenizer)
         has_response_schema = getattr(self._tokenizer, "response_schema", None)
         if self.tools and not has_response_schema:
-            processing_class = add_response_schema(self._tokenizer)
+            self._tokenizer = add_response_schema(self._tokenizer)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
         if self.tools and not is_chat_template_prefix_preserving(self._tokenizer):
