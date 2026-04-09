@@ -523,6 +523,200 @@ class VLLMClient:
             # Update each parameter individually
             self.update_named_param(name, param.data)
 
+    def get_sequence_logprobs(
+        self,
+        sequences: list[list[int]],
+        prompt_lengths: list[int],
+        top_logprobs: int = 100,
+        temperature: float = 1.0,
+        use_binary: bool = True,
+        chunk_size: int = 0,
+        max_concurrent_requests: int = 4,
+    ) -> dict[str, list]:
+        """
+        Computes teacher logprobs for existing token sequences without generating new tokens.
+
+        Sends full sequences (prompt + completion) to the vLLM server and retrieves per-token top-k logprobs for the
+        completion region only. This is used for knowledge distillation where the teacher model evaluates existing
+        sequences rather than generating new ones.
+
+        When `chunk_size > 0`, splits the batch into chunks and dispatches them concurrently via a thread pool, keeping
+        the server's data-parallel workers busy.
+
+        When `use_binary=True`, uses base64-encoded numpy arrays for fast serialization instead of nested JSON lists.
+
+        Args:
+            sequences (`list[list[int]]`):
+                List of full token ID sequences (prompt + completion).
+            prompt_lengths (`list[int]`):
+                Number of prompt tokens in each sequence. Logprobs are returned starting from this position.
+            top_logprobs (`int`, *optional*, defaults to `100`):
+                Number of top logprobs to return per token position.
+            temperature (`float`, *optional*, defaults to `1.0`):
+                Temperature used when scoring the teacher distribution.
+            use_binary (`bool`, *optional*, defaults to `True`):
+                Use binary (base64 numpy) response format for faster serialization.
+            chunk_size (`int`, *optional*, defaults to `0`):
+                If > 0, split batch into chunks of this size and dispatch concurrently. If 0, send the entire batch in
+                a single request.
+            max_concurrent_requests (`int`, *optional*, defaults to `4`):
+                Maximum number of concurrent requests when using chunked dispatch.
+
+        Returns:
+            `dict` with keys:
+                - `logprobs` (`list[list[list[float]]]`):
+                    Per-token logprobs of shape (batch, completion_len, top_logprobs), sorted by descending
+                    probability.
+                - `logprob_token_ids` (`list[list[list[int]]]`):
+                    Token IDs corresponding to each logprob, same shape as `logprobs`.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        if temperature <= 0:
+            raise ValueError(f"temperature must be positive, got {temperature}")
+
+        url = f"{self.base_url}/get_sequence_logprobs/"
+        response_format = "binary" if use_binary else "json"
+
+        if chunk_size > 0 and len(sequences) > chunk_size:
+            # Chunked concurrent dispatch
+            n = len(sequences)
+            chunks = []
+            for i in range(0, n, chunk_size):
+                chunks.append((sequences[i : i + chunk_size], prompt_lengths[i : i + chunk_size]))
+
+            responses = [None] * len(chunks)
+
+            def _send_chunk(idx, seqs, plens):
+                resp = self.session.post(
+                    url,
+                    json={
+                        "sequences": seqs,
+                        "prompt_lengths": plens,
+                        "top_logprobs": top_logprobs,
+                        "temperature": temperature,
+                        "response_format": response_format,
+                    },
+                )
+                if resp.status_code != 200:
+                    raise Exception(f"Request failed: {resp.status_code}, {resp.text}")
+                return idx, resp.json()
+
+            with ThreadPoolExecutor(max_workers=min(max_concurrent_requests, len(chunks))) as executor:
+                futures = {
+                    executor.submit(_send_chunk, idx, seqs, plens): idx for idx, (seqs, plens) in enumerate(chunks)
+                }
+                for future in as_completed(futures):
+                    idx, result = future.result()
+                    responses[idx] = result
+
+            # Merge results
+            if use_binary:
+                return self._merge_binary_responses(responses, top_logprobs)
+            else:
+                all_logprobs = []
+                all_token_ids = []
+                for resp in responses:
+                    all_logprobs.extend(resp["logprobs"])
+                    all_token_ids.extend(resp["logprob_token_ids"])
+                return {"logprobs": all_logprobs, "logprob_token_ids": all_token_ids}
+        else:
+            # Single request
+            response = self.session.post(
+                url,
+                json={
+                    "sequences": sequences,
+                    "prompt_lengths": prompt_lengths,
+                    "top_logprobs": top_logprobs,
+                    "temperature": temperature,
+                    "response_format": response_format,
+                },
+            )
+            if response.status_code != 200:
+                raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+            json_response = response.json()
+            if use_binary:
+                return self._decode_binary_logprobs(json_response)
+            else:
+                return {
+                    "logprobs": json_response["logprobs"],
+                    "logprob_token_ids": json_response["logprob_token_ids"],
+                }
+
+    @staticmethod
+    def _decode_binary_logprobs(response: dict) -> dict[str, list]:
+        """Decode base64-encoded numpy arrays back to nested lists.
+
+        Returns a dict with:
+            ``logprobs`` / ``logprob_token_ids`` — teacher's sorted top-k logprobs and
+                token IDs (shape per sequence: ``(comp_len, top_k)``). Used for the forward KL term.
+            ``actual_logprobs`` / ``actual_token_ids`` — teacher logprob for the actual
+                token at each position (shape per sequence: ``(comp_len, 1)``). Used for the reverse KL term.
+        """
+        import numpy as np
+
+        shape = response["shape"]  # [batch, max_comp_len, top_k]
+        comp_lengths = response["completion_lengths"]
+
+        logprobs_arr = np.frombuffer(base64.b64decode(response["logprobs_b64"]), dtype=np.float32).reshape(shape)
+        token_ids_arr = np.frombuffer(base64.b64decode(response["token_ids_b64"]), dtype=np.int32).reshape(shape)
+
+        # Convert back to nested lists, trimming padding
+        all_logprobs = []
+        all_token_ids = []
+        for i, comp_len in enumerate(comp_lengths):
+            all_logprobs.append(logprobs_arr[i, :comp_len, :].tolist())
+            all_token_ids.append(token_ids_arr[i, :comp_len, :].tolist())
+
+        result = {"logprobs": all_logprobs, "logprob_token_ids": all_token_ids}
+
+        # Decode actual-token logprobs (for reverse KL)
+        if "actual_logprobs_b64" in response:
+            actual_shape = [shape[0], shape[1], 1]
+            actual_lp = np.frombuffer(base64.b64decode(response["actual_logprobs_b64"]), dtype=np.float32).reshape(
+                actual_shape
+            )
+            actual_ids = np.frombuffer(base64.b64decode(response["actual_token_ids_b64"]), dtype=np.int32).reshape(
+                actual_shape
+            )
+            all_actual_lps = []
+            all_actual_ids = []
+            for i, comp_len in enumerate(comp_lengths):
+                all_actual_lps.append(actual_lp[i, :comp_len, :].tolist())
+                all_actual_ids.append(actual_ids[i, :comp_len, :].tolist())
+            result["actual_logprobs"] = all_actual_lps
+            result["actual_token_ids"] = all_actual_ids
+
+        return result
+
+    @staticmethod
+    def _merge_binary_responses(responses: list[dict], top_logprobs: int) -> dict[str, list]:
+        """Merge binary responses from multiple chunks into a single result."""
+
+        all_logprobs = []
+        all_token_ids = []
+        all_actual_lps = []
+        all_actual_ids = []
+        for resp in responses:
+            decoded = VLLMClient._decode_binary_logprobs(resp)
+            all_logprobs.extend(decoded["logprobs"])
+            all_token_ids.extend(decoded["logprob_token_ids"])
+            if "actual_logprobs" in decoded:
+                all_actual_lps.extend(decoded["actual_logprobs"])
+                all_actual_ids.extend(decoded["actual_token_ids"])
+
+        result = {"logprobs": all_logprobs, "logprob_token_ids": all_token_ids}
+        if all_actual_lps:
+            if len(all_actual_lps) != len(all_logprobs):
+                raise ValueError(
+                    f"Inconsistent chunks: {len(all_actual_lps)} actual_logprobs entries "
+                    f"but {len(all_logprobs)} logprobs entries."
+                )
+            result["actual_logprobs"] = all_actual_lps
+            result["actual_token_ids"] = all_actual_ids
+        return result
+
     def reset_prefix_cache(self):
         """
         Resets the prefix cache for the model.
