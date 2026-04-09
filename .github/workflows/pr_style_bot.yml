@@ -18,7 +18,7 @@ jobs:
     steps:
       - name: Extract PR details
         id: pr_info
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8
         with:
           script: |
             const prNumber = context.payload.issue.number;
@@ -35,7 +35,7 @@ jobs:
             core.setOutput("headRepoFullName", pr.head.repo.full_name);
 
       - name: Check out PR branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         env: 
           HEADREPOFULLNAME: ${{ steps.pr_info.outputs.headRepoFullName }}
           HEADREF: ${{ steps.pr_info.outputs.headRef }}
@@ -58,7 +58,7 @@ jobs:
           echo "Head Repo Full Name: ${{ env.HEADREPOFULLNAME }}"
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
 
       - name: Install dependencies
         run: |
@@ -111,7 +111,7 @@ jobs:
 
       - name: Comment on PR with workflow run link
         if: steps.commit_and_push.outputs.changes_pushed == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8
         with:
           script: |
             const prNumber = parseInt(process.env.prNumber, 10);

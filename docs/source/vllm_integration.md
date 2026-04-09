@@ -3,7 +3,7 @@
 This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summarize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood.
 
 > [!WARNING]
-> TRL currently only supports vLLM versions from `0.10.2` to `0.17.1`. Please ensure you have a version in this range installed to avoid compatibility issues.
+> TRL currently only supports vLLM versions from `0.11.0` to `0.17.1`. Please ensure you have a version in this range installed to avoid compatibility issues.
 
 > [!TIP]
 > The following trainers currently support generation with vLLM:

@@ -96,7 +96,6 @@ class TestNashMDTrainer(TrlTestCase):
             remove_unused_columns=False,
             gradient_accumulation_steps=1,
             learning_rate=9e-1,
-            eval_strategy="steps",
             report_to="none",
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
@@ -108,7 +107,6 @@ class TestNashMDTrainer(TrlTestCase):
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
         )
 
         trainer.train()
@@ -124,7 +122,6 @@ class TestNashMDTrainer(TrlTestCase):
             per_device_train_batch_size=2,
             max_steps=3,
             learning_rate=5.0e-7,
-            eval_strategy="steps",
             report_to="none",
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
@@ -135,7 +132,6 @@ class TestNashMDTrainer(TrlTestCase):
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
             peft_config=lora_config,
         )
 
@@ -152,7 +148,6 @@ class TestNashMDTrainer(TrlTestCase):
             per_device_train_batch_size=2,
             max_steps=3,
             learning_rate=5.0e-7,
-            eval_strategy="steps",
             report_to="none",
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
@@ -164,7 +159,6 @@ class TestNashMDTrainer(TrlTestCase):
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
             peft_config=lora_config,
         )
 
@@ -214,7 +208,6 @@ class TestNashMDTrainer(TrlTestCase):
             remove_unused_columns=False,
             gradient_accumulation_steps=1,
             learning_rate=9e-1,
-            eval_strategy="steps",
             report_to="none",
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
@@ -227,7 +220,6 @@ class TestNashMDTrainer(TrlTestCase):
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
         )
 
         trainer.train()
