@@ -114,6 +114,7 @@ class TestCloneChatTemplate(TrlTestCase):
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
+        pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
     ],
@@ -497,6 +498,7 @@ class TestGetTrainingChatTemplate:
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
+        pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
         pytest.param(
@@ -531,8 +533,11 @@ class TestParseResponse:
         assert parsed == messages[-1]
 
     def test_parse_response_with_reasoning_content(self, tokenizer_name):
-        if tokenizer_name == "trl-internal-testing/tiny-Gemma4ForConditionalGeneration":
-            pytest.skip("Gemma4 doesn't support inline reasoning_content.")
+        if tokenizer_name in (
+            "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+        ):
+            pytest.skip("This model doesn't support inline reasoning_content.")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if getattr(tokenizer, "response_schema", None) is None:
             tokenizer = add_response_schema(tokenizer)
@@ -600,6 +605,8 @@ class TestParseResponse:
         assert parsed == {"role": "assistant", "content": "", "tool_calls": tool_calls}
 
     def test_parse_response_multiple_tool_calls(self, tokenizer_name):
+        if tokenizer_name == "trl-internal-testing/tiny-GptOssForCausalLM":
+            pytest.skip("GPT-OSS template only renders one tool call per assistant message.")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if getattr(tokenizer, "response_schema", None) is None:
             tokenizer = add_response_schema(tokenizer)
