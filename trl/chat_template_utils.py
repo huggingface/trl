@@ -117,6 +117,84 @@ def clone_chat_template(
     return model, tokenizer, added_tokens
 
 
+glm4moe_schema = {
+    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?$",
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "reasoning_content": {"type": "string"},
+        "tool_calls": {
+            "type": "array",
+            "x-regex-iterator": r"<tool_call>\s*(.+?)\s*</tool_call>",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "x-regex": r"^(\S+)"},
+                            "arguments": {
+                                "type": "object",
+                                "x-regex-key-value": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*\n<arg_value>(?P<value>.*?)</arg_value>",
+                                "default": {},
+                                "additionalProperties": {
+                                    "x-parser": "json",
+                                    "x-parser-args": {"allow_non_json": True},
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+gptoss_schema = {
+    # Normalize final content to analysis format so both map to the same "content" group.
+    "x-regex-substitutions": [
+        [r"<\|channel\|>final<\|message\|>(.*?)<\|return\|>", r"<|channel|>analysis<|message|>\1<|end|>"],
+    ],
+    "x-regex": r"^(?:<\|channel\|>analysis<\|message\|>(?P<content>.*?)<\|end\|>(?:<\|start\|>assistant)?)?\s*(?P<tool_calls>to=functions\.\S+<\|channel\|>commentary json<\|message\|>.*?<\|call\|>)?$",
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "tool_calls": {
+            "type": "array",
+            "x-regex-iterator": r"(to=functions\.\S+<\|channel\|>commentary json<\|message\|>.*?<\|call\|>)",
+            "items": {
+                # Convert "to=functions.NAME<|channel|>commentary json<|message|>ARGS<|call|>"
+                # into '{"name": "NAME", "arguments": ARGS}' so it can be parsed as JSON.
+                "x-regex-substitutions": [
+                    [
+                        r"to=functions\.(\S+)<\|channel\|>commentary json<\|message\|>(.*?)<\|call\|>",
+                        r'{"name": "\1", "arguments": \2}',
+                    ],
+                ],
+                "x-parser": "json",
+                "x-parser-args": {"transform": "{type: 'function', function: @}"},
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "arguments": {
+                                "type": "object",
+                                "additionalProperties": {},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
 # Adapted and corrected versions of the schemas from:
 # https://github.com/huggingface/transformers/blob/main/tests/utils/test_chat_parsing_utils.py
 qwen3_schema = {
@@ -186,42 +264,10 @@ qwen3_5_schema = {
     },
 }
 
-glm4moe_schema = {
-    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?$",
-    "type": "object",
-    "properties": {
-        "role": {"const": "assistant"},
-        "content": {"type": "string"},
-        "reasoning_content": {"type": "string"},
-        "tool_calls": {
-            "type": "array",
-            "x-regex-iterator": r"<tool_call>\s*(.+?)\s*</tool_call>",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "type": {"const": "function"},
-                    "function": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string", "x-regex": r"^(\S+)"},
-                            "arguments": {
-                                "type": "object",
-                                "x-regex-key-value": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*\n<arg_value>(?P<value>.*?)</arg_value>",
-                                "default": {},
-                                "additionalProperties": {
-                                    "x-parser": "json",
-                                    "x-parser-args": {"allow_non_json": True},
-                                },
-                            },
-                        },
-                    },
-                },
-            },
-        },
-    },
-}
 
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
+
+gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text()
 
 qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text()
 
@@ -261,6 +307,8 @@ def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     """
     if tokenizer.chat_template == glm4moe_chat_template:
         tokenizer.response_schema = glm4moe_schema
+    if tokenizer.chat_template == gptoss_chat_template:
+        tokenizer.response_schema = gptoss_schema
         return tokenizer
     if tokenizer.chat_template == qwen3_chat_template:
         tokenizer.response_schema = qwen3_schema

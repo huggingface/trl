@@ -15,6 +15,10 @@ Used for identity comparison only.
 
 Original GLM-4-MoE chat template.
 
+### `gptoss.jinja`
+
+Original GPT-OSS chat template.
+
 ### `qwen3.jinja`
 
 Original Qwen3 chat template.
