@@ -232,6 +232,8 @@ qwen3_5_schema = {
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text()
 
+llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text()
+
 qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text()
 
 qwen3_5_chat_template_2b_and_below = (_CHAT_TEMPLATES_DIR / "qwen3_5_2b_and_below.jinja").read_text()
@@ -365,6 +367,8 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
     return text2.startswith(text1)
 
 
+llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text()
+
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text()
 
 
@@ -374,7 +378,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently Qwen3 is supported.
+    requirements. Currently Llama 3 and Qwen3 are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -423,14 +427,17 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     if is_chat_template_prefix_preserving(tokenizer) and "{% generation %}" in tokenizer.chat_template:
         return None  # No patching needed
 
+    if tokenizer.chat_template == llama3_chat_template:
+        return llama3_training_chat_template
+
     if tokenizer.chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
-    else:
-        raise ValueError(
-            "The tokenizer's chat template is not training-compatible (missing prefix-preservation or "
-            "`{% generation %}` markers) and patching is not supported for this template. "
-            "Please manually modify the tokenizer's chat template for training."
-        )
+
+    raise ValueError(
+        "The tokenizer's chat template is not training-compatible (missing prefix-preservation or "
+        "`{% generation %}` markers) and patching is not supported for this template. "
+        "Please manually modify the tokenizer's chat template for training."
+    )
 
 
 def _validate_tool_calls(tool_calls: list | None) -> None:
