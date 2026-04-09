@@ -240,7 +240,7 @@ class _DistillationCollator:
             has_completion = len(messages) > 1 and messages[-1].get("role") == "assistant"
             prompt_messages = messages[:-1] if has_completion else messages
 
-            # Tokenize prompt with its own budget (truncate from the left to keep recent context)
+            # Tokenize prompt with its own budget using the tokenizer's truncation side
             formatted_prompt = self.tokenizer.apply_chat_template(
                 prompt_messages, tokenize=False, add_generation_prompt=True
             )

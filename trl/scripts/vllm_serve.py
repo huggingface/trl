@@ -784,7 +784,7 @@ def main(script_args: ScriptArguments):
                                 future.set_result((outputs_slice, prompt_lengths, top_logprobs, response_format))
                     except Exception as e:
                         # Signal error to all waiting requests in this execution-parameter group
-                        for _, _, _, future in items:
+                        for *_, future in items:
                             if not future.done():
                                 future.set_exception(e)
             except Exception as e:
@@ -929,6 +929,13 @@ def main(script_args: ScriptArguments):
         """
         if len(request.sequences) != len(request.prompt_lengths):
             raise ValueError("sequences and prompt_lengths must have the same length.")
+
+        for i, (seq, pl) in enumerate(zip(request.sequences, request.prompt_lengths, strict=True)):
+            if pl < 0 or pl > len(seq):
+                raise ValueError(
+                    f"Sequence {i} has prompt_length={pl} which is out of range [0, {len(seq)}]. "
+                    f"prompt_length must be between 0 and the sequence length inclusive."
+                )
 
         # Validate sequence lengths against max_model_len to prevent worker OOM crashes
         if _max_model_len:

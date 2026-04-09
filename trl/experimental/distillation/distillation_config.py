@@ -201,8 +201,8 @@ class DistillationConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of tokens for the prompt. If None, auto-computed as "
-            "max_length - max_completion_length. Prompts are truncated from the left to preserve "
-            "the most recent context near the generation point."
+            "max_length - max_completion_length. Prompts are truncated according to the "
+            "tokenizer's truncation_side setting."
         },
     )
     disable_dropout: bool = field(
