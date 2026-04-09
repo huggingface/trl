@@ -35,6 +35,12 @@ jobs:
           script: |
             const body = process.env.PR_BODY || "";
 
+            // Validate input to prevent resource exhaustion
+            if (body.length > 65536) {
+              core.setFailed("PR body exceeds maximum allowed length (64KB).");
+              return;
+            }
+
             const errors = [];
 
             // 1. Must have a non-placeholder description (the "What does this PR do?" section)
