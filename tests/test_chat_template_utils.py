@@ -160,7 +160,8 @@ class TestSupportsToolCalling:
                 ),
             ),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
-            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
+            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
             pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", id="qwen3"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3moe"),
@@ -194,6 +195,8 @@ class TestSupportsToolCalling:
             # Silently ignores tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM", id="phi3"),
+            # Silently drops assistant tool_calls (basic Llama 3 template only reads message['content'])
+            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         ],
     )
     def test_does_not_support_tool_calling(self, model_id):
