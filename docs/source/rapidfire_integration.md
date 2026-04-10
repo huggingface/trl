@@ -62,7 +62,7 @@ Once installed, authenticate with Hugging Face and initialize RapidFire AI:
 
 ```bash
 # Authenticate with Hugging Face
-huggingface-cli login --token YOUR_TOKEN
+hf auth login --token YOUR_TOKEN
 
 # Workaround for current issue: https://github.com/huggingface/xet-core/issues/527
 pip uninstall -y hf-xet

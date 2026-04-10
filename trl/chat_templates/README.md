@@ -56,3 +56,10 @@ Always include the thinking block regardless of message position. The original c
 ```
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `gptoss_training.jinja`
+
+Patched GPT-OSS template. Diff vs `gptoss.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
+`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.

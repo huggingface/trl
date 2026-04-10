@@ -60,9 +60,6 @@ class SFTConfig(_BaseConfig):
         eos_token (`str`, *optional*):
             Token used to indicate the end of a turn or sequence. If `None`, it defaults to
             `processing_class.eos_token`.
-        pad_token (`str`, *optional*):
-            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
-            it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left
             or right depending on `truncation_mode`. If `None`, no truncation is applied. When packing is enabled,
@@ -106,6 +103,17 @@ class SFTConfig(_BaseConfig):
             Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629)).
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
+
+        > Deprecated parameters
+
+        pad_token:
+
+            <Deprecated version="1.1.0">
+
+            Parameter `pad_token` is deprecated and will be removed in version v2.0.0. Set `tokenizer.pad_token`
+            directly and pass it as `processing_class` to the trainer instead.
+
+            </Deprecated>
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -165,13 +173,6 @@ class SFTConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
-        },
-    )
-    pad_token: str | None = field(
-        default=None,
-        metadata={
-            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
-            "is also `None`, it falls back to `processing_class.eos_token`."
         },
     )
     max_length: int | None = field(
@@ -266,9 +267,23 @@ class SFTConfig(_BaseConfig):
         metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
+    # Deprecated parameters
+    pad_token: str | None = field(
+        default=None,
+        metadata={
+            "help": "Deprecated. Set `tokenizer.pad_token` directly and pass it as `processing_class` to the trainer instead."
+        },
+    )
+
     def __post_init__(self):
         super().__post_init__()
-
+        if self.pad_token is not None:
+            warnings.warn(
+                "`pad_token` is deprecated and will be removed in v2.0.0. "
+                "Set `tokenizer.pad_token` directly and pass it as `processing_class` to the trainer instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
         if self.truncation_mode == "keep_end":
             warnings.warn(
                 "The `'keep_end'` truncation mode is deprecated and will be removed in v2.0.0. "
@@ -276,7 +291,6 @@ class SFTConfig(_BaseConfig):
                 FutureWarning,
                 stacklevel=3,
             )
-
         if self.packing_strategy == "bfd-requeue":
             warnings.warn(
                 "The `bfd-requeue` packing strategy has been renamed to `bfd_split`. Please update your configuration accordingly. "
