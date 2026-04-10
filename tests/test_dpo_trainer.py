@@ -1030,8 +1030,22 @@ class TestDPOTrainer(TrlTestCase):
             ),
             # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
             # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  high memory peak, skipped for now
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__).is_devrelease,
+                    reason="Upstream issue with transformers 5.6.0.dev0, see #5497",
+                    strict=True,
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__).is_devrelease,
+                    reason="Upstream issue with transformers 5.6.0.dev0, see #5497",
+                    strict=True,
+                ),
+            ),
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
