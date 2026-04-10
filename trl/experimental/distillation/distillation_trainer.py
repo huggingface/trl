@@ -37,13 +37,8 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
-from transformers.utils import (
-    is_liger_kernel_available,
-    is_peft_available,
-    is_rich_available,
-    is_trackio_available,
-    is_wandb_available,
-)
+from transformers import is_trackio_available, is_wandb_available
+from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
