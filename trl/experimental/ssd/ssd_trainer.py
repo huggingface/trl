@@ -15,8 +15,8 @@
 """Trainer for Simple Self-Distillation (SSD).
 
 Implements the method from *Embarrassingly Simple Self-Distillation Improves Code Generation* (Zhang et al., 2026):
-sample completions from the frozen model at a training-time temperature and truncation configuration, then fine-tune
-on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or
+sample completions from the frozen model at a training-time temperature and truncation configuration, then fine-tune on
+those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or
 reinforcement learning is needed.
 """
 

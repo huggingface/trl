@@ -186,7 +186,9 @@ class SSDConfig(_BaseConfig):
     )
     vllm_server_base_url: str | None = field(
         default=None,
-        metadata={"help": "Base URL for the vLLM server. If provided, vllm_server_host and vllm_server_port are ignored."},
+        metadata={
+            "help": "Base URL for the vLLM server. If provided, vllm_server_host and vllm_server_port are ignored."
+        },
     )
     vllm_server_host: str = field(
         default="0.0.0.0",
