@@ -394,6 +394,7 @@ class BCOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "bco"]
     _name = "BCO"
+    dataset_types = ("unpaired-preference", "preference")
     _paper = {
         "title": "Binary Classifier Optimization for Large Language Model Alignment",
         "id": "2404.04656",

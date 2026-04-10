@@ -422,6 +422,8 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`experimental.prm.PRMTrainer`] | [Stepwise supervision](#stepwise-supervision) |
 | [`experimental.xpo.XPOTrainer`] | [Prompt-only](#prompt-only) |
 
+The same metadata is also exposed programmatically on each trainer class through the `dataset_types` attribute. For example, `GRPOTrainer.dataset_types == ("prompt-only",)`.
+
 ## Using any dataset with TRL: preprocessing and conversion
 
 Many datasets come in formats tailored to specific tasks, which might not be directly compatible with TRL. To use such datasets with TRL, you may need to preprocess and convert them into the required format.

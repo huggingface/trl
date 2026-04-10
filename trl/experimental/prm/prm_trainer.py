@@ -134,6 +134,7 @@ class PRMTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "prm"]
     _name = "PRM"
+    dataset_types = ("stepwise-supervision",)
     _paper = {
         "title": "Solving math word problems with process-and outcome-based feedback",
         "id": "2211.14275",

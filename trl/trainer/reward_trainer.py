@@ -317,6 +317,7 @@ class RewardTrainer(_BaseTrainer):
     _tag_names = ["trl", "reward-trainer"]
     _name = "Reward"
     _template_file = "rm_model_card.md"
+    dataset_types = ("preference",)
 
     def __init__(
         self,

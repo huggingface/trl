@@ -92,6 +92,7 @@ class GKDTrainer(SFTTrainer):
 
     _tag_names = ["trl", "gkd"]
     _name = "GKD"
+    dataset_types = ("prompt-completion",)
     _paper = {
         "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
         "id": "2306.13649",

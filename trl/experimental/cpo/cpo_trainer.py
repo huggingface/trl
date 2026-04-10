@@ -111,6 +111,7 @@ class CPOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "cpo"]
     _name = "CPO"
+    dataset_types = ("preference",)
     _paper = {
         "title": "Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation",
         "id": "2401.08417",

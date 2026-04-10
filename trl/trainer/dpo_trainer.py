@@ -484,6 +484,7 @@ class DPOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "dpo"]
     _name = "DPO"
+    dataset_types = ("preference",)
     _paper = {
         "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
         "id": "2305.18290",

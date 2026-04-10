@@ -639,6 +639,7 @@ class SFTTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "sft"]
     _name = "SFT"
+    dataset_types = ("language-modeling", "prompt-completion")
 
     def __init__(
         self,

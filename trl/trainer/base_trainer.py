@@ -28,6 +28,7 @@ class _BaseTrainer(Trainer):
     _name = "Base"
     _paper = {}
     _template_file = None
+    dataset_types: tuple[str, ...] = ()
 
     def create_model_card(
         self,

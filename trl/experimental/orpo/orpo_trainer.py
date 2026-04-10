@@ -122,6 +122,7 @@ class ORPOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "orpo"]
     _name = "ORPO"
+    dataset_types = ("preference",)
     _paper = {
         "title": "ORPO: Monolithic Preference Optimization without Reference Model",
         "id": "2403.07691",

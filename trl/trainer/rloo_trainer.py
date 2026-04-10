@@ -202,6 +202,7 @@ class RLOOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "rloo"]
     _name = "RLOO"
+    dataset_types = ("prompt-only",)
     _paper = {
         "title": "Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs",
         "id": "2402.14740",

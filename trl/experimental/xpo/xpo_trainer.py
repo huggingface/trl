@@ -89,6 +89,7 @@ class XPOTrainer(OnlineDPOTrainer):
 
     _tag_names = ["trl", "xpo"]
     _name = "XPO"
+    dataset_types = ("prompt-only",)
     _paper = {
         "title": "Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF",
         "id": "2405.21046",

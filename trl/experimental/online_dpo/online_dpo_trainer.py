@@ -153,6 +153,7 @@ class OnlineDPOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "online-dpo"]
     _name = "Online DPO"
+    dataset_types = ("prompt-only",)
     _paper = {
         "title": "Direct Language Model Alignment from Online AI Feedback",
         "id": "2402.04792",

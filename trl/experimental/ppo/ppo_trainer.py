@@ -341,6 +341,7 @@ class PPOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "ppo"]
     _name = "PPO"
+    dataset_types = ("tokenized-language-modeling",)
     _paper = {
         "title": "Fine-Tuning Language Models from Human Preferences",
         "id": "1909.08593",

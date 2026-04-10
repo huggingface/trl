@@ -254,6 +254,7 @@ class GRPOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "grpo"]
     _name = "GRPO"
+    dataset_types = ("prompt-only",)
     _paper = {
         "title": "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
         "id": "2402.03300",

@@ -148,6 +148,7 @@ class NashMDTrainer(OnlineDPOTrainer):
 
     _tag_names = ["trl", "nash-md"]
     _name = "Nash-MD"
+    dataset_types = ("prompt-only",)
     _paper = {
         "title": "Nash Learning from Human Feedback",
         "id": "2312.00886",

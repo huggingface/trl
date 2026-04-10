@@ -293,6 +293,7 @@ class KTOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "kto"]
     _name = "KTO"
+    dataset_types = ("unpaired-preference", "preference")
     _paper = {
         "title": "KTO: Model Alignment as Prospect Theoretic Optimization",
         "id": "2402.01306",
