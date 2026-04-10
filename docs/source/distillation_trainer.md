@@ -34,16 +34,13 @@ config = DistillationConfig(
     num_train_epochs=1,
     per_device_train_batch_size=1,
     gradient_accumulation_steps=4,
-    learning_rate=1e-6,
     bf16=True,
     save_strategy="no",
     # Distillation
     lmbda=1.0,                      # fully on-policy (student generates)
     beta=1.0,                       # reverse KL
-    max_completion_length=512,
     # vLLM for student generation
     use_vllm=True,
-    vllm_gpu_memory_utilization=0.3,
     # Teacher
     teacher_model_init_kwargs={"torch_dtype": "bfloat16"},
     report_to="none",
