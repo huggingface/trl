@@ -307,6 +307,7 @@ def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     """
     if tokenizer.chat_template == glm4moe_chat_template:
         tokenizer.response_schema = glm4moe_schema
+        return tokenizer
     if tokenizer.chat_template == gptoss_chat_template:
         tokenizer.response_schema = gptoss_schema
         return tokenizer
