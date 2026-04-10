@@ -384,15 +384,13 @@ class RewardTrainer(_BaseTrainer):
 
         # Handle pad token for processors or tokenizers
         if args.eos_token is not None:
-            eos_token = args.eos_token
-            eos_token_id = processing_class.convert_tokens_to_ids(eos_token)
-            if eos_token_id is None:
+            if args.eos_token not in processing_class.get_vocab():
                 raise ValueError(
-                    f"The specified `eos_token` ('{eos_token}') is not found in the vocabulary of the given "
+                    f"The specified `eos_token` ('{args.eos_token}') is not found in the vocabulary of the given "
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `eos_token` exists "
                     "in the vocabulary before using it as an EOS token."
                 )
-            processing_class.eos_token_id = eos_token_id
+            processing_class.eos_token = args.eos_token
 
         if args.chat_template_path is not None:
             if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
@@ -465,20 +463,18 @@ class RewardTrainer(_BaseTrainer):
         # If not provided, use the one from the processing class or the eos token if the processing class does not have
         # a pad token.
         pad_token = args.pad_token or processing_class.pad_token or processing_class.eos_token
-        pad_token_id = processing_class.convert_tokens_to_ids(pad_token)
-        if pad_token_id is None:
+        if pad_token not in processing_class.get_vocab():
             raise ValueError(
                 f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
                 f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                 "in the vocabulary before using it as a padding token."
             )
-        model.config.pad_token_id = pad_token_id
-        processing_class.pad_token_id = pad_token_id
+        processing_class.pad_token = pad_token
 
         # Data collator
         if data_collator is None:
             data_collator = DataCollatorForPreference(
-                pad_token_id=pad_token_id,
+                pad_token_id=processing_class.pad_token_id,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
 

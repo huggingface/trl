@@ -4,6 +4,8 @@
       Always check for both tags to avoid edge cases where the model generates only one tag.
     - Removed the loop.index0 > ns.last_query_index conditional; always include thinking block.
       This makes the template prefix-preserving for the [user, assistant] → [user, assistant, tool] transition.
+    - Added {% generation %} / {% endgeneration %} around assistant message output to support
+      assistant-only loss masking in SFT training.
 -#}
 {%- if tools %}
     {{- '<|im_start|>system\n' }}
@@ -47,7 +49,9 @@
                 {%- set content = content.split('</think>')[-1].lstrip('\n') %}
             {%- endif %}
         {%- endif %}
-        {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+        {{- '<|im_start|>' + message.role + '\n' }}
+        {%- generation %}
+        {{- '<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
         {%- if message.tool_calls %}
             {%- for tool_call in message.tool_calls %}
                 {%- if (loop.first and content) or (not loop.first) %}
@@ -68,6 +72,7 @@
             {%- endfor %}
         {%- endif %}
         {{- '<|im_end|>\n' }}
+        {%- endgeneration %}
     {%- elif message.role == "tool" %}
         {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
             {{- '<|im_start|>user' }}

@@ -43,7 +43,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..chat_template_utils import clone_chat_template
+from ..chat_template_utils import clone_chat_template, get_training_chat_template
 from ..data_utils import (
     apply_chat_template,
     is_conversational,
@@ -711,15 +711,13 @@ class SFTTrainer(_BaseTrainer):
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
         if args.eos_token is not None:
-            eos_token = args.eos_token
-            eos_token_id = tokenizer.convert_tokens_to_ids(eos_token)
-            if eos_token_id is None:
+            if args.eos_token not in tokenizer.get_vocab():
                 raise ValueError(
-                    f"The specified `eos_token` ('{eos_token}') is not found in the vocabulary of the given "
+                    f"The specified `eos_token` ('{args.eos_token}') is not found in the vocabulary of the given "
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `eos_token` exists "
                     "in the vocabulary before using it as an EOS token."
                 )
-            tokenizer.eos_token_id = eos_token_id
+            tokenizer.eos_token = args.eos_token
 
         if args.chat_template_path is not None:
             if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
@@ -883,15 +881,15 @@ class SFTTrainer(_BaseTrainer):
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
             pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
-            pad_token_id = tokenizer.convert_tokens_to_ids(pad_token)
-            if pad_token_id is None:
+            if pad_token not in tokenizer.get_vocab():
                 raise ValueError(
                     f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
+            tokenizer.pad_token = pad_token
             data_collator = DataCollatorForLanguageModeling(
-                pad_token_id=pad_token_id,
+                pad_token_id=tokenizer.pad_token_id,
                 max_length=None if self.padding_free else args.max_length,
                 truncation_mode=args.truncation_mode,
                 completion_only_loss=self.completion_only_loss,
@@ -921,6 +919,13 @@ class SFTTrainer(_BaseTrainer):
                 "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
                 "supported for conversational datasets."
             )
+
+        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers
+        # if the current template doesn't already have them.
+        if args.assistant_only_loss and "{% generation %}" not in processing_class.chat_template:
+            self.chat_template = get_training_chat_template(processing_class)
+        else:
+            self.chat_template = None
 
         # Dataset
         if self.padding_free and not args.packing and args.max_length is not None and not self._is_vision_dataset:
@@ -1038,7 +1043,9 @@ class SFTTrainer(_BaseTrainer):
         if isinstance(input, list):  # conversational: list of message dicts
             if self._is_vlm:
                 input = prepare_multimodal_messages(input)
-            result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
+            result = processing_class.apply_chat_template(
+                input, tokenize=True, return_dict=True, chat_template=self.chat_template, **kwargs
+            )
         else:  # non-conversational: plain text string
             result = processing_class(text=input)
         # VLMs emit a batch dimension even for single examples; unwrap it

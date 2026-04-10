@@ -3,9 +3,11 @@
 Jinja2 chat templates stored here serve two purposes:
 
 1. **Identity comparison**: detecting which model is being used (by comparing `tokenizer.chat_template` against known templates) to add the appropriate response schema (`add_response_schema`) or swap in a training template (`get_training_chat_template`).
-2. **Training patches**: modified templates that fix prefix-preservation issues for the GRPO tool call loop.
+2. **Training patches**: modified templates that fix training-specific issues (prefix-preservation for GRPO, `{% generation %}` markers for SFT assistant-only loss).
 
 **Why prefix-preserving?** The GRPO tool call loop extracts tool response formatting tokens by comparing tokenizations with and without tool messages appended (`_get_tool_suffix_ids`). This requires the chat template to be *prefix-preserving*: appending messages must not change how earlier messages are rendered.
+
+**Why generation-tagged?** SFT with `assistant_only_loss=True` requires the chat template to include `{% generation %}` / `{% endgeneration %}` markers around assistant output, so `return_assistant_tokens_mask=True` can produce correct masks. Most model templates don't include these markers natively.
 
 ## Original templates
 
@@ -29,11 +31,11 @@ Original Qwen3.5 chat templates.
 
 ## Training templates
 
-Patched templates that fix prefix-preservation issues. Swapped in at init when tools are enabled.
+Patched templates that fix training-specific issues. Swapped in at init when tools are enabled (GRPO) or when `assistant_only_loss=True` (SFT).
 
 ### `qwen3_training.jinja`
 
-Patched Qwen3 template that always includes thinking blocks, making it prefix-preserving. Diff vs `qwen3.jinja`:
+Patched Qwen3 template. Diff vs `qwen3.jinja`:
 
 Require both `<think>` and `</think>` to be present before parsing, to avoid incorrect splitting when the model generates only one tag:
 
@@ -56,3 +58,12 @@ Always include the thinking block regardless of message position. The original c
 - {%- endif %}
 + {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
 ```
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `gptoss_training.jinja`
+
+Patched GPT-OSS template. Diff vs `gptoss.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
+`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.

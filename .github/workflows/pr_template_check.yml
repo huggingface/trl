@@ -1,5 +1,7 @@
-# This workflow runs on every PR opened or edited by a first-time contributor (author_association
-# is FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, or NONE). It checks that the PR body:
+# This workflow runs when a PR is first opened by an external contributor
+# (author_association is FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, or NONE).
+# Org members with public membership are skipped (author_association = MEMBER).
+# It checks that the PR body:
 #   1. Contains a non-empty description (not just the template placeholder)
 #   2. Includes the "## Before submitting" checklist
 #   3. Has at least one checkbox checked
@@ -9,7 +11,7 @@ name: PR Template Check
 
 on:
   pull_request_target:
-    types: [opened, edited, reopened]
+    types: [opened]
 
 permissions:
   pull-requests: write
@@ -19,18 +21,14 @@ permissions:
 jobs:
   check-pr-template:
     runs-on: ubuntu-latest
-    if: |
-      (github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' ||
-       github.event.pull_request.author_association == 'FIRST_TIMER' ||
-       github.event.pull_request.author_association == 'NONE') &&
-      !(github.event.action == 'reopened' &&
-        (github.event.sender.author_association == 'MEMBER' ||
-         github.event.sender.author_association == 'OWNER' ||
-         github.event.sender.author_association == 'COLLABORATOR'))
+    if: >
+      github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' ||
+      github.event.pull_request.author_association == 'FIRST_TIMER' ||
+      github.event.pull_request.author_association == 'NONE'
     steps:
       - name: Check PR body follows template
         id: check
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         with:
