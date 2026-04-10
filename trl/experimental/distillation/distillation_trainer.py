@@ -41,6 +41,8 @@ from transformers.utils import (
     is_liger_kernel_available,
     is_peft_available,
     is_rich_available,
+    is_trackio_available,
+    is_wandb_available,
 )
 
 from ...extras.profiling import profiling_decorator
@@ -64,6 +66,12 @@ if is_peft_available():
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+
+if is_wandb_available():
+    import wandb
+
+if is_trackio_available():
+    import trackio
 
 if is_rich_available():
     from rich.console import Console
@@ -1647,7 +1655,7 @@ class DistillationTrainer(_BaseTrainer):
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
-        # Log completions to console and wandb
+        # Log completions to console, wandb, and trackio
         should_log_completions = (
             self.log_completions
             and self.state.global_step > 0
@@ -1661,25 +1669,25 @@ class DistillationTrainer(_BaseTrainer):
             if prompts:
                 _print_completions_sample(prompts, completions, self.state.global_step, self.num_completions_to_print)
 
-                # Log as a wandb Table
-                if self.args.report_to and "wandb" in self.args.report_to:
-                    try:
-                        import wandb
+                logging_backends = []
+                if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                    logging_backends.append(wandb)
+                if self.args.report_to and "trackio" in self.args.report_to:
+                    logging_backends.append(trackio)
 
-                        if wandb.run is not None:
-                            import pandas as pd
+                import pandas as pd
 
-                            table_data = {
-                                "step": [str(self.state.global_step)] * len(prompts),
-                                "prompt": prompts,
-                                "completion": completions,
-                            }
-                            df = pd.DataFrame(table_data)
-                            if self.num_completions_to_print and len(df) > self.num_completions_to_print:
-                                df = df.sample(n=self.num_completions_to_print, random_state=42)
-                            wandb.log({"completions": wandb.Table(dataframe=df)})
-                    except ImportError:
-                        pass
+                table_data = {
+                    "step": [str(self.state.global_step)] * len(prompts),
+                    "prompt": prompts,
+                    "completion": completions,
+                }
+                df = pd.DataFrame(table_data)
+                if self.num_completions_to_print and len(df) > self.num_completions_to_print:
+                    df = df.sample(n=self.num_completions_to_print, random_state=42)
+
+                for logging_backend in logging_backends:
+                    logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
 
         # Clear text logs on all processes after the logging interval
         if should_log_completions:
