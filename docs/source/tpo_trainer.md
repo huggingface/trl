@@ -8,8 +8,7 @@ Triple Preference Optimization (TPO) was introduced in the paper [Triple Prefere
 
 The abstract from the paper is the following:
 
-> Reinforcement Learning with Human Feedback (RLHF) enhances the alignment
-of Large Language Models (LLMs). However, its limitations have led to the development of Direct Preference Optimization (DPO), an RL-free approach designed to overcome these shortcomings. While studies have shown that DPO improves instruction-following capabilities, it negatively impacts the reasoning ability of LLMs. Additionally, DPO is highly sensitive to judgment noise in preference datasets and the size of the training set. Although several modifications to DPO have been proposed, they still fail to fully resolve these issues. To address these limitations, we propose Triple Preference Optimization (TPO), a new preference learning method designed to enhance both reasoning and instruction-following abilities through one-step optimization. We compare TPO against DPO and its recent variants using state-of-the-art training setups, including both base and instructiontuned models such as Mistral and Llama 3. Our evaluation covers a comprehensive range of chat-based and reasoning benchmarks. The results demonstrate that TPO achieves significant improvements over existing methods without substantially increasing response length across different dataset sizes. Specifically, TPO outperforms DPO and SimPO by up to 7.0% and 7.3% points on Arena-Hard, 12.2% and 13.3% points on MixEval-Hard, 10.4% and 10.1% points on MMLU-Pro, and 19.0% and 19.2% points on GSM8K, respectively. Furthermore, TPO achieves these improvements while requiring less data than DPO.
+> Reinforcement Learning with Human Feedback (RLHF) enhances the alignment of Large Language Models (LLMs). However, its limitations have led to the development of Direct Preference Optimization (DPO), an RL-free approach designed to overcome these shortcomings. While studies have shown that DPO improves instruction-following capabilities, it negatively impacts the reasoning ability of LLMs. Additionally, DPO is highly sensitive to judgment noise in preference datasets and the size of the training set. Although several modifications to DPO have been proposed, they still fail to fully resolve these issues. To address these limitations, we propose Triple Preference Optimization (TPO), a new preference learning method designed to enhance both reasoning and instruction-following abilities through one-step optimization. We compare TPO against DPO and its recent variants using state-of-the-art training setups, including both base and instructiontuned models such as Mistral and Llama 3. Our evaluation covers a comprehensive range of chat-based and reasoning benchmarks. The results demonstrate that TPO achieves significant improvements over existing methods without substantially increasing response length across different dataset sizes. Specifically, TPO outperforms DPO and SimPO by up to 7.0% and 7.3% points on Arena-Hard, 12.2% and 13.3% points on MixEval-Hard, 10.4% and 10.1% points on MMLU-Pro, and 19.0% and 19.2% points on GSM8K, respectively. Furthermore, TPO achieves these improvements while requiring less data than DPO.
 
 This post-training method was contributed by [Kashif Rasul](https://huggingface.co/kashif).
 
@@ -112,7 +111,6 @@ Setting `tpo_alpha=0.0` disables the NLL term entirely (the reference response i
 While training and evaluating we record the following metrics:
 
 * `loss`: The total TPO loss (contrastive + `tpo_alpha` × NLL) averaged over the current logging interval.
-* `nll_loss`: The supervised NLL loss on the gold (`reference`) completion.
 * `entropy`: The average entropy of the model's predicted token distribution over completion tokens.
 * `mean_token_accuracy`: The proportion of completion tokens for which the model's top-1 prediction matches the chosen completion.
 * `num_tokens`: The total number of tokens processed so far.
@@ -120,11 +118,15 @@ While training and evaluating we record the following metrics:
 * `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected completion.
 * `logps/chosen`: The average log-probability assigned by the model to the chosen completion.
 * `logps/rejected`: The average log-probability assigned by the model to the rejected completion.
-* `logps/reference`: The average log-probability assigned by the model to the gold (`reference`) completion.
 * `rewards/chosen`: The average implicit reward computed for the chosen completion, defined as  \\( \beta \log \pi_{\theta}(y^{+}\!\mid x) \\).
 * `rewards/rejected`: The average implicit reward computed for the rejected completion, defined as  \\( \beta \log \pi_{\theta}(y^{-}\!\mid x) \\).
 * `rewards/margins`: The average implicit reward margin between the chosen and rejected completions.
 * `rewards/accuracies`: The proportion of examples where the implicit reward for the chosen completion is higher than that for the rejected completion.
+
+The following metrics are only logged when `tpo_alpha != 0.0` (i.e. when the reference branch is active):
+
+* `nll_loss`: The supervised NLL loss on the gold (`reference`) completion.
+* `logps/reference`: The average log-probability assigned by the model to the gold (`reference`) completion.
 
 ## TPOTrainer
 

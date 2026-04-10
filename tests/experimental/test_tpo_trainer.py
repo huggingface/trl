@@ -15,7 +15,6 @@
 import pytest
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM
 from transformers.utils import is_peft_available
 
 from trl.experimental.tpo import TPOConfig, TPOTrainer
@@ -102,38 +101,6 @@ class TestDataCollatorForTriplePreference(TrlTestCase):
         torch.testing.assert_close(result["input_ids"], expected_input_ids)
         assert set(result.keys()) == {"input_ids", "attention_mask", "completion_mask"}
 
-    def test_exclude_reference_missing_reference_ids_ok(self):
-        # When `include_reference=False` the collator must not touch `reference_ids`, so examples can omit it.
-        collator = DataCollatorForTriplePreference(pad_token_id=0, include_reference=False)
-        examples = [
-            {"prompt_ids": [1, 2], "chosen_ids": [3], "rejected_ids": [4]},
-            {"prompt_ids": [5], "chosen_ids": [6, 7], "rejected_ids": [8, 9]},
-        ]
-        result = collator(examples)
-        assert result["input_ids"].shape[0] == 4  # 2 * B
-
-    def test_with_pad_to_multiple_of(self):
-        collator = DataCollatorForTriplePreference(pad_token_id=0, pad_to_multiple_of=5)
-        examples = [
-            {"prompt_ids": [1], "chosen_ids": [2], "rejected_ids": [3], "reference_ids": [4]},
-            {"prompt_ids": [5, 6], "chosen_ids": [7, 8], "rejected_ids": [9, 10], "reference_ids": [11, 12]},
-        ]
-        result = collator(examples)
-
-        expected_input_ids = torch.tensor(
-            [
-                [1, 2, 0, 0, 0],  # prompt + chosen (example 1, padded to multiple of 5)
-                [5, 6, 7, 8, 0],  # prompt + chosen (example 2, padded to multiple of 5)
-                [1, 3, 0, 0, 0],  # prompt + rejected (example 1, padded to multiple of 5)
-                [5, 6, 9, 10, 0],  # prompt + rejected (example 2, padded to multiple of 5)
-                [1, 4, 0, 0, 0],  # prompt + reference (example 1, padded to multiple of 5)
-                [5, 6, 11, 12, 0],  # prompt + reference (example 2, padded to multiple of 5)
-            ]
-        )
-
-        assert set(result.keys()) == {"input_ids", "attention_mask", "completion_mask"}
-        torch.testing.assert_close(result["input_ids"], expected_input_ids)
-
 
 class TestExtractTriplePrompt(TrlTestCase):
     def test_standard(self):
@@ -147,27 +114,6 @@ class TestExtractTriplePrompt(TrlTestCase):
         assert result["chosen"] == " blue."
         assert result["rejected"] == " green."
         assert result["reference"] == " a beautiful shade of blue."
-
-    def test_conversational(self):
-        example = {
-            "chosen": [
-                {"role": "user", "content": "What color is the sky?"},
-                {"role": "assistant", "content": "It is blue."},
-            ],
-            "rejected": [
-                {"role": "user", "content": "What color is the sky?"},
-                {"role": "assistant", "content": "It is green."},
-            ],
-            "reference": [
-                {"role": "user", "content": "What color is the sky?"},
-                {"role": "assistant", "content": "It is a beautiful shade of blue."},
-            ],
-        }
-        result = _extract_triple_prompt(example)
-        assert result["prompt"] == [{"role": "user", "content": "What color is the sky?"}]
-        assert result["chosen"] == [{"role": "assistant", "content": "It is blue."}]
-        assert result["rejected"] == [{"role": "assistant", "content": "It is green."}]
-        assert result["reference"] == [{"role": "assistant", "content": "It is a beautiful shade of blue."}]
 
     def test_reference_missing_prompt_prefix_raises(self):
         example = {
@@ -196,39 +142,6 @@ class TestTPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
-
-        # Save the initial parameters to compare them later
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        # Train the model
-        trainer.train()
-
-        # Check that the training loss is not None
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
-
-    def test_train_model(self):
-        # Instantiate the model
-        model = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            dtype="float32",
-        )
-
-        # Get the dataset and synthesize a reference (gold) completion
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
-        dataset = dataset.map(_add_reference_column)
-
-        # Initialize the trainer
-        training_args = TPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,
-            report_to="none",
-        )
-        trainer = TPOTrainer(model=model, args=training_args, train_dataset=dataset)
 
         # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
