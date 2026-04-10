@@ -1381,3 +1381,102 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
         }
 
     model.forward = types.MethodType(_chunked_forward, model)
+
+
+def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
+    """
+    Estimate training FLOPs per token for a causal language model (forward + backward).
+
+    Supports both dense and MoE (Mixture-of-Experts) architectures. The backward pass is assumed to cost 2× the
+    forward pass, so total training FLOPs = 3 × forward FLOPs.
+
+    Args:
+        config ([`~transformers.PretrainedConfig`]):
+            The model configuration.
+        seq_len (`int`):
+            The sequence length used for training.
+
+    Returns:
+        `int`: Estimated training FLOPs per token.
+    """
+    h = config.hidden_size
+    L = config.num_hidden_layers
+    V = config.vocab_size
+    n_heads = config.num_attention_heads
+    n_kv_heads = getattr(config, "num_key_value_heads", n_heads)
+    head_dim = getattr(config, "head_dim", h // n_heads)
+
+    # Attention projections: Q, K, V, O  (each is a matmul: 2 * m * n FLOPs per token)
+    qkv_flops = 2 * h * (n_heads * head_dim + 2 * n_kv_heads * head_dim)
+    o_proj_flops = 2 * n_heads * head_dim * h
+    # Attention score: QK^T and attn @ V  (each is 2 * n_heads * head_dim * seq_len)
+    attn_score_flops = 2 * 2 * n_heads * head_dim * seq_len
+    attn_flops = qkv_flops + o_proj_flops + attn_score_flops
+
+    # MLP FLOPs per layer
+    num_experts = getattr(config, "num_local_experts", None) or getattr(config, "num_experts", None)
+    is_moe = num_experts is not None
+    if is_moe:
+        moe_intermediate = config.moe_intermediate_size
+        num_experts_per_tok = config.num_experts_per_tok
+        # Routed experts: gate_proj + up_proj + down_proj (3 matmuls, each 2*h*moe_intermediate)
+        mlp_flops = num_experts_per_tok * 2 * 3 * h * moe_intermediate
+        # Router: hidden -> num_experts
+        mlp_flops += 2 * h * num_experts
+        # Dense layers in MoE models use the full intermediate_size
+        dense_intermediate = config.intermediate_size
+        dense_mlp_flops = 2 * 3 * h * dense_intermediate
+    else:
+        intermediate = config.intermediate_size
+        mlp_flops = 2 * 3 * h * intermediate
+
+    # Per-layer forward FLOPs
+    if is_moe:
+        # Some MoE models have dense MLP layers interspersed (decoder_sparse_step)
+        sparse_step = getattr(config, "decoder_sparse_step", 1)
+        total_layer_flops = 0
+        for layer_idx in range(L):
+            layer_flops = attn_flops
+            if sparse_step > 0 and layer_idx % sparse_step == 0:
+                layer_flops += mlp_flops  # MoE layer
+            else:
+                layer_flops += dense_mlp_flops  # Dense layer
+            total_layer_flops += layer_flops
+    else:
+        total_layer_flops = L * (attn_flops + mlp_flops)
+
+    # Embedding and lm_head
+    embed_flops = 2 * V * h
+    lm_head_flops = 2 * V * h if not config.tie_word_embeddings else 0
+
+    forward_flops = total_layer_flops + embed_flops + lm_head_flops
+    # Training: forward (1×) + backward (2×) = 3× forward
+    return 3 * forward_flops
+
+
+def compute_mfu(
+    flops_per_token: int,
+    tokens_per_second: float,
+    world_size: int,
+    peak_flops_per_device: float = 989.5e12,
+) -> float:
+    """
+    Compute Model FLOPs Utilization (MFU) as a percentage.
+
+    Note: when using context parallelism (CP), `tokens_per_second` from the Trainer may overcount tokens
+    (each CP rank reports full sequence length). MFU values >100% with CP indicate this overcounting.
+
+    Args:
+        flops_per_token (`int`):
+            Training FLOPs per token (from [`compute_flops_per_token`]).
+        tokens_per_second (`float`):
+            Aggregate tokens per second across all devices.
+        world_size (`int`):
+            Number of devices (GPUs).
+        peak_flops_per_device (`float`, *optional*, defaults to `989.5e12`):
+            Theoretical peak FLOPs per device in bf16. Defaults to H100 SXM.
+
+    Returns:
+        `float`: MFU as a percentage (0-100).
+    """
+    return 100 * (flops_per_token * tokens_per_second) / (peak_flops_per_device * world_size)

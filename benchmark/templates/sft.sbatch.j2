@@ -1,0 +1,38 @@
+#!/bin/bash
+#SBATCH --job-name={{ job_name }}
+#SBATCH --partition=hopper-prod
+#SBATCH --qos={{ qos | default('normal') }}
+#SBATCH --nodes={{ nodes }}
+#SBATCH --gpus-per-node={{ gpus_per_node | default(8) }}
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=0
+#SBATCH --exclusive
+#SBATCH --requeue
+#SBATCH --time={{ time_limit | default('4:00:00') }}
+#SBATCH --output=/fsx/amine_dirhoussi/trl/benchmark/logs/%x-%j.out
+#SBATCH --error=/fsx/amine_dirhoussi/trl/benchmark/logs/%x-%j.err
+
+set -euo pipefail
+
+echo "========================================="
+echo "Job: $SLURM_JOB_ID"
+echo "Nodes: $SLURM_JOB_NUM_NODES ($SLURM_JOB_NODELIST)"
+echo "GPUs/node: {{ gpus_per_node | default(8) }}"
+echo "Model: {{ model_name_or_path }}"
+echo "Context: {{ context_length }}"
+echo "Parallelism: DP={{ dp }} TP={{ tp }} PP={{ pp }} CP={{ cp }} EP={{ ep }}"
+echo "Started: $(date)"
+echo "========================================="
+
+# NCCL multi-node configuration
+export NCCL_DEBUG=WARN
+export NCCL_IB_DISABLE=0
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+
+export WANDB_PROJECT="{{ wandb_project | default('trl-sft-benchmark') }}"
+{%- if wandb_run_name is defined %}
+export WANDB_NAME="{{ wandb_run_name }}"
+{%- endif %}
+
+srun {{ launch_script_path }}

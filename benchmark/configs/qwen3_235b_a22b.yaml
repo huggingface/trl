@@ -1,0 +1,76 @@
+model_name_or_path: Qwen/Qwen3-235B-A22B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+
+runs:
+  # 4 nodes — PP + EP, short context
+  - context_length: 1024
+    nodes: 4
+    backend: fsdp2
+    dp: 1
+    tp: 1
+    pp: 4
+    cp: 1
+    ep: 8
+    cpu_offload: false
+
+  - context_length: 2048
+    nodes: 4
+    backend: fsdp2
+    dp: 1
+    tp: 1
+    pp: 4
+    cp: 1
+    ep: 8
+    cpu_offload: false
+
+  - context_length: 4096
+    nodes: 4
+    backend: fsdp2
+    dp: 1
+    tp: 1
+    pp: 4
+    cp: 1
+    ep: 8
+    cpu_offload: false
+
+  - context_length: 8192
+    nodes: 4
+    backend: fsdp2
+    dp: 1
+    tp: 1
+    pp: 4
+    cp: 1
+    ep: 8
+    cpu_offload: false
+
+  # 8 nodes — PP8 + EP8
+  - context_length: 8192
+    nodes: 8
+    backend: fsdp2
+    dp: 1
+    tp: 1
+    pp: 8
+    cp: 1
+    ep: 8
+    cpu_offload: false
+
+  - context_length: 16384
+    nodes: 8
+    backend: fsdp2
+    dp: 1
+    tp: 1
+    pp: 8
+    cp: 1
+    ep: 8
+    cpu_offload: false
+
+  - context_length: 16384
+    nodes: 8
+    backend: fsdp2
+    dp: 1
+    tp: 1
+    pp: 4
+    cp: 1
+    ep: 16
+    cpu_offload: false

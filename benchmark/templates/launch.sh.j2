@@ -1,0 +1,32 @@
+#!/bin/bash
+source {{ venv_path | default('/fsx/amine_dirhoussi/trl/.venv/bin/activate') }}
+
+export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+export MASTER_PORT={{ master_port | default(29500) }}
+
+accelerate launch \
+  --config_file {{ accelerate_config_path }} \
+  --num_processes {{ num_processes }} \
+  --num_machines {{ nodes }} \
+  --machine_rank $SLURM_PROCID \
+  --main_process_ip $MASTER_ADDR \
+  --main_process_port $MASTER_PORT \
+  trl/scripts/sft.py \
+  --model_name_or_path {{ model_name_or_path }} \
+  --dataset_name {{ dataset_name | default('THUDM/LongAlign-10k') }} \
+  --max_length {{ context_length }} \
+  --per_device_train_batch_size {{ per_device_train_batch_size | default(1) }} \
+  --gradient_checkpointing true \
+  --attn_implementation flash_attention_2 \
+{%- if use_reentrant_gc %}
+  --gradient_checkpointing_kwargs '{"use_reentrant": true}' \
+{%- endif %}
+  --packing \
+  --packing_strategy wrapped \
+  --max_steps {{ max_steps | default(20) }} \
+  --logging_steps {{ logging_steps | default(5) }} \
+  --include_num_input_tokens_seen true \
+  --output_dir {{ output_dir }} \
+  --report_to wandb \
+  --save_strategy no \
+  {{ extra_args | default('') }}

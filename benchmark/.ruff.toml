@@ -1,0 +1,2 @@
+[lint]
+ignore = ["T201"]

@@ -1,0 +1,98 @@
+model_name_or_path: Qwen/Qwen3-4B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+
+runs:
+  # 2 nodes, 16k context
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 1
+
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 4
+    tp: 1
+    pp: 1
+    cp: 4
+    ep: 1
+
+  # 2 nodes, 32k context
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 1
+
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 4
+    tp: 1
+    pp: 1
+    cp: 4
+    ep: 1
+
+  # 4 nodes, 32k context — TP variants
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 8
+    tp: 4
+    pp: 1
+    cp: 1
+    ep: 1
+
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 4
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 1
+
+  # 4 nodes, 32k context — CP variants
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 1
+
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 4
+    ep: 1
+
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 4
+    tp: 1
+    pp: 1
+    cp: 8
+    ep: 1

@@ -56,6 +56,8 @@ from ..models import get_act_offloading_ctx_manager
 from .base_trainer import _BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
+    compute_flops_per_token,
+    compute_mfu,
     create_model_from_path,
     entropy_from_logits,
     flush_left,
@@ -1014,6 +1016,10 @@ class SFTTrainer(_BaseTrainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
 
+        # MFU tracking
+        self._flops_per_token = compute_flops_per_token(model.config, args.max_length or 1024)
+        self._world_size = self.accelerator.num_processes
+
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
@@ -1397,6 +1403,22 @@ class SFTTrainer(_BaseTrainer):
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
         logs = {**logs, **metrics}
+
+        # Compute MFU: speed_metrics is computed inside super().log(), so we replicate the TPS calculation here
+        if mode == "train" and start_time is not None and self.args.include_num_input_tokens_seen != "no":
+            import time
+
+            runtime = time.time() - start_time
+            if runtime > 0:
+                tps = self.state.num_input_tokens_seen / runtime
+                # TODO(transformers): num_input_tokens_seen overcounts by cp_size with context parallelism.
+                # The Trainer counts tokens before CP splits the inputs, and gather().sum() across all ranks
+                # includes CP ranks that each report the full sequence length. Divide by cp_size to correct.
+                # This should be fixed upstream in transformers' _inner_training_loop token counting.
+                cp_size = getattr(getattr(self.accelerator, "parallelism_config", None), "cp_size", 1) or 1
+                tps = tps / cp_size
+                logs["mfu"] = compute_mfu(self._flops_per_token, tps, self._world_size)
+
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
