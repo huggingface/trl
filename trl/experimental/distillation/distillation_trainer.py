@@ -1669,19 +1669,20 @@ class DistillationTrainer(_BaseTrainer):
                 if self.args.report_to and "trackio" in self.args.report_to:
                     logging_backends.append(trackio)
 
-                import pandas as pd
+                if logging_backends:
+                    import pandas as pd
 
-                table_data = {
-                    "step": [str(self.state.global_step)] * len(prompts),
-                    "prompt": prompts,
-                    "completion": completions,
-                }
-                df = pd.DataFrame(table_data)
-                if self.num_completions_to_print and len(df) > self.num_completions_to_print:
-                    df = df.sample(n=self.num_completions_to_print, random_state=42)
+                    table_data = {
+                        "step": [str(self.state.global_step)] * len(prompts),
+                        "prompt": prompts,
+                        "completion": completions,
+                    }
+                    df = pd.DataFrame(table_data)
+                    if self.num_completions_to_print and len(df) > self.num_completions_to_print:
+                        df = df.sample(n=self.num_completions_to_print, random_state=42)
 
-                for logging_backend in logging_backends:
-                    logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
+                    for logging_backend in logging_backends:
+                        logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
 
         # Clear text logs on all processes after the logging interval
         if should_log_completions:
