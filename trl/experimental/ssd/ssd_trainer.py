@@ -23,6 +23,7 @@ reinforcement learning is needed.
 from __future__ import annotations
 
 import inspect
+import math
 import textwrap
 from collections import defaultdict
 from functools import partial
@@ -113,6 +114,10 @@ class SSDTrainer(_BaseTrainer):
             isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
         ):
             raise NotImplementedError("Iterable eval datasets are not yet supported in SSDTrainer.")
+        if args is None:
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args = SSDConfig(f"{model_name}-SSD")
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
@@ -158,7 +163,8 @@ class SSDTrainer(_BaseTrainer):
         self.eos_token_id = tokenizer.eos_token_id
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
-        self.num_generations = args.num_generations
+        # SSD always samples a single completion per prompt (N=1 in the paper).
+        self.num_generations = 1
         self.num_iterations = args.num_iterations
         self.temperature = args.temperature
         self.shuffle_dataset = args.shuffle_dataset
@@ -498,3 +504,19 @@ class SSDTrainer(_BaseTrainer):
             with self.compute_loss_context_manager():
                 loss = self.compute_loss(model, inputs)
         return loss.detach(), None, None
+
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        mode = "train" if self.model.training else "eval"
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            valid = [v for v in val if not math.isnan(v)]
+            metrics[key] = sum(valid) / len(valid) if valid else None
+
+        # When called in evaluation, the keys in `logs` start with "eval_". We need to add the prefix "eval_" to the
+        # keys in `metrics` to match the format.
+        if mode == "eval":
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+
+        logs = {**logs, **metrics}
+        super().log(logs, start_time)
+        self._metrics[mode].clear()

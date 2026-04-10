@@ -43,8 +43,6 @@ class SSDConfig(_BaseConfig):
             Maximum prompt length. Longer prompts are truncated from the left.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum generated completion length.
-        num_generations (`int`, *optional*, defaults to `1`):
-            Number of sampled generations per prompt.
         generation_batch_size (`int` or `None`, *optional*):
             Global batch size used for generation. Mutually exclusive with `steps_per_generation`.
         steps_per_generation (`int` or `None`, *optional*):
@@ -116,10 +114,6 @@ class SSDConfig(_BaseConfig):
         default=None,
         metadata={"help": "Keyword arguments for model initialization when `model` is passed as a string."},
     )
-    remove_unused_columns: bool = field(
-        default=False,
-        metadata={"help": "Whether to drop dataset columns unused by the trainer."},
-    )
     max_prompt_length: int | None = field(
         default=512,
         metadata={"help": "Maximum prompt length. Longer prompts are truncated from the left."},
@@ -127,10 +121,6 @@ class SSDConfig(_BaseConfig):
     max_completion_length: int | None = field(
         default=256,
         metadata={"help": "Maximum generated completion length."},
-    )
-    num_generations: int = field(
-        default=1,
-        metadata={"help": "Number of sampled generations per prompt."},
     )
     generation_batch_size: int | None = field(
         default=None,
@@ -246,9 +236,6 @@ class SSDConfig(_BaseConfig):
     def __post_init__(self):
         super().__post_init__()
 
-        if self.num_generations < 1:
-            raise ValueError("num_generations must be at least 1")
-
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
             self.steps_per_generation = self.gradient_accumulation_steps
@@ -264,8 +251,3 @@ class SSDConfig(_BaseConfig):
             self.generation_batch_size = self.per_device_train_batch_size * num_processes * self.steps_per_generation
         else:
             raise ValueError("'generation_batch_size' and 'steps_per_generation' can not both be configured")
-
-        if self.generation_batch_size % self.num_generations != 0:
-            raise ValueError(
-                f"generation_batch_size ({self.generation_batch_size}) must be divisible by num_generations ({self.num_generations})."
-            )

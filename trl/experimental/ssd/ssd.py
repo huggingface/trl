@@ -45,7 +45,6 @@ python trl/experimental/ssd/ssd.py \
     --lr_scheduler_type cosine \
     --max_prompt_length 1024 \
     --max_completion_length 65536 \
-    --num_generations 1 \
     --temperature 1.6 \
     --top_k 20 \
     --top_p 0.8 \

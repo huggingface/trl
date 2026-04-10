@@ -34,7 +34,6 @@ training_args = SSDConfig(
     temperature=0.6,           # T_train from the paper
     top_k=20,                  # training-time top-k truncation
     top_p=0.95,                # training-time top-p truncation
-    num_generations=1,         # N=1 already suffices per the paper
     max_completion_length=65536,
     learning_rate=5e-6,
 )

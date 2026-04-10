@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from datasets import Dataset
+from datasets import load_dataset
 from transformers.utils import is_peft_available
 
 from trl.experimental.ssd import SSDConfig, SSDTrainer
@@ -32,11 +32,7 @@ class TestSSDTrainer(TrlTestCase):
         assert config.vllm_model_impl == "vllm"
 
     def test_training_with_string_prompts(self):
-        dataset = Dataset.from_dict(
-            {
-                "prompt": ["Write a function to add two numbers.", "Write a function to check if a number is prime."],
-            }
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SSDConfig(
             output_dir=self.tmp_dir,
@@ -44,7 +40,6 @@ class TestSSDTrainer(TrlTestCase):
             per_device_train_batch_size=1,
             max_completion_length=8,
             max_steps=1,
-            num_generations=1,
         )
 
         trainer = SSDTrainer(
@@ -58,14 +53,7 @@ class TestSSDTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_training_with_chat_prompts(self):
-        dataset = Dataset.from_dict(
-            {
-                "prompt": [
-                    [{"role": "user", "content": "Write a function to add two numbers."}],
-                    [{"role": "user", "content": "Write a function to check if a number is prime."}],
-                ],
-            }
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = SSDConfig(
             output_dir=self.tmp_dir,
@@ -73,7 +61,6 @@ class TestSSDTrainer(TrlTestCase):
             per_device_train_batch_size=1,
             max_completion_length=8,
             max_steps=1,
-            num_generations=1,
         )
 
         trainer = SSDTrainer(
@@ -88,14 +75,7 @@ class TestSSDTrainer(TrlTestCase):
 
     def test_training_with_temperature_and_truncation(self):
         """Test with SSD-paper-style hyperparameters: T_train=0.6, top_k=20, top_p=0.95."""
-        dataset = Dataset.from_dict(
-            {
-                "prompt": [
-                    "Write a Python function to reverse a string.",
-                    "Write a Python function to sort a list.",
-                ],
-            }
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SSDConfig(
             output_dir=self.tmp_dir,
@@ -103,7 +83,6 @@ class TestSSDTrainer(TrlTestCase):
             per_device_train_batch_size=1,
             max_completion_length=16,
             max_steps=1,
-            num_generations=1,
             temperature=0.6,
             top_k=20,
             top_p=0.95,
@@ -119,41 +98,8 @@ class TestSSDTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_training_with_multiple_generations(self):
-        dataset = Dataset.from_dict(
-            {
-                "prompt": [
-                    "Write a function to add two numbers.",
-                    "Write a function to check if a number is prime.",
-                ],
-            }
-        )
-
-        training_args = SSDConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,
-            per_device_train_batch_size=2,
-            max_completion_length=8,
-            max_steps=1,
-            num_generations=2,
-        )
-
-        trainer = SSDTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
     def test_training_reuses_buffered_generation_batches(self):
-        dataset = Dataset.from_dict(
-            {
-                "prompt": ["Write a function to add two numbers.", "Write a function to check if a number is prime."],
-            }
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SSDConfig(
             output_dir=self.tmp_dir,
@@ -162,7 +108,6 @@ class TestSSDTrainer(TrlTestCase):
             steps_per_generation=2,
             max_completion_length=8,
             max_steps=2,
-            num_generations=1,
         )
 
         trainer = SSDTrainer(
@@ -176,11 +121,7 @@ class TestSSDTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_training_with_filter_empty_disabled(self):
-        dataset = Dataset.from_dict(
-            {
-                "prompt": ["Write a function to add two numbers.", "Write a function to check if a number is prime."],
-            }
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SSDConfig(
             output_dir=self.tmp_dir,
@@ -188,7 +129,6 @@ class TestSSDTrainer(TrlTestCase):
             per_device_train_batch_size=1,
             max_completion_length=8,
             max_steps=1,
-            num_generations=1,
             filter_empty=False,
         )
 
@@ -203,11 +143,7 @@ class TestSSDTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_training_logs_ssd_metrics(self):
-        dataset = Dataset.from_dict(
-            {
-                "prompt": ["Write a function to add two numbers.", "Write a function to check if a number is prime."],
-            }
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SSDConfig(
             output_dir=self.tmp_dir,
@@ -215,7 +151,6 @@ class TestSSDTrainer(TrlTestCase):
             per_device_train_batch_size=1,
             max_completion_length=8,
             max_steps=1,
-            num_generations=1,
             logging_steps=1,
             report_to="none",
         )
@@ -228,18 +163,15 @@ class TestSSDTrainer(TrlTestCase):
 
         trainer.train()
 
-        # Check that SSD-specific metrics were logged
-        assert len(trainer._metrics["train"]["ssd/cross_entropy_loss"]) > 0
-        assert len(trainer._metrics["train"]["ssd/active_sample_ratio"]) > 0
-        assert len(trainer._metrics["train"]["completions/mean_length"]) > 0
+        # The log() override merges _metrics into log_history and clears the buffer.
+        last_log = trainer.state.log_history[-2]
+        assert "ssd/cross_entropy_loss" in last_log
+        assert "ssd/active_sample_ratio" in last_log
+        assert "completions/mean_length" in last_log
 
     @require_peft
     def test_training_with_peft_model(self):
-        dataset = Dataset.from_dict(
-            {
-                "prompt": ["Write a function to add two numbers.", "Write a function to check if a number is prime."],
-            }
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SSDConfig(
             output_dir=self.tmp_dir,
@@ -247,7 +179,6 @@ class TestSSDTrainer(TrlTestCase):
             per_device_train_batch_size=1,
             max_completion_length=8,
             max_steps=1,
-            num_generations=1,
         )
 
         trainer = SSDTrainer(
@@ -265,11 +196,7 @@ class TestSSDTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_training_with_disable_dropout_false(self):
-        dataset = Dataset.from_dict(
-            {
-                "prompt": ["Write a function to add two numbers.", "Write a function to check if a number is prime."],
-            }
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SSDConfig(
             output_dir=self.tmp_dir,
@@ -277,7 +204,6 @@ class TestSSDTrainer(TrlTestCase):
             per_device_train_batch_size=1,
             max_completion_length=8,
             max_steps=1,
-            num_generations=1,
             disable_dropout=False,
         )
 
