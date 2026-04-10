@@ -124,8 +124,6 @@ if __name__ == "__main__":
     )
 
     # For VLM online DPO, using a reward model is complex because it needs images
-    # Instead, we'll use a simple random judge for testing
-    # In production, you'd want to use a proper text-only reward model or a custom judge
     reward_model = None
     reward_processor = None
 
