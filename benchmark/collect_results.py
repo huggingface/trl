@@ -1,3 +1,4 @@
+# ruff: noqa: T201
 #!/usr/bin/env python3
 """
 Collect benchmark results from Slurm logs and/or wandb, output CSV.
@@ -39,9 +40,7 @@ ERROR_PATTERNS = [
     ),
     (re.compile(r"DeepEP.*timeout|deepep.*error", re.IGNORECASE), "DeepEP timeout"),
     (
-        re.compile(
-            r"CheckpointError.*Recomputed values|CheckpointError", re.IGNORECASE
-        ),
+        re.compile(r"CheckpointError.*Recomputed values|CheckpointError", re.IGNORECASE),
         "MoE checkpoint error",
     ),
     (re.compile(r"RuntimeError.*CUDA|CUDA error", re.IGNORECASE), "CUDA error"),
@@ -207,9 +206,7 @@ def collect_from_logs(logs_dir: str) -> list[dict]:
     return results
 
 
-def collect_from_wandb(
-    project: str, entity: str | None = None, logs_dir: str | None = None
-) -> list[dict]:
+def collect_from_wandb(project: str, entity: str | None = None, logs_dir: str | None = None) -> list[dict]:
     """Collect results from wandb, optionally cross-referencing with log files for failure diagnosis."""
     import wandb as wb
 
@@ -246,15 +243,11 @@ def collect_from_wandb(
 
         results.append(
             {
-                "Model": run.config.get(
-                    "model_name_or_path", parsed.get("model", run.name)
-                ),
+                "Model": run.config.get("model_name_or_path", parsed.get("model", run.name)),
                 "Context length (k tokens)": parsed.get("context_length_k", ""),
                 "Nodes": parsed.get("nodes", ""),
                 "Distributed backend": parsed.get("backend", ""),
-                "CPU Offload": str(
-                    run.config.get("fsdp_offload_params", False)
-                ).lower(),
+                "CPU Offload": str(run.config.get("fsdp_offload_params", False)).lower(),
                 "DP": parsed.get("dp", ""),
                 "TP": parsed.get("tp", ""),
                 "PP": parsed.get("pp", ""),
@@ -273,12 +266,8 @@ def collect_from_wandb(
 
 def main():
     parser = argparse.ArgumentParser(description="Collect TRL SFT benchmark results")
-    parser.add_argument(
-        "--logs-dir", help="Directory with Slurm log files (primary method)"
-    )
-    parser.add_argument(
-        "--wandb-project", help="Wandb project name (optional, supplements log parsing)"
-    )
+    parser.add_argument("--logs-dir", help="Directory with Slurm log files (primary method)")
+    parser.add_argument("--wandb-project", help="Wandb project name (optional, supplements log parsing)")
     parser.add_argument("--wandb-entity", help="Wandb entity (team or user)")
     parser.add_argument("--output", "-o", help="Output CSV file (default: stdout)")
     args = parser.parse_args()
@@ -289,9 +278,7 @@ def main():
     if args.logs_dir and not args.wandb_project:
         results = collect_from_logs(args.logs_dir)
     elif args.wandb_project:
-        results = collect_from_wandb(
-            args.wandb_project, args.wandb_entity, args.logs_dir
-        )
+        results = collect_from_wandb(args.wandb_project, args.wandb_entity, args.logs_dir)
     else:
         results = []
 

@@ -1,3 +1,4 @@
+# ruff: noqa: T201
 """Check token length distribution of a dataset for benchmarking."""
 
 import numpy as np
