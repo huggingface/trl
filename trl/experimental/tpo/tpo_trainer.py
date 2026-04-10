@@ -60,17 +60,40 @@ if is_peft_available():
 logger = get_logger(__name__)
 
 
+def _extract_triple_prompt(example: dict) -> dict:
+    """Extract the shared prompt from `chosen`/`rejected` and also strip it from `reference`.
+
+    Wraps [`~trl.data_utils.extract_prompt`] — which only rewrites `chosen` and `rejected` — and additionally strips
+    the extracted prompt prefix from the `reference` (gold) completion. This is specific to TPO and assumes that the
+    `reference` completion shares the same implicit prompt prefix as `chosen` and `rejected`. If it does not, a
+    `ValueError` is raised asking the caller to provide an explicit `prompt` column.
+    """
+    extracted = extract_prompt(example)
+    prompt = extracted["prompt"]
+    reference = example["reference"]
+    if reference[: len(prompt)] != prompt:
+        raise ValueError(
+            "The `reference` completion does not start with the implicit prompt extracted from `chosen`/`rejected`. "
+            "Either provide an explicit `prompt` column, or make sure the `reference` completion shares the same "
+            "prompt prefix as the `chosen` and `rejected` completions."
+        )
+    extracted["reference"] = reference[len(prompt) :]
+    return extracted
+
+
 @dataclass
 class DataCollatorForTriplePreference(DataCollatorMixin):
     """
     Data collator used for triple-preference data. Inputs are dynamically padded to the maximum length of a batch.
 
     This collator expects each example in the input list to be a dictionary containing the keys `"prompt_ids"`,
-    `"chosen_ids"`, `"rejected_ids"` and `"reference_ids"`. The collator returns a dictionary containing the following
-    keys:
-    - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch. The first third of the batch
-        corresponds to the `"chosen_ids"`, the second third to the `"rejected_ids"` and the last third to the
-        `"reference_ids"`.
+    `"chosen_ids"` and `"rejected_ids"`. When `include_reference=True` (the default) each example must additionally
+    contain `"reference_ids"`. The collator returns a dictionary containing the following keys:
+    - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch. When
+        `include_reference=True`, the first third of the batch corresponds to the `"chosen_ids"`, the second third to
+        the `"rejected_ids"` and the last third to the `"reference_ids"`. When `include_reference=False`, the first
+        half corresponds to the `"chosen_ids"` and the second half to the `"rejected_ids"` (matching the layout of
+        [`~trl.trainer.dpo_trainer.DataCollatorForPreference`]).
     - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
     - `"completion_mask"`: Tensor indicating the positions of the completion tokens, padded to the maximum length of
         the batch.
@@ -88,6 +111,10 @@ class DataCollatorForTriplePreference(DataCollatorMixin):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
+        include_reference (`bool`, *optional*, defaults to `True`):
+            Whether to include the `"reference_ids"` branch in the collated batch. When `False`, the collator emits
+            only the chosen/rejected halves and skips the gold-response sequences entirely, which matches the behavior
+            expected when `tpo_alpha=0.0` (no NLL term).
 
     Examples:
     ```python
@@ -125,18 +152,18 @@ class DataCollatorForTriplePreference(DataCollatorMixin):
     truncation_mode: str = "keep_start"
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
+    include_reference: bool = True
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         prompt_chosen_ids = [example["prompt_ids"] + example["chosen_ids"] for example in examples]
         prompt_rejected_ids = [example["prompt_ids"] + example["rejected_ids"] for example in examples]
-        prompt_reference_ids = [example["prompt_ids"] + example["reference_ids"] for example in examples]
         chosen_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["chosen_ids"]) for example in examples]
-        rejected_mask = [
-            [0] * len(example["prompt_ids"]) + [1] * len(example["rejected_ids"]) for example in examples
-        ]
-        reference_mask = [
-            [0] * len(example["prompt_ids"]) + [1] * len(example["reference_ids"]) for example in examples
-        ]
+        rejected_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["rejected_ids"]) for example in examples]
+        if self.include_reference:
+            prompt_reference_ids = [example["prompt_ids"] + example["reference_ids"] for example in examples]
+            reference_mask = [
+                [0] * len(example["prompt_ids"]) + [1] * len(example["reference_ids"]) for example in examples
+            ]
 
         if self.max_length is not None:
             if self.truncation_mode == "keep_start":
@@ -149,17 +176,22 @@ class DataCollatorForTriplePreference(DataCollatorMixin):
                 )
             prompt_chosen_ids = [ids[sl] for ids in prompt_chosen_ids]
             prompt_rejected_ids = [ids[sl] for ids in prompt_rejected_ids]
-            prompt_reference_ids = [ids[sl] for ids in prompt_reference_ids]
             chosen_mask = [m[sl] for m in chosen_mask]
             rejected_mask = [m[sl] for m in rejected_mask]
-            reference_mask = [m[sl] for m in reference_mask]
+            if self.include_reference:
+                prompt_reference_ids = [ids[sl] for ids in prompt_reference_ids]
+                reference_mask = [m[sl] for m in reference_mask]
 
         chosen_attention_mask = [[1] * len(ids) for ids in prompt_chosen_ids]
         rejected_attention_mask = [[1] * len(ids) for ids in prompt_rejected_ids]
-        reference_attention_mask = [[1] * len(ids) for ids in prompt_reference_ids]
-        input_ids = prompt_chosen_ids + prompt_rejected_ids + prompt_reference_ids
-        attention_mask = chosen_attention_mask + rejected_attention_mask + reference_attention_mask
-        completion_mask = chosen_mask + rejected_mask + reference_mask
+        input_ids = prompt_chosen_ids + prompt_rejected_ids
+        attention_mask = chosen_attention_mask + rejected_attention_mask
+        completion_mask = chosen_mask + rejected_mask
+        if self.include_reference:
+            reference_attention_mask = [[1] * len(ids) for ids in prompt_reference_ids]
+            input_ids = input_ids + prompt_reference_ids
+            attention_mask = attention_mask + reference_attention_mask
+            completion_mask = completion_mask + reference_mask
 
         # Convert to tensor
         input_ids = [torch.tensor(ids) for ids in input_ids]
@@ -191,8 +223,8 @@ class DataCollatorForTriplePreference(DataCollatorMixin):
 
 class TPOTrainer(_BaseTrainer):
     """
-    Trainer for Triple Preference Optimization (TPO) method. This algorithm was initially proposed in the paper
-    [Triple Preference Optimization: Achieving Better Alignment using a Single Step
+    Trainer for Triple Preference Optimization (TPO) method. This algorithm was initially proposed in the paper [Triple
+    Preference Optimization: Achieving Better Alignment using a Single Step
     Optimization](https://huggingface.co/papers/2405.16681). This class is a wrapper around the
     [`~transformers.Trainer`] class and inherits all of its attributes and methods.
 
@@ -348,13 +380,16 @@ class TPOTrainer(_BaseTrainer):
         if is_peft_available() and isinstance(model, PeftModel) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
-        # Data collator
+        # Data collator. When `tpo_alpha=0.0`, the NLL term on the gold response is disabled, so we can drop the
+        # reference branch from the batch entirely — this spares the model from computing logits for a third of
+        # each step.
         if data_collator is None:
             data_collator = DataCollatorForTriplePreference(
                 pad_token_id=tokenizer.pad_token_id,
                 max_length=args.max_length,
                 truncation_mode=args.truncation_mode,
                 pad_to_multiple_of=args.pad_to_multiple_of,
+                include_reference=args.tpo_alpha != 0.0,
             )
 
         # Training arguments
@@ -464,12 +499,13 @@ class TPOTrainer(_BaseTrainer):
             map_kwargs["num_proc"] = args.dataset_num_proc
 
         with PartialState().main_process_first():
-            # Extract the prompt if needed (only inspects chosen/rejected; reference is assumed to share the prompt)
+            # Extract the prompt if needed. Unlike DPO, we must also strip the extracted prompt from the reference
+            # column (see `_extract_triple_prompt`), which assumes the reference shares the same implicit prompt.
             first_example = next(iter(dataset))
             if "prompt" not in first_example:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Extracting prompt from {dataset_name} dataset"
-                dataset = dataset.map(extract_prompt, **map_kwargs)
+                dataset = dataset.map(_extract_triple_prompt, **map_kwargs)
 
             # Add EOS to completions for non-conversational data
             first_example = next(iter(dataset))
@@ -530,9 +566,9 @@ class TPOTrainer(_BaseTrainer):
                     prompt_rejected_ids = self._tokenize(processing_class, example["prompt"] + example["rejected"])[
                         "input_ids"
                     ]
-                    prompt_reference_ids = self._tokenize(
-                        processing_class, example["prompt"] + example["reference"]
-                    )["input_ids"]
+                    prompt_reference_ids = self._tokenize(processing_class, example["prompt"] + example["reference"])[
+                        "input_ids"
+                    ]
 
                 # Check if the tokenized prompt starts with the tokenized prompt+completion
                 if not prompt_chosen_ids[: len(prompt_ids)] == prompt_ids:
@@ -575,6 +611,11 @@ class TPOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         device = self.accelerator.device
 
+        # When `tpo_alpha=0.0` the NLL term is disabled and the collator drops the reference branch, so the batch
+        # is laid out as `[chosen, rejected]` (n_branches=2). Otherwise it is `[chosen, rejected, reference]`
+        # (n_branches=3).
+        n_branches = 3 if self.tpo_alpha != 0.0 else 2
+
         _non_model_keys = {"completion_mask"}
         model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
@@ -595,8 +636,9 @@ class TPOTrainer(_BaseTrainer):
             logps = per_token_logps.sum(dim=1) / completion_lengths
         else:
             logps = per_token_logps.sum(dim=1)
-        # batch is [chosen, rejected, reference]
-        chosen_logps, rejected_logps, reference_logps = logps.chunk(3, dim=0)
+        logps_chunks = logps.chunk(n_branches, dim=0)
+        chosen_logps, rejected_logps = logps_chunks[0], logps_chunks[1]
+        reference_logps = logps_chunks[2] if n_branches == 3 else None
 
         # Contrastive loss between chosen and rejected. Unlike DPO, TPO does not subtract reference-model log-probs:
         # the "reference" in TPO is a gold response used in the NLL term below, not a separate reference policy.
@@ -634,7 +676,7 @@ class TPOTrainer(_BaseTrainer):
         # NLL loss on the gold (`reference`) response. Mirrors the `"sft"` loss branch of `DPOTrainer._compute_loss`:
         # we restrict the cross-entropy to the completion tokens of the reference sequence and let `F.cross_entropy`
         # average over them.
-        if self.tpo_alpha == 0.0:
+        if n_branches == 2:
             nll_loss = torch.tensor(0.0, device=device)
         else:
             _, _, ref_logits = shift_logits.chunk(3, dim=0)
@@ -658,9 +700,12 @@ class TPOTrainer(_BaseTrainer):
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Average logits for chosen and rejected completions
-        chosen_logits, rejected_logits, _ = shift_logits.detach().chunk(3, dim=0)
-        chosen_mask, rejected_mask, _ = shift_completion_mask.chunk(3, dim=0)
-        chosen_labels, _, _ = shift_labels.chunk(3, dim=0)
+        logits_chunks = shift_logits.detach().chunk(n_branches, dim=0)
+        mask_chunks = shift_completion_mask.chunk(n_branches, dim=0)
+        labels_chunks = shift_labels.chunk(n_branches, dim=0)
+        chosen_logits, rejected_logits = logits_chunks[0], logits_chunks[1]
+        chosen_mask, rejected_mask = mask_chunks[0], mask_chunks[1]
+        chosen_labels = labels_chunks[0]
         total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
         total_chosen_tokens = chosen_mask.sum()
         total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
@@ -704,15 +749,14 @@ class TPOTrainer(_BaseTrainer):
         agg_margins = self.accelerator.gather(margins)
         self._metrics[mode]["rewards/margins"].append(agg_margins.mean().item())
 
-        # Average log probabilities for chosen, rejected and reference completions
+        # Average log probabilities for chosen, rejected and (when enabled) reference completions
         self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
         self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
-        self._metrics[mode]["logps/reference"].append(self.accelerator.gather(reference_logps).mean().item())
-
-        # NLL on the reference completion
-        self._metrics[mode]["nll_loss"].append(
-            self.accelerator.gather_for_metrics(nll_loss.detach()).mean().item()
-        )
+        if reference_logps is not None:
+            self._metrics[mode]["logps/reference"].append(self.accelerator.gather(reference_logps).mean().item())
+            self._metrics[mode]["nll_loss"].append(
+                self.accelerator.gather_for_metrics(nll_loss.detach()).mean().item()
+            )
 
         return (loss, outputs) if return_outputs else loss
 
