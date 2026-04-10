@@ -28,7 +28,7 @@ import torch.nn.functional as F
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object
 from datasets import Dataset
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, TrainerCallback
+from transformers import AutoTokenizer, TrainerCallback, is_trackio_available, is_wandb_available
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
@@ -37,7 +37,6 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
-from transformers import is_trackio_available, is_wandb_available
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_rich_available
 
 from ...extras.profiling import profiling_decorator
