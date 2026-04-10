@@ -116,6 +116,8 @@ class TestCloneChatTemplate(TrlTestCase):
     [
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
@@ -504,6 +506,8 @@ class TestGetTrainingChatTemplate:
     [
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
@@ -542,6 +546,8 @@ class TestParseResponse:
         if tokenizer_name in (
             "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
             "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
         ):
             pytest.skip("This tokenizer doesn't support inline reasoning_content.")
@@ -583,6 +589,11 @@ class TestParseResponse:
             # Gemma4 response_schema regex doesn't capture content after tool calls.
             # Remove once https://huggingface.co/google/gemma-4-31B-it/discussions/19 is merged.
             pytest.xfail("Gemma4 response_schema regex bug.")
+        if tokenizer_name in (
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+        ):
+            pytest.skip("Llama 3.1 / 3.2 templates only allow a single tool call per assistant turn, with no content.")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if getattr(tokenizer, "response_schema", None) is None:
             tokenizer = add_response_schema(tokenizer)
@@ -613,8 +624,12 @@ class TestParseResponse:
         assert parsed == {"role": "assistant", "content": "", "tool_calls": tool_calls}
 
     def test_parse_response_multiple_tool_calls(self, tokenizer_name):
-        if tokenizer_name == "trl-internal-testing/tiny-GptOssForCausalLM":
-            pytest.skip("GPT-OSS template only renders one tool call per assistant message.")
+        if tokenizer_name in (
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+        ):
+            pytest.skip("This template only renders one tool call per assistant message.")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if getattr(tokenizer, "response_schema", None) is None:
             tokenizer = add_response_schema(tokenizer)

@@ -229,6 +229,46 @@ qwen3_schema = {
     },
 }
 
+llama3_schema = {
+    # Llama 3.1 / 3.2 render a tool call as a single bare JSON object using the key "parameters" instead of
+    # "arguments": `{"name": "<name>", "parameters": <args_json>}<|eot_id|>`. There is no surrounding marker, no
+    # support for content alongside a tool call, and at most one tool call per assistant turn (the template raises
+    # otherwise). Either we match a tool call (capturing the JSON) or we treat the response as plain content.
+    "x-regex": r'^(?:(?P<tool_calls>\{"name":\s*".+?",\s*"parameters":\s*.+\})|(?P<content>.*?))(?:<\|eot_id\|>|$)',
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "tool_calls": {
+            "type": "array",
+            "x-regex-iterator": r'(\{"name":\s*".+?",\s*"parameters":\s*.+\})',
+            "items": {
+                # Rewrite "parameters" → "arguments" so the JSON parses into the standard tool-call shape. Anchored
+                # on the leading `{"name": "..."` so a stray `"parameters"` inside argument values is not touched.
+                "x-regex-substitutions": [
+                    [r'^(\{"name":\s*"[^"]+",\s*)"parameters":', r'\1"arguments":'],
+                ],
+                "x-parser": "json",
+                "x-parser-args": {"transform": "{type: 'function', function: @}"},
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "arguments": {
+                                "type": "object",
+                                "additionalProperties": {},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
 qwen3_5_schema = {
     "x-regex": r"^(?:(?:<think>\n?)?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n+(?=<tool_call>))?(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
@@ -270,6 +310,10 @@ glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text()
 
 llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text()
+
+llama3_1_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1.jinja").read_text()
+
+llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text()
 
 qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text()
 
@@ -314,6 +358,9 @@ def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
         return tokenizer
     if tokenizer.chat_template == gptoss_chat_template:
         tokenizer.response_schema = gptoss_schema
+        return tokenizer
+    if tokenizer.chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
+        tokenizer.response_schema = llama3_schema
         return tokenizer
     if tokenizer.chat_template in [qwen3_chat_template, qwen3_vl_chat_template]:
         tokenizer.response_schema = qwen3_schema

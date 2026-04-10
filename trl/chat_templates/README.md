@@ -21,6 +21,10 @@ Original GLM-4-MoE chat template.
 
 Original GPT-OSS chat template.
 
+### `llama3_1.jinja` / `llama3_2.jinja`
+
+Original Llama 3.1 / 3.2 chat templates. Both render tool calls as a single bare JSON object using the key `parameters` (instead of `arguments`) and support at most one tool call per assistant turn.
+
 ### `qwen3.jinja`
 
 Original Qwen3 chat template.
