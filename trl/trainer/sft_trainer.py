@@ -690,6 +690,10 @@ class SFTTrainer(_BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            if args.enable_expert_parallel:
+                from transformers.distributed.configuration_utils import DistributedConfig
+
+                model_init_kwargs["distributed_config"] = DistributedConfig(enable_expert_parallel=True)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:

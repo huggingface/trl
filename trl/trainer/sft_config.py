@@ -41,6 +41,13 @@ class SFTConfig(_BaseConfig):
             argument of the [`SFTTrainer`] is provided as a string. If you're training a MoE architecture and want to
             include the load balancing/auxiliary loss as a part of the final loss, remember to set
             `output_router_logits=True` in this dictionary.
+        enable_expert_parallel (`bool`, *optional*, defaults to `False`):
+            Whether to enable Expert Parallelism for MoE models. When `True`, passes
+            `distributed_config=DistributedConfig(enable_expert_parallel=True)` to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`]. This requires the model to have an `ep_plan`
+            defined in its config class. See the
+            [expert parallelism documentation](https://huggingface.co/docs/transformers/expert_parallelism) for
+            supported models.
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
@@ -139,6 +146,14 @@ class SFTConfig(_BaseConfig):
             "the `SFTTrainer` is provided as a string. If you're training a MoE architecture and want to include the "
             "load balancing/auxiliary loss as a part of the final loss, remember to set `output_router_logits=True` "
             "in this dictionary."
+        },
+    )
+    enable_expert_parallel: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to enable Expert Parallelism for MoE models. Passes "
+            "`distributed_config=DistributedConfig(enable_expert_parallel=True)` to `from_pretrained`. "
+            "Requires the model to have an `ep_plan` defined in its config class."
         },
     )
     chat_template_path: str | None = field(
