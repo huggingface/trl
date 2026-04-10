@@ -35,9 +35,7 @@ class OnlineDPOConfig(_BaseConfig):
 
     Parameters:
         reward_model_path (`str`, *optional*):
-            Path to the reward model. Either `judge` or `reward_model_path` must be set, but not both.
-        judge (`str`, *optional*):
-            Name of the judge to use. Either `judge` or `reward_model_path` must be set, but not both.
+            Path to the reward model.
         max_new_tokens (`int`, *optional*, defaults to `64`):
             Maximum number of tokens to generate per completion.
         max_length (`int`, *optional*, defaults to `256`):
@@ -49,7 +47,7 @@ class OnlineDPOConfig(_BaseConfig):
         missing_eos_penalty (`float`, *optional*):
             Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage to
             generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
-            value. This parameter only works when using `reward_funcs` and not when using `judge`.
+            value.
         beta (`float` or `list[float]`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
@@ -174,15 +172,7 @@ class OnlineDPOConfig(_BaseConfig):
 
     reward_model_path: str | None = field(
         default=None,
-        metadata={
-            "help": "Path to the reward model. Either `judge` or `reward_model_path` must be set, but not both."
-        },
-    )
-    judge: str | None = field(
-        default=None,
-        metadata={
-            "help": "Name of the judge to use. Either `judge` or `reward_model_path` must be set, but not both."
-        },
+        metadata={"help": "Path to the reward model."},
     )
     max_new_tokens: int = field(
         default=64,
