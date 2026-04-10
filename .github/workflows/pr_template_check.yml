@@ -10,13 +10,12 @@
 name: PR Template Check
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened]
 
 permissions:
   pull-requests: write
   issues: write
-  statuses: write
 
 jobs:
   check-pr-template:
