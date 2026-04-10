@@ -105,8 +105,6 @@
     title: GRPO With Replay Buffer
   - local: gspo_token
     title: GSPO-token
-  - local: judges
-    title: Judges
   - local: kto_trainer
     title: KTO 
   - local: merge_model_callback
@@ -133,8 +131,6 @@
     title: SDPO
   - local: ssd_trainer
     title: SSD
-  - local: winrate_callback
-    title: WinRateCallback
   - local: xpo_trainer
     title: XPO
   title: Experimental

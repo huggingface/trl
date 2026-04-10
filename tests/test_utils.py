@@ -24,6 +24,7 @@ import torch.nn.functional as F
 import transformers
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import ModelConfig
@@ -48,7 +49,7 @@ from trl.trainer.utils import (
     use_adapter,
 )
 
-from .testing_utils import TrlTestCase, require_peft, require_rich
+from .testing_utils import TrlTestCase, require_peft, require_rich, require_torch_accelerator
 
 
 if is_peft_available():
@@ -960,6 +961,23 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 1, 2]]))
         assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2], [1, 2, 1]]))
 
+    def test_split_by_image_position_ids(self):
+        # Gemma-style: no image_grid_thw, split by num_images using image_position_ids
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(3 * 4).reshape(3, 4),
+            "image_position_ids": torch.tensor([[0, 1], [2, 3], [4, 5]]),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:1])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][1:])
+        assert isinstance(result["image_position_ids"], list)
+        assert len(result["image_position_ids"]) == 2
+        assert torch.equal(result["image_position_ids"][0], batch["image_position_ids"][:1])
+        assert torch.equal(result["image_position_ids"][1], batch["image_position_ids"][1:])
+
 
 class TestUnsplitPixelValuesByGrid(TrlTestCase):
     def test_unsplit_correctly(self):
@@ -975,6 +993,15 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["image_grid_thw"], image_grid_thw_merged)
         assert "other_key" in result
 
+    def test_unsplit_image_position_ids(self):
+        image_position_ids = [torch.tensor([[0, 1]]), torch.tensor([[2, 3], [4, 5]])]
+        image_position_ids_merged = torch.cat(image_position_ids, dim=0)
+        pixel_values = [torch.randn(1, 4), torch.randn(2, 4)]
+        batch = {"pixel_values": pixel_values, "image_position_ids": image_position_ids}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["image_position_ids"], torch.Tensor)
+        assert torch.equal(result["image_position_ids"], image_position_ids_merged)
+
     def test_no_op_if_not_list(self):
         original = torch.randn(5, 3)
         batch = {"pixel_values": original}
@@ -982,6 +1009,7 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["pixel_values"], original)
 
 
+@require_torch_accelerator
 class TestForwardMaskedLogits:
     @pytest.mark.parametrize(
         "model_id",
@@ -1005,12 +1033,11 @@ class TestForwardMaskedLogits:
         ],
     )
     def test_llm(self, model_id):
-        device = torch.device("cuda")
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto", device_map=device)
-        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=device)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto", device_map=torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=torch_device)
         logits_mask = torch.tensor(
             [[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]],
-            device=device,
+            device=torch_device,
         )
 
         full_outputs = model(input_ids=input_ids)
@@ -1025,6 +1052,13 @@ class TestForwardMaskedLogits:
         "model_id",
         [
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
             "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
             "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
@@ -1051,12 +1085,11 @@ class TestForwardMaskedLogits:
         ],
     )
     def test_vlm(self, model_id):
-        device = torch.device("cuda")
-        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="auto", device_map=device)
-        input_ids = torch.randint(0, model.config.text_config.vocab_size, (2, 8), device=device)
+        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="auto", device_map=torch_device)
+        input_ids = torch.randint(0, model.config.text_config.vocab_size, (2, 8), device=torch_device)
         logits_mask = torch.tensor(
             [[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]],
-            device=device,
+            device=torch_device,
         )
 
         full_outputs = model(input_ids=input_ids)
@@ -1203,6 +1236,7 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
 ]
 
 
+@require_torch_accelerator
 class TestPatchChunkedLMHead:
     B, S = 4, 16  # batch size, sequence length (including prompt + completion)
     H, V = 32, 128
@@ -1285,15 +1319,14 @@ class TestPatchChunkedLMHead:
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_forward(self, model_id, temperature):
-        device = torch.device("cuda")
-        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(device)
+        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
         if getattr(model.config, "final_logit_softcapping", None) is not None:
             pytest.skip("model uses final_logit_softcapping, not supported by chunked LM head")
         model.eval()
 
         B, S, chunk_size = 2, 8, 32
         torch.manual_seed(42)
-        input_ids = torch.randint(0, model.config.vocab_size, (B, S), device=device)
+        input_ids = torch.randint(0, model.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
 
         # Reference: standard forward → shifted logits → logprobs & entropy
@@ -1316,15 +1349,14 @@ class TestPatchChunkedLMHead:
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, model_id, temperature):
-        device = torch.device("cuda")
-        model_ref = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(device)
+        model_ref = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
         if getattr(model_ref.config, "final_logit_softcapping", None) is not None:
             pytest.skip("model uses final_logit_softcapping, not supported by chunked LM head")
         model_chunked = copy.deepcopy(model_ref)
 
         B, S, chunk_size = 2, 8, 32
         torch.manual_seed(42)
-        input_ids = torch.randint(0, model_ref.config.vocab_size, (B, S), device=device)
+        input_ids = torch.randint(0, model_ref.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
         shifted_labels = labels[:, 1:]
 
