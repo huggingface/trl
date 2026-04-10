@@ -12,11 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
+
 import pytest
+import torch
 from datasets import Dataset, features, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
 
+import trl.experimental.online_dpo.online_dpo_trainer as module_under_test
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
 from ..testing_utils import TrlTestCase, require_peft, require_torch_accelerator, require_vision, require_vllm
@@ -414,6 +418,49 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.reward_weights is not None
         assert round(abs(trainer.reward_weights[0].item() - 0.7), 5) == 0
         assert round(abs(trainer.reward_weights[1].item() - 0.3), 5) == 0
+
+
+def test_generate_vllm_server_preserves_completion_lists(monkeypatch):
+    class DummyProcessor:
+        def __call__(self, text, return_tensors, padding, padding_side, add_special_tokens):
+            return {"input_ids": torch.tensor([[101, 102, 103]])}
+
+    monkeypatch.setattr(module_under_test, "gather_object", lambda x: x)
+    monkeypatch.setattr(module_under_test, "broadcast_object_list", lambda x, from_process=0: x)
+
+    trainer = OnlineDPOTrainer.__new__(OnlineDPOTrainer)
+    trainer.accelerator = SimpleNamespace(is_main_process=True, process_index=0)
+    trainer.state = SimpleNamespace(global_step=0)
+    trainer._move_model_to_vllm = lambda: None
+    trainer._last_loaded_step = -1
+    trainer.num_generations = 2
+    trainer.repetition_penalty = 1.0
+    trainer.temperature = 1.0
+    trainer.top_p = 1.0
+    trainer.top_k = None
+    trainer.min_p = None
+    trainer.generation_config = SimpleNamespace(max_tokens=16)
+    trainer.args = SimpleNamespace(generation_kwargs={})
+    trainer.processing_class = DummyProcessor()
+    trainer.vllm_client = SimpleNamespace(
+        generate=lambda **kwargs: {
+            "completion_ids": [
+                [11, 12, 13],
+                [21, 22],
+            ]
+        }
+    )
+
+    completion_ids, prompt_ids = trainer._generate_vllm_server(["plain prompt"])
+
+    assert completion_ids == [
+        [11, 12, 13],
+        [21, 22],
+    ]
+    assert prompt_ids == [
+        [101, 102, 103],
+        [101, 102, 103],
+    ]
 
 
 @require_vision

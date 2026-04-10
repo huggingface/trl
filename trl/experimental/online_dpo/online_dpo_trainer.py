@@ -662,8 +662,6 @@ class OnlineDPOTrainer(_BaseTrainer):
                 else None,
                 generation_kwargs=self.args.generation_kwargs,
             )["completion_ids"]
-            # Flatten: each prompt generates 2 completions
-            completion_ids = [[comp_id] for prompt_completions in completion_ids for comp_id in prompt_completions]
         else:
             completion_ids = [None] * (len(all_prompts) * 2)
 
