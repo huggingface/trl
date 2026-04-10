@@ -358,7 +358,11 @@ class DistillationConfig(_BaseConfig):
     # Logging
     log_completions: bool = field(
         default=False,
-        metadata={"help": "Whether to log a sample of (prompt, completion) pairs periodically."},
+        metadata={
+            "help": "Whether to log a sample of (prompt, completion) pairs every `log_completions_steps` steps. If `rich` is "
+            "installed, it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` "
+            "and/or `trackio`."
+        },
     )
     log_completions_steps: int = field(
         default=100,
