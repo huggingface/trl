@@ -244,7 +244,7 @@ jobs:
           uv pip install \
             ".[dev]" \
             "accelerate==1.4.0" \
-            "datasets==3.0.0" \
+            "datasets==4.7.0" \
             "transformers==4.56.2"
 
       - name: Test with pytest
