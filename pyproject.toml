@@ -52,11 +52,6 @@ deepspeed = [
     "deepspeed>=0.14.4",
     "transformers!=5.1.0",  # see transformers#43780
 ]
-judges = [
-    "openai>=1.23.2",
-    "llm-blender>=0.0.2",
-    "transformers<5.0.0",  # see #4918
-]
 kernels = [
     "kernels"
 ]
