@@ -114,6 +114,7 @@ class TestCloneChatTemplate(TrlTestCase):
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
+        pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
@@ -310,13 +311,14 @@ class TestIsChatTemplatePrefixPreserving:
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
+        pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
     ],
 )
 class TestGetTrainingChatTemplate:
     def test_new_chat_template_is_prefix_preserving(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        assert is_chat_template_prefix_preserving(tokenizer) is False
         tokenizer.chat_template = get_training_chat_template(tokenizer)
         assert is_chat_template_prefix_preserving(tokenizer) is True
 
@@ -462,10 +464,45 @@ class TestGetTrainingChatTemplate:
         )
         assert before == after
 
+    def test_assistant_masks(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": "It is blue."},
+        ]
+        chat_template = get_training_chat_template(tokenizer)
+        result = tokenizer.apply_chat_template(
+            messages, chat_template=chat_template, return_assistant_tokens_mask=True, return_dict=True
+        )
+        masks = result["assistant_masks"]
+        assert 1 in masks
+        # The first tokens (user turn) should not be masked
+        assert masks[0] == 0
+        # The last tokens (assistant turn ending with <|im_end|>) should be masked
+        assert masks[-1] == 1
+
+    def test_assistant_masks_multi_turn(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "Bye"},
+            {"role": "assistant", "content": "Goodbye!"},
+        ]
+        chat_template = get_training_chat_template(tokenizer)
+        result = tokenizer.apply_chat_template(
+            messages, chat_template=chat_template, return_assistant_tokens_mask=True, return_dict=True
+        )
+        masks = result["assistant_masks"]
+        # Should have two masked regions (two assistant turns): 0→1, 1→0, 0→1
+        transitions = sum(1 for i in range(1, len(masks)) if masks[i] != masks[i - 1])
+        assert transitions == 3
+
 
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
+        pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),

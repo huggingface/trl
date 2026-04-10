@@ -11,18 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import random
 
-from trl.experimental.judges import BasePairwiseJudge
+from .distillation_config import DistillationConfig
+from .distillation_trainer import DistillationTrainer
 
 
-class RandomPairwiseJudge(BasePairwiseJudge):
-    """
-    Random pairwise judge, for testing purposes.
-    """
-
-    def judge(self, prompts, completions, shuffle_order=True, return_scores=False):
-        if not return_scores:
-            return [random.randint(0, len(completion) - 1) for completion in completions]
-        else:
-            return [random.random() for _ in range(len(prompts))]
+__all__ = ["DistillationConfig", "DistillationTrainer"]
