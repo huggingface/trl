@@ -32,18 +32,13 @@ dataset = dataset.map(
 config = DistillationConfig(
     output_dir="results/distill-qwen-gsm8k",
     num_train_epochs=1,
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=32,
     bf16=True,
     save_strategy="no",
     # Distillation
     lmbda=1.0,                      # fully on-policy (student generates)
     beta=1.0,                       # reverse KL
-    # vLLM for student generation
-    use_vllm=True,
     # Teacher
     teacher_model_init_kwargs={"torch_dtype": "bfloat16"},
-    report_to="none",
 )
 
 # 3. Train
