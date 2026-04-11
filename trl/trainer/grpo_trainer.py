@@ -1491,13 +1491,6 @@ class GRPOTrainer(_BaseTrainer):
         tool_failure_count = 0
         iteration_num = 0
 
-        # Filter samples whose length exceeds max allowed length. This is important, because both
-        # vLLM and transformers will error out if the input is longer than the model's max length.
-        if self.use_vllm and self.vllm_mode == "colocate":
-            max_model_len = self.vllm_generation.llm.llm_engine.model_config.max_model_len
-        else:
-            config = self.model.config.text_config if self._is_vlm else self.model.config
-            max_model_len = config.max_position_embeddings
         while idxs_with_tool and iteration_num < self.max_tool_calling_iterations:
             prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
             # Snapshot state so we can rollback tool results that would exceed max_completion_length
@@ -1584,10 +1577,16 @@ class GRPOTrainer(_BaseTrainer):
                     prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids
                 )
 
-            # Drop tool results that would push the completion beyond max_completion_length or the
-            # sequence beyond the backend context ceiling. The sample exits the loop with its completion
-            # as-is; the tool messages/images appended during this iteration are rolled back so
-            # completions and tool_images stay consistent with completion_ids.
+            # Drop tool results whose addition would push the sequence past max_completion_length (the completion
+            # budget) or past the backend context ceiling (vLLM and transformers will error out on inputs longer than
+            # the model's max length). The sample exits the loop with its completion as-is, and the tool
+            # messages/images appended this iteration are rolled back so completions and tool_images stay consistent
+            # with completion_ids.
+            if self.use_vllm and self.vllm_mode == "colocate":
+                max_model_len = self.vllm_generation.llm.llm_engine.model_config.max_model_len
+            else:
+                config = self.model.config.text_config if self._is_vlm else self.model.config
+                max_model_len = config.max_position_embeddings
             overlong = [
                 len(pct) - len(prompt_ids[i]) > self.max_completion_length or len(pct) >= max_model_len
                 for i, pct in zip(idxs_with_tool, prompt_completion_tool_ids, strict=True)
