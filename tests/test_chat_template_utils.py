@@ -502,6 +502,74 @@ class TestGetTrainingChatTemplate:
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
+        pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
+        pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
+    ],
+)
+class TestGetTrainingChatTemplateGemma:
+    # Gemma's chat template forbids system messages, tool calls and non-alternating roles, so we mirror the
+    # Qwen3 `TestGetTrainingChatTemplate` tests using only the message shapes Gemma actually supports.
+    def test_behavior_unchanged_multi_turn_with_generation_prompt(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": "It is blue."},
+            {"role": "user", "content": "Thanks"},
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        new_chat_template = get_training_chat_template(tokenizer)
+        assert isinstance(new_chat_template, str)
+        after = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, chat_template=new_chat_template
+        )
+        assert before == after
+
+    def test_behavior_unchanged_multi_turn_no_generation_prompt(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "Bye"},
+            {"role": "assistant", "content": "Goodbye!"},
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
+
+    def test_assistant_masks_multi_turn(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "Bye"},
+            {"role": "assistant", "content": "Goodbye!"},
+        ]
+        chat_template = get_training_chat_template(tokenizer)
+        result = tokenizer.apply_chat_template(
+            messages, chat_template=chat_template, return_assistant_tokens_mask=True, return_dict=True
+        )
+        masks = result["assistant_masks"]
+        input_ids = result["input_ids"]
+        # Two assistant turns -> 3 mask transitions (0->1, 1->0, 0->1)
+        transitions = sum(1 for i in range(1, len(masks)) if masks[i] != masks[i - 1])
+        assert transitions == 3
+        # <bos> and the leading user turn must not be masked; final assistant turn must be masked through the end.
+        assert masks[0] == 0
+        assert input_ids[0] == tokenizer.bos_token_id
+        assert masks[-1] == 1
+        # The masked regions must be exactly the assistant content plus '<end_of_turn>\n', with no '<start_of_turn>'
+        # prompt cue leaking into the mask.
+        masked_ids = [tid for tid, m in zip(input_ids, masks, strict=False) if m == 1]
+        masked_text = tokenizer.decode(masked_ids)
+        assert masked_text == "Hello!<end_of_turn>\nGoodbye!<end_of_turn>\n"
+
+
+@pytest.mark.parametrize(
+    "tokenizer_name",
+    [
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),

@@ -264,6 +264,7 @@ qwen3_5_schema = {
     },
 }
 
+gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text()
 
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
 
@@ -409,11 +410,13 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
     return text2.startswith(text1)
 
 
+gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma_training.jinja").read_text()
+
+gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text()
+
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text()
 
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text()
-
-gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text()
 
 
 def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
@@ -422,7 +425,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently GPT-OSS, LLaMA 3 and Qwen3 are supported.
+    requirements. Currently Gemma(v1 + v2), GPT-OSS, LLaMA 3 and Qwen3 are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -468,8 +471,11 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     ```
     """
     # First check if patching is needed
-    if is_chat_template_prefix_preserving(tokenizer) and "{% generation %}" in tokenizer.chat_template:
+    if "{% generation %}" in tokenizer.chat_template and is_chat_template_prefix_preserving(tokenizer):
         return None  # No patching needed
+
+    if tokenizer.chat_template == gemma_chat_template:
+        return gemma_training_chat_template
 
     if tokenizer.chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
