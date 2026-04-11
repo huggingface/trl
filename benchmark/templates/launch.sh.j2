@@ -17,7 +17,7 @@ accelerate launch \
   --max_length {{ context_length }} \
   --per_device_train_batch_size {{ per_device_train_batch_size | default(1) }} \
   --gradient_checkpointing true \
-  --attn_implementation flash_attention_2 \
+  --attn_implementation {{ attn_implementation | default('sdpa') }} \
 {%- if use_reentrant_gc %}
   --gradient_checkpointing_kwargs '{"use_reentrant": true}' \
 {%- endif %}

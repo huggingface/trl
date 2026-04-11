@@ -1,0 +1,65 @@
+model_name_or_path: /fsx/amine_dirhoussi/Qwen3-30B-A3B-fused
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+extra_args: --enable_expert_parallel
+
+runs:
+  # 2 nodes (EP=16), 16k — DP only
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 16
+
+  # 4 nodes (EP=32), 16k — DP only
+  - context_length: 16384
+    nodes: 4
+    backend: fsdp2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+
+  # 2 nodes (EP=16), 32k — CP=2
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 16
+
+  # 4 nodes (EP=32), 32k — CP=2
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 32
+
+  # 2 nodes, 32k — DP only (OOM data point)
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 16
+
+  # 4 nodes, 32k — DP only (OOM data point)
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32

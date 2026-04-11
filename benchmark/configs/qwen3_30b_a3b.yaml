@@ -1,79 +1,165 @@
 model_name_or_path: Qwen/Qwen3-30B-A3B
 dataset_name: THUDM/LongAlign-10k
 gpus_per_node: 8
+extra_args: --fuse_moe_experts
 
 runs:
+  # --- sdpa (default, required for CP) ---
+
   # 2 nodes, 16k — DP baseline
   - context_length: 16384
     nodes: 2
-    backend: deepspeed_zero3
+    backend: fsdp2
     dp: 16
     tp: 1
     pp: 1
     cp: 1
     ep: 1
 
-  # 2 nodes, 16k — SP=2
+  # 2 nodes, 16k — CP=2
   - context_length: 16384
     nodes: 2
-    backend: deepspeed_zero3
+    backend: fsdp2
     dp: 8
     tp: 1
     pp: 1
-    cp: 1
+    cp: 2
     ep: 1
-    sp: 2
 
-  # 2 nodes, 32k — SP=2 (may OOM)
+  # 2 nodes, 32k — CP=2
   - context_length: 32768
     nodes: 2
-    backend: deepspeed_zero3
+    backend: fsdp2
     dp: 8
     tp: 1
     pp: 1
-    cp: 1
+    cp: 2
     ep: 1
-    sp: 2
 
   # 4 nodes, 16k — DP baseline
   - context_length: 16384
     nodes: 4
-    backend: deepspeed_zero3
+    backend: fsdp2
     dp: 32
     tp: 1
     pp: 1
     cp: 1
     ep: 1
 
-  # 4 nodes, 16k — SP=2
+  # 4 nodes, 16k — CP=2
   - context_length: 16384
     nodes: 4
-    backend: deepspeed_zero3
+    backend: fsdp2
     dp: 16
     tp: 1
     pp: 1
-    cp: 1
+    cp: 2
     ep: 1
-    sp: 2
 
-  # 4 nodes, 32k — SP=2
-  - context_length: 32768
+  # 4 nodes, 16k — CP=4
+  - context_length: 16384
     nodes: 4
-    backend: deepspeed_zero3
-    dp: 16
-    tp: 1
-    pp: 1
-    cp: 1
-    ep: 1
-    sp: 2
-
-  # 4 nodes, 32k — SP=4
-  - context_length: 32768
-    nodes: 4
-    backend: deepspeed_zero3
+    backend: fsdp2
     dp: 8
     tp: 1
     pp: 1
+    cp: 4
+    ep: 1
+
+  # 4 nodes, 32k — CP=2
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 1
+
+  # 4 nodes, 32k — CP=4
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 4
+    ep: 1
+
+  # --- flash_attention_2 (no CP — incompatible) ---
+
+  # 2 nodes, 16k — DP + flash
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
     cp: 1
     ep: 1
-    sp: 4
+    attn_implementation: flash_attention_2
+
+  # 4 nodes, 16k — DP + flash
+  - context_length: 16384
+    nodes: 4
+    backend: fsdp2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    attn_implementation: flash_attention_2
+
+  # --- OOM data points ---
+
+  # 2 nodes, 32k — DP only (expect OOM)
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+
+  # 4 nodes, 32k — DP only (expect OOM)
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+
+  # --- TP variants ---
+
+  # 4 nodes, 16k — TP=2
+  - context_length: 16384
+    nodes: 4
+    backend: fsdp2
+    dp: 16
+    tp: 2
+    pp: 1
+    cp: 1
+    ep: 1
+
+  # 4 nodes, 16k — TP=4
+  - context_length: 16384
+    nodes: 4
+    backend: fsdp2
+    dp: 8
+    tp: 4
+    pp: 1
+    cp: 1
+    ep: 1
+
+  # 4 nodes, 32k — TP=2
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 16
+    tp: 2
+    pp: 1
+    cp: 1
+    ep: 1

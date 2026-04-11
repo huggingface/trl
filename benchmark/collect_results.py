@@ -79,6 +79,15 @@ def parse_run_name(run_name: str) -> dict:
         if backend in run_name:
             result["backend"] = backend
             break
+    # Extract SP
+    sp_match = re.search(r"_sp(\d+)", run_name)
+    if sp_match:
+        result["sp"] = int(sp_match.group(1))
+    # Extract attention implementation
+    if "flashattention2" in run_name:
+        result["attn"] = "flash_attention_2"
+    else:
+        result["attn"] = "sdpa"
     # Extract model name
     model_match = re.search(r"bench-(.*?)_ctx", run_name)
     if model_match:
@@ -194,7 +203,9 @@ def collect_from_logs(logs_dir: str) -> list[dict]:
                 "TP": parsed.get("tp", ""),
                 "PP": parsed.get("pp", ""),
                 "CP": parsed.get("cp", ""),
+                "SP": parsed.get("sp", 1),
                 "EP": parsed.get("ep", ""),
+                "Attn": parsed.get("attn", "sdpa"),
                 "MFU": round(mfu, 2) if mfu else "-",
                 "TPS": round(tps, 2) if tps else "-",
                 "TPS/GPU": tps_per_gpu if tps_per_gpu else "-",
@@ -252,7 +263,9 @@ def collect_from_wandb(project: str, entity: str | None = None, logs_dir: str | 
                 "TP": parsed.get("tp", ""),
                 "PP": parsed.get("pp", ""),
                 "CP": parsed.get("cp", ""),
+                "SP": parsed.get("sp", 1),
                 "EP": parsed.get("ep", ""),
+                "Attn": parsed.get("attn", "sdpa"),
                 "MFU": round(mfu, 2) if mfu else "-",
                 "TPS": round(tps, 2) if tps else "-",
                 "TPS/GPU": tps_per_gpu if tps_per_gpu else "-",
@@ -297,7 +310,9 @@ def main():
         "TP",
         "PP",
         "CP",
+        "SP",
         "EP",
+        "Attn",
         "MFU",
         "TPS",
         "TPS/GPU",

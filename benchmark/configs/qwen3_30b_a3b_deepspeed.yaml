@@ -1,0 +1,34 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+
+runs:
+  # 2 nodes, 16k — DP baseline
+  - context_length: 16384
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+
+  # 4 nodes, 16k — DP baseline
+  - context_length: 16384
+    nodes: 4
+    backend: deepspeed_zero3
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+
+  # 2 nodes, 32k — DP (expect OOM)
+  - context_length: 32768
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1

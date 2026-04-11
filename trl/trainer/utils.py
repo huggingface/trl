@@ -1480,3 +1480,86 @@ def compute_mfu(
         `float`: MFU as a percentage (0-100).
     """
     return 100 * (flops_per_token * tokens_per_second) / (peak_flops_per_device * world_size)
+
+
+def fuse_moe_experts(model: "PreTrainedModel") -> "PreTrainedModel":
+    """
+    Fuse individual MoE expert weights into grouped tensors for FSDP2 compatibility.
+
+    Vanilla FSDP2 with MoE models fails because data-dependent expert routing causes different ranks to have
+    different active expert gradients, leading to collective shape mismatches in reduce_scatter. Fusing expert
+    weights into a single tensor per projection (shape ``[num_experts, ...]``) makes the parameter structure
+    symmetric across ranks, allowing FSDP2 to shard correctly.
+
+    This function replaces ``ModuleList[MLP(gate_proj, up_proj, down_proj)]`` with fused ``Parameter`` tensors
+    and patches the forward method to use indexed ``F.linear`` calls.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            The model to fuse. Must have MoE layers with a ``experts`` ``ModuleList`` attribute. If the model
+            is not MoE, it is returned unchanged.
+
+    Returns:
+        [`~transformers.PreTrainedModel`]: The model with fused expert weights.
+    """
+    num_experts = getattr(model.config, "num_experts", None) or getattr(model.config, "num_local_experts", None)
+    if num_experts is None:
+        return model
+
+    fused_count = 0
+    for layer in model.model.layers:
+        block = layer.mlp
+        if not hasattr(block, "experts") or not isinstance(block.experts, torch.nn.ModuleList):
+            continue
+
+        experts = block.experts
+        gate_weights = torch.stack([experts[i].gate_proj.weight for i in range(num_experts)])
+        up_weights = torch.stack([experts[i].up_proj.weight for i in range(num_experts)])
+        down_weights = torch.stack([experts[i].down_proj.weight for i in range(num_experts)])
+
+        fused = torch.nn.Module()
+        fused.gate_proj = torch.nn.Parameter(gate_weights)
+        fused.up_proj = torch.nn.Parameter(up_weights)
+        fused.down_proj = torch.nn.Parameter(down_weights)
+        block.experts = fused
+        block.forward = _make_fused_moe_forward(block)
+        fused_count += 1
+
+    return model
+
+
+def _make_fused_moe_forward(block):
+    """Create a forward method that uses fused expert weight tensors."""
+
+    def forward(hidden_states: torch.Tensor) -> torch.Tensor:
+        batch_size, sequence_length, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
+
+        router_logits = block.gate(hidden_states)
+        routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
+        routing_weights, selected_experts = torch.topk(routing_weights, block.top_k, dim=-1)
+        if block.norm_topk_prob:
+            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+        routing_weights = routing_weights.to(hidden_states.dtype)
+
+        final_hidden_states = torch.zeros(
+            (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
+        )
+
+        expert_mask = F.one_hot(selected_experts, num_classes=block.num_experts).permute(2, 1, 0)
+        expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
+        for expert_idx in expert_hit:
+            idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
+            current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
+
+            eidx = expert_idx.item()
+            gate_out = F.linear(current_state, block.experts.gate_proj[eidx])
+            up_out = F.linear(current_state, block.experts.up_proj[eidx])
+            current_hidden_states = F.linear(F.silu(gate_out) * up_out, block.experts.down_proj[eidx])
+            current_hidden_states = current_hidden_states * routing_weights[top_x, idx, None]
+            final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+
+        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+        return final_hidden_states, router_logits
+
+    return forward

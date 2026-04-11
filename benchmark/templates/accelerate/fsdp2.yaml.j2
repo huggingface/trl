@@ -2,11 +2,11 @@ distributed_type: FSDP
 fsdp_config:
   fsdp_version: 2
   fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
-  fsdp_cpu_ram_efficient_loading: {{ cpu_ram_efficient_loading | default(true) | lower }}
+  fsdp_cpu_ram_efficient_loading: false
   fsdp_offload_params: {{ cpu_offload | default(false) | lower }}
 num_machines: {{ nodes }}
 num_processes: {{ num_processes }}
-{%- if tp > 1 or cp > 1 or pp > 1 or ep > 1 %}
+{%- if tp > 1 or cp > 1 or pp > 1 %}
 parallelism_config:
 {%- if dp_shard is defined %}
   parallelism_config_dp_shard_size: {{ dp_shard }}
@@ -22,8 +22,5 @@ parallelism_config:
 {%- endif %}
 {%- if pp > 1 %}
   parallelism_config_pp_size: {{ pp }}
-{%- endif %}
-{%- if ep > 1 %}
-  parallelism_config_ep_size: {{ ep }}
 {%- endif %}
 {%- endif %}

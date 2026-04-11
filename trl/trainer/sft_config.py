@@ -156,6 +156,14 @@ class SFTConfig(_BaseConfig):
             "Requires the model to have an `ep_plan` defined in its config class."
         },
     )
+    fuse_moe_experts: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to fuse individual MoE expert weights into grouped tensors for FSDP2 compatibility. "
+            "This fixes the collective shape mismatch that prevents vanilla FSDP2 from training MoE models. "
+            "Only needed when using FSDP2 with MoE architectures."
+        },
+    )
     chat_template_path: str | None = field(
         default=None,
         metadata={

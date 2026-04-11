@@ -28,6 +28,9 @@ echo "========================================="
 # NCCL multi-node configuration
 export NCCL_DEBUG=WARN
 export NCCL_IB_DISABLE=0
+export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=600
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+export TORCH_DISTRIBUTED_DEBUG=INFO
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 export WANDB_PROJECT="{{ wandb_project | default('trl-sft-benchmark') }}"

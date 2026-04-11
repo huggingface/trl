@@ -1,0 +1,45 @@
+model_name_or_path: /fsx/amine_dirhoussi/Qwen3-30B-A3B-fused
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+extra_args: --enable_expert_parallel
+
+runs:
+  # 8 nodes (EP=64), 32k — CP=2
+  - context_length: 32768
+    nodes: 8
+    backend: fsdp2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 64
+
+  # 8 nodes (EP=64), 32k — DP only (may OOM)
+  - context_length: 32768
+    nodes: 8
+    backend: fsdp2
+    dp: 64
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 64
+
+  # 4 nodes (EP=32), 32k — CP=4 (previously hit CUDA peer error)
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 4
+    ep: 32
+
+  # 8 nodes (EP=64), 16k — DP only
+  - context_length: 16384
+    nodes: 8
+    backend: fsdp2
+    dp: 64
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 64

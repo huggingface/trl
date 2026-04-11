@@ -44,6 +44,9 @@ def build_run_id(config: dict, run: dict) -> str:
     ]
     if run.get("sp", 1) > 1:
         parts.append(f"sp{run['sp']}")
+    attn = run.get("attn_implementation", config.get("attn_implementation", "sdpa"))
+    if attn != "sdpa":
+        parts.append(attn.replace("_", ""))
     return "_".join(parts)
 
 
@@ -68,8 +71,9 @@ def render_accelerate_config(env: Environment, run: dict, config: dict) -> str:
     }
 
     # Compute DP shard/replicate sizes for parallelism_config
-    # Total GPUs = dp_replicate * dp_shard * tp * cp * pp * ep * sp
-    non_dp = run["tp"] * run["cp"] * run.get("pp", 1) * run.get("ep", 1) * run.get("sp", 1)
+    # Total GPUs = dp_replicate * dp_shard * tp * cp * pp * sp
+    # Note: EP is NOT included — it's handled by transformers' distribute_model, not accelerate's mesh
+    non_dp = run["tp"] * run["cp"] * run.get("pp", 1) * run.get("sp", 1)
     if non_dp > 0 and num_processes // non_dp > 0:
         dp_total = num_processes // non_dp
         # dp_shard = dp (FSDP shards), dp_replicate = dp_total // dp_shard
@@ -104,6 +108,7 @@ def render_launch_script(env: Environment, run: dict, config: dict, run_id: str,
         max_steps=run.get("max_steps", 20),
         logging_steps=run.get("logging_steps", 5),
         use_reentrant_gc=use_reentrant_gc,
+        attn_implementation=run.get("attn_implementation", config.get("attn_implementation", "sdpa")),
         extra_args=run.get("extra_args", config.get("extra_args", "")),
     )
 

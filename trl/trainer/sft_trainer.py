@@ -61,6 +61,7 @@ from .utils import (
     create_model_from_path,
     entropy_from_logits,
     flush_left,
+    fuse_moe_experts,
     get_config_model_id,
     pad,
     selective_log_softmax,
@@ -691,9 +692,14 @@ class SFTTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             if args.enable_expert_parallel:
+                import torch.distributed as dist
                 from transformers.distributed.configuration_utils import DistributedConfig
 
                 model_init_kwargs["distributed_config"] = DistributedConfig(enable_expert_parallel=True)
+                model_init_kwargs.pop("device_map", None)  # device_map is incompatible with tp_plan
+                if dist.is_initialized():
+                    world_size = dist.get_world_size()
+                    model_init_kwargs["device_mesh"] = dist.init_device_mesh("cuda", (world_size,))
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
@@ -701,6 +707,9 @@ class SFTTrainer(_BaseTrainer):
                     "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
+
+        if args.fuse_moe_experts:
+            model = fuse_moe_experts(model)
 
         # Processing class
         if processing_class is None:
