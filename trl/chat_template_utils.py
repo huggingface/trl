@@ -279,6 +279,8 @@ qwen3_5_chat_template_2b_and_below = (_CHAT_TEMPLATES_DIR / "qwen3_5_2b_and_belo
 
 qwen3_5_chat_template_4b_and_above = (_CHAT_TEMPLATES_DIR / "qwen3_5_4b_and_above.jinja").read_text()
 
+qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text()
+
 
 def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     r"""
@@ -415,6 +417,8 @@ qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").re
 
 gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text()
 
+qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text()
+
 
 def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     r"""
@@ -422,7 +426,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently GPT-OSS, LLaMA 3 and Qwen3 are supported.
+    requirements. Currently GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -479,6 +483,9 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     if tokenizer.chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
+
+    if tokenizer.chat_template == qwen2_5_chat_template:
+        return qwen2_5_training_chat_template
 
     raise ValueError(
         "The tokenizer's chat template is not training-compatible (missing prefix-preservation or "
