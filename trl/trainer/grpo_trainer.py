@@ -321,13 +321,25 @@ class GRPOTrainer(_BaseTrainer):
         if isinstance(processing_class, ProcessorMixin):
             tokenizer = processing_class.tokenizer
             self._is_vlm = True
-            self._vision_token_ids_cache = None  # populated lazily by _get_vision_token_ids
         elif isinstance(processing_class, PreTrainedTokenizerBase):
             tokenizer = processing_class
             self._is_vlm = False
-            self._vision_token_ids_cache = None
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
+        # when tool responses inject images into the completion (see _generate forward_kwargs block).
+        self._image_pad_token_id = None
+        self._video_pad_token_id = None
+        if self._is_vlm:
+            for candidate in ("<|image_pad|>", "<|image|>"):
+                tid = tokenizer.convert_tokens_to_ids(candidate)
+                if tid != tokenizer.unk_token_id:
+                    self._image_pad_token_id = tid
+                    break
+            tid = tokenizer.convert_tokens_to_ids("<|video_pad|>")
+            if tid != tokenizer.unk_token_id:
+                self._video_pad_token_id = tid
 
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -1467,29 +1479,6 @@ class GRPOTrainer(_BaseTrainer):
             raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
         return full_ids[len(prefix_ids) :]
 
-    def _get_vision_token_ids(self):
-        """Get vision-related special token IDs from the processor's tokenizer.
-
-        Returns a dict with keys 'image_pad', 'video_pad'. Values are None if the token doesn't exist in the
-        vocabulary. Supports multiple VLM families (e.g. Qwen uses <|image_pad|>, Gemma uses <|image|>).
-        """
-        if self._vision_token_ids_cache is None:
-            cache = {"image_pad": None, "video_pad": None}
-            if self._is_vlm:
-                tok = self.processing_class.tokenizer
-                # Try multiple token strings per role to support different VLM families
-                for name, candidates in {
-                    "image_pad": ["<|image_pad|>", "<|image|>"],
-                    "video_pad": ["<|video_pad|>"],
-                }.items():
-                    for token_str in candidates:
-                        tid = tok.convert_tokens_to_ids(token_str)
-                        if tid != tok.unk_token_id:
-                            cache[name] = tid
-                            break
-            self._vision_token_ids_cache = cache
-        return self._vision_token_ids_cache
-
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
         tool_calls = [completion[0].get("tool_calls") for completion in completions]
@@ -2000,12 +1989,11 @@ class GRPOTrainer(_BaseTrainer):
         # because our version already covers the full sequence (images are in the completion,
         # not just the prompt).
         if self.tools and any(imgs for imgs in tool_images) and self._is_vlm:
-            vtids = self._get_vision_token_ids()
             mm_ids = torch.zeros_like(prompt_completion_ids)
-            if vtids["image_pad"] is not None:
-                mm_ids[prompt_completion_ids == vtids["image_pad"]] = 1
-            if vtids["video_pad"] is not None:
-                mm_ids[prompt_completion_ids == vtids["video_pad"]] = 2
+            if self._image_pad_token_id is not None:
+                mm_ids[prompt_completion_ids == self._image_pad_token_id] = 1
+            if self._video_pad_token_id is not None:
+                mm_ids[prompt_completion_ids == self._video_pad_token_id] = 2
 
             # Use the same key the model expects: token_type_ids for models like Gemma,
             # mm_token_type_ids for models like Qwen.
