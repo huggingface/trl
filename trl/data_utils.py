@@ -87,10 +87,10 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
             elif isinstance(message["content"], str):
                 message = {**message, "content": [{"type": "text", "text": message["content"]}]}
         elif message["role"] == "assistant":
-            if message.get("content") and isinstance(message["content"], str):
+            if isinstance(message.get("content"), str):
                 message = {**message, "content": [{"type": "text", "text": message["content"]}]}
         elif message["role"] == "tool":
-            if message.get("content") and isinstance(message["content"], str):
+            if isinstance(message.get("content"), str):
                 message = {**message, "content": [{"type": "text", "text": message["content"]}]}
         else:
             raise ValueError(
