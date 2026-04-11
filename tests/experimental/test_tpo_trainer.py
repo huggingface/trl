@@ -18,7 +18,7 @@ from datasets import load_dataset
 from transformers.utils import is_peft_available
 
 from trl.experimental.tpo import TPOConfig, TPOTrainer
-from trl.experimental.tpo.tpo_trainer import DataCollatorForTriplePreference, _extract_triple_prompt
+from trl.experimental.tpo.tpo_trainer import DataCollatorForTriplePreference
 
 from ..testing_utils import TrlTestCase, require_peft
 
@@ -100,29 +100,6 @@ class TestDataCollatorForTriplePreference(TrlTestCase):
         assert result["input_ids"].shape == (4, 5)  # 2 * B rows, no reference branch
         torch.testing.assert_close(result["input_ids"], expected_input_ids)
         assert set(result.keys()) == {"input_ids", "attention_mask", "completion_mask"}
-
-
-class TestExtractTriplePrompt(TrlTestCase):
-    def test_standard(self):
-        example = {
-            "chosen": "The sky is blue.",
-            "rejected": "The sky is green.",
-            "reference": "The sky is a beautiful shade of blue.",
-        }
-        result = _extract_triple_prompt(example)
-        assert result["prompt"] == "The sky is"
-        assert result["chosen"] == " blue."
-        assert result["rejected"] == " green."
-        assert result["reference"] == " a beautiful shade of blue."
-
-    def test_reference_missing_prompt_prefix_raises(self):
-        example = {
-            "chosen": "The sky is blue.",
-            "rejected": "The sky is green.",
-            "reference": "Completely unrelated gold completion.",
-        }
-        with pytest.raises(ValueError, match="implicit prompt"):
-            _extract_triple_prompt(example)
 
 
 class TestTPOTrainer(TrlTestCase):
