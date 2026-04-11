@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from pathlib import Path
+from typing import TypeVar
 
 from jinja2 import TemplateError
 from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, ProcessorMixin
@@ -280,9 +281,10 @@ qwen3_5_chat_template_2b_and_below = (_CHAT_TEMPLATES_DIR / "qwen3_5_2b_and_belo
 qwen3_5_chat_template_4b_and_above = (_CHAT_TEMPLATES_DIR / "qwen3_5_4b_and_above.jinja").read_text()
 
 
-def add_response_schema(
-    processing_class: PreTrainedTokenizer | ProcessorMixin,
-) -> PreTrainedTokenizer | ProcessorMixin:
+ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizer, ProcessorMixin)
+
+
+def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     r"""
     Adds the appropriate response schema to the given tokenizer based on its chat template.
 

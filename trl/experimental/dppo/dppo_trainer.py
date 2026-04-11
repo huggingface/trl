@@ -667,7 +667,6 @@ class DPPOTrainer(GRPOTrainer):
             extra_fields = {}
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
-        # `parse_response` handles VLM processors internally by unwrapping the inner tokenizer.
         if is_conversational({"prompt": prompts[0]}):
             tokenizer = (
                 self.processing_class.tokenizer
