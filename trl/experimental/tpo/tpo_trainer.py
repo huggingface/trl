@@ -33,7 +33,6 @@ from transformers import (
     DataCollator,
     PreTrainedModel,
     PreTrainedTokenizerBase,
-    ProcessorMixin,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
@@ -314,7 +313,7 @@ class TPOTrainer(_BaseTrainer):
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
-        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+        processing_class: PreTrainedTokenizerBase | None = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
@@ -356,9 +355,11 @@ class TPOTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
-
         if not isinstance(processing_class, PreTrainedTokenizerBase):
-            raise TypeError("The `processing_class` must be a `PreTrainedTokenizerBase`")
+            raise TypeError(
+                "The `processing_class` must be a `PreTrainedTokenizerBase`. `TPOTrainer` does not currently "
+                "support vision-language models."
+            )
         tokenizer = processing_class
 
         if tokenizer.pad_token is None:
