@@ -139,7 +139,6 @@ class TestAddResponseSchema:
             {"role": "user", "content": "What is 3*4?"},
             {
                 "role": "assistant",
-                "content": "",
                 "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}],
             },
         ]
@@ -164,10 +163,12 @@ class TestAddResponseSchema:
         processor = add_response_schema(processor)
         assert processor.tokenizer.response_schema is not None
         messages = [
-            {"role": "user", "content": "What is 3*4?"},
+            {"role": "user", "content": [{"type": "text", "text": "What is 3*4?"}]},
             {
                 "role": "assistant",
-                "content": "",
+                # "content" is required here because VLM processors crash on tokenize=True without it
+                # (KeyError in processing_utils.py). See huggingface/transformers#45290.
+                "content": [{"type": "text", "text": ""}],
                 "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}],
             },
         ]
@@ -623,7 +624,13 @@ class TestParseResponse:
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         messages = [
             {"role": "user", "content": "What is 3*4?"},
-            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+            {
+                "role": "assistant",
+                # "content" is required here because VLM processors crash on tokenize=True without it
+                # (KeyError in processing_utils.py). See huggingface/transformers#45290.
+                "content": "",
+                "tool_calls": tool_calls,
+            },
         ]
         expected = messages[-1]
         messages = prepare_multimodal_messages(messages) if self.is_vlm else messages
@@ -698,7 +705,13 @@ class TestParseResponse:
         ]
         messages = [
             {"role": "user", "content": "What is 3*4?"},
-            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+            {
+                "role": "assistant",
+                # "content" is required here because VLM processors crash on tokenize=True without it
+                # (KeyError in processing_utils.py). See huggingface/transformers#45290.
+                "content": "",
+                "tool_calls": tool_calls,
+            },
         ]
         expected = messages[-1]
         messages = prepare_multimodal_messages(messages) if self.is_vlm else messages
