@@ -129,8 +129,6 @@ class TestAddResponseSchema:
         [
             pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
-            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
-            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         ],
     )
@@ -645,11 +643,6 @@ class TestParseResponse:
             # Gemma4 response_schema regex doesn't capture content after tool calls.
             # Remove once https://huggingface.co/google/gemma-4-31B-it/discussions/19 is merged.
             pytest.xfail("Gemma4 response_schema regex bug.")
-        if model_name in (
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-        ):
-            pytest.skip("Llama 3.1 / 3.2 templates only allow a single tool call per assistant turn, with no content.")
         processing_class = self._load(model_name)
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         messages = [
@@ -696,11 +689,7 @@ class TestParseResponse:
         assert parsed == expected
 
     def test_parse_response_multiple_tool_calls(self, model_name):
-        if model_name in (
-            "trl-internal-testing/tiny-GptOssForCausalLM",
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-        ):
+        if model_name == "trl-internal-testing/tiny-GptOssForCausalLM":
             pytest.skip("This template only renders one tool call per assistant message.")
         processing_class = self._load(model_name)
         tool_calls = [

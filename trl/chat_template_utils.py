@@ -326,8 +326,6 @@ def add_response_schema(
         tokenizer.response_schema = glm4moe_schema
     elif chat_template == gptoss_chat_template:
         tokenizer.response_schema = gptoss_schema
-    elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
-        tokenizer.response_schema = llama3_schema
     elif chat_template in [qwen3_chat_template, qwen3_vl_chat_template]:
         tokenizer.response_schema = qwen3_schema
     elif chat_template in [qwen3_5_chat_template_2b_and_below, qwen3_5_chat_template_4b_and_above]:
