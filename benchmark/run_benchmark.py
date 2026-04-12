@@ -47,6 +47,8 @@ def build_run_id(config: dict, run: dict) -> str:
     attn = run.get("attn_implementation", config.get("attn_implementation", "sdpa"))
     if attn != "sdpa":
         parts.append(attn.replace("_", ""))
+    if run.get("cpu_offload", False):
+        parts.append("offload")
     return "_".join(parts)
 
 

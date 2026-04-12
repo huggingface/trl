@@ -416,6 +416,8 @@ Each style tells `distribute_model()` what hook to apply:
 - `"grouped_gemm"` → applies `GroupedGemmParallel` which calls `partition_tensor` at load time: `param = param[ep_rank * local_experts : (ep_rank + 1) * local_experts]`, physically reducing the tensor from `[128, ...]` to `[16, ...]` on each rank
 - `"gather"` → applies `GatherParallel` which adds an all-reduce after the experts forward to combine results across EP ranks
 
+**Note: Why no attention TP in the EP plan.** When `enable_expert_parallel=True`, the `tp_plan` property returns `_ep_plan` instead of `_tp_plan` — the EP plan **replaces** TP entirely on the same device mesh. Models like Llama4 and gpt_oss include attention TP entries (`colwise`/`rowwise`) inside their EP plan so attention is sharded alongside experts. For Qwen3-30B-A3B, this is impossible: `num_key_value_heads=4` is not divisible by typical EP sizes (8, 16, 32), so `colwise` on k_proj/v_proj would produce fractional heads per rank. Our EP plan contains only expert entries — attention weights are replicated across EP ranks and FSDP2 handles their memory sharding instead. This is a model-specific limitation, not a design choice. If running with `EP_size=4` (where 4 KV heads divides evenly), attention entries could be added to the EP plan.
+
 **What changed in `modeling_qwen3_moe.py`**:
 
 Original Qwen3 MoE forward loops over individual experts:
@@ -601,3 +603,47 @@ Cluster uses AWS EFA (Elastic Fabric Adapter) with RDMA — not InfiniBand. 32 E
 - **all_to_all** (used by EP token routing) drops to **11%** inter-node — explains why EP doesn't help at multi-node scale. The all-to-all cost dominates any savings from fewer local experts
 
 This is why peak MFU (4.77%) was achieved at 2 nodes, not 8 — minimizing inter-node all-to-all hops.
+
+---
+
+## Addendum: Qwen3-235B-A22B Results
+
+### Architecture
+
+- 235B total params, 22B active per token
+- 128 experts, 8 active per token, moe_intermediate=1536
+- hidden=4096, 94 layers, 64 attention heads, 4 KV heads
+- Model size: 470 GB in bf16
+
+### Megatron Reference Config (from NVIDIA docs)
+
+The Megatron Bridge recipe for Qwen3-235B-A22B uses:
+- **16 nodes × 8 GPUs** (128 GPUs total)
+- **TP=4, PP=16, EP=8, CP=2**
+- Sequence length: 4096, micro_batch_size=1
+
+### Our Results (8 nodes, EP=64, FSDP2 + CPU offload)
+
+| Context | Nodes | DP | CP | EP | Offload | MFU | TPS | TPS/GPU | Status |
+|---|---|---|---|---|---|---|---|---|---|
+| 16k | 8 | 64 | 1 | 64 | no | - | - | - | OOM |
+| 16k | 8 | 32 | 2 | 64 | no | - | - | - | OOM |
+| 16k | 8 | 16 | 4 | 64 | no | - | - | - | OOM |
+| 16k | 8 | 8 | 8 | 64 | no | - | - | - | OOM |
+| 16k | 8 | 16 | 4 | 64 | yes | 0.51% | 4,496 | 70 | Yes |
+| 32k | 8 | 8 | 8 | 64 | yes | 0.73% | 8,483 | 133 | Yes |
+
+### Key Findings
+
+- **235B requires CPU offload on 8 nodes (64 GPUs)**: The model params (470 GB) + optimizer states (1.4 TB) exceed 64 × 80 GB = 5.1 TB total GPU memory after FSDP overhead. No amount of CP helps — the OOM is from params/optimizer, not activations.
+- **32k > 16k MFU**: Longer context gives more compute per communication round. 32k CP=8 (0.73%) outperforms 16k CP=4 (0.51%).
+- **CPU offload is the bottleneck**: MFU is 0.5-0.7% — GPU spends most time waiting for CPU↔GPU parameter transfers. Without offload, the Megatron reference uses PP=16 to distribute params across GPUs without offloading.
+- **EP mesh is flat (all 64 GPUs)**: All-to-all spans all nodes. A 2D mesh with intra-node EP + inter-node DP would reduce all-to-all overhead.
+- **Missing PP**: The Megatron reference uses PP=16 to avoid CPU offload. TRL/accelerate doesn't support PP with FSDP2 for MoE models. PP would allow distributing 94 layers across 16 stages × 8 EP GPUs = 128 GPUs without offload.
+
+### What would improve 235B performance
+
+1. **Pipeline Parallelism (PP)**: Split 94 layers across pipeline stages. PP=16 with EP=8 = 128 GPUs (16 nodes), no offload needed. Requires PP support in accelerate for MoE.
+2. **2D EP mesh**: EP=8 intra-node (NVLink) + DP=8 inter-node. Avoids cross-node all-to-all.
+3. **More nodes without offload**: 32 nodes (256 GPUs) could fit 235B with FSDP sharding alone, no offload.
+4. **Native flash_attn**: Would speed up the attention computation (currently using kernels library fallback).

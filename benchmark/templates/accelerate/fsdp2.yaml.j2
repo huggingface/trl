@@ -2,7 +2,7 @@ distributed_type: FSDP
 fsdp_config:
   fsdp_version: 2
   fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
-  fsdp_cpu_ram_efficient_loading: false
+  fsdp_cpu_ram_efficient_loading: {{ cpu_ram_efficient_loading | default(false) | lower }}
   fsdp_offload_params: {{ cpu_offload | default(false) | lower }}
 num_machines: {{ nodes }}
 num_processes: {{ num_processes }}
