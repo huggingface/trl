@@ -210,8 +210,7 @@ class SSDTrainer(_BaseTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
+        self.model.add_model_tags(self._tag_names)
 
         self.model_accepts_loss_kwargs = False
 
