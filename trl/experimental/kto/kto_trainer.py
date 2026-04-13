@@ -464,12 +464,6 @@ class KTOTrainer(_BaseTrainer):
         else:
             self.use_dpo_data_collator = False
 
-        # Disable dropout in the model and reference model
-        if args.disable_dropout:
-            disable_dropout_in_model(model)
-            if self.ref_model is not None:
-                disable_dropout_in_model(self.ref_model)
-
         self.loss_type = args.loss_type
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
@@ -680,6 +674,12 @@ class KTOTrainer(_BaseTrainer):
                 self.ref_model = create_model_from_path(ref_model_path, **ref_model_init_kwargs)
         else:
             self.ref_model = ref_model
+
+        # Disable dropout in the model and reference model
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
