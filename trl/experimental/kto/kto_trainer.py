@@ -42,7 +42,6 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
-    TrainingArguments,
     is_comet_available,
     is_wandb_available,
 )
@@ -56,6 +55,7 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
+    get_config_model_id,
     log_table_to_comet_experiment,
     selective_log_softmax,
 )
@@ -256,8 +256,8 @@ class KTOTrainer(_BaseTrainer):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
-        args ([`experimental.kto.KTOConfig`]):
-            The arguments to use for training.
+        args ([`experimental.kto.KTOConfig`], *optional*):
+            Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`]):
@@ -310,7 +310,7 @@ class KTOTrainer(_BaseTrainer):
         self,
         model: PreTrainedModel | nn.Module | str = None,
         ref_model: PreTrainedModel | nn.Module | str | None = None,
-        args: KTOConfig = None,
+        args: KTOConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
         processing_class: PreTrainedTokenizerBase
@@ -328,8 +328,11 @@ class KTOTrainer(_BaseTrainer):
         model_adapter_name: str | None = None,
         ref_adapter_name: str | None = None,
     ):
-        if type(args) is TrainingArguments:
-            raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
+        # Args
+        if args is None:
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args: KTOConfig = KTOConfig(f"{model_name}-KTO")
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
