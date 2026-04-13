@@ -60,7 +60,7 @@ from ...trainer.utils import (
     log_table_to_comet_experiment,
     selective_log_softmax,
 )
-from ..utils import DPODataCollatorWithPadding, create_reference_model, pad_to_length, peft_module_casting_to_bf16
+from ..utils import DPODataCollatorWithPadding, pad_to_length, peft_module_casting_to_bf16
 from .kto_config import KTOConfig
 
 
@@ -439,14 +439,6 @@ class KTOTrainer(_BaseTrainer):
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = model_adapter_name
         self.ref_adapter_name = ref_adapter_name
-
-        if ref_model:
-            self.ref_model = ref_model
-        elif self.is_peft_model or args.precompute_ref_log_probs:
-            # The `model` with adapters turned off will be used as the reference model
-            self.ref_model = None
-        else:
-            self.ref_model = create_reference_model(model)
 
         if processing_class is None:
             raise ValueError(
