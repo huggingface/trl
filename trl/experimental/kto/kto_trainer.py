@@ -337,12 +337,6 @@ class KTOTrainer(_BaseTrainer):
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
 
-        if not isinstance(model, str) and ref_model is model:
-            raise ValueError(
-                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
-                "same as `model`, you must mass a copy of it, or `None` if you use peft."
-            )
-
         # Model initialization
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
