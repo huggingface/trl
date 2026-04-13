@@ -244,6 +244,7 @@ jobs:
           uv pip install accelerate==1.4.0
           uv pip install datasets==3.0.0
           uv pip install transformers==4.56.2
+          uv pip install "kernels<0.13.0"  # see GH-5528
 
       - name: Test with pytest
         run: |
