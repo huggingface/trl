@@ -207,17 +207,18 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3"),
             pytest.param("trl-internal-testing/tiny-Idefics2ForConditionalGeneration", id="idefics2"),
             pytest.param("trl-internal-testing/tiny-Idefics3ForConditionalGeneration", id="idefics3"),
-            pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
             pytest.param("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava_next"),
             pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.1", id="mistral0.1"),
             pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", id="mistral0.2"),
             pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm"),
-            # Silently ignores tool messages
+            # Silently drops both tool_calls and tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
+            pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
+            pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM", id="phi3"),
+            # Renders tool message content as plain text but drops assistant tool_calls
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
             pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl"),
             pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5_vl"),
-            pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM", id="phi3"),
         ],
     )
     def test_does_not_support_tool_calling(self, model_id):
