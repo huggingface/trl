@@ -52,6 +52,10 @@ class KTOConfig(_BaseConfig):
             Whether to precompute the reference model log probabilities for the entire training dataset before
             training. This allows to save memory during training, as the reference model does not need to be kept in
             memory.
+        precompute_ref_batch_size (`int`, *optional*):
+            Batch size to use when precomputing reference model log probabilities. This can be set higher than the
+            training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
+            training and `per_device_eval_batch_size` for evaluation.
 
         > Parameters that control the training
 
@@ -120,6 +124,14 @@ class KTOConfig(_BaseConfig):
             "help": "Whether to precompute the reference model log probabilities for the entire training dataset "
             "before training. This allows to save memory during training, as the reference model does not need to be "
             "kept in memory."
+        },
+    )
+    precompute_ref_batch_size: int | None = field(
+        default=None,
+        metadata={
+            "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
+            "than the training batch size to speed up preprocessing. If `None`, defaults to "
+            "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
         },
     )
 
