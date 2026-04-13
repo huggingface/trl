@@ -661,13 +661,13 @@ class SFTTrainer(_BaseTrainer):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
-            args = SFTConfig(f"{model_name}-SFT")
+            args: SFTConfig = SFTConfig(f"{model_name}-SFT")
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
             dict_args = args.to_dict()
             dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
             if Version(transformers.__version__) < Version("5.0.0"):
                 dict_args.pop("push_to_hub_token")
-            args = SFTConfig(**dict_args)
+            args: SFTConfig = SFTConfig(**dict_args)
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")

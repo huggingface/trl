@@ -128,7 +128,7 @@ class PAPOTrainer(GRPOTrainer):
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
             model_name = model_name.split("/")[-1]
-            args = PAPOConfig(f"{model_name}-PAPO")
+            args: PAPOConfig = PAPOConfig(f"{model_name}-PAPO")
 
         # Store PAPO-specific parameters
         self.perception_loss_weight = args.perception_loss_weight

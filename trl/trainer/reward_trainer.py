@@ -337,7 +337,7 @@ class RewardTrainer(_BaseTrainer):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
-            args = RewardConfig(f"{model_name}-Reward")
+            args: RewardConfig = RewardConfig(f"{model_name}-Reward")
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")

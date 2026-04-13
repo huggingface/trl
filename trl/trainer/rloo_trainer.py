@@ -235,7 +235,7 @@ class RLOOTrainer(_BaseTrainer):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
-            args = RLOOConfig(f"{model_name}-RLOO")
+            args: RLOOConfig = RLOOConfig(f"{model_name}-RLOO")
 
         # Model
         if isinstance(model, str):

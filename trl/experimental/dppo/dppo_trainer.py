@@ -205,7 +205,7 @@ class DPPOTrainer(GRPOTrainer):
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
             model_name = model_name.split("/")[-1]
-            args = DPPOConfig(f"{model_name}-DPPO")
+            args: DPPOConfig = DPPOConfig(f"{model_name}-DPPO")
 
         self.divergence_type = args.divergence_type
         self.divergence_topk = args.divergence_topk

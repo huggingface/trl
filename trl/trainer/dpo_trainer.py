@@ -517,7 +517,7 @@ class DPOTrainer(_BaseTrainer):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
-            args = DPOConfig(f"{model_name}-DPO")
+            args: DPOConfig = DPOConfig(f"{model_name}-DPO")
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")

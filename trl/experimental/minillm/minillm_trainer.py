@@ -185,7 +185,7 @@ class MiniLLMTrainer(GRPOTrainer):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
-            args = MiniLLMConfig(f"{model_name}-MiniLLM")
+            args: MiniLLMConfig = MiniLLMConfig(f"{model_name}-MiniLLM")
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream

@@ -402,7 +402,7 @@ class DistillationTrainer(_BaseTrainer):
         peft_config: Optional["PeftConfig"] = None,
     ):
         if args is None:
-            args = DistillationConfig(output_dir="tmp_distillation")
+            args: DistillationConfig = DistillationConfig(output_dir="tmp_distillation")
 
         # ── Student model loading ──
         model_init_kwargs = args.model_init_kwargs or {}
