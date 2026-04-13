@@ -13,6 +13,10 @@ Jinja2 chat templates stored here serve two purposes:
 
 Used for identity comparison only.
 
+### `glm4moe.jinja`
+
+Original GLM-4-MoE chat template.
+
 ### `gptoss.jinja`
 
 Original GPT-OSS chat template.
@@ -20,6 +24,10 @@ Original GPT-OSS chat template.
 ### `qwen3.jinja`
 
 Original Qwen3 chat template.
+
+### `qwen3_vl.jinja`
+
+Original Qwen3-VL chat template. Unlike text-only Qwen3, this template is already prefix-preserving (no conditional thinking blocks), so no training patch is needed.
 
 ### `qwen3_5_2b_and_below.jinja` / `qwen3_5_4b_and_above.jinja`
 
