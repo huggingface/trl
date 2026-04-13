@@ -805,17 +805,26 @@ class DPOTrainer(_BaseTrainer):
                     "Dataset or set `precompute_ref_log_probs=False`."
                 )
 
-            batch_size = self.args.precompute_ref_batch_size or self.args.per_device_train_batch_size
-            self.train_dataset = self._precompute_ref_logps(self.train_dataset, "train", batch_size)
+            self.train_dataset = self._precompute_ref_logps(
+                self.train_dataset,
+                "train",
+                self.args.precompute_ref_batch_size or self.args.per_device_train_batch_size,
+            )
             if self.eval_dataset is not None:
-                batch_size = self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
+                # batch_size = self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
                 if isinstance(self.eval_dataset, dict):
                     self.eval_dataset = {
-                        name: self._precompute_ref_logps(dataset, name, batch_size)
+                        name: self._precompute_ref_logps(
+                            dataset, name, self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
+                        )
                         for name, dataset in self.eval_dataset.items()
                     }
                 else:
-                    self.eval_dataset = self._precompute_ref_logps(self.eval_dataset, "eval", batch_size)
+                    self.eval_dataset = self._precompute_ref_logps(
+                        self.eval_dataset,
+                        "eval",
+                        self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
+                    )
 
     def _tokenize(
         self,
