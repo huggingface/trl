@@ -54,14 +54,20 @@ python trl/experimental/ssd/ssd_eval.py \\
 ```
 """
 
+# ruff: noqa: T201
+
 from __future__ import annotations
 
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from huggingface_hub import hf_hub_download
+from lcb_runner.benchmarks.code_generation import CodeGenerationProblem
+from lcb_runner.evaluation.compute_code_generation_metrics import codegen_metrics
 from transformers import AutoTokenizer
+from vllm import LLM, SamplingParams
 
 from trl import TrlParser
 
@@ -148,10 +154,6 @@ def _extract_code(text: str) -> str:
 
 def _load_lcb_v6_problems(args: SSDEvalArguments):
     """Load LiveCodeBench v6 problems, filter by date/difficulty/count, and return as a list."""
-    from datetime import datetime
-
-    from lcb_runner.benchmarks.code_generation import CodeGenerationProblem
-
     jsonl_path = hf_hub_download(repo_id=LCB_REPO, filename=LCB_V6_FILE, repo_type="dataset")
     with open(jsonl_path) as f:
         problems = [CodeGenerationProblem(**json.loads(line)) for line in f]
@@ -173,9 +175,6 @@ def _load_lcb_v6_problems(args: SSDEvalArguments):
 def main():
     parser = TrlParser(SSDEvalArguments)
     (args,) = parser.parse_args_and_config()
-
-    from lcb_runner.evaluation.compute_code_generation_metrics import codegen_metrics
-    from vllm import LLM, SamplingParams
 
     problems = _load_lcb_v6_problems(args)
     print(f"Evaluating {len(problems)} problems from LiveCodeBench v6")
@@ -246,7 +245,7 @@ def main():
             "code_list": code_list,
             "pass@1": per_problem_pass1[i],
         }
-        for i, (p, code_list) in enumerate(zip(problems, generations_list))
+        for i, (p, code_list) in enumerate(zip(problems, generations_list, strict=False))
     ]
 
     with open(args.output_file, "w") as f:
