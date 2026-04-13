@@ -169,11 +169,26 @@ training_args = SFTConfig(assistant_only_loss=True)
 ![train_on_assistant](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_assistant.png)
 
 > [!WARNING]
-> This functionality is only available for chat templates that support returning the assistant tokens mask via the `&#123;% generation %&#125;` and `&#123;% endgeneration %&#125;` keywords. For an example of such a template, see [HugggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B/blob/main/chat_template.jinja#L76-L82).
+> This functionality requires the chat template to include `&#123;% generation %&#125;` and `&#123;% endgeneration %&#125;` keywords. For known model families (e.g. Qwen3), TRL automatically patches the template when `assistant_only_loss=True`. For other models, check that your chat template includes these keywords — see [HuggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B/blob/main/chat_template.jinja#L76-L82) for an example.
 
 ### Train on completion only
 
 To train on completion only, use a [prompt-completion](dataset_formats#prompt-completion) dataset. By default, the trainer computes the loss on the completion tokens only, ignoring the prompt tokens. If you want to train on the full sequence, set `completion_only_loss=False` in the [`SFTConfig`].
+
+```python
+from trl import SFTConfig, SFTTrainer
+from datasets import load_dataset
+
+# Load a prompt-completion dataset; loss is computed on the completion only by default
+dataset = load_dataset("trl-lib/kto-mix-14k", split="train")
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    args=SFTConfig(completion_only_loss=True),  # True by default for prompt-completion datasets
+    train_dataset=dataset,
+)
+trainer.train()
+```
 
 ![train_on_completion](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_completion.png)
 
