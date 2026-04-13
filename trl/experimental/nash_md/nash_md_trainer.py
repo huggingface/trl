@@ -16,7 +16,6 @@ import textwrap
 from collections.abc import Callable
 from typing import Any
 
-import jinja2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,12 +33,11 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available
 
-from ...data_utils import is_conversational, maybe_apply_chat_template
+from ...data_utils import maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.utils import selective_log_softmax
-from ..judges import BasePairwiseJudge
 from ..online_dpo import OnlineDPOTrainer
-from ..utils import SIMPLE_CHAT_TEMPLATE, empty_cache, get_reward, truncate_right
+from ..utils import empty_cache, get_reward, truncate_right
 from .nash_md_config import NashMDConfig
 
 
@@ -121,8 +119,6 @@ class NashMDTrainer(OnlineDPOTrainer):
         reward_funcs ([`~transformers.PreTrainedModel`]):
             The reward model to score completions with, preferably an
             [`~transformers.AutoModelForSequenceClassification`].
-        judge ([`experimental.judges.BasePairwiseJudge`]):
-            The judge to use for pairwise comparison of model completions.
         args ([`experimental.nash_md.NashMDConfig`]):
             The NashMD config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
@@ -172,7 +168,6 @@ class NashMDTrainer(OnlineDPOTrainer):
         model: PreTrainedModel | nn.Module = None,
         ref_model: PreTrainedModel | nn.Module = None,
         reward_funcs: PreTrainedModel | nn.Module | None = None,
-        judge: BasePairwiseJudge | None = None,
         args: NashMDConfig | None = None,
         data_collator: Callable | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
@@ -192,7 +187,6 @@ class NashMDTrainer(OnlineDPOTrainer):
             model=model,
             ref_model=ref_model,
             reward_funcs=reward_funcs,
-            judge=judge,
             args=args,
             data_collator=data_collator,
             train_dataset=train_dataset,
@@ -222,15 +216,14 @@ class NashMDTrainer(OnlineDPOTrainer):
             "logps/rejected": [],
             "val/model_contain_eos_token": [],
             "val/ref_contain_eos_token": [],
+            "rewards/chosen": [],
+            "rewards/rejected": [],
             "beta": [],
             "mixture_coef": [],
         }
-        if self.reward_funcs is not None:
-            if len(self.reward_funcs) != 1:
-                raise ValueError("NashMDTrainer only supports one reward function/model.")
-            self.reward_funcs = self.reward_funcs[0]
-            self.stats["rewards/chosen"] = []
-            self.stats["rewards/rejected"] = []
+        if len(self.reward_funcs) != 1:
+            raise ValueError("NashMDTrainer only supports one reward function/model.")
+        self.reward_funcs = self.reward_funcs[0]
 
     @property
     def mixture_coef(self):
@@ -340,40 +333,6 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         return model_scores, mixture_scores
 
-    def _compute_judge(self, model_data, mixture_data, context_length):
-        prompts = model_data["raw"]
-        model_data_completions = self.processing_class.batch_decode(
-            model_data["input_ids"][:, context_length:], skip_special_tokens=True
-        )
-        model_data_completions = [completion.strip() for completion in model_data_completions]
-
-        mixture_data_completions = self.processing_class.batch_decode(
-            mixture_data["input_ids"][:, context_length:], skip_special_tokens=True
-        )
-        mixture_data_completions = [completion.strip() for completion in mixture_data_completions]
-        if is_conversational({"prompt": prompts[0]}):
-            model_data_completions = [
-                [{"role": "assistant", "content": completion}] for completion in model_data_completions
-            ]
-            environment = jinja2.Environment()
-            template = environment.from_string(SIMPLE_CHAT_TEMPLATE)
-            prompts = [template.render(messages=message) for message in prompts]
-            model_data_completions = [template.render(messages=completion) for completion in model_data_completions]
-
-            mixture_data_completions = [
-                [{"role": "assistant", "content": completion}] for completion in mixture_data_completions
-            ]
-            mixture_data_completions = [
-                template.render(messages=completion) for completion in mixture_data_completions
-            ]
-
-        probability = self.judge.judge(
-            prompts,
-            list(zip(model_data_completions, mixture_data_completions, strict=True)),
-            return_scores=True,
-        )
-        return torch.tensor(probability, device=model_data["input_ids"].device)
-
     def _compute_logprobs(self, model, model_data, context_length):
         def compute_logprobs_for_data(m, data):
             output = m(data["input_ids"], attention_mask=data["attention_mask"])
@@ -429,8 +388,8 @@ class NashMDTrainer(OnlineDPOTrainer):
         score,
         kl_div,
         context_length,
-        model_scores=None,
-        mixture_scores=None,
+        model_scores,
+        mixture_scores,
     ):
         # Helper function to gather and compute mean
         def gather_mean(tensor):
@@ -449,9 +408,8 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.stats["logps/rejected"].append(gather_mean(ref_logprobs_model_data_sum))
 
         # Log rewards
-        if self.reward_funcs is not None:
-            self.stats["rewards/chosen"].append(gather_mean(model_scores))
-            self.stats["rewards/rejected"].append(gather_mean(mixture_scores))
+        self.stats["rewards/chosen"].append(gather_mean(model_scores))
+        self.stats["rewards/rejected"].append(gather_mean(mixture_scores))
 
         # Log probabilities
         self.stats["rewards/probabilities"].append(gather_mean(probability))
@@ -508,13 +466,9 @@ class NashMDTrainer(OnlineDPOTrainer):
         model_data, mixture_data = self._process_completions(model_output, mixture_output, prompts)
 
         # Compute rewards
-        if self.reward_funcs is not None:
-            model_scores, mixture_scores = self._compute_rewards(model_data, mixture_data, context_length)
-            # probability of the model data vs the mixture data
-            probability = F.sigmoid(model_scores - mixture_scores)
-        else:
-            model_scores, mixture_scores = None, None
-            probability = self._compute_judge(model_data, mixture_data, context_length)
+        model_scores, mixture_scores = self._compute_rewards(model_data, mixture_data, context_length)
+        # probability of the model data vs the mixture data
+        probability = F.sigmoid(model_scores - mixture_scores)
 
         # Compute logprobs
         model_logprobs_model_data, ref_logprobs_model_data = self._compute_logprobs(model, model_data, context_length)

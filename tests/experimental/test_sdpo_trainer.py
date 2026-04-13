@@ -178,9 +178,9 @@ class TestSDPOTrainer(TrlTestCase):
         training_args = SDPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             distillation_topk=5,
             full_logit_distillation=True,
             distillation_is_clip=None,
@@ -209,9 +209,9 @@ class TestSDPOTrainer(TrlTestCase):
         training_args = SDPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             distillation_is_clip=None,
         )
 
@@ -438,9 +438,9 @@ class TestSDPOTrainer(TrlTestCase):
         training_args = SDPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             diagnostics_warning_interval=2,
             max_steps=2,
         )

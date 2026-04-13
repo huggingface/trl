@@ -219,7 +219,7 @@ class TestPrepareMultimodalMessages:
             {"role": "assistant", "content": "The current weather in New York is 22.0 degrees Celsius."},
         ]
 
-        messages = prepare_multimodal_messages(messages, images=[])
+        messages = prepare_multimodal_messages(messages)
 
         expected = [
             {
@@ -235,7 +235,7 @@ class TestPrepareMultimodalMessages:
                     }
                 ],
             },
-            {"role": "tool", "name": "get_current_weather", "content": "22.0"},
+            {"role": "tool", "name": "get_current_weather", "content": [{"type": "text", "text": "22.0"}]},
             {
                 "role": "assistant",
                 "content": [{"type": "text", "text": "The current weather in New York is 22.0 degrees Celsius."}],
