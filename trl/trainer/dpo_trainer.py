@@ -811,7 +811,6 @@ class DPOTrainer(_BaseTrainer):
                 self.args.precompute_ref_batch_size or self.args.per_device_train_batch_size,
             )
             if self.eval_dataset is not None:
-                # batch_size = self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
                 if isinstance(self.eval_dataset, dict):
                     self.eval_dataset = {
                         name: self._precompute_ref_logps(
