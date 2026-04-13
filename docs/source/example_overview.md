@@ -60,7 +60,6 @@ Scripts are maintained in the [`trl/scripts`](https://github.com/huggingface/trl
 | [`examples/scripts/cpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/cpo.py) | This script shows how to use the [`experimental.cpo.CPOTrainer`] to fine-tune a model to increase helpfulness and harmlessness using the [Anthropic/hh-rlhf](https://huggingface.co/datasets/Anthropic/hh-rlhf) dataset. |
 | [`trl/scripts/dpo.py`](https://github.com/huggingface/trl/blob/main/trl/scripts/dpo.py) | This script shows how to use the [`DPOTrainer`] to fine-tune a model. |
 | [`examples/scripts/dpo_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/dpo_vlm.py) | This script shows how to use the [`DPOTrainer`] to fine-tune a Vision Language Model to reduce hallucinations using the [openbmb/RLAIF-V-Dataset](https://huggingface.co/datasets/openbmb/RLAIF-V-Dataset) dataset. |
-| [`examples/scripts/evals/judge_tldr.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/evals/judge_tldr.py) | This script shows how to use [`experimental.judges.HfPairwiseJudge`] or [`experimental.judges.OpenAIPairwiseJudge`] to judge model generations. |
 | [`examples/scripts/gkd.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/gkd.py) | This script shows how to use the [`experimental.gkd.GKDTrainer`] to fine-tune a model. |
 | [`trl/scripts/grpo.py`](https://github.com/huggingface/trl/blob/main/trl/scripts/grpo.py) | This script shows how to use the [`GRPOTrainer`] to fine-tune a model. |
 | [`trl/scripts/grpo_agent.py`](https://github.com/huggingface/trl/blob/main/trl/scripts/grpo_agent.py) | This script shows how to use the [`GRPOTrainer`] to fine-tune a model to enable agentic usage. |
@@ -103,6 +102,8 @@ These scripts demonstrate how to train models with [OpenEnv](openenv) environmen
 | [`examples/scripts/openenv/browsergym.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/browsergym.py) | GRPO training with the BrowserGym environment for VLMs. |
 | [`examples/scripts/openenv/browsergym_llm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/browsergym_llm.py) | GRPO training with the BrowserGym environment for LLMs. |
 | [`examples/scripts/openenv/carla.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla.py) | GRPO training with the CARLA environment for autonomous driving. |
+| [`examples/scripts/openenv/carla_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla_vlm.py) | GRPO training with CARLA for VLMs with multimodal tool responses (camera images). |
+| [`examples/scripts/openenv/carla_vlm_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla_vlm_gemma.py) | GRPO training with CARLA for Gemma 4 with multimodal tool responses (camera images). |
 
 ## Distributed Training (for scripts)
 

@@ -231,7 +231,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
     - `"pixel_values"`: Tensor representing image pixel values.
 
-    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"pixel_position_ids"`.
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"image_position_ids"`.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
@@ -315,8 +315,8 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
                 example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
-                example["chosen"] = prepare_multimodal_messages(example["chosen"], images=[])
-                example["rejected"] = prepare_multimodal_messages(example["rejected"], images=[])
+                example["chosen"] = prepare_multimodal_messages(example["chosen"])
+                example["rejected"] = prepare_multimodal_messages(example["rejected"])
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples] * 2  # repeat for chosen and rejected
@@ -568,10 +568,6 @@ class DPOTrainer(_BaseTrainer):
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        self.pad_token = tokenizer.pad_token
-        self.pad_token_id = tokenizer.pad_token_id
-        self.eos_token_id = tokenizer.eos_token_id
-
         if is_peft_available() and is_peft_model(model) and peft_config is not None:
             raise ValueError(
                 "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
@@ -634,15 +630,15 @@ class DPOTrainer(_BaseTrainer):
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
             pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
-            pad_token_id = tokenizer.convert_tokens_to_ids(pad_token)
-            if pad_token_id is None:
+            if pad_token not in tokenizer.get_vocab():
                 raise ValueError(
                     f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
+            tokenizer.pad_token = pad_token
             data_collator = DataCollatorForPreference(
-                pad_token_id=pad_token_id,
+                pad_token_id=tokenizer.pad_token_id,
                 max_length=args.max_length,
                 truncation_mode=args.truncation_mode,
                 pad_to_multiple_of=args.pad_to_multiple_of,
@@ -846,7 +842,7 @@ class DPOTrainer(_BaseTrainer):
         """
         if isinstance(input, list):  # conversational: list of message dicts
             if self._is_vlm:
-                input = prepare_multimodal_messages(input, images=[])
+                input = prepare_multimodal_messages(input)
             result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
         else:  # non-conversational: plain text string
             result = processing_class(text=input)
@@ -1021,24 +1017,9 @@ class DPOTrainer(_BaseTrainer):
         """Computes reference log probabilities for a single padded batch."""
         device = self.accelerator.device
 
-        input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
-        completion_mask = inputs["completion_mask"]
-        shift_labels = input_ids[..., 1:].contiguous()
-        shift_completion_mask = completion_mask[..., 1:].contiguous()
-
-        model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key in (
-            "token_type_ids",
-            "mm_token_type_ids",
-            "pixel_values",
-            "pixel_attention_mask",
-            "image_grid_thw",
-            "image_sizes",
-            "pixel_position_ids",
-        ):
-            if key in inputs:
-                model_kwargs[key] = inputs[key]
+        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
+        model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
+        model_kwargs["use_cache"] = False
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             if is_peft_model(self.model) and self.ref_model is None:
@@ -1048,6 +1029,10 @@ class DPOTrainer(_BaseTrainer):
             else:
                 ref_outputs = self.ref_model(**model_kwargs)
 
+        input_ids = inputs["input_ids"]
+        completion_mask = inputs["completion_mask"]
+        shift_labels = input_ids[..., 1:].contiguous()
+        shift_completion_mask = completion_mask[..., 1:].contiguous()
         ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
         ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
         ref_per_token_logps[shift_completion_mask == 0] = 0.0
@@ -1150,23 +1135,13 @@ class DPOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         device = self.accelerator.device
 
-        input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
-        completion_mask = inputs["completion_mask"]
-        model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key in (
-            "token_type_ids",
-            "mm_token_type_ids",
-            "pixel_values",
-            "pixel_attention_mask",
-            "image_grid_thw",
-            "image_sizes",
-            "pixel_position_ids",
-        ):
-            if key in inputs:
-                model_kwargs[key] = inputs[key]
-
+        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
+        model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
+        model_kwargs["use_cache"] = False
         outputs = model(**model_kwargs)
+
+        input_ids = inputs["input_ids"]
+        completion_mask = inputs["completion_mask"]
         shift_logits = outputs.logits[..., :-1, :].contiguous()
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()

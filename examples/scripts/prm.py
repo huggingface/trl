@@ -89,8 +89,6 @@ if __name__ == "__main__":
     model = AutoModelForTokenClassification.from_pretrained(
         model_args.model_name_or_path, num_labels=2, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
-    # Align padding tokens between tokenizer and model
-    model.config.pad_token_id = tokenizer.pad_token_id
 
     if model_args.use_peft and model_args.lora_task_type != "TOKEN_CLS":
         logger.warning(

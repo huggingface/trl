@@ -1021,10 +1021,31 @@ class TestDPOTrainer(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
             # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
             # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  high memory peak, skipped for now
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__).is_devrelease,
+                    reason="Upstream issue with transformers 5.6.0.dev0, see #5497",
+                    strict=True,
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__).is_devrelease,
+                    reason="Upstream issue with transformers 5.6.0.dev0, see #5497",
+                    strict=True,
+                ),
+            ),
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
@@ -1289,12 +1310,13 @@ class TestDPOTrainer(TrlTestCase):
         # Regression test for #5285: keep_end with a VLM must raise at init time, not silently corrupt training.
         # Image tokens live at the start of the sequence (in the prompt); keep_end would drop them.
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            max_length=32,
-            truncation_mode="keep_end",
-            report_to="none",
-        )
+        with pytest.warns(FutureWarning, match="keep_end.*deprecated"):
+            training_args = DPOConfig(
+                output_dir=self.tmp_dir,
+                max_length=32,
+                truncation_mode="keep_end",
+                report_to="none",
+            )
         with pytest.raises(ValueError, match="truncation_mode='keep_end' is not supported for vision-language models"):
             DPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",

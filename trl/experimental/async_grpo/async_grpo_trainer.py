@@ -31,7 +31,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.data.data_collator import DataCollatorMixin
 
 from trl.trainer.base_trainer import _BaseTrainer
-from trl.trainer.utils import pad, selective_log_softmax
+from trl.trainer.utils import pad, patch_chunked_lm_head
 
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
@@ -291,6 +291,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model_name = model
         model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.float32)
 
+        if self.args.use_liger_kernel:
+            raise NotImplementedError("`use_liger_kernel` is not supported yet.")
+
+        patch_chunked_lm_head(model, chunk_size=8192, temperature=self.temperature)
+
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model_name)
@@ -404,11 +409,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 dataset,
                 batch_size=self.args.per_device_train_batch_size * self.accelerator.num_processes,
                 collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id),
-                num_workers=0,  # MUST be 0
+                num_workers=0,
+                # NOTE(@aminediro):
+                # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
+                # dataloader prepared by the Accelerator is only iterated through on the main process a
             )
-            # NOTE(@aminediro):
-            # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
-            # dataloader prepared by the Accelerator is only iterated through on the main process a
         )
 
     def _set_signature_columns_if_needed(self):
@@ -444,13 +449,16 @@ class AsyncGRPOTrainer(_BaseTrainer):
         old_log_probs = old_log_probs[:, :local_max_len]
 
         forward_start = time.time()
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+        outputs = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=input_ids,
+            completion_mask=completion_mask,
+            use_cache=False,
+        )
+        log_probs, entropy = outputs["log_probs"], outputs["entropy"]
         self._last_forward_time_s = time.time() - forward_start
 
-        logits = outputs.logits[:, :-1, :]
-        targets = input_ids[:, 1:]
-        logits.div_(self.temperature)
-        log_probs = selective_log_softmax(logits, targets)
         completion_mask = completion_mask[:, 1:]
         old_log_probs = old_log_probs[:, 1:]
         advantages = advantages.unsqueeze(1)
@@ -485,9 +493,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 else torch.zeros((), device=completion_mask.device)
             )
 
-            probs = torch.softmax(logits, dim=-1)
-            log_p = torch.log_softmax(logits, dim=-1)
-            entropy = -torch.sum(probs * log_p, dim=-1)
             local_entropy_sum = (
                 entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
@@ -564,9 +569,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def _streaming_iter(self):
         # Iterate parameters one at a time. For FSDP2 (DTensor), full_tensor() all-gathers just this parameter across
         # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
+        device = self.accelerator.device
         for name, param in self.model.named_parameters():
             name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
+            if full.device != device:
+                full = full.to(device)
             yield name, full
 
     def _sync_weight(self):
