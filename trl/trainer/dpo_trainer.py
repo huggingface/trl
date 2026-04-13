@@ -435,7 +435,7 @@ class DPOTrainer(_BaseTrainer):
               config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-        ref_model (`PreTrainedModel`, *optional*):
+        ref_model ([`~transformers.PreTrainedModel`], *optional*):
             Reference model used to compute the reference log probabilities.
 
             - If provided, this model is used directly as the reference policy.
