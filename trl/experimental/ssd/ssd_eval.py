@@ -22,12 +22,12 @@
 # ///
 
 """
-LiveCodeBench v6 evaluation for SSD-trained models.
+LiveCodeBench v6 evaluation script.
 
-Replicates the evaluation setup from *Embarrassingly Simple Self-Distillation Improves Code Generation* (Zhang et al.,
-2026) for the code generation scenario. Generations are produced with vLLM at the evaluation-time decoding
-configuration from Table 3 of the paper, and scored with LiveCodeBench's official ``codegen_metrics`` (pass@k via
-sandboxed test execution).
+Generates completions with vLLM at a configurable decoding setting and scores them with LiveCodeBench's official
+``codegen_metrics`` (pass@k via sandboxed test execution). The default decoding configuration matches Table 3 of
+*Embarrassingly Simple Self-Distillation Improves Code Generation* (Zhang et al., 2026), making this script suitable
+for evaluating SSD-trained checkpoints alongside their base models.
 
 Example — evaluate the base Qwen3-4B-Instruct-2507 on the v6 delta (the new problems released in v6):
 

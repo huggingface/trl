@@ -62,6 +62,18 @@ The paper identifies the following key hyperparameters:
 - **`top_k`** and **`top_p`**: training-time truncation parameters (rho_train). These suppress low-probability distractor tails during data synthesis.
 - **T_eval**: the evaluation-time decoding temperature is set independently at inference time. The paper shows that T_train and T_eval compose through an effective temperature T_eff = T_train * T_eval, with a broad optimal band.
 
+## Evaluation on LiveCodeBench
+
+Use [`trl/experimental/ssd/ssd_eval.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/ssd/ssd_eval.py) to evaluate a base model or an SSD-trained checkpoint on LiveCodeBench v6. The script uses vLLM for generation and LiveCodeBench's official `codegen_metrics` for sandboxed `pass@k` scoring; default decoding parameters match Table 3 of the paper.
+
+```bash
+python trl/experimental/ssd/ssd_eval.py \
+    --model_name_or_path <path-or-repo> \
+    --temperature 1.1 --top_k 20 --top_p 0.8 \
+    --n 1 \
+    --output_file outputs/lcb_v6.json
+```
+
 ## SSDConfig
 
 [[autodoc]] experimental.ssd.SSDConfig
