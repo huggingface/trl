@@ -265,6 +265,8 @@ qwen3_5_schema = {
 }
 
 
+deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
+
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text()
@@ -417,11 +419,22 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
         {"role": "tool", "name": "dummy", "content": "dummy"},
     ]
 
-    text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
-    text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+    try:
+        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
+        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+    except TypeError:
+        # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
+        # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
+        dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
+        messages1[1]["tool_calls"] = dummy_tool_calls
+        messages2[1]["tool_calls"] = dummy_tool_calls
+        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
+        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
 
     return text2.startswith(text1)
 
+
+deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text()
 
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text()
 
@@ -438,7 +451,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
+    requirements. Currently DeepSeek-V3, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -486,6 +499,9 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     # First check if patching is needed
     if is_chat_template_prefix_preserving(tokenizer) and "{% generation %}" in tokenizer.chat_template:
         return None  # No patching needed
+
+    if tokenizer.chat_template == deepseekv3_chat_template:
+        return deepseekv3_training_chat_template
 
     if tokenizer.chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
