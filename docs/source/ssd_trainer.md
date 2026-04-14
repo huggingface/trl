@@ -64,9 +64,8 @@ The paper identifies the following key hyperparameters:
 
 ## Example script                                                                                                            
  
-Use [`trl/experimental/ssd/ssd.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/ssd/ssd.py) to launch SSD training from the command line. The script supports any causal LM from the Hub, custom local datasets via `--dataset_path`,
-and PEFT/LoRA via the standard `ModelConfig` flags.                                                                          
-                
+Use [`trl/experimental/ssd/ssd.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/ssd/ssd.py) to launch SSD training from the command line. The script supports any causal LM from the Hub, custom local datasets via `--dataset_path`, and PEFT/LoRA via the standard `ModelConfig` flags.
+
 ```bash
 python trl/experimental/ssd/ssd.py \
     --model_name_or_path Qwen/Qwen3-4B-Instruct-2507 \
@@ -86,6 +85,7 @@ python trl/experimental/ssd/ssd.py \
     --num_train_epochs 1 \
     --bf16 \
     --report_to wandb
+```
 
 ## Evaluation on LiveCodeBench
 
