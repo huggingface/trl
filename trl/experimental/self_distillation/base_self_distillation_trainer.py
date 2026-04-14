@@ -273,8 +273,7 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
                 else:
                     self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
+        self.model.add_model_tags(self._tag_names)
         self.model_accepts_loss_kwargs = False
         self.ref_model = None
         self.teacher_model = None
