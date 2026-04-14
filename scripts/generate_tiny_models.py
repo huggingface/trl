@@ -105,9 +105,6 @@ api = HfApi()
 
 
 def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, force=False):
-    # return if not phi3
-    if not isinstance(model.config, Phi3Config):
-        return
     model_class_name = model.__class__.__name__
     content = MODEL_CARD.format(model_class_name=model_class_name)
     model_card = ModelCard(content)
