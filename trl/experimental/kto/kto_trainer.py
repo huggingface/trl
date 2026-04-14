@@ -42,7 +42,6 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
-    TrainingArguments,
     is_comet_available,
     is_wandb_available,
 )
@@ -261,18 +260,14 @@ class KTOTrainer(_BaseTrainer):
               config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-        ref_model ([`~transformers.PreTrainedModel`]):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
-            and loss. If no reference model is provided, the trainer will create a reference model with the same
-            architecture as the model to be optimized.
         ref_model ([`~transformers.PreTrainedModel`], *optional*):
             Reference model used to compute the reference log probabilities.
 
             - If provided, this model is used directly as the reference policy.
             - If `None`, the trainer will automatically use the initial policy corresponding to `model`, i.e. the model
               state before KTO training starts.
-        args ([`experimental.kto.KTOConfig`]):
-            The arguments to use for training.
+        args ([`experimental.kto.KTOConfig`], *optional*):
+            Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`]):
@@ -325,7 +320,7 @@ class KTOTrainer(_BaseTrainer):
         self,
         model: "str | PreTrainedModel | PeftModel",
         ref_model: PreTrainedModel | None = None,
-        args: KTOConfig = None,
+        args: KTOConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
         processing_class: PreTrainedTokenizerBase
@@ -343,8 +338,11 @@ class KTOTrainer(_BaseTrainer):
         model_adapter_name: str | None = None,
         ref_adapter_name: str | None = None,
     ):
-        if type(args) is TrainingArguments:
-            raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
+        # Args
+        if args is None:
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args = KTOConfig(f"{model_name}-KTO")
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")

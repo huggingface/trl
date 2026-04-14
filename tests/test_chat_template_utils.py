@@ -588,10 +588,6 @@ class TestParseResponse:
         assert parsed == messages[-1]
 
     def test_parse_response_tool_call_with_content(self, tokenizer_name):
-        if tokenizer_name == "trl-internal-testing/tiny-Gemma4ForConditionalGeneration":
-            # Gemma4 response_schema regex doesn't capture content after tool calls.
-            # Remove once https://huggingface.co/google/gemma-4-31B-it/discussions/19 is merged.
-            pytest.xfail("Gemma4 response_schema regex bug.")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if getattr(tokenizer, "response_schema", None) is None:
             tokenizer = add_response_schema(tokenizer)
