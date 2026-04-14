@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import textwrap
 
 import pytest
@@ -387,15 +388,18 @@ class TestGetTrainingChatTemplate:
 
     def test_behavior_unchanged_assistant_with_tool_calls(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         messages = [
             {"role": "user", "content": "Multiply 3 by 4."},
-            {
-                "role": "assistant",
-                "content": "I will call a tool.",
-                "tool_calls": [{"name": "multiply", "arguments": {"a": 3, "b": 4}}],
-            },
+            {"role": "assistant", "content": "I will call a tool.", "tool_calls": tool_calls},
         ]
-        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        messages_before = copy.deepcopy(messages)
+        if tokenizer_name == "trl-internal-testing/tiny-DeepseekV3ForCausalLM":
+            # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
+            # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
+            messages_before[1]["tool_calls"][0]["function"]["arguments"] = '{"a": 3, "b": 4}'
+
+        before = tokenizer.apply_chat_template(messages_before, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
         assert before == after

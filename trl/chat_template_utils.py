@@ -265,11 +265,11 @@ qwen3_5_schema = {
 }
 
 
+deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
+
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text()
-
-deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
 
 llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text()
 
@@ -407,8 +407,17 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
         {"role": "tool", "name": "dummy", "content": "dummy"},
     ]
 
-    text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
-    text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+    try:
+        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
+        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+    except TypeError:
+        # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
+        # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
+        dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
+        messages1[1]["tool_calls"] = dummy_tool_calls
+        messages2[1]["tool_calls"] = dummy_tool_calls
+        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
+        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
 
     return text2.startswith(text1)
 
