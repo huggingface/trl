@@ -78,10 +78,6 @@ def is_liger_kernel_available(min_version: str = LIGER_KERNEL_MIN_VERSION) -> bo
     return _liger_kernel_available and Version(_liger_kernel_version) >= Version(min_version)
 
 
-def is_llm_blender_available() -> bool:
-    return _is_package_available("llm_blender")
-
-
 def is_math_verify_available() -> bool:
     return _is_package_available("math_verify")
 
