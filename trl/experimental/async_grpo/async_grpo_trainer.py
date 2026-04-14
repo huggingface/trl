@@ -367,6 +367,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     model_name=model_name,
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
+                    processing_class=processing_class,
                     tools=tools,
                     environment_factory=environment_factory,
                     num_generations=self.args.num_generations,
