@@ -83,30 +83,6 @@ def _patch_vllm_logging() -> None:
         os.environ["VLLM_LOGGING_LEVEL"] = os.getenv("VLLM_LOGGING_LEVEL", "ERROR")
 
 
-def _patch_vllm_disabled_tqdm() -> None:
-    """
-    Fix DisabledTqdm class in vLLM.
-
-    - Bug introduced in https://github.com/vllm-project/vllm/pull/52
-    - Fixed in https://github.com/vllm-project/vllm/pull/28471 (released in v0.11.1)
-    - Since TRL currently supports vLLM v0.11.0-0.17.1, we patch it here
-    - This can be removed when TRL requires vLLM>=0.11.1
-    """
-    if _is_package_version_below("vllm", "0.11.1"):
-        try:
-            import vllm.model_executor.model_loader.weight_utils
-            from tqdm import tqdm
-
-            class DisabledTqdm(tqdm):
-                def __init__(self, *args, **kwargs):
-                    kwargs["disable"] = True
-                    super().__init__(*args, **kwargs)
-
-            vllm.model_executor.model_loader.weight_utils.DisabledTqdm = DisabledTqdm
-        except (ImportError, AttributeError) as e:
-            warnings.warn(f"Failed to patch vLLM DisabledTqdm: {e}", stacklevel=2)
-
-
 def _patch_vllm_cached_tokenizer() -> None:
     """
     Fix get_cached_tokenizer for transformers v5 compatibility.
@@ -242,7 +218,6 @@ def _patch_transformers_parallelism_config() -> None:
 
 # Apply vLLM patches
 _patch_vllm_logging()
-_patch_vllm_disabled_tqdm()
 _patch_vllm_cached_tokenizer()
 
 # Apply transformers patches

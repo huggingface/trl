@@ -398,7 +398,6 @@ def chunk_list(lst: list, n: int) -> list[list]:
 def main(script_args: ScriptArguments):
     import asyncio
 
-    from packaging.version import Version
     from transformers import is_vision_available
 
     from trl.generation.vllm_generation import extract_logprobs
@@ -428,16 +427,11 @@ def main(script_args: ScriptArguments):
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
     import uvicorn
-    import vllm
     from fastapi import FastAPI
     from pydantic import BaseModel
     from vllm import SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
-
-    if Version(vllm.__version__) <= Version("0.11.0"):
-        from vllm.utils import get_open_port
-    else:
-        from vllm.utils.network_utils import get_open_port
+    from vllm.utils.network_utils import get_open_port
 
     if is_vision_available():
         from PIL import Image
