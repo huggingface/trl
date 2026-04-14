@@ -1496,6 +1496,7 @@ class GRPOTrainer(_BaseTrainer):
             # Snapshot state so we can rollback tool results that would exceed max_completion_length
             completions_len_before = [len(completions[i]) for i in idxs_with_tool]
             tool_images_len_before = [len(tool_images[i]) for i in idxs_with_tool]
+            prompts_len_before = [len(prompts[i]) for i in idxs_with_tool]
 
             # Call the tools, and build the new prompt for generation
             for idx in range(len(idxs_with_tool)):
@@ -1596,6 +1597,7 @@ class GRPOTrainer(_BaseTrainer):
                     idx_with_tool = idxs_with_tool[idx]
                     del completions[idx_with_tool][completions_len_before[idx] :]
                     del tool_images[idx_with_tool][tool_images_len_before[idx] :]
+                    del prompts[idx_with_tool][prompts_len_before[idx] :]
             # Keep only non-overlong items for further processing
             idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
             prompt_completion_tool_ids = [
