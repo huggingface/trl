@@ -265,6 +265,8 @@ qwen3_5_schema = {
 }
 
 
+deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
+
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text()
@@ -335,9 +337,11 @@ def supports_tool_calling(processing_class) -> bool:
     """
     Check if the processing class's chat template can render a full tool-calling conversation.
 
-    This tests two things: (1) the template doesn't error when rendering a conversation with ``user → assistant (with
-    tool_calls) → tool`` roles, and (2) the tool message content actually appears in the rendered output (some
-    templates silently swallow tool messages).
+    This tests that (1) the template doesn't error when rendering a conversation with ``user → assistant (with
+    tool_calls) → tool`` roles, and (2) every part of the tool-calling exchange — the assistant's tool call name, its
+    arguments, and the tool message content — actually appears in the rendered output. Some templates silently swallow
+    `tool_calls` (e.g. the basic Llama 3 template, which only reads `message['content']`) or tool messages (e.g.
+    Cohere2, Phi3); both cases must be rejected.
 
     For VLMs (processors), the messages are converted to multimodal format via
     [`~trl.data_utils.prepare_multimodal_messages`] before rendering.
@@ -354,12 +358,21 @@ def supports_tool_calling(processing_class) -> bool:
         return False
 
     is_vlm = isinstance(processing_class, ProcessorMixin)
-    _sentinel = "TOOL_CONTENT_c4f9a8e2"
-    tool_calls = [{"type": "function", "function": {"name": "test", "arguments": {}}}]
+    # Distinct sentinels so we can tell which part of the exchange a template drops.
+    _name_sentinel = "tool_name_a8f3e2b1"
+    _arg_key_sentinel = "tool_arg_key_b9d4f5c2"
+    _arg_val_sentinel = "tool_arg_val_d6e7a9f3"
+    _content_sentinel = "tool_content_c4f9a8e2"
+    tool_calls = [
+        {
+            "type": "function",
+            "function": {"name": _name_sentinel, "arguments": {_arg_key_sentinel: _arg_val_sentinel}},
+        }
+    ]
     messages = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "", "tool_calls": tool_calls},
-        {"role": "tool", "name": "test", "content": _sentinel},
+        {"role": "tool", "name": _name_sentinel, "content": _content_sentinel},
     ]
     # VLMs expect content as [{"type": "text", "text": "..."}] instead of plain strings
     if is_vlm:
@@ -372,9 +385,10 @@ def supports_tool_calling(processing_class) -> bool:
         # UndefinedError (subclass): template indexes into content as a list for all roles, including tool
         #   (Idefics2, Idefics3, LlavaNext, SmolVLM)
         return False
-    # Some templates (e.g. Cohere2, Phi3) accept tool messages without error but silently ignore them.
-    # Check that the tool content actually appears in the rendered output.
-    return _sentinel in rendered
+    # All four sentinels must survive: the tool name and arguments (assistant tool_calls) AND the tool message
+    # content. Templates that silently drop either side (basic Llama 3 drops tool_calls; Cohere2/Phi3 drop tool
+    # messages) will fail this check.
+    return all(s in rendered for s in (_name_sentinel, _arg_key_sentinel, _arg_val_sentinel, _content_sentinel))
 
 
 def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
@@ -405,11 +419,22 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
         {"role": "tool", "name": "dummy", "content": "dummy"},
     ]
 
-    text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
-    text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+    try:
+        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
+        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+    except TypeError:
+        # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
+        # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
+        dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
+        messages1[1]["tool_calls"] = dummy_tool_calls
+        messages2[1]["tool_calls"] = dummy_tool_calls
+        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
+        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
 
     return text2.startswith(text1)
 
+
+deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text()
 
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text()
 
@@ -426,7 +451,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
+    requirements. Currently DeepSeek-V3, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -474,6 +499,9 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     # First check if patching is needed
     if is_chat_template_prefix_preserving(tokenizer) and "{% generation %}" in tokenizer.chat_template:
         return None  # No patching needed
+
+    if tokenizer.chat_template == deepseekv3_chat_template:
+        return deepseekv3_training_chat_template
 
     if tokenizer.chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
