@@ -742,9 +742,10 @@ class DPOTrainer(_BaseTrainer):
 
         # Reference model
         if ref_model is None:
-            if is_peft_model(self.model):
+            if is_peft_model(self.model) or args.precompute_ref_log_probs:
                 # If PEFT is used, the reference model is not needed since the adapter can be disabled to revert to the
-                # initial model.
+                # initial model. If precompute_ref_log_probs is True, the reference model does not need to be kept in
+                # memory during training.
                 self.ref_model = None
             else:
                 ref_model_init_kwargs = args.model_init_kwargs or {}
@@ -1030,9 +1031,12 @@ class DPOTrainer(_BaseTrainer):
         model_kwargs["use_cache"] = False
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if is_peft_model(self.model) and self.ref_model is None:
-                model = self.accelerator.unwrap_model(self.model)
-                with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+            if self.ref_model is None:
+                if is_peft_model(self.model):
+                    model = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                        ref_outputs = self.model(**model_kwargs)
+                else:
                     ref_outputs = self.model(**model_kwargs)
             else:
                 ref_outputs = self.ref_model(**model_kwargs)
