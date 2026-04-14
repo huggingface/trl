@@ -95,6 +95,8 @@
     title: BCO
   - local: cpo_trainer
     title: CPO
+  - local: distillation_trainer
+    title: Distillation
   - local: gfpo
     title: GFPO
   - local: gkd_trainer
