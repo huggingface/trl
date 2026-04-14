@@ -105,6 +105,9 @@ api = HfApi()
 
 
 def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, force=False):
+    # return if not phi3
+    if not isinstance(model.config, Phi3Config):
+        return
     model_class_name = model.__class__.__name__
     content = MODEL_CARD.format(model_class_name=model_class_name)
     model_card = ModelCard(content)
@@ -180,7 +183,8 @@ for model_id, config_class, model_class, dtype, suffix in [
     ("mistralai/Mistral-7B-Instruct-v0.1", MistralConfig, MistralForCausalLM, torch.bfloat16, "0.1"),
     ("mistralai/Mistral-7B-Instruct-v0.2", MistralConfig, MistralForCausalLM, torch.bfloat16, "0.2"),
     ("facebook/opt-1.3b", OPTConfig, OPTForCausalLM, torch.float16, None),
-    ("microsoft/Phi-3.5-mini-instruct", Phi3Config, Phi3ForCausalLM, torch.bfloat16, None),
+    ("microsoft/Phi-3-mini-4k-instruct", Phi3Config, Phi3ForCausalLM, torch.bfloat16, "3"),
+    ("microsoft/Phi-3.5-mini-instruct", Phi3Config, Phi3ForCausalLM, torch.bfloat16, "3.5"),
     ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForCausalLM, torch.bfloat16, "2.5"),
     ("Qwen/Qwen2.5-Coder-0.5B", Qwen2Config, Qwen2ForCausalLM, torch.bfloat16, "2.5-Coder"),
     ("Qwen/Qwen3-8B", Qwen3Config, Qwen3ForCausalLM, torch.bfloat16, None),

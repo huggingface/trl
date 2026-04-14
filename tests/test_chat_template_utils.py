@@ -195,7 +195,8 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
             # Silently ignores tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
-            pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM", id="phi3"),
+            pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
+            pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
             # Silently drops assistant tool_calls (basic Llama 3 template only reads message['content'])
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         ],
