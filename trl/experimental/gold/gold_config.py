@@ -286,16 +286,6 @@ class GOLDConfig(SFTConfig):
         metadata={"help": "Whether to skip EOS token for teacher in ULD loss computation."},
     )
 
-    # transformers paged attention
-    use_transformers_paged: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
-            "`transformers` paged implementation will be used for generation instead of the default padded "
-            "implementation."
-        },
-    )
-
     # vLLM parameters
     use_vllm: bool = field(
         default=False,
@@ -413,8 +403,26 @@ class GOLDConfig(SFTConfig):
     overwrite_hub_revision: bool = field(default=False, metadata={"help": "Whether to overwrite the Hub revision."})
     push_to_hub_revision: bool = field(default=False, metadata={"help": "Whether to push to a Hub revision/branch."})
 
+    # Deprecated parameters
+    use_transformers_paged: bool = field(
+        default=False,
+        metadata={
+            "help": "Deprecated. It will be replaced by `transformers` continuous batching support in an upcoming "
+            "release."
+        },
+    )
+
     def __post_init__(self):
         super().__post_init__()
+
+        if self.use_transformers_paged:
+            warnings.warn(
+                "`use_transformers_paged` is deprecated and will be removed in v2.0.0. It will be replaced by "
+                "`transformers` continuous batching support in an upcoming release.",
+                FutureWarning,
+                stacklevel=3,
+            )
+
         # check lmbda and beta are in the range [0, 1]
         if self.lmbda < 0.0 or self.lmbda > 1.0:
             raise ValueError("lmbda must be in the range [0.0, 1.0].")
