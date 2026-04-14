@@ -25,25 +25,29 @@ Run the TPO training script with the following command with some example argumen
 TPO requires a *triple-preference* dataset where each example contains a `chosen`, a `rejected` and a `reference`
 (gold) completion for the same prompt.
 
-# Full training:
+When `--dataset_name` points to raw [UltraFeedback](https://huggingface.co/datasets/openbmb/UltraFeedback), this
+script automatically builds the triple-preference dataset as described in the TPO paper
+(Saeidi et al., 2025): the response with the highest `overall_score` becomes `reference`, the second-highest
+becomes `chosen`, and the lowest becomes `rejected`. For any other dataset, the columns `prompt`, `chosen`,
+`rejected` and `reference` must already be present.
+
+# Full training on UltraFeedback:
 python examples/scripts/tpo.py \
-    --dataset_name tpo-alignment/ultrafeedback_triple_preference \
-    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --dataset_name openbmb/UltraFeedback \
+    --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
     --max_steps 1000 \
     --learning_rate 5e-7 \
     --gradient_accumulation_steps 8 \
-    --eval_strategy steps \
-    --eval_steps 500 \
     --beta 0.01 \
     --tpo_alpha 1.0 \
-    --output_dir Qwen2-0.5B-TPO \
+    --output_dir Qwen3-0.6B-TPO \
     --no_remove_unused_columns
 
 # TPO-L (length-normalized variant with target reward margin):
 python examples/scripts/tpo.py \
-    --dataset_name tpo-alignment/ultrafeedback_triple_preference \
-    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --dataset_name openbmb/UltraFeedback \
+    --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
     --max_steps 1000 \
     --learning_rate 5e-7 \
@@ -52,18 +56,18 @@ python examples/scripts/tpo.py \
     --tpo_alpha 1.0 \
     --loss_type tpo-l \
     --tpo_l_gamma 5.4 \
-    --output_dir Qwen2-0.5B-TPO-L \
+    --output_dir Qwen3-0.6B-TPO-L \
     --no_remove_unused_columns
 
 # LoRA:
 python examples/scripts/tpo.py \
-    --dataset_name tpo-alignment/ultrafeedback_triple_preference \
-    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --dataset_name openbmb/UltraFeedback \
+    --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
     --max_steps 1000 \
     --learning_rate 5e-6 \
     --gradient_accumulation_steps 8 \
-    --output_dir Qwen2-0.5B-TPO-LoRA \
+    --output_dir Qwen3-0.6B-TPO-LoRA \
     --no_remove_unused_columns \
     --use_peft \
     --lora_r 32 \
@@ -75,6 +79,32 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
 from trl import ModelConfig, ScriptArguments, get_peft_config
 from trl.experimental.tpo import TPOConfig, TPOTrainer
+
+
+def build_triple_preference_from_ultrafeedback(example):
+    """
+    Build a TPO triple-preference example from a raw UltraFeedback row.
+
+    Following the TPO paper (Saeidi et al., 2025), completions are sorted by `overall_score` and we pick:
+    - the highest-scored response as the gold `reference`,
+    - the second-highest as `chosen`,
+    - the lowest as `rejected`.
+
+    Emits the *conversational* format so that [`TPOTrainer`] applies the model's chat template automatically
+    (see `trl.data_utils.is_conversational`). Completions with a missing `overall_score` or `response` are
+    filtered out; if fewer than 3 valid completions remain, the returned example contains `None` values and
+    should be filtered out downstream.
+    """
+    scored = [c for c in example["completions"] if c.get("overall_score") is not None and c.get("response")]
+    if len(scored) < 3:
+        return {"prompt": None, "reference": None, "chosen": None, "rejected": None}
+    scored.sort(key=lambda c: c["overall_score"], reverse=True)
+    return {
+        "prompt": [{"role": "user", "content": example["instruction"]}],
+        "reference": [{"role": "assistant", "content": scored[0]["response"]}],
+        "chosen": [{"role": "assistant", "content": scored[1]["response"]}],
+        "rejected": [{"role": "assistant", "content": scored[-1]["response"]}],
+    }
 
 
 if __name__ == "__main__":
@@ -97,6 +127,15 @@ if __name__ == "__main__":
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+
+    # Auto-build the triple-preference schema from raw UltraFeedback.
+    first_example = next(iter(dataset[script_args.dataset_train_split]))
+    if "completions" in first_example and "instruction" in first_example:
+        dataset = dataset.map(
+            build_triple_preference_from_ultrafeedback,
+            remove_columns=list(first_example.keys()),
+        )
+        dataset = dataset.filter(lambda ex: ex["reference"] is not None)
 
     ################
     # Training

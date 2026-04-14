@@ -232,9 +232,6 @@ class TestTPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        # `nll_loss` and `logps/reference` should not be logged when the reference branch is disabled.
-        assert "train_nll_loss" not in trainer.state.log_history[-1]
-        assert "train_logps/reference" not in trainer.state.log_history[-1]
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"

@@ -14,7 +14,7 @@ This post-training method was contributed by [Kashif Rasul](https://huggingface.
 
 ## Quick start
 
-This example demonstrates how to train a model using the TPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model. TPO requires a *triple-preference* dataset (`prompt`, `chosen`, `rejected`, `reference`) — see [Expected dataset type](#expected-dataset-type-and-format) below.
+This example demonstrates how to train a model using the TPO method. We use the [Qwen 3 0.6B model](https://huggingface.co/Qwen/Qwen3-0.6B) as the base model. TPO requires a *triple-preference* dataset (`prompt`, `chosen`, `rejected`, `reference`) — see [Expected dataset type](#expected-dataset-type-and-format) below.
 
 Below is the script to train the model:
 
@@ -24,11 +24,11 @@ from datasets import load_dataset
 from trl.experimental.tpo import TPOConfig, TPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-train_dataset = load_dataset("tpo-alignment/ultrafeedback_triple_preference", split="train")
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B")
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
+train_dataset = load_dataset("path/to/your-triple-preference-dataset", split="train")
 
-training_args = TPOConfig(output_dir="Qwen2-0.5B-TPO")
+training_args = TPOConfig(output_dir="Qwen3-0.6B-TPO")
 trainer = TPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
 trainer.train()
 ```
@@ -67,17 +67,17 @@ The reference response is typically the highest-quality completion available for
 
 We provide an example script to train a model using the TPO method. The script is available at [`examples/scripts/tpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/tpo.py).
 
-To test the TPO script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) on a triple-preference dataset, run the following command:
+To test the TPO script with the [Qwen 3 0.6B model](https://huggingface.co/Qwen/Qwen3-0.6B) on a triple-preference dataset, run the following command:
 
 ```bash
 accelerate launch examples/scripts/tpo.py \
-    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
-    --dataset_name tpo-alignment/ultrafeedback_triple_preference \
+    --model_name_or_path Qwen/Qwen3-0.6B \
+    --dataset_name path/to/your-triple-preference-dataset \
     --beta 0.01 \
     --tpo_alpha 1.0 \
     --learning_rate 5e-7 \
     --num_train_epochs 1 \
-    --output_dir Qwen2-0.5B-TPO
+    --output_dir Qwen3-0.6B-TPO
 ```
 
 ## Looking deeper into the TPO method
@@ -122,11 +122,6 @@ While training and evaluating we record the following metrics:
 * `rewards/rejected`: The average implicit reward computed for the rejected completion, defined as  \\( \beta \log \pi_{\theta}(y^{-}\!\mid x) \\).
 * `rewards/margins`: The average implicit reward margin between the chosen and rejected completions.
 * `rewards/accuracies`: The proportion of examples where the implicit reward for the chosen completion is higher than that for the rejected completion.
-
-The following metrics are only logged when `tpo_alpha != 0.0` (i.e. when the reference branch is active):
-
-* `nll_loss`: The supervised NLL loss on the gold (`reference`) completion.
-* `logps/reference`: The average log-probability assigned by the model to the gold (`reference`) completion.
 
 ## TPOTrainer
 

@@ -227,21 +227,6 @@ class TPOTrainer(_BaseTrainer):
     Optimization](https://huggingface.co/papers/2405.16681). This class is a wrapper around the
     [`~transformers.Trainer`] class and inherits all of its attributes and methods.
 
-    Example:
-
-    ```python
-    from trl.experimental.tpo import TPOTrainer
-    from datasets import load_dataset
-
-    dataset = load_dataset("tpo-alignment/ultrafeedback_triple_preference", split="train")
-
-    trainer = TPOTrainer(
-        model="Qwen/Qwen2.5-0.5B-Instruct",
-        train_dataset=dataset,
-    )
-    trainer.train()
-    ```
-
     Args:
         model (`str` or [`~transformers.PreTrainedModel`] or [`~peft.PeftModel`]):
             Model to be trained. Can be either:
@@ -610,7 +595,6 @@ class TPOTrainer(_BaseTrainer):
 
     def _compute_loss(self, model, inputs, return_outputs):
         mode = "train" if self.model.training else "eval"
-        device = self.accelerator.device
 
         # When `tpo_alpha=0.0` the NLL term is disabled and the collator drops the reference branch, so the batch
         # is laid out as `[chosen, rejected]` (n_branches=2). Otherwise it is `[chosen, rejected, reference]`
@@ -639,7 +623,6 @@ class TPOTrainer(_BaseTrainer):
             logps = per_token_logps.sum(dim=1)
         logps_chunks = logps.chunk(n_branches, dim=0)
         chosen_logps, rejected_logps = logps_chunks[0], logps_chunks[1]
-        reference_logps = logps_chunks[2] if n_branches == 3 else None
 
         # Contrastive loss between chosen and rejected. Unlike DPO, TPO does not subtract reference-model log-probs:
         # the "reference" in TPO is a gold response used in the NLL term below, not a separate reference policy.
@@ -676,10 +659,9 @@ class TPOTrainer(_BaseTrainer):
 
         # NLL loss on the gold (`reference`) response. Mirrors the `"sft"` loss branch of `DPOTrainer._compute_loss`:
         # we restrict the cross-entropy to the completion tokens of the reference sequence and let `F.cross_entropy`
-        # average over them.
-        if n_branches == 2:
-            nll_loss = torch.tensor(0.0, device=device)
-        else:
+        # average over them. The NLL contribution is folded into the main `loss` (matching DPO/SFT convention: the
+        # individual NLL term is not logged separately).
+        if n_branches == 3:
             _, _, ref_logits = shift_logits.chunk(3, dim=0)
             _, _, ref_labels = shift_labels.chunk(3, dim=0)
             _, _, ref_mask = shift_completion_mask.chunk(3, dim=0)
@@ -750,14 +732,9 @@ class TPOTrainer(_BaseTrainer):
         agg_margins = self.accelerator.gather(margins)
         self._metrics[mode]["rewards/margins"].append(agg_margins.mean().item())
 
-        # Average log probabilities for chosen, rejected and (when enabled) reference completions
+        # Average log probabilities for chosen and rejected completions
         self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
         self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
-        if reference_logps is not None:
-            self._metrics[mode]["logps/reference"].append(self.accelerator.gather(reference_logps).mean().item())
-            self._metrics[mode]["nll_loss"].append(
-                self.accelerator.gather_for_metrics(nll_loss.detach()).mean().item()
-            )
 
         return (loss, outputs) if return_outputs else loss
 
