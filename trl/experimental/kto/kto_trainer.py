@@ -29,7 +29,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
-from accelerate.utils import tqdm
+from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset, concatenate_datasets
 from packaging.version import Version
 from torch import autocast
@@ -42,7 +42,6 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
-    TrainingArguments,
     is_comet_available,
     is_wandb_available,
 )
@@ -56,10 +55,11 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
+    get_config_model_id,
     log_table_to_comet_experiment,
     selective_log_softmax,
 )
-from ..utils import DPODataCollatorWithPadding, create_reference_model, pad_to_length, peft_module_casting_to_bf16
+from ..utils import DPODataCollatorWithPadding, pad_to_length, peft_module_casting_to_bf16
 from .kto_config import KTOConfig
 
 
@@ -250,14 +250,24 @@ class KTOTrainer(_BaseTrainer):
     Initialize KTOTrainer.
 
     Args:
-        model ([`~transformers.PreTrainedModel`]):
-            The model to train, preferably an [`~transformers.AutoModelForSequenceClassification`].
-        ref_model ([`~transformers.PreTrainedModel`]):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
-            and loss. If no reference model is provided, the trainer will create a reference model with the same
-            architecture as the model to be optimized.
-        args ([`experimental.kto.KTOConfig`]):
-            The arguments to use for training.
+        model (`str` or [`~transformers.PreTrainedModel`] or [`~peft.PeftModel`]):
+            Model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
+              config) with the keyword arguments in `args.model_init_kwargs`.
+            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
+            - A [`~peft.PeftModel`] object. Only causal language models are supported.
+        ref_model ([`~transformers.PreTrainedModel`], *optional*):
+            Reference model used to compute the reference log probabilities.
+
+            - If provided, this model is used directly as the reference policy.
+            - If `None`, the trainer will automatically use the initial policy corresponding to `model`, i.e. the model
+              state before KTO training starts.
+        args ([`experimental.kto.KTOConfig`], *optional*):
+            Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`]):
@@ -308,9 +318,9 @@ class KTOTrainer(_BaseTrainer):
 
     def __init__(
         self,
-        model: PreTrainedModel | nn.Module | str = None,
-        ref_model: PreTrainedModel | nn.Module | str | None = None,
-        args: KTOConfig = None,
+        model: "str | PreTrainedModel | PeftModel",
+        ref_model: PreTrainedModel | None = None,
+        args: KTOConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
         processing_class: PreTrainedTokenizerBase
@@ -328,19 +338,16 @@ class KTOTrainer(_BaseTrainer):
         model_adapter_name: str | None = None,
         ref_adapter_name: str | None = None,
     ):
-        if type(args) is TrainingArguments:
-            raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
+        # Args
+        if args is None:
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args = KTOConfig(f"{model_name}-KTO")
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
 
-        if not isinstance(model, str) and ref_model is model:
-            raise ValueError(
-                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
-                "same as `model`, you must mass a copy of it, or `None` if you use peft."
-            )
-
-        # Model initialization
+        # Model
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             # Distributed training requires device_map=None ("auto" fails)
@@ -353,14 +360,11 @@ class KTOTrainer(_BaseTrainer):
                     "You passed `model_init_kwargs` to the KTOConfig, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
-
-        # Reference model initialization
-        if isinstance(ref_model, str):
-            ref_model_init_kwargs = args.model_init_kwargs or {}
-            # Distributed training requires device_map=None ("auto" fails)
-            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
-                ref_model_init_kwargs["device_map"] = None
-            ref_model = create_model_from_path(ref_model, **ref_model_init_kwargs)
+        if ref_model is model:
+            raise ValueError(
+                "`model` and `ref_model` cannot be the same object. In most cases you should omit `ref_model` and "
+                "we'll initialize it to a copy of `model` for you."
+            )
 
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
@@ -440,14 +444,6 @@ class KTOTrainer(_BaseTrainer):
         self.model_adapter_name = model_adapter_name
         self.ref_adapter_name = ref_adapter_name
 
-        if ref_model:
-            self.ref_model = ref_model
-        elif self.is_peft_model or args.precompute_ref_log_probs:
-            # The `model` with adapters turned off will be used as the reference model
-            self.ref_model = None
-        else:
-            self.ref_model = create_reference_model(model)
-
         if processing_class is None:
             raise ValueError(
                 "max_length or a processing_class must be specified when using the default DPODataCollatorWithPadding"
@@ -477,12 +473,6 @@ class KTOTrainer(_BaseTrainer):
             self.use_dpo_data_collator = True
         else:
             self.use_dpo_data_collator = False
-
-        # Disable dropout in the model and reference model
-        if args.disable_dropout:
-            disable_dropout_in_model(model)
-            if self.ref_model is not None:
-                disable_dropout_in_model(self.ref_model)
 
         self.loss_type = args.loss_type
         self.max_length = max_length
@@ -679,6 +669,28 @@ class KTOTrainer(_BaseTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # Reference model
+        if ref_model is None:
+            if is_peft_model(self.model):
+                # If PEFT is used, the reference model is not needed since the adapter can be disabled to revert to the
+                # initial model.
+                self.ref_model = None
+            else:
+                ref_model_init_kwargs = args.model_init_kwargs or {}
+                # Distributed training requires device_map=None ("auto" fails)
+                if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                    ref_model_init_kwargs["device_map"] = None
+                ref_model_path = get_config_model_id(self.model.config)
+                self.ref_model = create_model_from_path(ref_model_path, **ref_model_init_kwargs)
+        else:
+            self.ref_model = ref_model
+
+        # Disable dropout in the model and reference model
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
+
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
@@ -735,18 +747,24 @@ class KTOTrainer(_BaseTrainer):
             self.kto_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
         if self.precompute_ref_log_probs:
-            self.train_dataset = self._precompute_reference_log_probs(
-                self.train_dataset, "train", self.args.per_device_train_batch_size
+            self.train_dataset = self._precompute_ref_logps(
+                self.train_dataset,
+                "train",
+                self.args.precompute_ref_batch_size or self.args.per_device_train_batch_size,
             )
             if self.eval_dataset is not None:
                 if isinstance(self.eval_dataset, dict):
                     self.eval_dataset = {
-                        name: self._precompute_reference_log_probs(dataset, name, self.args.per_device_eval_batch_size)
+                        name: self._precompute_ref_logps(
+                            dataset, name, self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
+                        )
                         for name, dataset in self.eval_dataset.items()
                     }
                 else:
-                    self.eval_dataset = self._precompute_reference_log_probs(
-                        self.eval_dataset, "eval", self.args.per_device_eval_batch_size
+                    self.eval_dataset = self._precompute_ref_logps(
+                        self.eval_dataset,
+                        "eval",
+                        self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                     )
 
     @contextmanager
@@ -763,7 +781,7 @@ class KTOTrainer(_BaseTrainer):
             if self.ref_adapter_name:
                 self.model.set_adapter(self.model_adapter_name or "default")
 
-    def _precompute_reference_log_probs(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
+    def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         dataloader_params = {
             "batch_size": batch_size,
             "collate_fn": self.data_collator,
