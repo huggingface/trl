@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import textwrap
 
 import pytest
@@ -116,7 +117,8 @@ class TestCloneChatTemplate(TrlTestCase):
     [
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
-        pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
+        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
     ],
 )
@@ -159,7 +161,8 @@ class TestSupportsToolCalling:
                 ),
             ),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
-            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
+            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
             pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", id="qwen3"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3moe"),
@@ -193,6 +196,8 @@ class TestSupportsToolCalling:
             # Silently ignores tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM", id="phi3"),
+            # Silently drops assistant tool_calls (basic Llama 3 template only reads message['content'])
+            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         ],
     )
     def test_does_not_support_tool_calling(self, model_id):
@@ -215,7 +220,7 @@ class TestSupportsToolCalling:
 
 class TestIsChatTemplatePrefixPreserving:
     def test_prefix_preserving_template(self):
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         # docstyle-ignore
         tokenizer.chat_template = textwrap.dedent(r"""
         {%- for message in messages %}
@@ -245,7 +250,7 @@ class TestIsChatTemplatePrefixPreserving:
         assert is_chat_template_prefix_preserving(tokenizer) is True
 
     def test_non_prefix_preserving_template(self):
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         # The following template is quite typical of models like Qwen3 and GPT-OSS, where the thinking part (even
         # empty) is only present for last assistant message, which makes it non-prefix-preserving: appending a tool
         # message changes the earlier output.
@@ -310,9 +315,11 @@ class TestIsChatTemplatePrefixPreserving:
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
+        pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
-        pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
+        pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
     ],
 )
 class TestGetTrainingChatTemplate:
@@ -384,15 +391,18 @@ class TestGetTrainingChatTemplate:
 
     def test_behavior_unchanged_assistant_with_tool_calls(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         messages = [
             {"role": "user", "content": "Multiply 3 by 4."},
-            {
-                "role": "assistant",
-                "content": "I will call a tool.",
-                "tool_calls": [{"name": "multiply", "arguments": {"a": 3, "b": 4}}],
-            },
+            {"role": "assistant", "content": "I will call a tool.", "tool_calls": tool_calls},
         ]
-        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        messages_before = copy.deepcopy(messages)
+        if tokenizer_name == "trl-internal-testing/tiny-DeepseekV3ForCausalLM":
+            # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
+            # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
+            messages_before[1]["tool_calls"][0]["function"]["arguments"] = '{"a": 3, "b": 4}'
+
+        before = tokenizer.apply_chat_template(messages_before, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
         assert before == after
@@ -503,7 +513,8 @@ class TestGetTrainingChatTemplate:
     [
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
-        pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
+        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
         pytest.param(
             "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
@@ -540,8 +551,10 @@ class TestParseResponse:
         if tokenizer_name in (
             "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
             "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
         ):
-            pytest.skip("This model doesn't support inline reasoning_content.")
+            pytest.skip("This tokenizer doesn't support inline reasoning_content.")
+
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if getattr(tokenizer, "response_schema", None) is None:
             tokenizer = add_response_schema(tokenizer)
@@ -629,7 +642,7 @@ class TestParseResponse:
         assert parsed == messages[-1]
 
     def test_parse_response_malformed_tool_call(self, tokenizer_name):
-        if tokenizer_name != "trl-internal-testing/tiny-Qwen3MoeForSequenceClassification":
+        if tokenizer_name != "trl-internal-testing/tiny-Qwen3MoeForCausalLM":
             pytest.skip("For simplicity, we only test the malformed tool call case on one tokenizer.")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if getattr(tokenizer, "response_schema", None) is None:
