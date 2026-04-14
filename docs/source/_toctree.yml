@@ -131,6 +131,8 @@
     title: SDFT
   - local: sdpo_trainer
     title: SDPO
+  - local: ssd_trainer
+    title: SSD
   - local: xpo_trainer
     title: XPO
   title: Experimental
