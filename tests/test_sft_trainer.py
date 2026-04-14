@@ -628,9 +628,9 @@ class TestSFTTrainer(TrlTestCase):
                 tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             )
         elif peft_type == "prefix_tuning":
-            if parse_version(peft.__version__) <= Version("0.18.0"):
+            if parse_version(peft.__version__) <= Version("0.17.1"):
                 pytest.xfail(
-                    "Prefix tuning with device_map='auto' is broken in peft 0.18.0 and below. See "
+                    "Prefix tuning with device_map='auto' is broken in peft 0.17.1 and below. See "
                     "https://github.com/huggingface/peft/issues/2821"
                 )
             peft_config = PrefixTuningConfig(
