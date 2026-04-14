@@ -321,13 +321,25 @@ class GRPOTrainer(_BaseTrainer):
         if isinstance(processing_class, ProcessorMixin):
             tokenizer = processing_class.tokenizer
             self._is_vlm = True
-            self._vision_token_ids_cache = None  # populated lazily by _get_vision_token_ids
         elif isinstance(processing_class, PreTrainedTokenizerBase):
             tokenizer = processing_class
             self._is_vlm = False
-            self._vision_token_ids_cache = None
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
+        # when tool responses inject images into the completion (see _generate forward_kwargs block).
+        self._image_pad_token_id = None
+        self._video_pad_token_id = None
+        if self._is_vlm:
+            for candidate in ("<|image_pad|>", "<|image|>"):
+                tid = tokenizer.convert_tokens_to_ids(candidate)
+                if tid != tokenizer.unk_token_id:
+                    self._image_pad_token_id = tid
+                    break
+            tid = tokenizer.convert_tokens_to_ids("<|video_pad|>")
+            if tid != tokenizer.unk_token_id:
+                self._video_pad_token_id = tid
 
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -1467,64 +1479,6 @@ class GRPOTrainer(_BaseTrainer):
             raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
         return full_ids[len(prefix_ids) :]
 
-    def _get_vision_token_ids(self):
-        """Get vision-related special token IDs from the processor's tokenizer.
-
-        Returns a dict with keys 'vision_start', 'vision_end', 'image_pad', 'video_pad'. Values are None if the token
-        doesn't exist in the vocabulary. Supports multiple VLM families (e.g. Qwen uses <|vision_start|>, Gemma uses
-        <|image>).
-        """
-        if self._vision_token_ids_cache is None:
-            cache = {"vision_start": None, "vision_end": None, "image_pad": None, "video_pad": None}
-            if self._is_vlm:
-                tok = self.processing_class.tokenizer
-                # Try multiple token strings per role to support different VLM families
-                for name, candidates in {
-                    "vision_start": ["<|vision_start|>", "<|image>"],
-                    "vision_end": ["<|vision_end|>", "<image|>"],
-                    "image_pad": ["<|image_pad|>", "<|image|>"],
-                    "video_pad": ["<|video_pad|>"],
-                }.items():
-                    for token_str in candidates:
-                        tid = tok.convert_tokens_to_ids(token_str)
-                        if tid != tok.unk_token_id:
-                            cache[name] = tid
-                            break
-            self._vision_token_ids_cache = cache
-        return self._vision_token_ids_cache
-
-    def _truncate_at_image_boundary(self, ids, max_length):
-        """Truncate token ID list to max_length, ensuring we don't cut in the middle of an image.
-
-        If truncation would split an image token sequence (<|vision_start|>...<|vision_end|>), backs up to the end of
-        the last complete image. This prevents mismatches between image placeholder tokens in input_ids and
-        pixel_values in the forward pass.
-        """
-        max_length = max(max_length, 0)
-        if len(ids) <= max_length:
-            return ids
-
-        vtids = self._get_vision_token_ids()
-        vision_start_id = vtids["vision_start"]
-        vision_end_id = vtids["vision_end"]
-        if vision_start_id is not None and vision_end_id is not None:
-            truncated = ids[:max_length]
-            last_start = -1
-            last_end = -1
-            for i in range(len(truncated) - 1, -1, -1):
-                if truncated[i] == vision_end_id and last_end == -1:
-                    last_end = i
-                if truncated[i] == vision_start_id and last_start == -1:
-                    last_start = i
-                if last_start != -1 and last_end != -1:
-                    break
-
-            # If last vision_start > last vision_end, we're inside an incomplete image
-            if last_start > last_end:
-                return ids[:last_start]  # truncate before the incomplete image
-            return truncated
-        return ids[:max_length]
-
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
         tool_calls = [completion[0].get("tool_calls") for completion in completions]
@@ -1536,8 +1490,13 @@ class GRPOTrainer(_BaseTrainer):
         tool_call_count = 0
         tool_failure_count = 0
         iteration_num = 0
+
         while idxs_with_tool and iteration_num < self.max_tool_calling_iterations:
             prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
+            # Snapshot state so we can rollback tool results that would exceed max_completion_length
+            completions_len_before = [len(completions[i]) for i in idxs_with_tool]
+            tool_images_len_before = [len(tool_images[i]) for i in idxs_with_tool]
+            prompts_len_before = [len(prompts[i]) for i in idxs_with_tool]
 
             # Call the tools, and build the new prompt for generation
             for idx in range(len(idxs_with_tool)):
@@ -1619,41 +1578,28 @@ class GRPOTrainer(_BaseTrainer):
                     prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids
                 )
 
-            # Filter samples whose length exceeds max allowed length. This is important, because both
-            # vLLM and transformers will error out if the input is longer than the model's max length.
-            # Note: _truncate_at_image_boundary ensures we never cut in the middle of an image token
-            # sequence (vision_start...vision_end), which would cause pixel_values/input_ids mismatches.
+            # Drop tool results whose addition would push the sequence past max_completion_length (the completion
+            # budget) or past the backend context ceiling (vLLM and transformers will error out on inputs longer than
+            # the model's max length). The sample exits the loop with its completion as-is, and the tool
+            # messages/images appended this iteration are rolled back so completions and tool_images stay consistent
+            # with completion_ids.
             if self.use_vllm and self.vllm_mode == "colocate":
                 max_model_len = self.vllm_generation.llm.llm_engine.model_config.max_model_len
-            elif self.use_vllm and self.vllm_mode == "server":
-                if self._is_vlm:
-                    max_model_len = self.model.config.text_config.max_position_embeddings
-                else:
-                    max_model_len = self.model.config.max_position_embeddings
-            elif not self.use_vllm:
-                if self._is_vlm:
-                    max_model_len = self.model.config.text_config.max_position_embeddings
-                else:
-                    max_model_len = self.model.config.max_position_embeddings
             else:
-                raise NotImplementedError(
-                    f"Unsupported mode detected: use_vllm={self.use_vllm}, vllm_mode={self.vllm_mode}"
-                )
-            overlong = [len(pct) >= max_model_len for pct in prompt_completion_tool_ids]
+                config = self.model.config.text_config if self._is_vlm else self.model.config
+                max_model_len = config.max_position_embeddings
+            overlong = [
+                len(pct) - len(prompt_ids[i]) > self.max_completion_length or len(pct) >= max_model_len
+                for i, pct in zip(idxs_with_tool, prompt_completion_tool_ids, strict=True)
+            ]
             for idx in range(len(idxs_with_tool)):
-                idx_with_tool = idxs_with_tool[idx]
                 if overlong[idx]:
-                    prompt_length = len(prompt_ids[idx_with_tool])
-                    ct = self._truncate_at_image_boundary(
-                        prompt_completion_tool_ids[idx][prompt_length:], self.max_completion_length
-                    )
-                    completion_ids[idx_with_tool] = ct
-                    tool_mask[idx_with_tool] += [1] * (len(ct) - len(tool_mask[idx_with_tool]))
-                    if logprobs is not None:
-                        logprobs[idx_with_tool] += [0.0] * (len(ct) - len(logprobs[idx_with_tool]))
+                    idx_with_tool = idxs_with_tool[idx]
+                    del completions[idx_with_tool][completions_len_before[idx] :]
+                    del tool_images[idx_with_tool][tool_images_len_before[idx] :]
+                    del prompts[idx_with_tool][prompts_len_before[idx] :]
             # Keep only non-overlong items for further processing
             idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
-            prompt_completion_tools = [pct for pct, o in zip(prompt_completion_tools, overlong, strict=True) if not o]
             prompt_completion_tool_ids = [
                 pct for pct, o in zip(prompt_completion_tool_ids, overlong, strict=True) if not o
             ]
@@ -1690,27 +1636,19 @@ class GRPOTrainer(_BaseTrainer):
                 prompt_completion_tool_ids, loop_images, loop_multimodal_fields
             )
 
-            # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
+            # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length.
+            # The pre-regen check guarantees len(completion_tool_ids) <= max_completion_length, so any
+            # excess can only come from post_tool_ids. post_tool_ids is model-generated text and never
+            # contains image tokens, so a plain slice is safe.
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
-                prompt_len = len(prompt_ids[idx_with_tool])
-                completion_tool_ids = prompt_completion_tool_ids[idx][prompt_len:]
-                excess_length = len(completion_tool_ids) + len(post_tool_ids[idx]) - self.max_completion_length
+                completion_tool_length = len(prompt_completion_tool_ids[idx]) - len(prompt_ids[idx_with_tool])
+                excess_length = completion_tool_length + len(post_tool_ids[idx]) - self.max_completion_length
                 if excess_length > 0:
-                    # If exceeding max length, truncate post_tool_ids (respecting image boundaries)
-                    truncated_post = self._truncate_at_image_boundary(
-                        post_tool_ids[idx], len(post_tool_ids[idx]) - excess_length
-                    )
+                    new_len = len(post_tool_ids[idx]) - excess_length
+                    post_tool_ids[idx] = post_tool_ids[idx][:new_len]
                     if logprobs is not None:
-                        post_tool_logprobs[idx] = post_tool_logprobs[idx][: len(truncated_post)]
-                    post_tool_ids[idx] = truncated_post
-                    excess_length = len(completion_tool_ids) + len(post_tool_ids[idx]) - self.max_completion_length
-                    if excess_length > 0:
-                        # If still exceeding, truncate completion_tool_ids (respecting image boundaries)
-                        truncated_pct = self._truncate_at_image_boundary(
-                            prompt_completion_tool_ids[idx], len(prompt_completion_tool_ids[idx]) - excess_length
-                        )
-                        prompt_completion_tool_ids[idx] = truncated_pct
+                        post_tool_logprobs[idx] = post_tool_logprobs[idx][:new_len]
 
             # Update tool_mask: the tool result should be 0 and the post-tool 1
             for idx in range(len(idxs_with_tool)):
@@ -1747,24 +1685,6 @@ class GRPOTrainer(_BaseTrainer):
             idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
             tool_calls = [tool_call for tool_call in tool_calls if tool_call]
             iteration_num += 1
-
-        # Sync tool_mask and tool_images with completion_ids: after truncation by
-        # _truncate_at_image_boundary, completion_ids may be shorter than tool_mask.
-        for i in range(len(completion_ids)):
-            if len(tool_mask[i]) > len(completion_ids[i]):
-                tool_mask[i] = tool_mask[i][: len(completion_ids[i])]
-        if logprobs is not None:
-            for i in range(len(completion_ids)):
-                if len(logprobs[i]) > len(completion_ids[i]):
-                    logprobs[i] = logprobs[i][: len(completion_ids[i])]
-
-        # Sync tool_images: count complete images in completion_ids and trim tool_images to match.
-        vtids = self._get_vision_token_ids()
-        if vtids["vision_end"] is not None:
-            for i, ids in enumerate(completion_ids):
-                complete_images = sum(1 for t in ids if t == vtids["vision_end"])
-                if complete_images < len(tool_images[i]):
-                    tool_images[i] = tool_images[i][:complete_images]
 
         return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count, tool_images
 
@@ -2079,12 +1999,11 @@ class GRPOTrainer(_BaseTrainer):
         # because our version already covers the full sequence (images are in the completion,
         # not just the prompt).
         if self.tools and any(imgs for imgs in tool_images) and self._is_vlm:
-            vtids = self._get_vision_token_ids()
             mm_ids = torch.zeros_like(prompt_completion_ids)
-            if vtids["image_pad"] is not None:
-                mm_ids[prompt_completion_ids == vtids["image_pad"]] = 1
-            if vtids["video_pad"] is not None:
-                mm_ids[prompt_completion_ids == vtids["video_pad"]] = 2
+            if self._image_pad_token_id is not None:
+                mm_ids[prompt_completion_ids == self._image_pad_token_id] = 1
+            if self._video_pad_token_id is not None:
+                mm_ids[prompt_completion_ids == self._video_pad_token_id] = 2
 
             # Use the same key the model expects: token_type_ids for models like Gemma,
             # mm_token_type_ids for models like Qwen.
