@@ -458,7 +458,6 @@ class SSDTrainer(_BaseTrainer):
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
-            "num_items_in_batch": completion_mask.sum().detach(),
         }
 
     # ------------------------------------------------------------------
