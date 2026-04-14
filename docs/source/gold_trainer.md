@@ -160,6 +160,23 @@ P_merged("cool") = 0.1 × 0.9 = 0.09
 
 The merged distribution is unnormalized (sums to 0.81), but this is intentional and correct for ULD loss computation, which uses sorting and L1 distance.
 
+## Example script
+
+Use [`trl/experimental/gold/gold.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/gold/gold.py) to launch GOLD training from the command line. The script supports full training and LoRA via the standard `ModelConfig` flags.
+
+```bash
+python trl/experimental/gold/gold.py \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --learning_rate 2e-5 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 8 \
+    --output_dir gold-model \
+    --num_train_epochs 1 \
+    --push_to_hub
+```
+
 ## GOLDTrainer
 
 [[autodoc]] experimental.gold.GOLDTrainer
