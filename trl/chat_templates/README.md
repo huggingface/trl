@@ -25,6 +25,14 @@ Original GLM-4-MoE chat template.
 
 Original GPT-OSS chat template.
 
+### `llama3.jinja`
+
+Original Llama 3 chat template.
+
+### `qwen2_5.jinja`
+
+Original Qwen2.5 chat template.
+
 ### `qwen3.jinja`
 
 Original Qwen3 chat template.
@@ -79,6 +87,20 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 ### `gptoss_training.jinja`
 
 Patched GPT-OSS template. Diff vs `gptoss.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
+`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `llama3_training.jinja`
+
+Patched Llama 3 template. Diff vs `llama3.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
+`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `qwen2_5_training.jinja`
+
+Patched Qwen2.5 template. Diff vs `qwen2_5.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
 `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
