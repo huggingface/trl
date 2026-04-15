@@ -28,6 +28,10 @@ class SDFTConfig(SelfDistillationConfig):
     Parameters:
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the student and teacher models.
+        peft_teacher_mode (`str`, *optional*, defaults to `"auto"`):
+            PEFT teacher execution mode. The default `auto` reproduces the original SDFT behavior: use the
+            adapter-disabled base model without EMA teacher regularization, and the EMA teacher adapter when
+            `teacher_regularization="ema"`.
         generate_from_teacher (`bool`, *optional*, defaults to `False`):
             Whether on-policy generation should use the teacher-conditioned prompt instead of the student prompt.
         teacher_prompt_template (`str`, *optional*, defaults to `"{prompt}\n\n{privileged_context}"`):
@@ -39,6 +43,10 @@ class SDFTConfig(SelfDistillationConfig):
     disable_dropout: bool = field(
         default=True,
         metadata={"help": "Whether to disable dropout in the student and teacher models."},
+    )
+    peft_teacher_mode: str = field(
+        default="auto",
+        metadata={"help": "PEFT teacher execution mode. `auto` reproduces the original SDFT teacher behavior."},
     )
     generate_from_teacher: bool = field(
         default=False,

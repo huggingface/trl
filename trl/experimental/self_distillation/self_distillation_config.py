@@ -52,6 +52,20 @@ class SelfDistillationConfig(_BaseConfig):
         scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
             Reward normalization mode. Supported: `group`, `batch`, `none`.
 
+        > Parameters that control teacher construction
+
+        teacher_regularization (`str`, *optional*, defaults to `"none"`):
+            Teacher update strategy. Supported: `none`, `ema`.
+        teacher_update_rate (`float`, *optional*, defaults to `0.6`):
+            EMA update rate used when `teacher_regularization="ema"`.
+        teacher_sync_steps (`int`, *optional*, defaults to `512`):
+            Number of optimizer steps between EMA teacher updates.
+        peft_teacher_mode (`str`, *optional*, defaults to `"inherit_adapter"`):
+            How teacher forwards should behave for PEFT models. Supported: `auto`, `inherit_adapter`,
+            `disable_adapter`, `teacher_adapter`.
+        teacher_adapter_name (`str`, *optional*, defaults to `"teacher"`):
+            Adapter name used when `peft_teacher_mode="teacher_adapter"`.
+
         > Parameters that control self-distillation
 
         distillation_alpha (`float`, *optional*, defaults to `0.5`):
@@ -238,17 +252,28 @@ class SelfDistillationConfig(_BaseConfig):
         default=False,
         metadata={"help": "Whether to exclude truncated completions from the loss."},
     )
-    sync_ref_model: bool = field(
-        default=False,
-        metadata={"help": "Whether to synchronize the reference model with the student model."},
+    teacher_regularization: str = field(
+        default="none",
+        metadata={"help": "Teacher regularization mode. Supported: `none`, `ema`."},
     )
-    ref_model_mixup_alpha: float = field(
+    teacher_update_rate: float = field(
         default=0.6,
-        metadata={"help": "EMA mix coefficient used when syncing the reference model."},
+        metadata={"help": "EMA update rate used when synchronizing the teacher model."},
     )
-    ref_model_sync_steps: int = field(
+    teacher_sync_steps: int = field(
         default=512,
-        metadata={"help": "How often to synchronize the reference model."},
+        metadata={"help": "How often to synchronize the teacher model."},
+    )
+    peft_teacher_mode: str = field(
+        default="inherit_adapter",
+        metadata={
+            "help": "Teacher execution mode for PEFT models. Supported: `auto`, `inherit_adapter`, "
+            "`disable_adapter`, `teacher_adapter`."
+        },
+    )
+    teacher_adapter_name: str = field(
+        default="teacher",
+        metadata={"help": "Adapter name used for PEFT teacher forwards when `peft_teacher_mode='teacher_adapter'`."},
     )
     top_entropy_quantile: float = field(
         default=1.0,
@@ -302,6 +327,20 @@ class SelfDistillationConfig(_BaseConfig):
             raise ValueError("importance_sampling_level must be either 'token' or 'sequence'")
         if self.loss_type not in ["grpo", "bnpo", "dr_grpo", "dapo"]:
             raise ValueError("loss_type must be one of: 'grpo', 'bnpo', 'dr_grpo', 'dapo'")
+        if self.teacher_regularization not in {"none", "ema"}:
+            raise ValueError("teacher_regularization must be one of: 'none', 'ema'")
+        if not 0.0 <= self.teacher_update_rate <= 1.0:
+            raise ValueError("teacher_update_rate must be in [0, 1]")
+        if self.teacher_sync_steps <= 0:
+            raise ValueError("teacher_sync_steps must be positive")
+        if self.peft_teacher_mode not in {"auto", "inherit_adapter", "disable_adapter", "teacher_adapter"}:
+            raise ValueError(
+                "peft_teacher_mode must be one of: 'auto', 'inherit_adapter', 'disable_adapter', 'teacher_adapter'"
+            )
+        if self.peft_teacher_mode == "teacher_adapter" and self.teacher_regularization != "ema":
+            raise ValueError("peft_teacher_mode='teacher_adapter' requires teacher_regularization='ema'")
+        if self.teacher_adapter_name == "":
+            raise ValueError("teacher_adapter_name must be non-empty")
         if self.num_generations < 1:
             raise ValueError("num_generations must be at least 1")
         if not 0.0 <= self.distillation_alpha <= 1.0:

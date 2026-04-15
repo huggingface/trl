@@ -22,8 +22,24 @@ from transformers import (
     TrainingArguments,
 )
 
+from ...trainer.callbacks import SyncRefModelCallback
+
 
 logger = logging.getLogger(__name__)
+
+
+class SyncTeacherModelCallback(SyncRefModelCallback):
+    """Synchronize an EMA teacher model with the student model on each configured sync step."""
+
+    def __init__(self, teacher_model, accelerator=None):
+        super().__init__(ref_model=teacher_model, accelerator=accelerator)
+
+    def on_step_end(self, args, state, control, **kwargs):
+        model = kwargs["model"]
+        if self.ref_model is not None and state.global_step % args.teacher_sync_steps == 0:
+            if self.accelerator:
+                model = self.accelerator.unwrap_model(model)
+            self.sync_target_model(model, self.ref_model, args.teacher_update_rate)
 
 
 class PEFTAdapterEMACallback(TrainerCallback):

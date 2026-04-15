@@ -19,7 +19,6 @@ from typing import Any
 
 import torch
 from accelerate.logging import get_logger
-from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
 from transformers import (
@@ -204,10 +203,3 @@ class SDFTTrainer(UnifiedBaseSelfDistillationTrainer):
         loss = self._compute_self_distillation_loss(model, inputs)
         accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
         return loss / accumulation_scale
-
-    def _get_peft_teacher_mode(self) -> str:
-        if not (is_peft_available() and is_peft_model(self.model)):
-            return super()._get_peft_teacher_mode()
-        if self.args.sync_ref_model:
-            return "teacher_adapter"
-        return "disable_adapter"

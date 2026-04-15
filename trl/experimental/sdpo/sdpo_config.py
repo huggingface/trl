@@ -41,10 +41,10 @@ class SDPOConfig(SelfDistillationConfig):
 
         teacher_regularization (`str`, *optional*, defaults to `"ema"`):
             Teacher update strategy. Supported: `ema`, `none`.
-        teacher_update_rate (`float` or `None`, *optional*):
+        teacher_update_rate (`float`, *optional*, defaults to `0.05`):
             EMA update rate used when `teacher_regularization="ema"`.
-        ema_update_rate (`float`, *optional*, defaults to `0.05`):
-            Deprecated alias for `teacher_update_rate`.
+        teacher_sync_steps (`int`, *optional*, defaults to `1`):
+            Number of optimizer steps between teacher EMA updates.
 
         > Parameters that control reprompting
 
@@ -78,13 +78,13 @@ class SDPOConfig(SelfDistillationConfig):
         default="ema",
         metadata={"help": "Teacher regularization mode. Supported: `ema`, `none`."},
     )
-    teacher_update_rate: float | None = field(
-        default=None,
+    teacher_update_rate: float = field(
+        default=0.05,
         metadata={"help": "Teacher update rate used for EMA teacher synchronization."},
     )
-    ema_update_rate: float = field(
-        default=0.05,
-        metadata={"help": "Deprecated alias for `teacher_update_rate`."},
+    teacher_sync_steps: int = field(
+        default=1,
+        metadata={"help": "How often to synchronize the EMA teacher model."},
     )
     max_reprompt_len: int = field(
         default=10240,
@@ -125,14 +125,6 @@ class SDPOConfig(SelfDistillationConfig):
 
     def __post_init__(self):
         super().__post_init__()
-
-        if self.teacher_update_rate is None:
-            self.teacher_update_rate = self.ema_update_rate
-
-        if self.teacher_regularization not in {"ema", "none"}:
-            raise ValueError("teacher_regularization must be one of: 'ema', 'none'")
-        if not 0.0 <= self.teacher_update_rate <= 1.0:
-            raise ValueError("teacher_update_rate must be in [0, 1]")
         if self.sdpo_policy_loss_mode not in {"distillation_only", "hybrid"}:
             raise ValueError("sdpo_policy_loss_mode must be one of: 'distillation_only', 'hybrid'")
         if self.sdpo_policy_loss_mode == "distillation_only" and self.distillation_weight <= 0:

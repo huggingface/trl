@@ -42,7 +42,6 @@ from transformers.utils import is_datasets_available, is_peft_available
 
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
@@ -57,13 +56,12 @@ from ..utils import prepare_peft_model
 from .self_distillation_config import SelfDistillationConfig
 from .self_distillation_mixin import SelfDistillationMixin
 from .teacher_context import PromptTokenizer
+from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback
 
 
 if is_peft_available():
     from peft import PeftConfig
     from peft.peft_model import PeftModel
-
-    from .peft_adapter_ema_callback import PEFTAdapterEMACallback
 
 
 logger = get_logger(__name__)
@@ -196,6 +194,7 @@ class UnifiedBaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, AB
         self.num_iterations = args.num_iterations
         self.shuffle_dataset = args.shuffle_dataset
         self.loss_type = args.loss_type
+        self.mask_truncated_completions = args.mask_truncated_completions
         self.temperature = args.temperature
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self._step = 0
@@ -285,8 +284,8 @@ class UnifiedBaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, AB
     def _setup_teacher_model(self) -> None:
         """Prepare teacher state according to the shared teacher policy."""
 
-        teacher_regularization = self._get_teacher_regularization_mode()
-        peft_teacher_mode = self._get_peft_teacher_mode()
+        teacher_regularization = self.args.teacher_regularization
+        peft_teacher_mode = self._resolve_peft_teacher_mode()
         self._validate_teacher_policy(teacher_regularization, peft_teacher_mode)
 
         if teacher_regularization == "none":
@@ -296,9 +295,9 @@ class UnifiedBaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, AB
             self.add_callback(
                 PEFTAdapterEMACallback(
                     model=self.model,
-                    teacher_adapter_name=self._get_teacher_adapter_name(),
-                    update_rate=self.args.ref_model_mixup_alpha,
-                    sync_steps=self.args.ref_model_sync_steps,
+                    teacher_adapter_name=self.args.teacher_adapter_name,
+                    update_rate=self.args.teacher_update_rate,
+                    sync_steps=self.args.teacher_sync_steps,
                     accelerator=self.accelerator,
                 )
             )
@@ -316,24 +315,27 @@ class UnifiedBaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, AB
         else:
             self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
 
-        self.add_callback(SyncRefModelCallback(ref_model=self.teacher_model, accelerator=self.accelerator))
+        self.add_callback(SyncTeacherModelCallback(teacher_model=self.teacher_model, accelerator=self.accelerator))
 
-    def _get_teacher_regularization_mode(self) -> str:
-        return "ema" if self.args.sync_ref_model else "none"
+    def _resolve_peft_teacher_mode(self) -> str:
+        peft_teacher_mode = self.args.peft_teacher_mode
+        if not (is_peft_available() and is_peft_model(self.model)):
+            if peft_teacher_mode in {"disable_adapter", "teacher_adapter"}:
+                raise ValueError(f"PEFT teacher mode `{peft_teacher_mode}` requires a PEFT model.")
+            return "inherit_adapter"
 
-    def _get_peft_teacher_mode(self) -> str:
-        return "inherit_adapter"
+        if peft_teacher_mode == "auto":
+            if self.args.teacher_regularization == "ema":
+                return "teacher_adapter"
+            return "disable_adapter"
 
-    def _get_teacher_adapter_name(self) -> str:
-        return "teacher"
+        return peft_teacher_mode
 
     def _validate_teacher_policy(self, teacher_regularization: str, peft_teacher_mode: str) -> None:
         if teacher_regularization not in {"none", "ema"}:
             raise ValueError(f"Unsupported teacher regularization mode: {teacher_regularization}")
         if peft_teacher_mode not in {"inherit_adapter", "disable_adapter", "teacher_adapter"}:
             raise ValueError(f"Unsupported PEFT teacher mode: {peft_teacher_mode}")
-        if peft_teacher_mode == "teacher_adapter" and not (is_peft_available() and is_peft_model(self.model)):
-            raise ValueError("PEFT teacher mode `teacher_adapter` requires a PEFT model.")
         if peft_teacher_mode == "teacher_adapter" and teacher_regularization != "ema":
             raise ValueError("PEFT teacher mode `teacher_adapter` requires EMA teacher regularization.")
 
@@ -444,6 +446,10 @@ class UnifiedBaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, AB
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right").to(device=device)
         completion_mask = pad(completion_mask, padding_value=0, padding_side="right").to(device=device)
+        if self.mask_truncated_completions:
+            eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+            completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
         old_per_token_logps = self.compute_rollout_logps(
             prompt_ids=prompt_ids,
             prompt_mask=prompt_mask,
@@ -457,6 +463,11 @@ class UnifiedBaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, AB
             completion_ids=completion_ids,
             completion_mask=completion_mask,
             old_per_token_logps=old_per_token_logps,
+            metadata={
+                "raw_completion_lengths": torch.tensor(
+                    [len(ids) for ids in completion_ids_list], device=device, dtype=torch.long
+                )
+            },
         )
 
     def _generate(self, prompts: list[Any]) -> tuple[list[list[int]], list[list[int]]]:
@@ -581,7 +592,7 @@ class UnifiedBaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, AB
         """Inject teacher-side inputs and algorithm-specific fields into a common student rollout batch."""
 
     def _get_teacher_context_for_self_distillation(self, model):
-        peft_teacher_mode = self._get_peft_teacher_mode()
+        peft_teacher_mode = self._resolve_peft_teacher_mode()
         if not (is_peft_available() and isinstance(self.model, PeftModel)):
             return super()._get_teacher_context_for_self_distillation(model)
 
@@ -594,7 +605,7 @@ class UnifiedBaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, AB
         if peft_teacher_mode == "disable_adapter":
             return use_adapter(target_model, adapter_name=None)
         if peft_teacher_mode == "teacher_adapter":
-            teacher_adapter_name = self._get_teacher_adapter_name()
+            teacher_adapter_name = self.args.teacher_adapter_name
             if teacher_adapter_name not in target_model.peft_config:
                 raise RuntimeError(
                     f"Expected PEFT teacher adapter `{teacher_adapter_name}` to exist before teacher forward."

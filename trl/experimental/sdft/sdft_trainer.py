@@ -41,7 +41,6 @@ from transformers.utils import is_datasets_available, is_peft_available
 
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
@@ -54,6 +53,7 @@ from ...trainer.utils import (
 )
 from ..self_distillation.self_distillation_mixin import SelfDistillationMixin
 from ..self_distillation.teacher_context import PromptTokenizer, extract_last_user_text
+from ..self_distillation.teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback
 from ..self_distillation.unified_base_self_distillation_trainer import (
     SelfDistillationBatch,
     SelfDistillationRolloutBatch,
@@ -65,8 +65,6 @@ from .sdft_config import SDFTConfig
 if is_peft_available():
     from peft import PeftConfig
     from peft.peft_model import PeftModel
-
-    from ..self_distillation.peft_adapter_ema_callback import PEFTAdapterEMACallback
 
 
 logger = get_logger(__name__)
@@ -278,18 +276,27 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         self.model.add_model_tags(self._tag_names)
 
         # In self-distillation the teacher is always derived from the student:
-        # - PEFT: base model with adapter disabled (or EMA teacher adapter when sync_ref_model=True)
-        # - Non-PEFT: same model (or deep-copied EMA model when sync_ref_model=True)
+        # - PEFT: base model with adapter disabled (or EMA teacher adapter when teacher_regularization="ema")
+        # - Non-PEFT: same model (or deep-copied EMA model when teacher_regularization="ema")
         self.teacher_model = None
 
-        if args.sync_ref_model:
-            if is_peft_available() and is_peft_model(self.model):
+        peft_teacher_mode = args.peft_teacher_mode
+        if is_peft_available() and is_peft_model(self.model):
+            if peft_teacher_mode == "auto":
+                peft_teacher_mode = "teacher_adapter" if args.teacher_regularization == "ema" else "disable_adapter"
+        else:
+            if peft_teacher_mode in {"disable_adapter", "teacher_adapter"}:
+                raise ValueError(f"PEFT teacher mode `{peft_teacher_mode}` requires a PEFT model.")
+            peft_teacher_mode = "inherit_adapter"
+
+        if args.teacher_regularization == "ema":
+            if peft_teacher_mode == "teacher_adapter":
                 self.add_callback(
                     PEFTAdapterEMACallback(
                         model=self.model,
-                        teacher_adapter_name="teacher",
-                        update_rate=args.ref_model_mixup_alpha,
-                        sync_steps=args.ref_model_sync_steps,
+                        teacher_adapter_name=args.teacher_adapter_name,
+                        update_rate=args.teacher_update_rate,
+                        sync_steps=args.teacher_sync_steps,
                         accelerator=self.accelerator,
                     )
                 )
@@ -304,7 +311,9 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
                     self.teacher_model = prepare_fsdp(self.teacher_model, self.accelerator)
                 else:
                     self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
-                self.add_callback(SyncRefModelCallback(ref_model=self.teacher_model, accelerator=self.accelerator))
+                self.add_callback(
+                    SyncTeacherModelCallback(teacher_model=self.teacher_model, accelerator=self.accelerator)
+                )
 
         self.model_accepts_loss_kwargs = False
 
@@ -508,7 +517,16 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
     def _get_teacher_context_for_self_distillation(self, model):
         if is_peft_available() and isinstance(self.model, PeftModel):
             model = self.accelerator.unwrap_model(self.model)
-            if self.args.sync_ref_model and "teacher" in model.peft_config:
-                return use_adapter(model, adapter_name="teacher")
-            return use_adapter(model, adapter_name=None)
+            peft_teacher_mode = self.args.peft_teacher_mode
+            if peft_teacher_mode == "auto":
+                peft_teacher_mode = (
+                    "teacher_adapter" if self.args.teacher_regularization == "ema" else "disable_adapter"
+                )
+            if peft_teacher_mode == "inherit_adapter":
+                return super()._get_teacher_context_for_self_distillation(model)
+            if peft_teacher_mode == "teacher_adapter" and self.args.teacher_adapter_name in model.peft_config:
+                return use_adapter(model, adapter_name=self.args.teacher_adapter_name)
+            if peft_teacher_mode == "disable_adapter":
+                return use_adapter(model, adapter_name=None)
+            raise ValueError(f"Unsupported PEFT teacher mode: {peft_teacher_mode}")
         return super()._get_teacher_context_for_self_distillation(model)

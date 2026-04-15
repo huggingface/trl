@@ -33,11 +33,14 @@ from .sdpo_config import SDPOConfig
 class EMATeacherSyncCallback(SyncRefModelCallback):
     """Synchronize an EMA teacher model with the student model on each step."""
 
-    def __init__(self, teacher_model, update_rate: float, accelerator=None):
+    def __init__(self, teacher_model, update_rate: float, sync_steps: int, accelerator=None):
         super().__init__(ref_model=teacher_model, accelerator=accelerator)
         self.update_rate = update_rate
+        self.sync_steps = sync_steps
 
     def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step % self.sync_steps != 0:
+            return
         model = kwargs["model"]
         if self.accelerator is not None:
             model = self.accelerator.unwrap_model(model)
@@ -300,6 +303,7 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
                 EMATeacherSyncCallback(
                     teacher_model=self.teacher_model,
                     update_rate=self.args.teacher_update_rate,
+                    sync_steps=self.args.teacher_sync_steps,
                     accelerator=self.accelerator,
                 )
             )

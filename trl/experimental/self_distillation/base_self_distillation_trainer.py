@@ -276,10 +276,6 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
         self.model_accepts_loss_kwargs = False
         self.ref_model = None
         self.teacher_model = None
-        if args.sync_ref_model:
-            raise ValueError(
-                "sync_ref_model is not supported on the shared online self-distillation base without `ref_model`."
-            )
 
     def get_train_dataloader(self):
         if self.train_dataset is None:

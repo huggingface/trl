@@ -47,9 +47,9 @@ python trl/experimental/sdft/sdft.py \
     --max_prompt_length 1024 \
     --max_completion_length 512 \
     --generate_from_teacher \
-    --sync_ref_model \
-    --ref_model_sync_steps 1 \
-    --ref_model_mixup_alpha 0.01 \
+    --teacher_regularization ema \
+    --teacher_sync_steps 1 \
+    --teacher_update_rate 0.01 \
     --eval_strategy steps \
     --eval_steps 50 \
     --report_to wandb
