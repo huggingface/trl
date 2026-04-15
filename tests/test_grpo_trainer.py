@@ -177,10 +177,8 @@ class TestGRPORolloutDispatch:
         trainer.processing_class = SimpleNamespace(
             batch_decode=MagicMock(return_value=["decoded"]),
         )
-        trainer._tokenizer = SimpleNamespace(eos_token_id=MagicMock(), pad_token_id=MagicMock())
+        trainer._tokenizer = SimpleNamespace(eos_token_id=2, pad_token_id=0)
         trainer.tools = None
-        trainer.eos_token_id = 2
-        trainer.pad_token_id = 0
         trainer._metrics = {
             "train": {
                 "num_tokens": [],
