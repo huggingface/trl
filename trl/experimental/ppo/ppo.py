@@ -37,7 +37,7 @@ from trl.experimental.ppo import PPOConfig, PPOTrainer
 
 
 """
-python -i examples/scripts/ppo/ppo.py \
+python -i trl/experimental/ppo/ppo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
     --dataset_train_split descriptiveness \
     --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-ppo \
@@ -48,7 +48,7 @@ python -i examples/scripts/ppo/ppo.py \
     --missing_eos_penalty 1.0
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/ppo/ppo.py \
+    trl/experimental/ppo/ppo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
     --dataset_train_split descriptiveness \
     --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-ppo \

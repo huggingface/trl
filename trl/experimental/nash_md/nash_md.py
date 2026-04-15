@@ -14,43 +14,49 @@
 
 # /// script
 # dependencies = [
-#     "trl[peft]",
+#     "trl",
 #     "trackio",
 #     "kernels",
 # ]
 # ///
 
 """
-# Full training:
-python examples/scripts/gkd.py \
-    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
-    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
-    --dataset_name trl-lib/chatbot_arena_completions \
-    --learning_rate 2e-5 \
+Usage:
+
+python trl/experimental/nash_md/nash_md.py \
+    --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
+    --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
+    --dataset_name trl-lib/tldr \
+    --learning_rate 5.0e-7 \
+    --output_dir pythia-1b-tldr-nash-md \
     --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 8 \
-    --output_dir gkd-model \
-    --num_train_epochs 1 \
+    --gradient_accumulation_steps 32 \
+    --num_train_epochs 3 \
+    --max_new_tokens 64 \
+    --warmup_steps 0.1 \
+    --missing_eos_penalty 1.0 \
     --push_to_hub
 
-# LoRA:
-python examples/scripts/gkd.py \
-    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
-    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
-    --dataset_name trl-lib/chatbot_arena_completions \
-    --learning_rate 2e-4 \
+
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+    trl/experimental/nash_md/nash_md.py \
+    --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
+    --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
+    --dataset_name trl-lib/tldr \
+    --learning_rate 5.0e-7 \
+    --output_dir pythia-1b-tldr-nash-md \
     --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 8 \
-    --output_dir gkd-model \
-    --num_train_epochs 1 \
-    --push_to_hub \
-    --use_peft \
-    --lora_r 64 \
-    --lora_alpha 16
+    --gradient_accumulation_steps 32 \
+    --num_train_epochs 3 \
+    --max_new_tokens 64 \
+    --warmup_steps 0.1 \
+    --missing_eos_penalty 1.0 \
+    --push_to_hub
 """
 
+import torch
 from datasets import load_dataset
-from transformers import AutoTokenizer, GenerationConfig
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 
 from trl import (
     LogCompletionsCallback,
@@ -58,24 +64,21 @@ from trl import (
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
-    get_peft_config,
     get_quantization_config,
 )
-from trl.experimental.gkd import GKDConfig, GKDTrainer
+from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 
 
 if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, GKDConfig, ModelConfig))
+    parser = TrlParser((ScriptArguments, NashMDConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
+    training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
-    ################
-    # Model & Tokenizer
-    ################
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     model_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
-        dtype=model_args.dtype,
+        dtype=dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
     )
     quantization_config = get_quantization_config(model_args)
@@ -84,47 +87,39 @@ if __name__ == "__main__":
         model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
-    training_args.model_init_kwargs = model_kwargs
-
-    teacher_model_kwargs = dict(
-        revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
-        attn_implementation=model_args.attn_implementation,
-        dtype=model_args.dtype,
-        use_cache=True,
+    model = AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
-    if quantization_config is not None:
-        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
-        model_kwargs["quantization_config"] = quantization_config
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
+    )
 
-    training_args.teacher_model_init_kwargs = teacher_model_kwargs
+    if training_args.reward_model_path is not None:
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            training_args.reward_model_path,
+            num_labels=1,
+            trust_remote_code=model_args.trust_remote_code,
+            **model_kwargs,
+        )
+    else:
+        reward_model = None
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path,
-        revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
-        padding_side="left",
+        model_args.model_name_or_path, padding_side="left", trust_remote_code=model_args.trust_remote_code
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    ################
-    # Dataset
-    ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
-    ################
-    # Training
-    ################
-    trainer = GKDTrainer(
-        model=model_args.model_name_or_path,
-        teacher_model=training_args.teacher_model_name_or_path,
+    trainer = NashMDTrainer(
+        model=model,
+        ref_model=ref_model,
+        reward_funcs=reward_model,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         processing_class=tokenizer,
-        peft_config=get_peft_config(model_args),
     )
 
     if training_args.eval_strategy != "no":

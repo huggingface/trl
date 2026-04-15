@@ -67,6 +67,10 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
 CUDA_VISIBLE_DEVICES=1 accelerate launch train_async_grpo.py
 ```
 
+## Example script
+
+An example script is available at [`trl/experimental/async_grpo/async_grpo.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/async_grpo/async_grpo.py).
+
 ## Design philosophy
 
 This trainer is intentionally kept minimal and is not meant to grow into a general-purpose solution. If you need a feature that is not supported, we recommend cloning the repository and adapting the trainer to your needs directly. New features will only be considered when there is significant community demand.

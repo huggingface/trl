@@ -87,6 +87,10 @@ The dataset should be formatted as a list of "messages" where each message is a 
 * `role`: either `system`, `assistant` or `user`
 * `content`: the message content
 
+## Example script
+
+An example script is available at [`trl/experimental/gkd/gkd.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/gkd/gkd.py).
+
 ## GKDTrainer
 
 [[autodoc]] experimental.gkd.GKDTrainer

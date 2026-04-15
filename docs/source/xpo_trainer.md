@@ -96,12 +96,12 @@ This callback logs the model's generated completions directly to Weights & Biase
 
 ## Example script
 
-We provide an example script to train a model using the XPO method. The script is available in [`examples/scripts/xpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/xpo.py)
+We provide an example script to train a model using the XPO method. The script is available in [`trl/experimental/xpo/xpo.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/xpo/xpo.py)
 
 To test the XPO script with the [Qwen2.5 0.5B model](https://huggingface.co/trl-lib/Qwen/Qwen2.5-0.5B-Instruct) on the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback), run the following command:
 
 ```bash
-python examples/scripts/xpo.py \
+python trl/experimental/xpo/xpo.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --reward_model_path trl-lib/Qwen2-0.5B-Reward \
     --dataset_name trl-lib/ultrafeedback-prompt \

@@ -21,36 +21,36 @@
 # ///
 
 """
-Usage:
-
-python examples/scripts/online_dpo.py \
-    --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
-    --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
-    --dataset_name trl-lib/tldr \
-    --learning_rate 5.0e-7 \
-    --output_dir pythia-1b-tldr-online-dpo \
-    --per_device_train_batch_size 8 \
-    --gradient_accumulation_steps 16 \
-    --warmup_steps 0.1 \
-    --missing_eos_penalty 1.0
-
-With LoRA:
-python examples/scripts/online_dpo.py \
-    --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
-    --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
-    --dataset_name trl-lib/tldr \
-    --learning_rate 5.0e-6 \
-    --output_dir pythia-1b-tldr-online-dpo \
-    --per_device_train_batch_size 16 \
+# Full training:
+python trl/experimental/gkd/gkd.py \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --learning_rate 2e-5 \
+    --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
-    --warmup_steps 0.1 \
-    --missing_eos_penalty 1.0 \
-    --use_peft
+    --output_dir gkd-model \
+    --num_train_epochs 1 \
+    --push_to_hub
+
+# LoRA:
+python trl/experimental/gkd/gkd.py \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --learning_rate 2e-4 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 8 \
+    --output_dir gkd-model \
+    --num_train_epochs 1 \
+    --push_to_hub \
+    --use_peft \
+    --lora_r 64 \
+    --lora_alpha 16
 """
 
-import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
+from transformers import AutoTokenizer, GenerationConfig
 
 from trl import (
     LogCompletionsCallback,
@@ -61,19 +61,21 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
-from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
+from trl.experimental.gkd import GKDConfig, GKDTrainer
 
 
 if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, OnlineDPOConfig, ModelConfig))
+    parser = TrlParser((ScriptArguments, GKDConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
-    training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
-    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
+    ################
+    # Model & Tokenizer
+    ################
     model_kwargs = dict(
         revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
-        dtype=dtype,
+        dtype=model_args.dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
     )
     quantization_config = get_quantization_config(model_args)
@@ -82,48 +84,46 @@ if __name__ == "__main__":
         model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-    )
+    training_args.model_init_kwargs = model_kwargs
 
-    if training_args.reward_model_path is not None:
-        reward_model = AutoModelForSequenceClassification.from_pretrained(
-            training_args.reward_model_path,
-            num_labels=1,
-            trust_remote_code=model_args.trust_remote_code,
-            **model_kwargs,
-        )
-        reward_tokenizer = AutoTokenizer.from_pretrained(
-            training_args.reward_model_path,
-            trust_remote_code=model_args.trust_remote_code,
-            truncation=True,
-            truncation_side="left",  # since we judge the completion, truncating left is more appropriate
-        )
-        if reward_tokenizer.pad_token_id is None:
-            reward_tokenizer.pad_token = reward_tokenizer.eos_token
-    else:
-        reward_model = None
-        reward_tokenizer = None
+    teacher_model_kwargs = dict(
+        revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
+        attn_implementation=model_args.attn_implementation,
+        dtype=model_args.dtype,
+        use_cache=True,
+    )
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+
+    training_args.teacher_model_init_kwargs = teacher_model_kwargs
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
-        padding_side="left",
+        revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
-        **model_kwargs,
+        padding_side="left",
     )
-    if tokenizer.pad_token_id is None:
+    if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    ################
+    # Dataset
+    ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
-    trainer = OnlineDPOTrainer(
-        model=model,
-        reward_funcs=reward_model,
+    ################
+    # Training
+    ################
+    trainer = GKDTrainer(
+        model=model_args.model_name_or_path,
+        teacher_model=training_args.teacher_model_name_or_path,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         processing_class=tokenizer,
-        reward_processing_classes=reward_tokenizer,
         peft_config=get_peft_config(model_args),
     )
 

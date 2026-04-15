@@ -22,7 +22,7 @@
 
 """
 Full training:
-python examples/scripts/prm.py \
+python trl/experimental/prm/prm.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/prm800k \
     --output_dir Qwen2-0.5B-Reward \
@@ -33,7 +33,7 @@ python examples/scripts/prm.py \
     --eval_steps 50
 
 LoRA:
-python examples/scripts/prm.py \
+python trl/experimental/prm/prm.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/prm800k \
     --output_dir Qwen2-0.5B-Reward-LoRA \
