@@ -39,13 +39,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
-from transformers.utils import (
-    is_datasets_available,
-    is_flash_attn_2_available,
-    is_liger_kernel_available,
-    is_peft_available,
-    is_rich_available,
-)
+from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available, is_rich_available
 
 from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset
 from ...extras.profiling import profiling_decorator
@@ -882,8 +876,6 @@ class GOLDTrainer(SFTTrainer):
         self._unmatched_sum = 0.0
         self._matched_step_eq = 0.0
         self._unmatched_step_eq = 0.0
-
-        self.use_transformers_paged = args.use_transformers_paged or False
 
         self.uld_loss_fn = None
         if self.use_uld_loss:
@@ -1877,35 +1869,14 @@ class GOLDTrainer(SFTTrainer):
 
     def generate_on_policy_outputs(self, model, inputs, generation_config, pad_token_id=None):
         # Generate output with respect to the prompt only
-        if self.use_transformers_paged:
-            previous_attn = self.model.config._attn_implementation
-            if is_flash_attn_2_available():
-                model.config._attn_implementation = "paged_attention"
-            else:
-                model.config._attn_implementation = "sdpa_paged"
-            prompt_mask = inputs.get("prompt_attention_mask")
-            prompts_tensor = inputs["prompts"]
-            if prompt_mask is not None:
-                prompt_sequences = [
-                    row[mask.bool()].detach().cpu().tolist()
-                    for row, mask in zip(prompts_tensor, prompt_mask, strict=True)
-                ]
-            else:
-                prompt_sequences = [row.detach().cpu().tolist() for row in prompts_tensor]
-            generated_outputs = model.generate_batch(prompt_sequences, generation_config=generation_config)
-            model.config._attn_implementation = previous_attn
-
-            completion_ids = [output.generated_tokens for output in generated_outputs.values()]
-            generated_tokens = torch.stack([torch.tensor(ids, device=model.device) for ids in completion_ids])
-        else:
-            generated_outputs = model.generate(
-                input_ids=inputs["prompts"],
-                attention_mask=inputs.get("prompt_attention_mask", None),
-                generation_config=generation_config,
-                return_dict_in_generate=True,
-            )
-            # Get the generated token IDs
-            generated_tokens = generated_outputs.sequences
+        generated_outputs = model.generate(
+            input_ids=inputs["prompts"],
+            attention_mask=inputs.get("prompt_attention_mask", None),
+            generation_config=generation_config,
+            return_dict_in_generate=True,
+        )
+        # Get the generated token IDs
+        generated_tokens = generated_outputs.sequences
 
         batch_size = generated_tokens.size(0)
         device = generated_tokens.device
@@ -1913,18 +1884,9 @@ class GOLDTrainer(SFTTrainer):
         prompt_mask = inputs.get("prompt_attention_mask")
         pad_token_id = pad_token_id if pad_token_id is not None else self.processing_class.pad_token_id
 
-        if self.use_transformers_paged:
-            # generate_batch() returns completion-only tokens, so the entire tensor is completion.
-            prompt_lengths = torch.zeros(batch_size, dtype=torch.long, device=device)
-        else:
-            # model.generate() returns full sequences (prompt + completion), so completions start
-            # after the full padded prompt width.
-            prompt_lengths = torch.full(
-                (batch_size,),
-                inputs["prompts"].shape[1],
-                dtype=torch.long,
-                device=device,
-            )
+        # model.generate() returns full sequences (prompt + completion), so completions start
+        # after the full padded prompt width.
+        prompt_lengths = torch.full((batch_size,), inputs["prompts"].shape[1], dtype=torch.long, device=device)
 
         new_input_ids = generated_tokens
         new_attention_mask, new_labels = self._build_sequence_batch(new_input_ids, prompt_lengths, pad_token_id)
