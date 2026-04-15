@@ -58,6 +58,7 @@ from ...trainer.utils import (
     get_config_model_id,
     log_table_to_comet_experiment,
     selective_log_softmax,
+    use_adapter,
 )
 from ..utils import DPODataCollatorWithPadding, pad_to_length, peft_module_casting_to_bf16
 from .kto_config import KTOConfig
@@ -771,16 +772,12 @@ class KTOTrainer(_BaseTrainer):
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
-        with (
-            self.accelerator.unwrap_model(self.model).disable_adapter()
-            if self.is_peft_model and not self.ref_adapter_name
-            else nullcontext()
-        ):
-            if self.ref_adapter_name:
-                self.model.set_adapter(self.ref_adapter_name)
+        if self.is_peft_model:
+            model = self.accelerator.unwrap_model(self.model)
+            with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                yield
+        else:
             yield
-            if self.ref_adapter_name:
-                self.model.set_adapter(self.model_adapter_name or "default")
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         dataloader_params = {
