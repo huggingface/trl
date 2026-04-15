@@ -1115,10 +1115,9 @@ class SFTTrainer(_BaseTrainer):
                             example["completion"] = example["completion"] + eos_token
                         return example
 
-                    eos_token = processing_class.tokenizer.eos_token if self._is_vlm else processing_class.eos_token
                     dataset = dataset.map(
                         add_eos,
-                        fn_kwargs={"eos_token": eos_token},
+                        fn_kwargs={"eos_token": self._tokenizer.eos_token},
                         remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                         **map_kwargs,
                     )
