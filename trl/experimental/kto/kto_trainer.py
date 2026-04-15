@@ -336,8 +336,6 @@ class KTOTrainer(_BaseTrainer):
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
         peft_config: dict | None = None,
         compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
-        model_adapter_name: str | None = None,
-        ref_adapter_name: str | None = None,
     ):
         # Args
         if args is None:
@@ -450,8 +448,6 @@ class KTOTrainer(_BaseTrainer):
             )
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
-        self.model_adapter_name = model_adapter_name
-        self.ref_adapter_name = ref_adapter_name
 
         if processing_class is None:
             raise ValueError(
