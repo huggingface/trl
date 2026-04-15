@@ -290,9 +290,6 @@ def truncate_right(
     return output_ids, mask
 
 
-SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
-
-
 def add_bos_token_if_needed(
     bos_token_id: int | None,
     prompt_len_input_ids: int,

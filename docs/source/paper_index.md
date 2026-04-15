@@ -1414,17 +1414,16 @@ Papers relating to the [`experimental.nash_md.NashMDTrainer`]
 Introduces Nash-MD, an alternative to standard RLHF that learns a preference model conditioned on two inputs and finds a policy at the Nash equilibrium. Instead of optimizing against a reward model, Nash-MD produces policies that consistently generate responses preferred over those of any competing policy. The algorithm is based on mirror descent principles. Used in TRL via [`experimental.nash_md.NashMDTrainer`].
 
 ```python
-from trl.experimental.judges import PairRMJudge
 from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained(model_id)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
-judge = PairRMJudge()
+reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id, num_labels=1)
 
 trainer = NashMDTrainer(
     model=model,
-    judge=judge,
+    reward_funcs=reward_model,
     args=NashMDConfig(),
     processing_class=tokenizer,
     train_dataset=...,
@@ -1510,35 +1509,6 @@ Papers relating to the [`experimental.odpo.OnlineDPOTrainer`]
 Online DPO improves direct alignment from preferences methods by providing real-time feedback from a model, outperforming both DPO and PPO methods.
 
 To use Online DPO, you can use the [`experimental.odpo.OnlineDPOTrainer`].
-
-### The Perfect Blend: Redefining RLHF with Mixture of Judges
-
-**📜 Paper**: https://huggingface.co/papers/2409.20370
-
-This paper introduces Constrained Generative Policy Optimization (CGPO), a post-training RLHF paradigm for multi-task learning. Its core contribution is the Mixture of Judges (MoJ) framework, which aggregates multiple reward signals to mitigate reward hacking and achieve Pareto-optimal trade-offs across many objectives. CGPO outperforms common RLHF algorithms like PPO and DPO across general chat, STEM reasoning, instruction following, math, coding, and knowledge benchmarks.
-
-⚠️ Experimental: CGPO is not yet implemented as a TRL trainer. Users can experiment with multiple reward/judge aggregation using [`trl.experimental.judges.AllTrueJudge`].
-
-```python
-from trl.experimental.judges import AllTrueJudge, BaseBinaryJudge
-
-# Example placeholder judges
-class RewardJudge(BaseBinaryJudge):
-    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
-        return [1 for _ in completions]
-
-class SafetyJudge(BaseBinaryJudge):
-    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
-        return [1 for _ in completions]
-
-moj = AllTrueJudge(judges=[RewardJudge(), SafetyJudge()])
-
-results = moj.judge(
-    prompts=["Explain gravity."],
-    completions=["Gravity is a fundamental force of nature."]
-)
-print(results)  
-```
 
 ### Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF
 
@@ -1737,6 +1707,37 @@ Expected dataset columns:
 - `privileged_context` containing only the extra teacher-only information
 
 For more details, see the [SDFT Trainer documentation](sdft_trainer).
+
+### Embarrassingly Simple Self-Distillation Improves Code Generation
+
+**📜 Paper**: https://huggingface.co/papers/2604.01193
+
+Simple Self-Distillation (SSD) improves code generation by sampling completions from the model at a training-time temperature and truncation configuration, then fine-tuning on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or reinforcement learning is needed. SSD reshapes token distributions in a context-dependent way: suppressing distractor tails at "lock" positions (where syntax leaves little ambiguity) while preserving diversity at "fork" positions (where multiple valid continuations exist).
+
+```python
+from trl.experimental.ssd import SSDConfig, SSDTrainer
+
+training_args = SSDConfig(
+    temperature=0.6,                       # Training-time sampling temperature (T_train)
+    top_k=20,                              # Training-time top-k truncation
+    top_p=0.95,                            # Training-time top-p truncation
+    max_completion_length=65536,
+    learning_rate=5e-6,
+)
+
+trainer = SSDTrainer(
+    model="Qwen/Qwen3-4B-Instruct",
+    args=training_args,
+    train_dataset=...,
+)
+trainer.train()
+```
+
+Expected dataset columns:
+
+- `prompt`
+
+For more details, see the [SSD Trainer documentation](ssd_trainer).
 
 ## Distributed Training
 

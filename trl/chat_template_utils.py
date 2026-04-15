@@ -117,6 +117,41 @@ def clone_chat_template(
     return model, tokenizer, added_tokens
 
 
+glm4moe_schema = {
+    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?$",
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "reasoning_content": {"type": "string"},
+        "tool_calls": {
+            "type": "array",
+            "x-regex-iterator": r"<tool_call>\s*(.+?)\s*</tool_call>",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "x-regex": r"^(\S+)"},
+                            "arguments": {
+                                "type": "object",
+                                "x-regex-key-value": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*\n<arg_value>(?P<value>.*?)</arg_value>",
+                                "default": {},
+                                "additionalProperties": {
+                                    "x-parser": "json",
+                                    "x-parser-args": {"allow_non_json": True},
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
 gptoss_schema = {
     # Normalize final content to analysis format so both map to the same "content" group.
     "x-regex-substitutions": [
@@ -230,9 +265,19 @@ qwen3_5_schema = {
 }
 
 
+deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
+
+glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
+
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text()
 
+llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text()
+
+qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text()
+
 qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text()
+
+qwen3_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl.jinja").read_text()
 
 qwen3_5_chat_template_2b_and_below = (_CHAT_TEMPLATES_DIR / "qwen3_5_2b_and_below.jinja").read_text()
 
@@ -268,10 +313,13 @@ def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
     ```
     """
+    if tokenizer.chat_template == glm4moe_chat_template:
+        tokenizer.response_schema = glm4moe_schema
+        return tokenizer
     if tokenizer.chat_template == gptoss_chat_template:
         tokenizer.response_schema = gptoss_schema
         return tokenizer
-    if tokenizer.chat_template == qwen3_chat_template:
+    if tokenizer.chat_template in [qwen3_chat_template, qwen3_vl_chat_template]:
         tokenizer.response_schema = qwen3_schema
         return tokenizer
     if tokenizer.chat_template in [qwen3_5_chat_template_2b_and_below, qwen3_5_chat_template_4b_and_above]:
@@ -289,9 +337,11 @@ def supports_tool_calling(processing_class) -> bool:
     """
     Check if the processing class's chat template can render a full tool-calling conversation.
 
-    This tests two things: (1) the template doesn't error when rendering a conversation with ``user → assistant (with
-    tool_calls) → tool`` roles, and (2) the tool message content actually appears in the rendered output (some
-    templates silently swallow tool messages).
+    This tests that (1) the template doesn't error when rendering a conversation with ``user → assistant (with
+    tool_calls) → tool`` roles, and (2) every part of the tool-calling exchange — the assistant's tool call name, its
+    arguments, and the tool message content — actually appears in the rendered output. Some templates silently swallow
+    `tool_calls` (e.g. the basic Llama 3 template, which only reads `message['content']`) or tool messages (e.g.
+    Cohere2, Phi3); both cases must be rejected.
 
     For VLMs (processors), the messages are converted to multimodal format via
     [`~trl.data_utils.prepare_multimodal_messages`] before rendering.
@@ -308,12 +358,21 @@ def supports_tool_calling(processing_class) -> bool:
         return False
 
     is_vlm = isinstance(processing_class, ProcessorMixin)
-    _sentinel = "TOOL_CONTENT_c4f9a8e2"
-    tool_calls = [{"type": "function", "function": {"name": "test", "arguments": {}}}]
+    # Distinct sentinels so we can tell which part of the exchange a template drops.
+    _name_sentinel = "tool_name_a8f3e2b1"
+    _arg_key_sentinel = "tool_arg_key_b9d4f5c2"
+    _arg_val_sentinel = "tool_arg_val_d6e7a9f3"
+    _content_sentinel = "tool_content_c4f9a8e2"
+    tool_calls = [
+        {
+            "type": "function",
+            "function": {"name": _name_sentinel, "arguments": {_arg_key_sentinel: _arg_val_sentinel}},
+        }
+    ]
     messages = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "", "tool_calls": tool_calls},
-        {"role": "tool", "name": "test", "content": _sentinel},
+        {"role": "tool", "name": _name_sentinel, "content": _content_sentinel},
     ]
     # VLMs expect content as [{"type": "text", "text": "..."}] instead of plain strings
     if is_vlm:
@@ -326,9 +385,10 @@ def supports_tool_calling(processing_class) -> bool:
         # UndefinedError (subclass): template indexes into content as a list for all roles, including tool
         #   (Idefics2, Idefics3, LlavaNext, SmolVLM)
         return False
-    # Some templates (e.g. Cohere2, Phi3) accept tool messages without error but silently ignore them.
-    # Check that the tool content actually appears in the rendered output.
-    return _sentinel in rendered
+    # All four sentinels must survive: the tool name and arguments (assistant tool_calls) AND the tool message
+    # content. Templates that silently drop either side (basic Llama 3 drops tool_calls; Cohere2/Phi3 drop tool
+    # messages) will fail this check.
+    return all(s in rendered for s in (_name_sentinel, _arg_key_sentinel, _arg_val_sentinel, _content_sentinel))
 
 
 def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
@@ -359,13 +419,30 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
         {"role": "tool", "name": "dummy", "content": "dummy"},
     ]
 
-    text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
-    text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+    try:
+        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
+        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+    except TypeError:
+        # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
+        # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
+        dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
+        messages1[1]["tool_calls"] = dummy_tool_calls
+        messages2[1]["tool_calls"] = dummy_tool_calls
+        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
+        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
 
     return text2.startswith(text1)
 
 
+deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text()
+
+llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text()
+
+qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text()
+
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text()
+
+gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text()
 
 
 def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
@@ -374,7 +451,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently Qwen3 is supported.
+    requirements. Currently DeepSeek-V3, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -423,14 +500,26 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     if is_chat_template_prefix_preserving(tokenizer) and "{% generation %}" in tokenizer.chat_template:
         return None  # No patching needed
 
+    if tokenizer.chat_template == deepseekv3_chat_template:
+        return deepseekv3_training_chat_template
+
+    if tokenizer.chat_template == gptoss_chat_template:
+        return gptoss_training_chat_template
+
+    if tokenizer.chat_template == llama3_chat_template:
+        return llama3_training_chat_template
+
+    if tokenizer.chat_template == qwen2_5_chat_template:
+        return qwen2_5_training_chat_template
+
     if tokenizer.chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
-    else:
-        raise ValueError(
-            "The tokenizer's chat template is not training-compatible (missing prefix-preservation or "
-            "`{% generation %}` markers) and patching is not supported for this template. "
-            "Please manually modify the tokenizer's chat template for training."
-        )
+
+    raise ValueError(
+        "The tokenizer's chat template is not training-compatible (missing prefix-preservation or "
+        "`{% generation %}` markers) and patching is not supported for this template. "
+        "Please manually modify the tokenizer's chat template for training."
+    )
 
 
 def _validate_tool_calls(tool_calls: list | None) -> None:
