@@ -1718,7 +1718,6 @@ class GRPOTrainer(_BaseTrainer):
         if is_conversational({"prompt": prompts[0]}):
             if (
                 Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
-                and isinstance(self._tokenizer, PreTrainedTokenizerBase)
                 and hasattr(self._tokenizer, "response_schema")  # attribute not set by default for now
                 and self._tokenizer.response_schema is not None  # only works if the tokenizer has a schema
             ):
