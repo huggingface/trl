@@ -25,6 +25,7 @@ from typing import Any
 import datasets
 import torch
 from accelerate.logging import get_logger
+from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
 from torch.utils.data import DataLoader, Sampler
@@ -50,6 +51,7 @@ from ...trainer.utils import (
     identity,
     pad,
     split_tensor_dict,
+    use_adapter,
 )
 from ..utils import prepare_peft_model
 from .self_distillation_config import SelfDistillationConfig
@@ -59,6 +61,9 @@ from .teacher_context import PromptTokenizer
 
 if is_peft_available():
     from peft import PeftConfig
+    from peft.peft_model import PeftModel
+
+    from .peft_adapter_ema_callback import PEFTAdapterEMACallback
 
 
 logger = get_logger(__name__)
@@ -158,6 +163,11 @@ class UnifiedBaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, AB
             else inspect.signature(model.get_base_model().forward).parameters.keys()
         )
 
+        if is_peft_available() and is_peft_model(model) and peft_config is not None:
+            raise ValueError(
+                "You passed a `PeftModel` instance together with a `peft_config`. Pass either a base "
+                "model with `peft_config`, or a pre-wrapped PEFT model."
+            )
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
 
@@ -269,17 +279,29 @@ class UnifiedBaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, AB
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
-        self.teacher_model = None
         self._setup_teacher_model()
         self.model_accepts_loss_kwargs = False
 
     def _setup_teacher_model(self) -> None:
-        """Prepare a generic teacher model derived from the student.
+        """Prepare teacher state according to the shared teacher policy."""
 
-        Subclasses can override this when they need algorithm-specific teacher handling, such as adapter switching.
-        """
+        teacher_regularization = self._get_teacher_regularization_mode()
+        peft_teacher_mode = self._get_peft_teacher_mode()
+        self._validate_teacher_policy(teacher_regularization, peft_teacher_mode)
 
-        if not self.args.sync_ref_model:
+        if teacher_regularization == "none":
+            return
+
+        if is_peft_available() and is_peft_model(self.model) and peft_teacher_mode == "teacher_adapter":
+            self.add_callback(
+                PEFTAdapterEMACallback(
+                    model=self.model,
+                    teacher_adapter_name=self._get_teacher_adapter_name(),
+                    update_rate=self.args.ref_model_mixup_alpha,
+                    sync_steps=self.args.ref_model_sync_steps,
+                    accelerator=self.accelerator,
+                )
+            )
             return
 
         student_model = self.accelerator.unwrap_model(self.model)
@@ -295,6 +317,25 @@ class UnifiedBaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, AB
             self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
 
         self.add_callback(SyncRefModelCallback(ref_model=self.teacher_model, accelerator=self.accelerator))
+
+    def _get_teacher_regularization_mode(self) -> str:
+        return "ema" if self.args.sync_ref_model else "none"
+
+    def _get_peft_teacher_mode(self) -> str:
+        return "inherit_adapter"
+
+    def _get_teacher_adapter_name(self) -> str:
+        return "teacher"
+
+    def _validate_teacher_policy(self, teacher_regularization: str, peft_teacher_mode: str) -> None:
+        if teacher_regularization not in {"none", "ema"}:
+            raise ValueError(f"Unsupported teacher regularization mode: {teacher_regularization}")
+        if peft_teacher_mode not in {"inherit_adapter", "disable_adapter", "teacher_adapter"}:
+            raise ValueError(f"Unsupported PEFT teacher mode: {peft_teacher_mode}")
+        if peft_teacher_mode == "teacher_adapter" and not (is_peft_available() and is_peft_model(self.model)):
+            raise ValueError("PEFT teacher mode `teacher_adapter` requires a PEFT model.")
+        if peft_teacher_mode == "teacher_adapter" and teacher_regularization != "ema":
+            raise ValueError("PEFT teacher mode `teacher_adapter` requires EMA teacher regularization.")
 
     def get_train_dataloader(self):
         if self.train_dataset is None:
@@ -538,6 +579,29 @@ class UnifiedBaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, AB
         rollout_batch: SelfDistillationRolloutBatch,
     ) -> SelfDistillationBatch:
         """Inject teacher-side inputs and algorithm-specific fields into a common student rollout batch."""
+
+    def _get_teacher_context_for_self_distillation(self, model):
+        peft_teacher_mode = self._get_peft_teacher_mode()
+        if not (is_peft_available() and isinstance(self.model, PeftModel)):
+            return super()._get_teacher_context_for_self_distillation(model)
+
+        if peft_teacher_mode == "inherit_adapter":
+            return super()._get_teacher_context_for_self_distillation(model)
+
+        target_model = self.teacher_model if self.teacher_model is not None else self.model
+        target_model = self.accelerator.unwrap_model(target_model)
+
+        if peft_teacher_mode == "disable_adapter":
+            return use_adapter(target_model, adapter_name=None)
+        if peft_teacher_mode == "teacher_adapter":
+            teacher_adapter_name = self._get_teacher_adapter_name()
+            if teacher_adapter_name not in target_model.peft_config:
+                raise RuntimeError(
+                    f"Expected PEFT teacher adapter `{teacher_adapter_name}` to exist before teacher forward."
+                )
+            return use_adapter(target_model, adapter_name=teacher_adapter_name)
+
+        raise ValueError(f"Unsupported PEFT teacher mode: {peft_teacher_mode}")
 
     @abstractmethod
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):

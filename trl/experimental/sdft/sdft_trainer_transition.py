@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import copy
 import textwrap
 from typing import Any
 
@@ -31,11 +30,6 @@ from transformers import (
 )
 from transformers.utils import is_peft_available
 
-from ...models import prepare_deepspeed, prepare_fsdp
-from ...trainer.callbacks import SyncRefModelCallback
-from ...trainer.utils import (
-    use_adapter,
-)
 from ..self_distillation.teacher_context import PromptTokenizer, extract_last_user_text
 from ..self_distillation.unified_base_self_distillation_trainer import (
     SelfDistillationBatch,
@@ -47,9 +41,6 @@ from .sdft_config import SDFTConfig
 
 if is_peft_available():
     from peft import PeftConfig
-    from peft.peft_model import PeftModel
-
-    from ..self_distillation.peft_adapter_ema_callback import PEFTAdapterEMACallback
 
 
 logger = get_logger(__name__)
@@ -162,7 +153,7 @@ class SDFTTrainer(UnifiedBaseSelfDistillationTrainer):
         ):
             raise NotImplementedError("Iterable eval datasets are not yet supported in SDFTTrainer.")
 
-        super().init(
+        super().__init__(
             model=model,
             args=args,
             train_dataset=train_dataset,
@@ -174,39 +165,7 @@ class SDFTTrainer(UnifiedBaseSelfDistillationTrainer):
         )
 
         self.num_loss_tokens_to_skip = args.num_loss_tokens_to_skip
-        self.generate_from_teacher = args.generate_from_teacher
         self.teacher_context_builder = DemonstrationTeacherContextBuilder(self)
-
-        # In self-distillation the teacher is always derived from the student:
-        # - PEFT: base model with adapter disabled (or EMA teacher adapter when sync_ref_model=True)
-        # - Non-PEFT: same model (or deep-copied EMA model when sync_ref_model=True)
-        self.teacher_model = None
-
-        if args.sync_ref_model:
-            if is_peft_available() and is_peft_model(self.model):
-                self.add_callback(
-                    PEFTAdapterEMACallback(
-                        model=self.model,
-                        teacher_adapter_name="teacher",
-                        update_rate=args.ref_model_mixup_alpha,
-                        sync_steps=args.ref_model_sync_steps,
-                        accelerator=self.accelerator,
-                    )
-                )
-            else:
-                student_model = self.accelerator.unwrap_model(self.model)
-                self.teacher_model = copy.deepcopy(student_model)
-                self.teacher_model.requires_grad_(False)
-                self.teacher_model.eval()
-                if self.is_deepspeed_enabled:
-                    self.teacher_model = prepare_deepspeed(self.teacher_model, self.accelerator)
-                elif self.is_fsdp_enabled:
-                    self.teacher_model = prepare_fsdp(self.teacher_model, self.accelerator)
-                else:
-                    self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
-                self.add_callback(SyncRefModelCallback(ref_model=self.teacher_model, accelerator=self.accelerator))
-
-        self.model_accepts_loss_kwargs = False
 
     def augment_training_batch(
         self,
@@ -221,7 +180,6 @@ class SDFTTrainer(UnifiedBaseSelfDistillationTrainer):
             rollout_batch.completion_mask,
         )
 
-        old_per_token_logps = None if self.generate_from_teacher else rollout_batch.old_per_token_logps
         return SelfDistillationBatch(
             prompt_ids=teacher_batch["prompt_ids"],
             prompt_mask=teacher_batch["prompt_mask"],
@@ -229,7 +187,7 @@ class SDFTTrainer(UnifiedBaseSelfDistillationTrainer):
             completion_mask=rollout_batch.completion_mask,
             teacher_input_ids=teacher_batch["teacher_input_ids"],
             teacher_attention_mask=teacher_batch["teacher_attention_mask"],
-            old_per_token_logps=old_per_token_logps,
+            old_per_token_logps=rollout_batch.old_per_token_logps,
         )
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -247,10 +205,9 @@ class SDFTTrainer(UnifiedBaseSelfDistillationTrainer):
         accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
         return loss / accumulation_scale
 
-    def _get_teacher_context_for_self_distillation(self, model):
-        if is_peft_available() and isinstance(self.model, PeftModel):
-            model = self.accelerator.unwrap_model(self.model)
-            if self.args.sync_ref_model and "teacher" in model.peft_config:
-                return use_adapter(model, adapter_name="teacher")
-            return use_adapter(model, adapter_name=None)
-        return super()._get_teacher_context_for_self_distillation(model)
+    def _get_peft_teacher_mode(self) -> str:
+        if not (is_peft_available() and is_peft_model(self.model)):
+            return super()._get_peft_teacher_mode()
+        if self.args.sync_ref_model:
+            return "teacher_adapter"
+        return "disable_adapter"
