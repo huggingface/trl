@@ -445,17 +445,17 @@ qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").re
 gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text()
 
 
-def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
+def get_training_chat_template(processing_class: PreTrainedTokenizer | ProcessorMixin) -> str | None:
     r"""
     Get a training-compatible chat template, if needed.
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
-    %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently DeepSeek-V3, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
+    %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
+    Currently DeepSeek-V3, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
 
     Args:
-        tokenizer (`PreTrainedTokenizer`):
-            Tokenizer instance to check.
+        processing_class (`PreTrainedTokenizer` or `ProcessorMixin`):
+            Tokenizer or processor instance to check.
 
     Returns:
         `str` or `None`:
@@ -497,28 +497,27 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     ```
     """
     # First check if patching is needed
-    if is_chat_template_prefix_preserving(tokenizer) and "{% generation %}" in tokenizer.chat_template:
+    if is_chat_template_prefix_preserving(processing_class) and "{% generation %}" in processing_class.chat_template:
         return None  # No patching needed
 
-    if tokenizer.chat_template == deepseekv3_chat_template:
+    if processing_class.chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
 
-    if tokenizer.chat_template == gptoss_chat_template:
+    if processing_class.chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
 
-    if tokenizer.chat_template == llama3_chat_template:
+    if processing_class.chat_template == llama3_chat_template:
         return llama3_training_chat_template
 
-    if tokenizer.chat_template == qwen2_5_chat_template:
+    if processing_class.chat_template == qwen2_5_chat_template:
         return qwen2_5_training_chat_template
 
-    if tokenizer.chat_template == qwen3_chat_template:
+    if processing_class.chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
 
     raise ValueError(
-        "The tokenizer's chat template is not training-compatible (missing prefix-preservation or "
-        "`{% generation %}` markers) and patching is not supported for this template. "
-        "Please manually modify the tokenizer's chat template for training."
+        "The chat template is not training-compatible (missing prefix-preservation or `{% generation %}` markers) "
+        "and patching is not supported for this template. Please manually modify the chat template for training."
     )
 
 
