@@ -29,7 +29,7 @@ from trl.chat_template_utils import (
     supports_tool_calling,
 )
 
-from .testing_utils import TrlTestCase, require_jmespath
+from .testing_utils import TrlTestCase, require_jmespath, require_vision
 
 
 class TestCloneChatTemplate(TrlTestCase):
@@ -311,6 +311,7 @@ class TestIsChatTemplatePrefixPreserving:
         {%- endif %}""")
         assert is_chat_template_prefix_preserving(tokenizer) is False
 
+    @require_vision
     def test_prefix_preserving_template_processor(self):
         processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration")
         # Simple prefix-preserving template that mirrors how Qwen-VL templates emit image tokens: a list-of-blocks
