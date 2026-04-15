@@ -12,10 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Trainer for Simple Self-Distillation (SSD).
+
+Implements the method from *Embarrassingly Simple Self-Distillation Improves Code Generation* (Zhang et al., 2026):
+sample completions from the frozen model at a training-time temperature and truncation configuration, then fine-tune on
+those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or
+reinforcement learning is needed.
+"""
+
 from __future__ import annotations
 
-import copy
 import inspect
+import math
 import textwrap
 from collections import defaultdict
 from functools import partial
@@ -39,9 +47,9 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available
 
-from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ...data_utils import maybe_apply_chat_template
+from ...models import unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
@@ -49,118 +57,48 @@ from ...trainer.utils import (
     get_config_model_id,
     identity,
     pad,
+    selective_log_softmax,
     split_tensor_dict,
-    use_adapter,
 )
-from ..self_distillation.self_distillation_mixin import SelfDistillationMixin
-from ..self_distillation.teacher_context import PromptTokenizer, extract_last_user_text
 from ..utils import prepare_peft_model
-from .sdft_config import SDFTConfig
+from .ssd_config import SSDConfig
 
 
 if is_peft_available():
     from peft import PeftConfig
-    from peft.peft_model import PeftModel
-
-    from ..self_distillation.peft_adapter_ema_callback import PEFTAdapterEMACallback
 
 
 logger = get_logger(__name__)
 
 
-class DemonstrationTeacherContextBuilder:
-    """Builds student and teacher contexts from prompts plus privileged context, as in SDFT."""
+class SSDTrainer(_BaseTrainer):
+    """Trainer for SSD-style on-policy self-distillation with cross-entropy loss.
 
-    def __init__(self, trainer):
-        self.trainer = trainer
-        self.prompt_tokenizer = PromptTokenizer(trainer)
+    SSD generates completions from the model at a specified training-time temperature and truncation configuration,
+    then fine-tunes on those raw, unverified samples using standard cross-entropy loss. The dataset only requires a
+    ``prompt`` column.
+    """
 
-    def _stringify_privileged_context(self, privileged_context: Any) -> str:
-        if privileged_context is None:
-            raise ValueError(
-                "`privileged_context` must not be None for self-distillation teacher prompt construction."
-            )
-        if isinstance(privileged_context, str):
-            return privileged_context
-        if isinstance(privileged_context, list) and privileged_context and isinstance(privileged_context[0], dict):
-            chunks = []
-            for message in privileged_context:
-                content = message.get("content", "")
-                if isinstance(content, list):
-                    text = " ".join(part.get("text", "") for part in content if part.get("type") == "text")
-                else:
-                    text = str(content)
-                if text:
-                    chunks.append(text)
-            return "\n".join(chunks)
-        return str(privileged_context)
-
-    def _compose_teacher_prompt(self, prompt: Any, privileged_context: Any) -> Any:
-        privileged_text = self._stringify_privileged_context(privileged_context)
-        if isinstance(prompt, list):
-            system_messages = prompt[:-1]
-            prompt_text = extract_last_user_text(prompt)
-            teacher_text = self.trainer.args.teacher_prompt_template.format(
-                prompt=prompt_text,
-                privileged_context=privileged_text,
-            )
-            return system_messages + [{"role": "user", "content": teacher_text}]
-        return self.trainer.args.teacher_prompt_template.format(prompt=prompt, privileged_context=privileged_text)
-
-    def select_generation_prompts(self, prompts: list[Any], privileged_contexts: list[Any]) -> list[Any]:
-        if not self.trainer.generate_from_teacher:
-            return prompts
-        return [
-            self._compose_teacher_prompt(prompt, privileged_context)
-            for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
-        ]
-
-    def build(
-        self,
-        prompts: list[Any],
-        privileged_contexts: list[Any],
-        completion_ids: torch.Tensor,
-        completion_mask: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
-        student_batch = self.prompt_tokenizer.tokenize_prompts(prompts)
-        teacher_prompts = [
-            self._compose_teacher_prompt(prompt, privileged_context)
-            for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
-        ]
-        teacher_batch = self.prompt_tokenizer.tokenize_prompts(teacher_prompts)
-        teacher_input_ids = torch.cat([teacher_batch.prompt_ids, completion_ids], dim=1)
-        teacher_attention_mask = torch.cat([teacher_batch.prompt_mask, completion_mask], dim=1)
-        return {
-            "prompt_ids": student_batch.prompt_ids,
-            "prompt_mask": student_batch.prompt_mask,
-            "teacher_input_ids": teacher_input_ids,
-            "teacher_attention_mask": teacher_attention_mask,
-        }
-
-
-class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
-    """Trainer for SDFT-style on-policy self-distillation with explicit teacher prompts."""
-
-    _tag_names = ["trl", "sdft"]
-    _name = "SDFT"
-    config_cls = SDFTConfig
+    _tag_names = ["trl", "ssd"]
+    _name = "SSD"
+    config_cls = SSDConfig
     # docstyle-ignore
     _paper = {
-        "title": "Self-Training with On-Policy Self-Distillation for Language Model Alignment",
-        "id": "2601.19897",
+        "title": "Embarrassingly Simple Self-Distillation Improves Code Generation",
+        "id": "2604.01193",
         "citation": textwrap.dedent("""\
-            @article{hubotter2026selftraining,
-                title        = {{Self-Training with On-Policy Self-Distillation for Language Model Alignment}},
-                author       = {Jonas H\\"ubotter and Frederike L\\"ubeck and Lejs Behric and Anton Baumann and Marco Bagatella and Daniel Marta and Ido Hakimi and Idan Shenfeld and Thomas Kleine Buening and Carlos Guestrin and Andreas Krause},
+            @article{zhang2026ssd,
+                title        = {{Embarrassingly Simple Self-Distillation Improves Code Generation}},
+                author       = {Ruixiang Zhang and Richard He Bai and Huangjie Zheng and Navdeep Jaitly and Ronan Collobert and Yizhe Zhang},
                 year         = 2026,
-                eprint       = {arXiv:2601.19897}
+                eprint       = {arXiv:2604.01193}
             }"""),
     }
 
     def __init__(
         self,
         model: str | PreTrainedModel | nn.Module,
-        args: SDFTConfig | None = None,
+        args: SSDConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
@@ -171,13 +109,15 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
         if isinstance(train_dataset, IterableDataset):
-            raise NotImplementedError("Iterable datasets are not yet supported in SDFTTrainer.")
+            raise NotImplementedError("Iterable datasets are not yet supported in SSDTrainer.")
         if isinstance(eval_dataset, IterableDataset) or (
             isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
         ):
-            raise NotImplementedError("Iterable eval datasets are not yet supported in SDFTTrainer.")
-        if args.use_vllm:
-            raise NotImplementedError("SDFTTrainer does not support `use_vllm=True` yet.")
+            raise NotImplementedError("Iterable eval datasets are not yet supported in SSDTrainer.")
+        if args is None:
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args = SSDConfig(f"{model_name}-SSD")
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
@@ -185,7 +125,7 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
             logger.warning(
-                "You passed `model_init_kwargs` to `SDFTConfig`, but `model` is already instantiated. "
+                "You passed `model_init_kwargs` to `SSDConfig`, but `model` is already instantiated. "
                 "The `model_init_kwargs` will be ignored."
             )
 
@@ -197,7 +137,7 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
 
         if is_peft_available() and is_peft_model(model) and peft_config is not None:
             raise ValueError(
-                "You passed a `PeftModel` instance together with a `peft_config` to SDFTTrainer. Pass either a base "
+                "You passed a `PeftModel` instance together with a `peft_config` to SSDTrainer. Pass either a base "
                 "model with `peft_config`, or a pre-wrapped PEFT model."
             )
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
@@ -223,19 +163,17 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         self.eos_token_id = tokenizer.eos_token_id
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
-        self.num_generations = args.num_generations
+        # SSD always samples a single completion per prompt (N=1 in the paper).
+        self.num_generations = 1
         self.num_iterations = args.num_iterations
         self.temperature = args.temperature
-        self.loss_type = args.loss_type
         self.shuffle_dataset = args.shuffle_dataset
-        self.generate_from_teacher = args.generate_from_teacher
-        self.num_loss_tokens_to_skip = args.num_loss_tokens_to_skip
+        self.filter_empty = args.filter_empty
+        self.use_vllm = args.use_vllm
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self._step = 0
         self._buffered_inputs = None
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self.prompt_tokenizer = PromptTokenizer(self)
-        self.teacher_context_builder = DemonstrationTeacherContextBuilder(self)
 
         generation_kwargs = {
             "max_new_tokens": self.max_completion_length,
@@ -274,36 +212,54 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
 
         self.model.add_model_tags(self._tag_names)
 
-        # In self-distillation the teacher is always derived from the student:
-        # - PEFT: base model with adapter disabled (or EMA teacher adapter when sync_ref_model=True)
-        # - Non-PEFT: same model (or deep-copied EMA model when sync_ref_model=True)
-        self.teacher_model = None
-
-        if args.sync_ref_model:
-            if is_peft_available() and is_peft_model(self.model):
-                self.add_callback(
-                    PEFTAdapterEMACallback(
-                        model=self.model,
-                        teacher_adapter_name="teacher",
-                        update_rate=args.ref_model_mixup_alpha,
-                        sync_steps=args.ref_model_sync_steps,
-                        accelerator=self.accelerator,
-                    )
-                )
-            else:
-                student_model = self.accelerator.unwrap_model(self.model)
-                self.teacher_model = copy.deepcopy(student_model)
-                self.teacher_model.requires_grad_(False)
-                self.teacher_model.eval()
-                if self.is_deepspeed_enabled:
-                    self.teacher_model = prepare_deepspeed(self.teacher_model, self.accelerator)
-                elif self.is_fsdp_enabled:
-                    self.teacher_model = prepare_fsdp(self.teacher_model, self.accelerator)
-                else:
-                    self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
-                self.add_callback(SyncRefModelCallback(ref_model=self.teacher_model, accelerator=self.accelerator))
-
         self.model_accepts_loss_kwargs = False
+
+        if self.use_vllm:
+            from ...generation.vllm_generation import VLLMGeneration
+
+            self.vllm_generation = VLLMGeneration(
+                model=self.model,
+                accelerator=self.accelerator,
+                is_fsdp_enabled=self.is_fsdp_enabled,
+                processing_class=self.processing_class,
+                mode=args.vllm_mode,
+                server_base_url=args.vllm_server_base_url,
+                server_host=args.vllm_server_host,
+                server_port=args.vllm_server_port,
+                group_port=args.vllm_group_port,
+                server_timeout=args.vllm_server_timeout,
+                tensor_parallel_size=args.vllm_tensor_parallel_size,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                max_model_length=args.vllm_max_model_length,
+                max_num_seqs=args.per_device_train_batch_size
+                * args.vllm_tensor_parallel_size
+                * args.steps_per_generation,
+                enable_sleep_mode=args.vllm_enable_sleep_mode,
+                model_impl=args.vllm_model_impl,
+                repetition_penalty=args.repetition_penalty,
+                temperature=self.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                min_p=args.min_p,
+                max_completion_length=self.max_completion_length,
+                logprobs=None,
+                generation_kwargs=args.generation_kwargs,
+            )
+            self._last_loaded_step = -1
+
+    def _set_signature_columns_if_needed(self):
+        if self._signature_columns is None:
+            self._signature_columns = ["prompt"]
+
+    def _apply_prompt_template(self, prompts):
+        return [
+            maybe_apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
+            for prompt in prompts
+        ]
+
+    # ------------------------------------------------------------------
+    # DataLoader
+    # ------------------------------------------------------------------
 
     def get_train_dataloader(self):
         if self.train_dataset is None:
@@ -351,6 +307,10 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             seed=self.args.seed,
         )
 
+    # ------------------------------------------------------------------
+    # Training step management
+    # ------------------------------------------------------------------
+
     def training_step(self, model, inputs, num_items_in_batch):
         output = super().training_step(model, inputs, num_items_in_batch)
         self._step += 1
@@ -363,17 +323,54 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 generation_batch = self._build_buffered_batch(generation_batch)
                 self._buffered_inputs = split_tensor_dict(generation_batch, self.args.steps_per_generation)
-                self._dispatch_self_distillation_callback(
-                    "on_generation_batch_built",
-                    generate_every=generate_every,
-                    steps_per_generation=self.args.steps_per_generation,
-                )
             return self._buffered_inputs[self._step % self.args.steps_per_generation]
         return self._build_buffered_batch(generation_batch)
 
+    # ------------------------------------------------------------------
+    # Generation
+    # ------------------------------------------------------------------
+
     def _generate_completion_ids(self, prompts: list[Any]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Generate completions from the model at the configured training-time temperature and truncation."""
+        if self.use_vllm:
+            return self._generate_completion_ids_vllm(prompts)
+        return self._generate_completion_ids_transformers(prompts)
+
+    def _generate_completion_ids_vllm(self, prompts: list[Any]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Generate completions using vLLM."""
+        if self.state.global_step != self._last_loaded_step:
+            self.vllm_generation.sync_weights()
+            self._last_loaded_step = self.state.global_step
+
+        prompts_text = self._apply_prompt_template(prompts)
+        tokenized = self.processing_class(
+            text=prompts_text,
+            return_tensors=None,
+            padding=False,
+            max_length=self.max_prompt_length,
+            truncation=True,
+            add_special_tokens=False,
+        )
+        prompt_ids = tokenized["input_ids"]
+
+        _, completion_ids_list, _, _ = self.vllm_generation.generate(
+            prompts=prompt_ids,
+            images=None,
+            num_generations=self.num_generations,
+        )
+
+        device = self.accelerator.device
+        completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
+        completion_mask = [torch.ones(len(ids), dtype=torch.long, device=device) for ids in completion_ids_list]
+        return (
+            pad(completion_ids, padding_value=self.pad_token_id, padding_side="right"),
+            pad(completion_mask, padding_value=0, padding_side="right"),
+        )
+
+    def _generate_completion_ids_transformers(self, prompts: list[Any]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Generate completions using the training model with transformers."""
         generate_inputs = self.processing_class(
-            text=self.prompt_tokenizer.apply_prompt_template(prompts),
+            text=self._apply_prompt_template(prompts),
             return_tensors="pt",
             padding=True,
             padding_side="left",
@@ -381,8 +378,7 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             truncation=True,
             add_special_tokens=False,
         )
-        # This generation helper builds tokenized model inputs directly, so use the base Trainer tensor preparation
-        # instead of re-entering the buffered outer training hook.
+        # Use the base Trainer tensor preparation instead of re-entering the buffered outer training hook.
         generate_inputs = _BaseTrainer._prepare_inputs(self, generate_inputs)
 
         with (
@@ -413,75 +409,112 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             pad(completion_mask, padding_value=0, padding_side="right"),
         )
 
+    # ------------------------------------------------------------------
+    # Batch construction
+    # ------------------------------------------------------------------
+
     def _build_buffered_batch(self, inputs: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
-        prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
-        generation_prompts = self.teacher_context_builder.select_generation_prompts(prompts, privileged_contexts)
-        generation_prompt_text = self.prompt_tokenizer.apply_prompt_template(generation_prompts)
-        self._dispatch_self_distillation_callback(
-            "on_generation_prompts_selected",
-            generation_prompts=generation_prompts,
-            generation_prompt_text=generation_prompt_text,
+        """Generate completions and build the training batch."""
+        prompts = [example["prompt"] for example in inputs]
+        completion_ids, completion_mask = self._generate_completion_ids(prompts)
+
+        # Optionally filter empty or single-line stub completions (the paper applies minimal syntactic filtering)
+        if self.filter_empty:
+            completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+            keep = torch.ones(len(completions_text), dtype=torch.bool, device=completion_ids.device)
+            for i, text in enumerate(completions_text):
+                stripped = text.strip()
+                if len(stripped) == 0 or stripped.count("\n") == 0 and len(stripped) < 10:
+                    keep[i] = False
+            completion_mask = completion_mask * keep.unsqueeze(1).long()
+
+        # Tokenize prompts for the training forward pass
+        prompt_text = self._apply_prompt_template(prompts)
+        prompt_inputs = self.processing_class(
+            text=prompt_text,
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+            max_length=self.max_prompt_length,
+            truncation=True,
+            add_special_tokens=False,
         )
-        completion_ids, completion_mask = self._generate_completion_ids(generation_prompts)
+        prompt_inputs = _BaseTrainer._prepare_inputs(self, prompt_inputs)
+        prompt_ids = prompt_inputs["input_ids"]
+        prompt_mask = prompt_inputs["attention_mask"]
 
-        teacher_batch = self.teacher_context_builder.build(
-            prompts, privileged_contexts, completion_ids, completion_mask
-        )
+        # Log completion statistics
+        mode = "train" if self.model.training else "eval"
+        completion_lengths = completion_mask.sum(dim=1).float()
+        agg_lengths = self.accelerator.gather(completion_lengths)
+        self._metrics[mode]["completions/mean_length"].append(agg_lengths.mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_lengths.min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_lengths.max().item())
+        active_ratio = (completion_mask.sum(dim=1) > 0).float().mean()
+        self._metrics[mode]["ssd/active_sample_ratio"].append(self.accelerator.gather(active_ratio).mean().item())
 
-        prompt_completion_ids = torch.cat([teacher_batch["prompt_ids"], completion_ids], dim=1)
-        attention_mask = torch.cat([teacher_batch["prompt_mask"], completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)
-
-        with torch.no_grad():
-            generate_every = self.args.steps_per_generation * self.num_iterations
-            if not self.generate_from_teacher and self.args.gradient_accumulation_steps % generate_every != 0:
-                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
-                    self.model,
-                    prompt_completion_ids,
-                    attention_mask,
-                    logits_to_keep,
-                    compute_entropy=False,
-                )
-            else:
-                old_per_token_logps = None
-
-        self._dispatch_self_distillation_callback(
-            "on_self_distillation_batch_prepared",
-            old_per_token_logps=old_per_token_logps,
-            prompt_ids=teacher_batch["prompt_ids"],
-            completion_ids=completion_ids,
-        )
-        output = {
-            "prompt_ids": teacher_batch["prompt_ids"],
-            "prompt_mask": teacher_batch["prompt_mask"],
+        return {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
-            "teacher_input_ids": teacher_batch["teacher_input_ids"],
-            "teacher_attention_mask": teacher_batch["teacher_attention_mask"],
         }
-        if old_per_token_logps is not None:
-            output["old_per_token_logps"] = old_per_token_logps
-        return output
+
+    # ------------------------------------------------------------------
+    # Loss computation
+    # ------------------------------------------------------------------
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
-            raise ValueError("The SDFTTrainer does not support returning outputs")
+            raise ValueError("The SSDTrainer does not support returning outputs")
 
-        if self.num_loss_tokens_to_skip > 0:
-            inputs = dict(inputs)
-            completion_mask = inputs["completion_mask"].clone()
-            token_positions = torch.arange(completion_mask.size(1), device=completion_mask.device).unsqueeze(0)
-            completion_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
-            inputs["completion_mask"] = completion_mask
+        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        logits_to_keep = completion_ids.size(1)
 
-        loss = self._compute_self_distillation_loss(model, inputs)
+        # Forward pass
+        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
+        if "logits_to_keep" in self.model_kwarg_keys:
+            model_inputs["logits_to_keep"] = logits_to_keep + 1
+        logits = model(**model_inputs).logits
+        logits = logits[:, :-1, :]
+        logits = logits[:, -logits_to_keep:, :]
+
+        # Standard cross-entropy loss: -log p(y_t | x, y<t)
+        per_token_logps = selective_log_softmax(logits, completion_ids)
+        per_token_loss = -per_token_logps
+
+        # Aggregate with mask
+        loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+
+        mode = "train" if self.model.training else "eval"
+        self._metrics[mode]["ssd/cross_entropy_loss"].append(self.accelerator.gather(loss.detach()).mean().item())
+
         accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
         return loss / accumulation_scale
 
-    def _get_teacher_context_for_self_distillation(self, model):
-        if is_peft_available() and isinstance(self.model, PeftModel):
-            model = self.accelerator.unwrap_model(self.model)
-            if self.args.sync_ref_model and "teacher" in model.peft_config:
-                return use_adapter(model, adapter_name="teacher")
-            return use_adapter(model, adapter_name=None)
-        return super()._get_teacher_context_for_self_distillation(model)
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        if not isinstance(inputs, dict):
+            inputs = self._prepare_inputs(inputs)
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+        return loss.detach(), None, None
+
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        mode = "train" if self.model.training else "eval"
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            valid = [v for v in val if not math.isnan(v)]
+            metrics[key] = sum(valid) / len(valid) if valid else None
+
+        # When called in evaluation, the keys in `logs` start with "eval_". We need to add the prefix "eval_" to the
+        # keys in `metrics` to match the format.
+        if mode == "eval":
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+
+        logs = {**logs, **metrics}
+        super().log(logs, start_time)
+        self._metrics[mode].clear()

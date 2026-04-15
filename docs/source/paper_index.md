@@ -1708,6 +1708,37 @@ Expected dataset columns:
 
 For more details, see the [SDFT Trainer documentation](sdft_trainer).
 
+### Embarrassingly Simple Self-Distillation Improves Code Generation
+
+**📜 Paper**: https://huggingface.co/papers/2604.01193
+
+Simple Self-Distillation (SSD) improves code generation by sampling completions from the model at a training-time temperature and truncation configuration, then fine-tuning on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or reinforcement learning is needed. SSD reshapes token distributions in a context-dependent way: suppressing distractor tails at "lock" positions (where syntax leaves little ambiguity) while preserving diversity at "fork" positions (where multiple valid continuations exist).
+
+```python
+from trl.experimental.ssd import SSDConfig, SSDTrainer
+
+training_args = SSDConfig(
+    temperature=0.6,                       # Training-time sampling temperature (T_train)
+    top_k=20,                              # Training-time top-k truncation
+    top_p=0.95,                            # Training-time top-p truncation
+    max_completion_length=65536,
+    learning_rate=5e-6,
+)
+
+trainer = SSDTrainer(
+    model="Qwen/Qwen3-4B-Instruct",
+    args=training_args,
+    train_dataset=...,
+)
+trainer.train()
+```
+
+Expected dataset columns:
+
+- `prompt`
+
+For more details, see the [SSD Trainer documentation](ssd_trainer).
+
 ## Distributed Training
 
 ### ZeRO: Memory Optimizations Toward Training Trillion Parameter Models
