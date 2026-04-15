@@ -54,6 +54,10 @@ from ...trainer.utils import (
 )
 from ..self_distillation.self_distillation_mixin import SelfDistillationMixin
 from ..self_distillation.teacher_context import PromptTokenizer, extract_last_user_text
+from ..self_distillation.unified_base_self_distillation_trainer import (
+    SelfDistillationBatch,
+    SelfDistillationRolloutBatch,
+)
 from ..utils import prepare_peft_model
 from .sdft_config import SDFTConfig
 
@@ -461,6 +465,30 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
         return output
+
+    def augment_training_batch(
+        self,
+        inputs: list[dict[str, Any]],
+        rollout_batch: SelfDistillationRolloutBatch,
+    ) -> SelfDistillationBatch:
+        prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
+        teacher_batch = self.teacher_context_builder.build(
+            prompts,
+            privileged_contexts,
+            rollout_batch.completion_ids,
+            rollout_batch.completion_mask,
+        )
+
+        old_per_token_logps = None if self.generate_from_teacher else rollout_batch.old_per_token_logps
+        return SelfDistillationBatch(
+            prompt_ids=teacher_batch["prompt_ids"],
+            prompt_mask=teacher_batch["prompt_mask"],
+            completion_ids=rollout_batch.completion_ids,
+            completion_mask=rollout_batch.completion_mask,
+            teacher_input_ids=teacher_batch["teacher_input_ids"],
+            teacher_attention_mask=teacher_batch["teacher_attention_mask"],
+            old_per_token_logps=old_per_token_logps,
+        )
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:

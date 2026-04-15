@@ -365,23 +365,27 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         else:
             self._diagnostic_counters[mode]["no_successful_rollouts"] = 0
 
-    def _compute_loss(
-        self,
-        model,
-        inputs,
-    ) -> torch.Tensor:
+    def _compute_policy_loss(self, model, inputs) -> torch.Tensor:
+        return super()._compute_loss(model, inputs)
+
+    def _compute_weighted_self_distillation_loss(self, model, inputs) -> torch.Tensor | None:
+        if self.args.distillation_weight <= 0.0:
+            return None
+
         accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
+        distillation_loss = self._compute_self_distillation_loss(model, inputs) / accumulation_scale
+        return self.args.distillation_weight * distillation_loss
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        if return_outputs:
+            raise ValueError("The SDPOTrainer does not support returning outputs")
 
         if self.args.sdpo_policy_loss_mode == "hybrid":
-            base_policy_loss = super()._compute_loss(model, inputs)
-            if self.args.distillation_weight <= 0.0:
-                return base_policy_loss
+            policy_loss = self._compute_policy_loss(model, inputs)
+            weighted_distillation_loss = self._compute_weighted_self_distillation_loss(model, inputs)
+            return policy_loss if weighted_distillation_loss is None else policy_loss + weighted_distillation_loss
 
-            sdpo_loss = self._compute_self_distillation_loss(model, inputs) / accumulation_scale
-            return base_policy_loss + self.args.distillation_weight * sdpo_loss
-
-        if self.args.distillation_weight <= 0.0:
-            return super()._compute_loss(model, inputs)
-
-        sdpo_loss = self._compute_self_distillation_loss(model, inputs) / accumulation_scale
-        return self.args.distillation_weight * sdpo_loss
+        weighted_distillation_loss = self._compute_weighted_self_distillation_loss(model, inputs)
+        if weighted_distillation_loss is not None:
+            return weighted_distillation_loss
+        return self._compute_policy_loss(model, inputs)
