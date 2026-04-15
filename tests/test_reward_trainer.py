@@ -106,6 +106,31 @@ class TestDataCollatorForPreference(TrlTestCase):
         )
         torch.testing.assert_close(result["margin"], torch.tensor([0.1, 0.2]))
 
+    def test_collate_without_margin(self):
+        collator = DataCollatorForPreference(pad_token_id=0)
+        examples = [
+            {
+                "chosen_ids": [1,2,3], 
+                "rejected_ids": [4,5]
+            },
+            {
+                "chosen_ids": [6,7,8],
+                "rejected_ids": [9,10],
+                "margin": 0.1,
+            },
+            {
+                "chosen_ids": [11,12,13],
+                "rejected_ids": [14],
+                "margin": 0.2,
+            },
+            {
+                "chosen_ids": [15,16,17],
+                "rejected_ids": [18, 19],
+            },
+        ]
+        result = collator(examples)
+        torch.testing.assert_close(result["margin"], torch.tensor([0.0, 0.1, 0.2, 0.0]))
+
 
 class TestRewardTrainer(TrlTestCase):
     def test_raises_error_when_model_num_labels_not_one(self):
