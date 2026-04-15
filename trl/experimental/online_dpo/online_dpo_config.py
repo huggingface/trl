@@ -145,17 +145,6 @@ class OnlineDPOConfig(_BaseConfig):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
 
-        > Deprecated parameters
-
-        use_transformers_paged:
-
-            <Deprecated version="1.2.0">
-
-            Parameter `use_transformers_paged` is deprecated and will be removed in version v2.0.0. It will be
-            replaced by `transformers` continuous batching support in an upcoming release.
-
-            </Deprecated>
-
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
     > - `logging_steps`: Defaults to `10` instead of `500`.
@@ -372,25 +361,8 @@ class OnlineDPOConfig(_BaseConfig):
         },
     )
 
-    # Deprecated parameters
-    use_transformers_paged: bool = field(
-        default=False,
-        metadata={
-            "help": "Deprecated. It will be replaced by `transformers` continuous batching support in an upcoming "
-            "release."
-        },
-    )
-
     def __post_init__(self):
         super().__post_init__()
-
-        if self.use_transformers_paged:
-            warnings.warn(
-                "`use_transformers_paged` is deprecated and will be removed in v2.0.0. It will be replaced by "
-                "`transformers` continuous batching support in an upcoming release.",
-                FutureWarning,
-                stacklevel=3,
-            )
 
         if hasattr(self.beta, "__len__") and len(self.beta) == 1:
             self.beta = self.beta[0]

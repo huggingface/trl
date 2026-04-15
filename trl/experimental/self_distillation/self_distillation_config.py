@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -292,25 +291,8 @@ class SelfDistillationConfig(_BaseConfig):
         },
     )
 
-    # Deprecated parameters
-    use_transformers_paged: bool = field(
-        default=False,
-        metadata={
-            "help": "Deprecated. It will be replaced by `transformers` continuous batching support in an upcoming "
-            "release."
-        },
-    )
-
     def __post_init__(self):
         super().__post_init__()
-
-        if self.use_transformers_paged:
-            warnings.warn(
-                "`use_transformers_paged` is deprecated and will be removed in v2.0.0. It will be replaced by "
-                "`transformers` continuous batching support in an upcoming release.",
-                FutureWarning,
-                stacklevel=3,
-            )
 
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
         if self.scale_rewards not in ["group", "batch", "none"]:

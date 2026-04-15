@@ -403,25 +403,8 @@ class GOLDConfig(SFTConfig):
     overwrite_hub_revision: bool = field(default=False, metadata={"help": "Whether to overwrite the Hub revision."})
     push_to_hub_revision: bool = field(default=False, metadata={"help": "Whether to push to a Hub revision/branch."})
 
-    # Deprecated parameters
-    use_transformers_paged: bool = field(
-        default=False,
-        metadata={
-            "help": "Deprecated. It will be replaced by `transformers` continuous batching support in an upcoming "
-            "release."
-        },
-    )
-
     def __post_init__(self):
         super().__post_init__()
-
-        if self.use_transformers_paged:
-            warnings.warn(
-                "`use_transformers_paged` is deprecated and will be removed in v2.0.0. It will be replaced by "
-                "`transformers` continuous batching support in an upcoming release.",
-                FutureWarning,
-                stacklevel=3,
-            )
 
         # check lmbda and beta are in the range [0, 1]
         if self.lmbda < 0.0 or self.lmbda > 1.0:
