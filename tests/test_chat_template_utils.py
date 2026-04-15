@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import textwrap
 
 import pytest
@@ -160,7 +161,8 @@ class TestSupportsToolCalling:
                 ),
             ),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
-            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
+            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
             pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", id="qwen3"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3moe"),
@@ -194,6 +196,8 @@ class TestSupportsToolCalling:
             # Silently ignores tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM", id="phi3"),
+            # Silently drops assistant tool_calls (basic Llama 3 template only reads message['content'])
+            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         ],
     )
     def test_does_not_support_tool_calling(self, model_id):
@@ -311,8 +315,10 @@ class TestIsChatTemplatePrefixPreserving:
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
+        pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+        pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
     ],
 )
@@ -385,15 +391,18 @@ class TestGetTrainingChatTemplate:
 
     def test_behavior_unchanged_assistant_with_tool_calls(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         messages = [
             {"role": "user", "content": "Multiply 3 by 4."},
-            {
-                "role": "assistant",
-                "content": "I will call a tool.",
-                "tool_calls": [{"name": "multiply", "arguments": {"a": 3, "b": 4}}],
-            },
+            {"role": "assistant", "content": "I will call a tool.", "tool_calls": tool_calls},
         ]
-        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        messages_before = copy.deepcopy(messages)
+        if tokenizer_name == "trl-internal-testing/tiny-DeepseekV3ForCausalLM":
+            # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
+            # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
+            messages_before[1]["tool_calls"][0]["function"]["arguments"] = '{"a": 3, "b": 4}'
+
+        before = tokenizer.apply_chat_template(messages_before, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
         assert before == after
@@ -579,10 +588,6 @@ class TestParseResponse:
         assert parsed == messages[-1]
 
     def test_parse_response_tool_call_with_content(self, tokenizer_name):
-        if tokenizer_name == "trl-internal-testing/tiny-Gemma4ForConditionalGeneration":
-            # Gemma4 response_schema regex doesn't capture content after tool calls.
-            # Remove once https://huggingface.co/google/gemma-4-31B-it/discussions/19 is merged.
-            pytest.xfail("Gemma4 response_schema regex bug.")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if getattr(tokenizer, "response_schema", None) is None:
             tokenizer = add_response_schema(tokenizer)
