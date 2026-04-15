@@ -26,7 +26,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
-train_dataset = load_dataset("path/to/your-triple-preference-dataset", split="train")
+train_dataset = load_dataset("tpo-alignment/triple-preference-ultrafeedback-40K", split="train")
 
 training_args = TPOConfig(output_dir="Qwen3-0.6B-TPO")
 trainer = TPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
@@ -72,7 +72,7 @@ To test the TPO script with the [Qwen 3 0.6B model](https://huggingface.co/Qwen/
 ```bash
 accelerate launch examples/scripts/tpo.py \
     --model_name_or_path Qwen/Qwen3-0.6B \
-    --dataset_name path/to/your-triple-preference-dataset \
+    --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --beta 0.01 \
     --tpo_alpha 1.0 \
     --learning_rate 5e-7 \

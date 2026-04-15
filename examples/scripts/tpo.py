@@ -25,15 +25,22 @@ Run the TPO training script with the following command with some example argumen
 TPO requires a *triple-preference* dataset where each example contains a `chosen`, a `rejected` and a `reference`
 (gold) completion for the same prompt.
 
-When `--dataset_name` points to raw [UltraFeedback](https://huggingface.co/datasets/openbmb/UltraFeedback), this
-script automatically builds the triple-preference dataset as described in the TPO paper
-(Saeidi et al., 2025): the response with the highest `overall_score` becomes `reference`, the second-highest
-becomes `chosen`, and the lowest becomes `rejected`. For any other dataset, the columns `prompt`, `chosen`,
-`rejected` and `reference` must already be present.
+Two dataset paths are supported out of the box:
 
-# Full training on UltraFeedback:
+- Use the published
+  [`tpo-alignment/triple-preference-ultrafeedback-40K`](https://huggingface.co/datasets/tpo-alignment/triple-preference-ultrafeedback-40K)
+  dataset directly. It already has the `prompt` / `reference` / `chosen` / `rejected` schema.
+- Pass `--dataset_name openbmb/UltraFeedback` and the script automatically builds the triple-preference dataset
+  as described in the TPO paper (Saeidi et al., 2025): the response with the highest `overall_score` becomes
+  `reference`, the second-highest becomes `chosen`, and the lowest becomes `rejected`.
+
+In both cases, if the dataset is in standard (plain-string) format it is auto-wrapped into the conversational
+format so that the model's chat template is applied — this matches how Instruct models like `Qwen/Qwen3-0.6B`
+are trained.
+
+# Full training:
 python examples/scripts/tpo.py \
-    --dataset_name openbmb/UltraFeedback \
+    --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
     --max_steps 1000 \
@@ -46,7 +53,7 @@ python examples/scripts/tpo.py \
 
 # TPO-L (length-normalized variant with target reward margin):
 python examples/scripts/tpo.py \
-    --dataset_name openbmb/UltraFeedback \
+    --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
     --max_steps 1000 \
@@ -61,7 +68,7 @@ python examples/scripts/tpo.py \
 
 # LoRA:
 python examples/scripts/tpo.py \
-    --dataset_name openbmb/UltraFeedback \
+    --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
     --max_steps 1000 \
@@ -107,6 +114,20 @@ def build_triple_preference_from_ultrafeedback(example):
     }
 
 
+def to_conversational(example):
+    """
+    Wrap a standard-format triple-preference example (plain strings) in the *conversational* format, so that
+    [`TPOTrainer`] applies the model's chat template automatically. This is the format expected by Instruct
+    models; for non-Instruct base models the standard format can be used directly.
+    """
+    return {
+        "prompt": [{"role": "user", "content": example["prompt"]}],
+        "reference": [{"role": "assistant", "content": example["reference"]}],
+        "chosen": [{"role": "assistant", "content": example["chosen"]}],
+        "rejected": [{"role": "assistant", "content": example["rejected"]}],
+    }
+
+
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, TPOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_into_dataclasses()
@@ -136,6 +157,15 @@ if __name__ == "__main__":
             remove_columns=list(first_example.keys()),
         )
         dataset = dataset.filter(lambda ex: ex["reference"] is not None)
+        first_example = next(iter(dataset[script_args.dataset_train_split]))
+
+    # Auto-wrap standard-format triple-preference data (plain strings) into conversational messages so the
+    # model's chat template gets applied. This matches how Instruct models are trained and is what the TPO
+    # paper's data preparation produces.
+    if {"prompt", "chosen", "rejected", "reference"}.issubset(first_example) and isinstance(
+        first_example["prompt"], str
+    ):
+        dataset = dataset.map(to_conversational)
 
     ################
     # Training
