@@ -50,7 +50,7 @@ python trl/experimental/ssd/ssd.py \
     --top_p 0.8 \
     --num_train_epochs 1 \
     --bf16 \
-    --report_to wandb
+    --report_to trackio
 ```
 """
 
