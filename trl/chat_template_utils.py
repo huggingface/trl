@@ -560,7 +560,7 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
                 tool_call["arguments"] = {}
 
 
-def parse_response(tokenizer_or_processor, ids: list[int]) -> dict:
+def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
     r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
 
@@ -570,11 +570,9 @@ def parse_response(tokenizer_or_processor, ids: list[int]) -> dict:
     Also removes incorrectly appended EOS tokens from tool call content when present, and validates tool_calls to
     ensure all required fields exist.
 
-    For VLM processors, automatically uses the inner tokenizer for parsing.
-
     Args:
-        tokenizer_or_processor (`PreTrainedTokenizer` or VLM processor):
-            Tokenizer or processor with a `parse_response()` method (directly or via inner tokenizer).
+        tokenizer (`PreTrainedTokenizer`):
+            Tokenizer with a `parse_response()` method.
         ids (`list[int]`):
             List of token sequences.
 
@@ -595,8 +593,6 @@ def parse_response(tokenizer_or_processor, ids: list[int]) -> dict:
     {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
     ```
     """
-    # VLM processors don't have parse_response directly; use the inner tokenizer
-    tokenizer = getattr(tokenizer_or_processor, "tokenizer", tokenizer_or_processor)
     try:
         parsed = tokenizer.parse_response(ids)
         # Hotfix: remove incorrectly appended EOS token from tool calls

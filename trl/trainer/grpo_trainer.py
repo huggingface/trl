@@ -1669,10 +1669,9 @@ class GRPOTrainer(_BaseTrainer):
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
-            # Decode post-tool completions.
-            post_tool_completions = [
-                parse_response(self.processing_class, ids) if ids else {} for ids in post_tool_ids
-            ]
+            # Decode post-tool completions
+            tokenizer = self.processing_class.tokenizer if self._is_vlm else self.processing_class
+            post_tool_completions = [parse_response(tokenizer, ids) if ids else {} for ids in post_tool_ids]
 
             # Add post-tool completions to the existing completions
             for idx in range(len(idxs_with_tool)):
@@ -1722,22 +1721,20 @@ class GRPOTrainer(_BaseTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
-            parsing_class = self.processing_class
             # For VLM processors, propagate response_schema to the inner tokenizer if needed
             if self._is_vlm:
                 if getattr(self.processing_class, "response_schema", None) and not getattr(
                     self.processing_class.tokenizer, "response_schema", None
                 ):
                     self.processing_class.tokenizer.response_schema = self.processing_class.response_schema
-            # parse_response handles VLM processors internally (uses inner tokenizer)
-            tokenizer = getattr(parsing_class, "tokenizer", parsing_class)
+            tokenizer = self.processing_class.tokenizer if self._is_vlm else self.processing_class
             if (
                 Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
                 and isinstance(tokenizer, PreTrainedTokenizerBase)
                 and hasattr(tokenizer, "response_schema")  # attribute not set by default for now
                 and tokenizer.response_schema is not None  # only works if the tokenizer has a schema
             ):
-                completions = [[parse_response(parsing_class, ids)] for ids in completion_ids]
+                completions = [[parse_response(tokenizer, ids)] for ids in completion_ids]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
