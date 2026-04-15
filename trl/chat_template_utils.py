@@ -419,6 +419,13 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
         {"role": "tool", "name": "dummy", "content": "dummy"},
     ]
 
+    if isinstance(tokenizer, ProcessorMixin):
+        from PIL import Image
+
+        dummy_image = Image.new("RGB", (8, 8))
+        messages1 = prepare_multimodal_messages(messages1, images=[dummy_image])
+        messages2 = prepare_multimodal_messages(messages2, images=[dummy_image])
+
     try:
         ids1 = tokenizer.apply_chat_template(messages1, tokenize=True, return_dict=False)
         ids2 = tokenizer.apply_chat_template(messages2, tokenize=True, return_dict=False, add_generation_prompt=True)
