@@ -375,14 +375,22 @@ class KTOTrainer(_BaseTrainer):
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it with `pip install peft` to use the PEFT models"
             )
-        elif is_peft_available() and peft_config is not None:
-            if isinstance(model, PeftModel):
-                raise ValueError(
-                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
-                    "merge and unload the existing adapter, save the resulting base model, and then pass that base "
-                    "model along with the new `peft_config` to the trainer."
-                )
-
+        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
+            raise ValueError(
+                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                "with the new `peft_config` to the trainer."
+            )
+        if is_peft_available() and isinstance(model, PeftModel) and ref_model is None:
+            # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
+            # of the "default" adapter, so that we can use it as the reference model during KTO training.
+            model.add_adapter("ref", model.peft_config["default"])
+            for name, param in model.named_parameters():
+                if ".default." in name:
+                    ref_name = name.replace(".default.", ".ref.")
+                    ref_param = model.get_parameter(ref_name)
+                    ref_param.data.copy_(param.data)
+        if is_peft_available() and peft_config is not None:
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 _support_gc_kwargs = hasattr(
                     args, "gradient_checkpointing_kwargs"
