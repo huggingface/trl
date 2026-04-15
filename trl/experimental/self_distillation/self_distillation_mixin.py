@@ -21,13 +21,11 @@ classes or their online-specific base.
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 from typing import Any
 
 import torch
 import torch.nn.functional as F
 
-from ...trainer.utils import entropy_from_logits, selective_log_softmax
 from .self_distillation_config import SelfDistillationConfig
 
 
@@ -61,26 +59,6 @@ class SelfDistillationMixin:
 
     def _allow_topk_without_full_logit_distillation(self) -> bool:
         return True
-
-    def _get_per_token_logps_and_entropies(
-        self,
-        model,
-        input_ids,
-        attention_mask,
-        logits_to_keep,
-        compute_entropy=False,
-    ):
-        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        if "logits_to_keep" in self.model_kwarg_keys:
-            model_inputs["logits_to_keep"] = logits_to_keep + 1
-        logits = model(**model_inputs).logits
-        logits = logits[:, :-1, :]
-        logits = logits[:, -logits_to_keep:, :]
-        logits = logits / self.temperature
-        completion_ids = input_ids[:, -logits_to_keep:]
-        selected_logps = selective_log_softmax(logits, completion_ids)
-        entropies = entropy_from_logits(logits) if compute_entropy else None
-        return selected_logps, entropies
 
     def _compute_self_distillation_loss(
         self,
@@ -213,9 +191,6 @@ class SelfDistillationMixin:
         if teacher_model is None:
             return model
         return teacher_model
-
-    def _get_teacher_context_for_self_distillation(self, model):
-        return nullcontext()
 
     def _log_self_distillation_metric(self, mode: str, metric_name: str, value: float) -> None:
         metric_prefix = getattr(self, "_name", "self_distillation").lower().replace(" ", "_")

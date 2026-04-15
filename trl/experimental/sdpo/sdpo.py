@@ -78,7 +78,8 @@ from trl import (
     get_quantization_config,
 )
 from trl.data_utils import maybe_apply_chat_template
-from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
+from trl.experimental.sdpo import SDPOConfig
+from trl.experimental.sdpo.sdpo_trainer_transition import SDPOTrainer
 
 
 SYSTEM_PROMPT = (

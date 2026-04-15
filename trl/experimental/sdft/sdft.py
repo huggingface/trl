@@ -46,7 +46,6 @@ python trl/experimental/sdft/sdft.py \
     --learning_rate 2e-5 \
     --max_prompt_length 1024 \
     --max_completion_length 512 \
-    --generate_from_teacher \
     --teacher_regularization ema \
     --teacher_sync_steps 1 \
     --teacher_update_rate 0.01 \
@@ -77,7 +76,8 @@ from trl import (
     get_quantization_config,
 )
 from trl.data_utils import maybe_apply_chat_template
-from trl.experimental.sdft import SDFTConfig, SDFTTrainer
+from trl.experimental.sdft import SDFTConfig
+from trl.experimental.sdft.sdft_trainer_transition import SDFTTrainer
 from trl.models import unwrap_model_for_generation
 
 
@@ -86,10 +86,6 @@ DEFAULT_DEMONSTRATION_TEMPLATE = Template("""Example response: $output_text""")
 
 @dataclass
 class SDFTScriptArguments(ScriptArguments):
-    ref_model_name_or_path: str | None = field(
-        default=None,
-        metadata={"help": "Reference teacher model. Optional for PEFT runs, where the base model is used as teacher."},
-    )
     dataset_path: str | None = field(
         default=None,
         metadata={"help": "Optional local dataset path to load with `load_from_disk`. Overrides `dataset_name`."},
@@ -328,9 +324,10 @@ if __name__ == "__main__":
 
     if model_args.model_name_or_path is None:
         raise ValueError("`model_name_or_path` is required.")
-    if script_args.ref_model_name_or_path is None and not model_args.use_peft:
-        script_args.ref_model_name_or_path = model_args.model_name_or_path
-
+    if training_args.generate_from_teacher:
+        raise ValueError(
+            "`generate_from_teacher` is not yet supported by the transitioned SDFT trainer used in this script."
+        )
     if model_args.dtype in ["auto", None]:
         if training_args.bf16:
             dtype = torch.bfloat16
@@ -385,16 +382,10 @@ if __name__ == "__main__":
         eval_dataset = _prepare_split(raw_eval_dataset, script_args)
 
     model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
-    ref_model = None
-    if script_args.ref_model_name_or_path is not None:
-        ref_model = AutoModelForCausalLM.from_pretrained(script_args.ref_model_name_or_path, **model_kwargs)
     model.config.use_cache = False if training_args.gradient_checkpointing else True
-    if ref_model is not None:
-        ref_model.config.use_cache = True
 
     trainer = SDFTTrainer(
         model=model,
-        ref_model=ref_model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,

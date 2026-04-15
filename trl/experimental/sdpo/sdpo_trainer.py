@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import re
 import textwrap
 from typing import Any
@@ -21,30 +20,30 @@ import torch
 from accelerate.utils import gather_object
 from datasets import Dataset, IterableDataset
 from torch import nn
-from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, TrainerCallback
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+    TrainerCallback,
+)
+from transformers.utils import logging
 
-from ...trainer.callbacks import SyncRefModelCallback
-from ...trainer.utils import pad
-from ..self_distillation.base_self_distillation_trainer import BaseSelfDistillationTrainer
+from ...data_utils import apply_chat_template, is_conversational
+from ...models import prepare_deepspeed, prepare_fsdp
+from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.utils import get_config_model_id, pad
+from ..self_distillation.base_self_distillation_trainer import (
+    BaseSelfDistillationTrainer,
+    SelfDistillationBatch,
+    SelfDistillationRolloutBatch,
+)
 from ..self_distillation.teacher_context import TokenizedPromptBatch, extract_last_user_text
 from .sdpo_config import SDPOConfig
 
 
-class EMATeacherSyncCallback(SyncRefModelCallback):
-    """Synchronize an EMA teacher model with the student model on each step."""
-
-    def __init__(self, teacher_model, update_rate: float, sync_steps: int, accelerator=None):
-        super().__init__(ref_model=teacher_model, accelerator=accelerator)
-        self.update_rate = update_rate
-        self.sync_steps = sync_steps
-
-    def on_step_end(self, args, state, control, **kwargs):
-        if state.global_step % self.sync_steps != 0:
-            return
-        model = kwargs["model"]
-        if self.accelerator is not None:
-            model = self.accelerator.unwrap_model(model)
-        self.sync_target_model(model, self.ref_model, self.update_rate)
+logger = logging.get_logger(__name__)
 
 
 class SuccessfulRolloutTeacherContextBuilder:
@@ -280,45 +279,197 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
             raise ValueError("`reward_funcs` is required for SDPOTrainer because SDPO must score rollouts.")
         super().__init__(
             model=model,
-            reward_funcs=reward_funcs,
             args=args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            reward_processing_classes=reward_processing_classes,
             callbacks=callbacks,
             optimizers=optimizers,
             peft_config=peft_config,
         )
-        self.teacher_context_builder = SuccessfulRolloutTeacherContextBuilder(self)
-        if self.args.teacher_regularization == "ema":
-            # `self.model` may already be accelerator-wrapped after the shared base constructor. Build the EMA
-            # teacher from the unwrapped student model first, then prepare it as an auxiliary eval-only module.
-            student_model = self.accelerator.unwrap_model(self.model)
-            self.teacher_model = copy.deepcopy(student_model)
-            self.teacher_model.requires_grad_(False)
-            self.teacher_model.eval()
-            self.teacher_model = self._prepare_auxiliary_model_for_eval(self.teacher_model)
-            self.add_callback(
-                EMATeacherSyncCallback(
-                    teacher_model=self.teacher_model,
-                    update_rate=self.args.teacher_update_rate,
-                    sync_steps=self.args.teacher_sync_steps,
-                    accelerator=self.accelerator,
+        self.importance_sampling_level = args.importance_sampling_level
+        self.scale_rewards = args.scale_rewards
+        self.epsilon_low = args.epsilon
+        self.epsilon_high = args.epsilon_high
+        self.beta = args.beta
+
+        if not isinstance(reward_funcs, list):
+            reward_funcs = [reward_funcs]
+        self.reward_func_names = []
+        for i, reward_func in enumerate(reward_funcs):
+            if isinstance(reward_func, str):
+                reward_model_init_kwargs = args.model_init_kwargs or {}
+                if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                    reward_model_init_kwargs["device_map"] = None
+                reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
+                    reward_func,
+                    num_labels=1,
+                    **reward_model_init_kwargs,
                 )
-            )
+            if isinstance(reward_funcs[i], nn.Module):
+                self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
+            else:
+                self.reward_func_names.append(reward_funcs[i].__name__)
+        self.reward_funcs = reward_funcs
+
+        if args.reward_weights is not None:
+            if len(args.reward_weights) != len(self.reward_funcs):
+                raise ValueError("Number of reward weights must match number of reward functions")
+            self.reward_weights = torch.tensor(args.reward_weights, dtype=torch.float32)
+        else:
+            self.reward_weights = torch.ones(len(self.reward_funcs), dtype=torch.float32)
+
+        if reward_processing_classes is None:
+            reward_processing_classes = [None] * len(self.reward_funcs)
+        elif not isinstance(reward_processing_classes, list):
+            reward_processing_classes = [reward_processing_classes]
+        if len(reward_processing_classes) != len(self.reward_funcs):
+            raise ValueError("Number of reward processing classes must match number of reward functions")
+
+        for i, (reward_processing_class, reward_func) in enumerate(
+            zip(reward_processing_classes, self.reward_funcs, strict=True)
+        ):
+            if isinstance(reward_func, PreTrainedModel):
+                if reward_processing_class is None:
+                    reward_processing_class = AutoTokenizer.from_pretrained(get_config_model_id(reward_func.config))
+                if reward_processing_class.pad_token_id is None:
+                    reward_processing_class.pad_token = reward_processing_class.eos_token
+                reward_func.config.pad_token_id = reward_processing_class.pad_token_id
+                reward_processing_classes[i] = reward_processing_class
+        self.reward_processing_classes = reward_processing_classes
+
+        for i, reward_func in enumerate(self.reward_funcs):
+            if isinstance(reward_func, nn.Module):
+                if self.is_deepspeed_enabled:
+                    self.reward_funcs[i] = prepare_deepspeed(reward_func, self.accelerator)
+                elif self.is_fsdp_enabled:
+                    self.reward_funcs[i] = prepare_fsdp(reward_func, self.accelerator)
+                else:
+                    self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
+
+        self.teacher_context_builder = SuccessfulRolloutTeacherContextBuilder(self)
 
     def _allow_topk_without_full_logit_distillation(self) -> bool:
         return False
 
-    def _generate_and_score_completions(
-        self, inputs: list[dict[str, torch.Tensor | Any]]
-    ) -> dict[str, torch.Tensor | Any]:
-        prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
+    def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
+        device = self.accelerator.device
+        if len(self.reward_funcs) == 0:
+            return torch.zeros((len(prompts), 0), device=device)
 
-        output = super()._generate_and_score_completions(inputs)
-        output.update(
-            self.teacher_context_builder.build(output, prompts, output["rewards"], feedbacks=privileged_contexts)
+        rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
+        keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
+        reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
+        reward_kwargs["trainer_state"] = self.state
+
+        for i, (reward_func, reward_processing_class) in enumerate(
+            zip(self.reward_funcs, self.reward_processing_classes, strict=True)
+        ):
+            if isinstance(reward_func, nn.Module):
+                if is_conversational(inputs[0]):
+                    messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
+                    texts = [
+                        apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
+                        for x in messages
+                    ]
+                else:
+                    texts = [p + c for p, c in zip(prompts, completions, strict=True)]
+                reward_inputs = reward_processing_class(
+                    text=texts,
+                    return_tensors="pt",
+                    padding=True,
+                    padding_side="right",
+                    add_special_tokens=False,
+                )
+                reward_inputs = _BaseTrainer._prepare_inputs(self, reward_inputs)
+                with torch.inference_mode():
+                    rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]
+            else:
+                output_reward_func = reward_func(
+                    prompts=prompts,
+                    completions=completions,
+                    completion_ids=completion_ids_list,
+                    **reward_kwargs,
+                )
+                output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
+                rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+
+        return self.accelerator.gather(rewards_per_func)
+
+    def augment_training_batch(
+        self,
+        inputs: list[dict[str, Any]],
+        rollout_batch: SelfDistillationRolloutBatch,
+    ) -> SelfDistillationBatch:
+        device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
+        prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
+        raw_completion_lengths = rollout_batch.metadata["raw_completion_lengths"].detach().cpu().tolist()
+        completion_ids_list = [
+            ids[:length].tolist()
+            for ids, length in zip(rollout_batch.completion_ids.detach().cpu(), raw_completion_lengths, strict=True)
+        ]
+        if is_conversational({"prompt": prompts[0]}):
+            completions_text = self.processing_class.batch_decode(
+                rollout_batch.completion_ids, skip_special_tokens=True
+            )
+            completions = [[{"role": "assistant", "content": content}] for content in completions_text]
+        else:
+            completions = self.processing_class.batch_decode(rollout_batch.completion_ids, skip_special_tokens=True)
+
+        rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
+        if rewards_per_func.numel() == 0:
+            rewards = torch.zeros(self.accelerator.num_processes * len(prompts), device=device)
+        else:
+            rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+
+        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+        mean_grouped_rewards = rewards.view(-1, num_generations).mean(dim=1).repeat_interleave(num_generations, dim=0)
+        if self.scale_rewards == "batch":
+            std_rewards = rewards.std().expand_as(rewards) if rewards.numel() > 1 else torch.zeros_like(rewards)
+            group_std_rewards = rewards.view(-1, num_generations).std(dim=1)
+        elif self.scale_rewards == "none":
+            std_rewards = torch.ones_like(rewards)
+            group_std_rewards = torch.ones(rewards.numel() // num_generations, device=device, dtype=rewards.dtype)
+        else:
+            group_std_rewards = rewards.view(-1, num_generations).std(dim=1)
+            std_rewards = group_std_rewards.repeat_interleave(num_generations, dim=0)
+        advantages = (rewards - mean_grouped_rewards) / (std_rewards + 1e-4)
+        self._record_reward_diagnostics(mode, rewards, rewards_per_func, group_std_rewards)
+
+        local_batch_size = rollout_batch.completion_ids.size(0)
+        process_start = self.accelerator.process_index * local_batch_size
+        process_slice = slice(process_start, process_start + local_batch_size)
+        local_rewards = rewards[process_slice]
+        local_advantages = advantages[process_slice]
+
+        agg_completion_lengths = self.accelerator.gather(
+            torch.tensor([len(ids) for ids in completion_ids_list], device=device)
+        )
+        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
+
+        eos_and_pad = [self.eos_token_id, self.pad_token_id]
+        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+        agg_is_truncated = self.accelerator.gather(is_truncated)
+        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
+        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
+        if len(term_completion_lengths) == 0:
+            term_completion_lengths = torch.zeros(1, device=device)
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
+
+        rollout_dict = rollout_batch.to_dict()
+        rollout_dict["rewards"] = local_rewards
+        rollout_dict["advantages"] = local_advantages
+        rollout_dict["num_items_in_batch"] = rollout_batch.completion_mask.sum().detach()
+        teacher_context = self.teacher_context_builder.build(
+            rollout_dict,
+            prompts,
+            rollout_dict["rewards"],
+            feedbacks=privileged_contexts,
         )
 
         mode = "train" if self.model.training else "eval"
@@ -328,13 +479,26 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
 
         self._dispatch_self_distillation_callback(
             "on_teacher_context_built",
-            teacher_input_ids=output["teacher_input_ids"],
-            teacher_attention_mask=output["teacher_attention_mask"],
-            completion_mask=output["completion_mask"],
-            self_distillation_mask=output["self_distillation_mask"],
+            teacher_input_ids=teacher_context["teacher_input_ids"],
+            teacher_attention_mask=teacher_context["teacher_attention_mask"],
+            completion_mask=rollout_batch.completion_mask,
+            self_distillation_mask=teacher_context["self_distillation_mask"],
         )
 
-        return output
+        return SelfDistillationBatch(
+            prompt_ids=rollout_batch.prompt_ids,
+            prompt_mask=rollout_batch.prompt_mask,
+            completion_ids=rollout_batch.completion_ids,
+            completion_mask=rollout_batch.completion_mask,
+            teacher_input_ids=teacher_context["teacher_input_ids"],
+            teacher_attention_mask=teacher_context["teacher_attention_mask"],
+            old_per_token_logps=rollout_batch.old_per_token_logps,
+            self_distillation_mask=teacher_context["self_distillation_mask"],
+            metadata={
+                "rewards": local_rewards,
+                "advantages": local_advantages,
+            },
+        )
 
     def _warn_on_inactive_self_distillation(self, mode: str) -> None:
         metrics = self.teacher_context_builder.last_metrics
@@ -369,8 +533,105 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         else:
             self._diagnostic_counters[mode]["no_successful_rollouts"] = 0
 
+    def _record_reward_diagnostics(
+        self,
+        mode: str,
+        rewards: torch.Tensor,
+        rewards_per_func: torch.Tensor,
+        group_std_rewards: torch.Tensor,
+    ) -> None:
+        tolerance = self.args.diagnostics_flat_tolerance
+
+        reward_mean = rewards.mean() if rewards.numel() > 0 else torch.tensor(0.0, device=self.accelerator.device)
+        reward_std = rewards.std() if rewards.numel() > 1 else torch.tensor(0.0, device=self.accelerator.device)
+        reward_min = rewards.min() if rewards.numel() > 0 else torch.tensor(0.0, device=self.accelerator.device)
+        reward_max = rewards.max() if rewards.numel() > 0 else torch.tensor(0.0, device=self.accelerator.device)
+        flat_group_fraction = (
+            (group_std_rewards <= tolerance).float().mean()
+            if group_std_rewards.numel() > 0
+            else torch.tensor(1.0, device=self.accelerator.device)
+        )
+
+        self._metrics[mode]["self_distillation/reward_mean"].append(self.accelerator.gather(reward_mean).mean().item())
+        self._metrics[mode]["self_distillation/reward_std"].append(self.accelerator.gather(reward_std).mean().item())
+        self._metrics[mode]["self_distillation/reward_min"].append(self.accelerator.gather(reward_min).min().item())
+        self._metrics[mode]["self_distillation/reward_max"].append(self.accelerator.gather(reward_max).max().item())
+        self._metrics[mode]["self_distillation/group_reward_std_mean"].append(
+            self.accelerator.gather(group_std_rewards.mean() if group_std_rewards.numel() > 0 else reward_std)
+            .mean()
+            .item()
+        )
+        self._metrics[mode]["self_distillation/flat_group_fraction"].append(
+            self.accelerator.gather(flat_group_fraction).mean().item()
+        )
+
+        if rewards_per_func.numel() > 0:
+            reward_func_means = rewards_per_func.nanmean(dim=0)
+            gathered_means = self.accelerator.gather(reward_func_means).view(-1, reward_func_means.numel()).mean(dim=0)
+            for reward_name, reward_func_mean in zip(self.reward_func_names, gathered_means.tolist(), strict=True):
+                self._metrics[mode][f"self_distillation/rewards/{reward_name}"].append(reward_func_mean)
+
+        reward_is_flat = reward_std.item() <= tolerance
+        grouped_rewards_are_flat = flat_group_fraction.item() >= 1.0 - tolerance
+        if reward_is_flat and grouped_rewards_are_flat:
+            self._warn_on_degenerate_diagnostics(
+                mode=mode,
+                counter_key="flat_rewards",
+                message=(
+                    "Observed flat SDPO rewards across all sampled generations. "
+                    "Policy advantages will collapse to zero, and SDPO will not learn. "
+                    "Check reward density, reward shaping, or `success_reward_threshold`."
+                ),
+            )
+        else:
+            self._diagnostic_counters[mode]["flat_rewards"] = 0
+
+    def _warn_on_degenerate_diagnostics(self, mode: str, counter_key: str, message: str) -> None:
+        interval = self.args.diagnostics_warning_interval
+        if interval == 0:
+            return
+
+        self._diagnostic_counters[mode][counter_key] += 1
+        count = self._diagnostic_counters[mode][counter_key]
+        if count == 1 or count % interval == 0:
+            logger.warning("%s Consecutive degenerate steps: %s.", message, count)
+
     def _compute_policy_loss(self, model, inputs) -> torch.Tensor:
-        return super()._compute_loss(model, inputs)
+        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        logits_to_keep = completion_ids.size(1)
+        per_token_logps, _ = self._get_per_token_logps_and_entropies(
+            model,
+            input_ids,
+            attention_mask,
+            logits_to_keep,
+            compute_entropy=False,
+        )
+        old_per_token_logps = inputs.get("old_per_token_logps")
+        old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
+        advantages = inputs["advantages"]
+        if advantages.dim() == 1:
+            advantages = advantages.unsqueeze(1)
+        log_ratio = per_token_logps - old_per_token_logps
+        if self.importance_sampling_level == "sequence":
+            log_ratio = (log_ratio * completion_mask).sum(-1, keepdim=True) / completion_mask.sum(
+                -1, keepdim=True
+            ).clamp(min=1.0)
+        coef_1 = torch.exp(log_ratio)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        per_token_loss = -torch.min(coef_1 * advantages, coef_2 * advantages)
+
+        loss = self._aggregate_self_distillation_loss(per_token_loss, completion_mask)
+
+        mode = "train" if self.model.training else "eval"
+        self._metrics[mode]["self_distillation/policy_loss"].append(
+            self.accelerator.gather(loss.detach()).mean().item()
+        )
+
+        accumulation_scale = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+        return loss / accumulation_scale
 
     def _compute_weighted_self_distillation_loss(self, model, inputs) -> torch.Tensor | None:
         if self.args.distillation_weight <= 0.0:
