@@ -106,6 +106,33 @@ class TestDataCollatorForPreference(TrlTestCase):
         )
         torch.testing.assert_close(result["margin"], torch.tensor([0.1, 0.2]))
 
+    def test_collate_with_margin_only_in_some_examples(self):
+        """Test that margins are preserved when only some examples have the key (e.g. after shuffle)."""
+        collator = DataCollatorForPreference(pad_token_id=0)
+        # First example lacks margin, second has it — simulates post-shuffle order
+        examples = [
+            {"chosen_ids": [1, 2, 3], "rejected_ids": [4, 5]},
+            {"chosen_ids": [6, 7], "rejected_ids": [8], "margin": 0.5},
+        ]
+
+        result = collator(examples)
+
+        assert "margin" in result
+        torch.testing.assert_close(result["margin"], torch.tensor([0.0, 0.5]))
+
+    def test_collate_with_margin_missing_in_later_examples(self):
+        """Test no KeyError when first example has margin but a later one does not."""
+        collator = DataCollatorForPreference(pad_token_id=0)
+        examples = [
+            {"chosen_ids": [1, 2, 3], "rejected_ids": [4, 5], "margin": 0.5},
+            {"chosen_ids": [6, 7], "rejected_ids": [8]},
+        ]
+
+        result = collator(examples)
+
+        assert "margin" in result
+        torch.testing.assert_close(result["margin"], torch.tensor([0.5, 0.0]))
+
 
 class TestRewardTrainer(TrlTestCase):
     def test_raises_error_when_model_num_labels_not_one(self):
