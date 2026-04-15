@@ -420,18 +420,18 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
     ]
 
     try:
-        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
-        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+        ids1 = tokenizer.apply_chat_template(messages1, tokenize=True, return_dict=False)
+        ids2 = tokenizer.apply_chat_template(messages2, tokenize=True, return_dict=False, add_generation_prompt=True)
     except TypeError:
         # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
         # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
         dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
         messages1[1]["tool_calls"] = dummy_tool_calls
         messages2[1]["tool_calls"] = dummy_tool_calls
-        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
-        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+        ids1 = tokenizer.apply_chat_template(messages1, tokenize=True, return_dict=False)
+        ids2 = tokenizer.apply_chat_template(messages2, tokenize=True, return_dict=False, add_generation_prompt=True)
 
-    return text2.startswith(text1)
+    return ids2[: len(ids1)] == ids1
 
 
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text()
