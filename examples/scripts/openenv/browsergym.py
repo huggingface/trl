@@ -136,14 +136,19 @@ def main() -> None:
             openenv-core<=0.2.1 does not pass max_size to ws_connect, so the websockets library
             defaults to 1MB. We force a connection and patch it to 100MB before any messages are sent.
             """
+            import websockets
+
             self.client.connect()
             ws = self.client._ws
-            if ws is not None and hasattr(ws, "protocol"):
+            if ws is not None and ws.protocol is not None:
                 proto = ws.protocol
-                # websockets <16: max_size; websockets >=16: max_message_size
-                attr = "max_size" if hasattr(proto, "max_size") else "max_message_size"
-                if getattr(proto, attr) == 2**20:
-                    setattr(proto, attr, 100 * 1024 * 1024)
+                # websockets renamed max_size to max_message_size in version 16
+                if int(websockets.__version__.split(".")[0]) >= 16:
+                    if proto.max_message_size == 2**20:
+                        proto.max_message_size = 100 * 1024 * 1024
+                else:
+                    if proto.max_size == 2**20:
+                        proto.max_size = 100 * 1024 * 1024
 
         def reset(self, **kwargs) -> str | None:
             self.reward = 0.0
@@ -166,7 +171,7 @@ def main() -> None:
                 bid = bid[0]
             return str(bid).strip().strip("[]")
 
-        def click(self, bid: str) -> list:
+        def click(self, bid: str) -> list | str:
             """Click an element on the page.
 
             Args:
@@ -178,7 +183,7 @@ def main() -> None:
             bid = self._normalize_bid(bid)
             return self._do_action(f"click({bid!r})")
 
-        def fill(self, bid: str, text: str) -> list:
+        def fill(self, bid: str, text: str) -> list | str:
             """Fill an input field with text.
 
             Args:
@@ -191,7 +196,7 @@ def main() -> None:
             bid = self._normalize_bid(bid)
             return self._do_action(f"fill({bid!r}, {text!r})")
 
-        def send_keys(self, text: str) -> list:
+        def send_keys(self, text: str) -> list | str:
             """Send keyboard input to the page.
 
             Args:
@@ -202,7 +207,7 @@ def main() -> None:
             """
             return self._do_action(f"send_keys({text!r})")
 
-        def scroll(self, direction: str) -> list:
+        def scroll(self, direction: str) -> list | str:
             """Scroll the page.
 
             Args:
@@ -213,7 +218,7 @@ def main() -> None:
             """
             return self._do_action(f"scroll({direction!r})")
 
-        def noop(self) -> list:
+        def noop(self) -> list | str:
             """Do nothing and observe the current page state.
 
             Returns:
@@ -221,7 +226,7 @@ def main() -> None:
             """
             return self._do_action("noop()")
 
-        def _do_action(self, action_str: str) -> list:
+        def _do_action(self, action_str: str) -> list | str:
             if self.done:
                 return "Episode finished successfully. No further actions needed."
 
