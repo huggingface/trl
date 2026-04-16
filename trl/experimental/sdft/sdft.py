@@ -76,8 +76,7 @@ from trl import (
     get_quantization_config,
 )
 from trl.data_utils import maybe_apply_chat_template
-from trl.experimental.sdft import SDFTConfig
-from trl.experimental.sdft.sdft_trainer import SDFTTrainer
+from trl.experimental.sdft import SDFTConfig, SDFTTrainer
 from trl.models import unwrap_model_for_generation
 
 
