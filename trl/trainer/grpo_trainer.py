@@ -526,13 +526,10 @@ class GRPOTrainer(_BaseTrainer):
 
         # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
         # While waiting for broader adoption, we provide this utility function to manually set the response schema for
-        # known chat templates.
-        # We need `getattr`` until the base class sets a default None value for response_schema
-        # For VLM processors, check the inner tokenizer too (response_schema lives on the tokenizer)
-        has_response_schema = getattr(processing_class, "response_schema", None) or (
-            self._is_vlm and getattr(processing_class.tokenizer, "response_schema", None)
-        )
-        if self.tools and not has_response_schema:
+        # known chat templates. `response_schema` lives on the (inner) tokenizer, since `parse_response` is a tokenizer
+        # method that reads `self.response_schema`.
+        tokenizer = processing_class.tokenizer if self._is_vlm else processing_class
+        if self.tools and getattr(tokenizer, "response_schema", None) is None:
             processing_class = add_response_schema(processing_class)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
@@ -1713,22 +1710,13 @@ class GRPOTrainer(_BaseTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
-            parsing_class = self.processing_class
-            # For VLM processors, propagate response_schema to the inner tokenizer if needed
-            if self._is_vlm:
-                if getattr(self.processing_class, "response_schema", None) and not getattr(
-                    self.processing_class.tokenizer, "response_schema", None
-                ):
-                    self.processing_class.tokenizer.response_schema = self.processing_class.response_schema
-            # parse_response handles VLM processors internally (uses inner tokenizer)
-            tokenizer = getattr(parsing_class, "tokenizer", parsing_class)
+            tokenizer = self.processing_class.tokenizer if self._is_vlm else self.processing_class
             if (
                 Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
-                and isinstance(tokenizer, PreTrainedTokenizerBase)
                 and hasattr(tokenizer, "response_schema")  # attribute not set by default for now
                 and tokenizer.response_schema is not None  # only works if the tokenizer has a schema
             ):
-                completions = [[parse_response(parsing_class, ids)] for ids in completion_ids]
+                completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]

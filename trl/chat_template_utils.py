@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from pathlib import Path
+from typing import TypeVar
 
 from jinja2 import TemplateError
 from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, ProcessorMixin
@@ -284,7 +285,10 @@ qwen3_5_chat_template_2b_and_below = (_CHAT_TEMPLATES_DIR / "qwen3_5_2b_and_belo
 qwen3_5_chat_template_4b_and_above = (_CHAT_TEMPLATES_DIR / "qwen3_5_4b_and_above.jinja").read_text()
 
 
-def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
+ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizer, ProcessorMixin)
+
+
+def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     r"""
     Adds the appropriate response schema to the given tokenizer based on its chat template.
 
@@ -292,13 +296,16 @@ def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     waiting for broader adoption, we provide this utility function to manually set the response schema for known chat
     templates.
 
+    When given a VLM processor, the schema is set on the inner tokenizer, since `parse_response` is a tokenizer method
+    and reads `self.response_schema` from the tokenizer instance.
+
     Args:
-        tokenizer (`PreTrainedTokenizer`):
-            Tokenizer to which the response schema will be added.
+        processing_class (`PreTrainedTokenizer` or `ProcessorMixin`):
+            Tokenizer or VLM processor to which the response schema will be added.
 
     Returns:
-        `PreTrainedTokenizer`:
-            Tokenizer with the added response schema.
+        `PreTrainedTokenizer` or `ProcessorMixin`:
+            The same object that was passed in, with the response schema set on the underlying tokenizer.
 
     Examples:
 
@@ -313,24 +320,30 @@ def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
     ```
     """
-    if tokenizer.chat_template == glm4moe_chat_template:
+    # For VLM processors, set the schema on the inner tokenizer (where `parse_response` reads it from).
+    # Match against the top-level chat_template, since that's what was used historically and processors
+    # may carry their own VLM-specific template separate from the inner tokenizer's.
+    chat_template = processing_class.chat_template
+    if isinstance(processing_class, ProcessorMixin):
+        tokenizer = processing_class.tokenizer
+    else:
+        tokenizer = processing_class
+    if chat_template == glm4moe_chat_template:
         tokenizer.response_schema = glm4moe_schema
-        return tokenizer
-    if tokenizer.chat_template == gptoss_chat_template:
+    elif chat_template == gptoss_chat_template:
         tokenizer.response_schema = gptoss_schema
-        return tokenizer
-    if tokenizer.chat_template in [qwen3_chat_template, qwen3_vl_chat_template]:
+    elif chat_template in [qwen3_chat_template, qwen3_vl_chat_template]:
         tokenizer.response_schema = qwen3_schema
-        return tokenizer
-    if tokenizer.chat_template in [qwen3_5_chat_template_2b_and_below, qwen3_5_chat_template_4b_and_above]:
+    elif chat_template in [qwen3_5_chat_template_2b_and_below, qwen3_5_chat_template_4b_and_above]:
         tokenizer.response_schema = qwen3_5_schema
-        return tokenizer
-    raise ValueError(
-        "Unrecognized chat template, failed to add response schema. Please manually set the response schema on the "
-        "tokenizer or processor. See the Transformers "
-        "[docs](https://huggingface.co/docs/transformers/main/en/chat_response_parsing#response-parsing) for more "
-        "details on response parsing."
-    )
+    else:
+        raise ValueError(
+            "Unrecognized chat template, failed to add response schema. Please manually set the response schema on "
+            "the tokenizer or processor. See the Transformers "
+            "[docs](https://huggingface.co/docs/transformers/main/en/chat_response_parsing#response-parsing) for more "
+            "details on response parsing."
+        )
+    return processing_class
 
 
 def supports_tool_calling(processing_class) -> bool:
@@ -560,7 +573,7 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
                 tool_call["arguments"] = {}
 
 
-def parse_response(tokenizer_or_processor, ids: list[int]) -> dict:
+def parse_response(processing_class: PreTrainedTokenizer | ProcessorMixin, ids: list[int]) -> dict:
     r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
 
@@ -573,7 +586,7 @@ def parse_response(tokenizer_or_processor, ids: list[int]) -> dict:
     For VLM processors, automatically uses the inner tokenizer for parsing.
 
     Args:
-        tokenizer_or_processor (`PreTrainedTokenizer` or VLM processor):
+        processing_class (`PreTrainedTokenizer` or VLM processor):
             Tokenizer or processor with a `parse_response()` method (directly or via inner tokenizer).
         ids (`list[int]`):
             List of token sequences.
@@ -596,7 +609,7 @@ def parse_response(tokenizer_or_processor, ids: list[int]) -> dict:
     ```
     """
     # VLM processors don't have parse_response directly; use the inner tokenizer
-    tokenizer = getattr(tokenizer_or_processor, "tokenizer", tokenizer_or_processor)
+    tokenizer = getattr(processing_class, "tokenizer", processing_class)
     try:
         parsed = tokenizer.parse_response(ids)
         # Hotfix: remove incorrectly appended EOS token from tool calls
