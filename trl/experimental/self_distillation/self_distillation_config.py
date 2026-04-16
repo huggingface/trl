@@ -55,7 +55,8 @@ class SelfDistillationConfig(_BaseConfig):
         > Parameters that control teacher construction
 
         teacher_model_kind (`str`, *optional*, defaults to `"live"`):
-            Semantic teacher choice. Supported: `base`, `live`, `ema`.
+            Semantic teacher choice. `live` uses the current student, `base` uses the student as it existed at the
+            start of training, and `ema` uses an exponentially averaged teacher.
         teacher_update_rate (`float`, *optional*, defaults to `0.6`):
             EMA update rate used when `teacher_model_kind="ema"`.
         teacher_sync_steps (`int`, *optional*, defaults to `512`):
@@ -249,7 +250,10 @@ class SelfDistillationConfig(_BaseConfig):
     )
     teacher_model_kind: str = field(
         default="live",
-        metadata={"help": "Semantic teacher choice. Supported: `base`, `live`, `ema`."},
+        metadata={
+            "help": "Semantic teacher choice. `live` uses the current student, `base` uses the initial student, "
+            "and `ema` uses an exponentially averaged teacher."
+        },
     )
     teacher_update_rate: float = field(
         default=0.6,

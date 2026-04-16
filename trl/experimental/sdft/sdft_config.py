@@ -29,7 +29,8 @@ class SDFTConfig(SelfDistillationConfig):
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the student and teacher models.
         teacher_model_kind (`str`, *optional*, defaults to `"base"`):
-            Semantic teacher choice for SDFT. Supported: `base`, `live`, `ema`.
+            Semantic teacher choice for SDFT. `base` uses the initial student, `live` uses the current student, and
+            `ema` uses an exponentially averaged teacher.
         generate_from_teacher (`bool`, *optional*, defaults to `False`):
             Whether on-policy generation should use the teacher-conditioned prompt instead of the student prompt.
         teacher_prompt_template (`str`, *optional*, defaults to `"{prompt}\n\n{privileged_context}"`):
@@ -44,7 +45,10 @@ class SDFTConfig(SelfDistillationConfig):
     )
     teacher_model_kind: str = field(
         default="base",
-        metadata={"help": "Semantic teacher choice for SDFT. Supported: `base`, `live`, `ema`."},
+        metadata={
+            "help": "Semantic teacher choice for SDFT. `base` uses the initial student, `live` uses the current "
+            "student, and `ema` uses an exponentially averaged teacher."
+        },
     )
     generate_from_teacher: bool = field(
         default=False,

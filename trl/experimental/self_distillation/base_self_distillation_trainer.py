@@ -64,7 +64,6 @@ from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback
 
 if is_peft_available():
     from peft import PeftConfig
-    from peft.peft_model import PeftModel
 
 
 logger = get_logger(__name__)
@@ -137,12 +136,12 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
             else inspect.signature(model.get_base_model().forward).parameters.keys()
         )
 
-        if is_peft_available() and is_peft_model(model) and peft_config is not None:
+        if is_peft_model(model) and peft_config is not None:
             raise ValueError(
                 "You passed a `PeftModel` instance together with a `peft_config`. Pass either a base "
                 "model with `peft_config`, or a pre-wrapped PEFT model."
             )
-        if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
+        if peft_config is not None or getattr(model, "peft_config", None) is not None:
             model = prepare_peft_model(model, peft_config, args)
 
         if processing_class is None:
@@ -261,7 +260,10 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
 
         teacher_model_kind = self.args.teacher_model_kind
 
-        if teacher_model_kind in {"base", "live"}:
+        if teacher_model_kind == "live":
+            return
+
+        if teacher_model_kind == "base" and is_peft_model(self.model):
             return
 
         if self._use_peft_ema_teacher_adapter():
@@ -276,11 +278,11 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
             )
             return
 
+        # create teacher model from student copy
         student_model = self.accelerator.unwrap_model(self.model)
         self.teacher_model = copy.deepcopy(student_model)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()
-
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(self.teacher_model, self.accelerator)
         elif self.is_fsdp_enabled:
@@ -288,13 +290,14 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
         else:
             self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
 
-        self.add_callback(SyncTeacherModelCallback(teacher_model=self.teacher_model, accelerator=self.accelerator))
+        if teacher_model_kind == "ema":
+            self.add_callback(SyncTeacherModelCallback(teacher_model=self.teacher_model, accelerator=self.accelerator))
 
     def _use_peft_ema_teacher_adapter(self) -> bool:
         return self.args.teacher_model_kind == "ema" and self._is_pure_lora_training()
 
     def _is_pure_lora_training(self) -> bool:
-        if not (is_peft_available() and is_peft_model(self.model)):
+        if not is_peft_model(self.model):
             return False
 
         model = self.accelerator.unwrap_model(self.model)
@@ -582,7 +585,7 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
 
     def _get_teacher_context_for_self_distillation(self):
         teacher_model_kind = self.args.teacher_model_kind
-        if not (is_peft_available() and isinstance(self.model, PeftModel)):
+        if not is_peft_model(self.model):
             return nullcontext()
 
         target_model = self.teacher_model if self.teacher_model is not None else self.model

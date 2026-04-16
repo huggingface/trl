@@ -40,7 +40,8 @@ class SDPOConfig(SelfDistillationConfig):
         > Parameters that control the teacher
 
         teacher_model_kind (`str`, *optional*, defaults to `"ema"`):
-            Semantic teacher choice. Supported: `base`, `live`, `ema`.
+            Semantic teacher choice. `base` uses the initial student, `live` uses the current student, and `ema`
+            uses an exponentially averaged teacher.
         teacher_update_rate (`float`, *optional*, defaults to `0.05`):
             EMA update rate used when `teacher_model_kind="ema"`.
         teacher_sync_steps (`int`, *optional*, defaults to `1`):
@@ -76,7 +77,10 @@ class SDPOConfig(SelfDistillationConfig):
     )
     teacher_model_kind: str = field(
         default="ema",
-        metadata={"help": "Semantic teacher choice. Supported: `base`, `live`, `ema`."},
+        metadata={
+            "help": "Semantic teacher choice. `base` uses the initial student, `live` uses the current student, "
+            "and `ema` uses an exponentially averaged teacher."
+        },
     )
     teacher_update_rate: float = field(
         default=0.05,
