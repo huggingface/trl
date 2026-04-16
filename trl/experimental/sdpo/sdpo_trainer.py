@@ -39,7 +39,7 @@ from ..self_distillation.base_self_distillation_trainer import (
     RolloutBatch,
     TrainingBatch,
 )
-from ..self_distillation.teacher_context import TokenizedPromptBatch, extract_last_user_text
+from ..self_distillation.teacher_context import _split_prompt_and_privileged_context, extract_last_user_text
 from .sdpo_config import SDPOConfig
 
 
@@ -62,7 +62,7 @@ class SuccessfulRolloutTeacherContextBuilder:
 
     def _tokenize_teacher_messages(
         self, teacher_messages_list: list[str | list[dict[str, Any]]]
-    ) -> TokenizedPromptBatch:
+    ) -> dict[str, torch.Tensor]:
         teacher_prompt_ids_list = []
         device = self.trainer.accelerator.device
         chat_template_kwargs = getattr(self.trainer, "chat_template_kwargs", {})
@@ -88,10 +88,10 @@ class SuccessfulRolloutTeacherContextBuilder:
 
         teacher_prompt_ids = [ids.to(device) for ids in teacher_prompt_ids_list]
         teacher_prompt_mask = [torch.ones(len(ids), dtype=torch.long, device=device) for ids in teacher_prompt_ids]
-        return TokenizedPromptBatch(
-            prompt_ids=pad(teacher_prompt_ids, padding_value=self.trainer.pad_token_id, padding_side="left"),
-            prompt_mask=pad(teacher_prompt_mask, padding_value=0, padding_side="left"),
-        )
+        return {
+            "prompt_ids": pad(teacher_prompt_ids, padding_value=self.trainer.pad_token_id, padding_side="left"),
+            "prompt_mask": pad(teacher_prompt_mask, padding_value=0, padding_side="left"),
+        }
 
     def build(
         self,
@@ -216,8 +216,8 @@ class SuccessfulRolloutTeacherContextBuilder:
                 local_teacher_messages.append(self._build_reprompt_text(original_prompt, solution_text, feedback_text))
 
         teacher_batch = self._tokenize_teacher_messages(local_teacher_messages)
-        teacher_input_ids = torch.cat([teacher_batch.prompt_ids, completion_ids], dim=1)
-        teacher_attention_mask = torch.cat([teacher_batch.prompt_mask, completion_mask], dim=1)
+        teacher_input_ids = torch.cat([teacher_batch["prompt_ids"], completion_ids], dim=1)
+        teacher_attention_mask = torch.cat([teacher_batch["prompt_mask"], completion_mask], dim=1)
 
         batch_size = total_samples if total_samples > 0 else 1
         num_groups = max(1, total_samples // max(1, num_generations))
@@ -403,7 +403,7 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
     ) -> TrainingBatch:
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
-        prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
+        prompts, privileged_contexts = _split_prompt_and_privileged_context(inputs)
         raw_completion_lengths = rollout_batch.raw_completion_lengths.detach().cpu().tolist()
         completion_ids_list = [
             ids[:length].tolist()

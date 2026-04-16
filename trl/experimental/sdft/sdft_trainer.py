@@ -34,7 +34,7 @@ from ..self_distillation.base_self_distillation_trainer import (
     RolloutBatch,
     TrainingBatch,
 )
-from ..self_distillation.teacher_context import PromptTokenizer, extract_last_user_text
+from ..self_distillation.teacher_context import _split_prompt_and_privileged_context, extract_last_user_text
 from .sdft_config import SDFTConfig
 
 
@@ -50,7 +50,6 @@ class DemonstrationTeacherContextBuilder:
 
     def __init__(self, trainer):
         self.trainer = trainer
-        self.prompt_tokenizer = PromptTokenizer(trainer)
 
     def _stringify_privileged_context(self, privileged_context: Any) -> str:
         if privileged_context is None:
@@ -99,17 +98,14 @@ class DemonstrationTeacherContextBuilder:
         completion_ids: torch.Tensor,
         completion_mask: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        student_batch = self.prompt_tokenizer.tokenize_prompts(prompts)
         teacher_prompts = [
             self._compose_teacher_prompt(prompt, privileged_context)
             for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
         ]
-        teacher_batch = self.prompt_tokenizer.tokenize_prompts(teacher_prompts)
-        teacher_input_ids = torch.cat([teacher_batch.prompt_ids, completion_ids], dim=1)
-        teacher_attention_mask = torch.cat([teacher_batch.prompt_mask, completion_mask], dim=1)
+        teacher_batch = self.trainer._tokenize_prompts(teacher_prompts)
+        teacher_input_ids = torch.cat([teacher_batch["prompt_ids"], completion_ids], dim=1)
+        teacher_attention_mask = torch.cat([teacher_batch["prompt_mask"], completion_mask], dim=1)
         return {
-            "prompt_ids": student_batch.prompt_ids,
-            "prompt_mask": student_batch.prompt_mask,
             "teacher_input_ids": teacher_input_ids,
             "teacher_attention_mask": teacher_attention_mask,
         }
@@ -171,7 +167,7 @@ class SDFTTrainer(BaseSelfDistillationTrainer):
         inputs: list[dict[str, Any]],
         rollout_batch: RolloutBatch,
     ) -> TrainingBatch:
-        prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
+        prompts, privileged_contexts = _split_prompt_and_privileged_context(inputs)
         teacher_batch = self.teacher_context_builder.build(
             prompts,
             privileged_contexts,
@@ -182,8 +178,6 @@ class SDFTTrainer(BaseSelfDistillationTrainer):
         batch = super().finalize_batch(inputs, rollout_batch)
         batch.update(
             {
-                "prompt_ids": teacher_batch["prompt_ids"],
-                "prompt_mask": teacher_batch["prompt_mask"],
                 "teacher_input_ids": teacher_batch["teacher_input_ids"],
                 "teacher_attention_mask": teacher_batch["teacher_attention_mask"],
             }

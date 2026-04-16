@@ -16,7 +16,7 @@
 
 This mixin owns generation, reward scoring, grouped reward normalization, and online policy-loss plumbing. It is paired
 with `BaseSelfDistillationTrainer` for SDPO-style methods and intentionally kept separate from the generic distillation
-loss logic in `self_distillation_mixin.py`.
+loss logic in `self_distillation_loss.py`.
 """
 
 from __future__ import annotations

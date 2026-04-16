@@ -41,6 +41,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available
 
+from ...data_utils import maybe_apply_chat_template
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
@@ -57,8 +58,7 @@ from ...trainer.utils import (
 )
 from ..utils import prepare_peft_model
 from .self_distillation_config import SelfDistillationConfig
-from .self_distillation_mixin import SelfDistillationMixin
-from .teacher_context import PromptTokenizer
+from .self_distillation_loss import SelfDistillationLossComputer
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback
 
 
@@ -97,7 +97,7 @@ class RolloutBatch:
 TrainingBatch = dict[str, torch.Tensor | Any]
 
 
-class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
+class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
     """Base that centralizes shared self-distillation trainer lifecycle."""
 
     config_cls = SelfDistillationConfig
@@ -179,7 +179,6 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
             "train": defaultdict(int),
             "eval": defaultdict(int),
         }
-        self.prompt_tokenizer = PromptTokenizer(self)
 
         generation_kwargs = {
             "max_new_tokens": self.max_completion_length,
@@ -253,7 +252,25 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
+        self._self_distillation_loss = SelfDistillationLossComputer(self)
         self.model_accepts_loss_kwargs = False
+
+    def _set_signature_columns_if_needed(self):
+        if self._signature_columns is None:
+            self._signature_columns = ["prompt", "privileged_context"]
+
+    def _dispatch_self_distillation_callback(self, event_name: str, **payload) -> None:
+        for callback in self.callback_handler.callbacks:
+            callback_fn = getattr(callback, event_name, None)
+            if callback_fn is not None:
+                callback_fn(
+                    args=self.args,
+                    state=self.state,
+                    control=self.control,
+                    model=self.model,
+                    processing_class=self.processing_class,
+                    **payload,
+                )
 
     def _setup_teacher_model(self) -> None:
         """Prepare teacher state according to the semantic teacher choice."""
@@ -395,17 +412,55 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
         )
         return batch
 
+    def _apply_chat_template_to_prompts(self, prompts: list[Any]) -> list[str]:
+        return [
+            maybe_apply_chat_template(
+                {"prompt": prompt},
+                self.processing_class,
+                **self.chat_template_kwargs,
+            )["prompt"]
+            for prompt in prompts
+        ]
+
+    def _tokenize_prompt_text(self, prompt_text: list[str]) -> dict[str, torch.Tensor]:
+        prompt_inputs = self.processing_class(
+            text=prompt_text,
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+            max_length=self.max_prompt_length,
+            truncation=True,
+            add_special_tokens=False,
+        )
+        prompt_inputs = _BaseTrainer._prepare_inputs(self, prompt_inputs)
+        prompt_ids = [
+            input_ids[mask].to(device=self.accelerator.device)
+            for input_ids, mask in zip(
+                prompt_inputs["input_ids"],
+                prompt_inputs["attention_mask"].bool(),
+                strict=False,
+            )
+        ]
+        prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
+        return {
+            "prompt_ids": pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left"),
+            "prompt_mask": pad(prompt_mask, padding_value=0, padding_side="left"),
+        }
+
+    def _tokenize_prompts(self, prompts: list[Any]) -> dict[str, torch.Tensor]:
+        return self._tokenize_prompt_text(self._apply_chat_template_to_prompts(prompts))
+
     def sample_rollouts(self, inputs: list[dict[str, Any]]) -> RolloutBatch:
         prompts, _ = self._split_prompt_and_privileged_context(inputs)
         generation_prompts = prompts
-        generation_prompt_text = self.prompt_tokenizer.apply_prompt_template(generation_prompts)
+        generation_prompt_text = self._apply_chat_template_to_prompts(generation_prompts)
         self._dispatch_self_distillation_callback(
             "on_generation_prompts_selected",
             generation_prompts=generation_prompts,
             generation_prompt_text=generation_prompt_text,
         )
 
-        prompt_ids_list, completion_ids_list = self._generate(generation_prompts)
+        prompt_ids_list, completion_ids_list = self._generate(generation_prompt_text)
         device = self.accelerator.device
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
@@ -437,19 +492,18 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
             ),
         )
 
-    def _generate(self, prompts: list[Any]) -> tuple[list[list[int]], list[list[int]]]:
+    def _generate(self, prompt_text: list[str]) -> tuple[list[list[int]], list[list[int]]]:
         if self.use_vllm:
-            return self._generate_vllm(prompts)
-        return self._generate_transformers(prompts)
+            return self._generate_vllm(prompt_text)
+        return self._generate_transformers(prompt_text)
 
-    def _generate_vllm(self, prompts: list[Any]) -> tuple[list[list[int]], list[list[int]]]:
+    def _generate_vllm(self, prompt_text: list[str]) -> tuple[list[list[int]], list[list[int]]]:
         if self.state.global_step != self._last_loaded_step:
             self.vllm_generation.sync_weights()
             self._last_loaded_step = self.state.global_step
 
-        prompts_text = self.prompt_tokenizer.apply_prompt_template(prompts)
         tokenized = self.processing_class(
-            text=prompts_text,
+            text=prompt_text,
             return_tensors=None,
             padding=False,
             max_length=self.max_prompt_length,
@@ -466,9 +520,9 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
         )
         return prompt_ids_out, completion_ids_list
 
-    def _generate_transformers(self, prompts: list[Any]) -> tuple[list[list[int]], list[list[int]]]:
+    def _generate_transformers(self, prompt_text: list[str]) -> tuple[list[list[int]], list[list[int]]]:
         generate_inputs = self.processing_class(
-            text=self.prompt_tokenizer.apply_prompt_template(prompts),
+            text=prompt_text,
             return_tensors="pt",
             padding=True,
             padding_side="left",
@@ -528,6 +582,16 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
                 )
 
         return old_per_token_logps
+
+    def _allow_topk_without_full_logit_distillation(self) -> bool:
+        return True
+
+    def _compute_self_distillation_loss(
+        self,
+        model,
+        inputs: TrainingBatch,
+    ) -> torch.Tensor:
+        return self._self_distillation_loss.compute_loss(model, inputs)
 
     def _get_per_token_logps_and_entropies(
         self,
@@ -601,6 +665,12 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
                 )
             return use_adapter(target_model, adapter_name=teacher_adapter_name)
         return nullcontext()
+
+    def _get_teacher_model_for_self_distillation(self, model):
+        teacher_model = getattr(self, "teacher_model", None)
+        if teacher_model is None:
+            return model
+        return teacher_model
 
     @abstractmethod
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
