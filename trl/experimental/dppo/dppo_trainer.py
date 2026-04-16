@@ -668,11 +668,11 @@ class DPPOTrainer(GRPOTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
+            tokenizer = self.processing_class.tokenizer if self._is_vlm else self.processing_class
             if (
                 Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
-                and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
-                and hasattr(self.processing_class, "response_schema")  # attribute not set by default for now
-                and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
+                and hasattr(tokenizer, "response_schema")  # attribute not set by default for now
+                and tokenizer.response_schema is not None  # only works if the tokenizer has a schema
             ):
                 completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
             else:
