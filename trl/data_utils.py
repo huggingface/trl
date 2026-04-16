@@ -333,7 +333,7 @@ def apply_chat_template(
 
 def maybe_apply_chat_template(
     example: dict[str, list[dict[str, str]]],
-    tokenizer: PreTrainedTokenizerBase | ProcessorMixin,
+    processing_class: PreTrainedTokenizerBase | ProcessorMixin,
     tools: list[dict | Callable] | None = None,
     **template_kwargs: Any,
 ) -> dict[str, str]:
@@ -356,7 +356,7 @@ def maybe_apply_chat_template(
             messages, where each message is a dictionary with keys `"role"` and `"content"`. Additionally, the example
             may contain a `"chat_template_kwargs"` key, which is a dictionary of additional keyword arguments to pass
             to the chat template renderer.
-        tokenizer ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
             Tokenizer to apply the chat template with.
         tools (`list[dict | Callable]`, *optional*):
             A list of tools (callable functions) that will be accessible to the model. If the template does not support
@@ -390,7 +390,7 @@ def maybe_apply_chat_template(
     ```
     """
     if is_conversational(example):
-        return apply_chat_template(example, tokenizer, tools, **template_kwargs)
+        return apply_chat_template(example, processing_class, tools, **template_kwargs)
     else:
         return example
 
