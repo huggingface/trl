@@ -73,10 +73,6 @@ class KTOConfig(_BaseConfig):
             Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
         undesirable_weight (`float`, *optional*, defaults to `1.0`):
             Undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
-        generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
-            during evaluation.
-
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
     > - `logging_steps`: Defaults to `10` instead of `500`.
@@ -162,12 +158,5 @@ class KTOConfig(_BaseConfig):
         metadata={
             "help": "Undesirable losses are weighed by this factor to counter unequal number of desirable and "
             "undesirable pairs.",
-        },
-    )
-    generate_during_eval: bool = field(
-        default=False,
-        metadata={
-            "help": "If `True`, generates and logs completions from both the model and the reference model to W&B "
-            "during evaluation."
         },
     )
