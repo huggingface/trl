@@ -31,8 +31,8 @@ from transformers.utils import is_peft_available
 
 from ..self_distillation.base_self_distillation_trainer import (
     BaseSelfDistillationTrainer,
-    SelfDistillationBatch,
-    SelfDistillationRolloutBatch,
+    RolloutBatch,
+    TrainingBatch,
 )
 from ..self_distillation.teacher_context import PromptTokenizer, extract_last_user_text
 from .sdft_config import SDFTConfig
@@ -166,11 +166,11 @@ class SDFTTrainer(BaseSelfDistillationTrainer):
         self.num_loss_tokens_to_skip = args.num_loss_tokens_to_skip
         self.teacher_context_builder = DemonstrationTeacherContextBuilder(self)
 
-    def augment_training_batch(
+    def finalize_batch(
         self,
         inputs: list[dict[str, Any]],
-        rollout_batch: SelfDistillationRolloutBatch,
-    ) -> SelfDistillationBatch:
+        rollout_batch: RolloutBatch,
+    ) -> TrainingBatch:
         prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
         teacher_batch = self.teacher_context_builder.build(
             prompts,
@@ -179,15 +179,16 @@ class SDFTTrainer(BaseSelfDistillationTrainer):
             rollout_batch.completion_mask,
         )
 
-        return SelfDistillationBatch(
-            prompt_ids=teacher_batch["prompt_ids"],
-            prompt_mask=teacher_batch["prompt_mask"],
-            completion_ids=rollout_batch.completion_ids,
-            completion_mask=rollout_batch.completion_mask,
-            teacher_input_ids=teacher_batch["teacher_input_ids"],
-            teacher_attention_mask=teacher_batch["teacher_attention_mask"],
-            old_per_token_logps=rollout_batch.old_per_token_logps,
+        batch = super().finalize_batch(inputs, rollout_batch)
+        batch.update(
+            {
+                "prompt_ids": teacher_batch["prompt_ids"],
+                "prompt_mask": teacher_batch["prompt_mask"],
+                "teacher_input_ids": teacher_batch["teacher_input_ids"],
+                "teacher_attention_mask": teacher_batch["teacher_attention_mask"],
+            }
         )
+        return batch
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:

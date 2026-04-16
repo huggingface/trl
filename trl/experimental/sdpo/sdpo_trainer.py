@@ -36,8 +36,8 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import get_config_model_id, pad
 from ..self_distillation.base_self_distillation_trainer import (
     BaseSelfDistillationTrainer,
-    SelfDistillationBatch,
-    SelfDistillationRolloutBatch,
+    RolloutBatch,
+    TrainingBatch,
 )
 from ..self_distillation.teacher_context import TokenizedPromptBatch, extract_last_user_text
 from .sdpo_config import SDPOConfig
@@ -396,15 +396,15 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
 
         return self.accelerator.gather(rewards_per_func)
 
-    def augment_training_batch(
+    def finalize_batch(
         self,
         inputs: list[dict[str, Any]],
-        rollout_batch: SelfDistillationRolloutBatch,
-    ) -> SelfDistillationBatch:
+        rollout_batch: RolloutBatch,
+    ) -> TrainingBatch:
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
         prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
-        raw_completion_lengths = rollout_batch.metadata["raw_completion_lengths"].detach().cpu().tolist()
+        raw_completion_lengths = rollout_batch.raw_completion_lengths.detach().cpu().tolist()
         completion_ids_list = [
             ids[:length].tolist()
             for ids, length in zip(rollout_batch.completion_ids.detach().cpu(), raw_completion_lengths, strict=True)
@@ -461,7 +461,7 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        rollout_dict = rollout_batch.to_dict()
+        rollout_dict = rollout_batch.as_dict()
         rollout_dict["rewards"] = local_rewards
         rollout_dict["advantages"] = local_advantages
         rollout_dict["num_items_in_batch"] = rollout_batch.completion_mask.sum().detach()
@@ -485,20 +485,17 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
             self_distillation_mask=teacher_context["self_distillation_mask"],
         )
 
-        return SelfDistillationBatch(
-            prompt_ids=rollout_batch.prompt_ids,
-            prompt_mask=rollout_batch.prompt_mask,
-            completion_ids=rollout_batch.completion_ids,
-            completion_mask=rollout_batch.completion_mask,
-            teacher_input_ids=teacher_context["teacher_input_ids"],
-            teacher_attention_mask=teacher_context["teacher_attention_mask"],
-            old_per_token_logps=rollout_batch.old_per_token_logps,
-            self_distillation_mask=teacher_context["self_distillation_mask"],
-            metadata={
+        batch = super().finalize_batch(inputs, rollout_batch)
+        batch.update(
+            {
+                "teacher_input_ids": teacher_context["teacher_input_ids"],
+                "teacher_attention_mask": teacher_context["teacher_attention_mask"],
+                "self_distillation_mask": teacher_context["self_distillation_mask"],
                 "rewards": local_rewards,
                 "advantages": local_advantages,
-            },
+            }
         )
+        return batch
 
     def _warn_on_inactive_self_distillation(self, mode: str) -> None:
         metrics = self.teacher_context_builder.last_metrics

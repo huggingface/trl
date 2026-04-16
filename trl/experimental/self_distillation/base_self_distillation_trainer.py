@@ -19,7 +19,7 @@ import inspect
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
@@ -71,58 +71,31 @@ logger = get_logger(__name__)
 
 
 @dataclass
-class SelfDistillationRolloutBatch:
-    """Common student rollout batch produced before algorithm-specific augmentation."""
+class RolloutBatch:
+    """Common student rollout batch produced before algorithm-specific finalization."""
 
     prompt_ids: torch.Tensor
     prompt_mask: torch.Tensor
     completion_ids: torch.Tensor
     completion_mask: torch.Tensor
     old_per_token_logps: torch.Tensor | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    raw_completion_lengths: torch.Tensor | None = None
 
-    def to_dict(self) -> dict[str, torch.Tensor | Any]:
-        output: dict[str, torch.Tensor | Any] = {
+    def as_dict(self) -> dict[str, torch.Tensor | Any]:
+        batch: dict[str, torch.Tensor | Any] = {
             "prompt_ids": self.prompt_ids,
             "prompt_mask": self.prompt_mask,
             "completion_ids": self.completion_ids,
             "completion_mask": self.completion_mask,
         }
         if self.old_per_token_logps is not None:
-            output["old_per_token_logps"] = self.old_per_token_logps
-        output.update(self.metadata)
-        return output
+            batch["old_per_token_logps"] = self.old_per_token_logps
+        if self.raw_completion_lengths is not None:
+            batch["raw_completion_lengths"] = self.raw_completion_lengths
+        return batch
 
 
-@dataclass
-class SelfDistillationBatch:
-    """Final self-distillation batch contract consumed by `SelfDistillationMixin`."""
-
-    prompt_ids: torch.Tensor
-    prompt_mask: torch.Tensor
-    completion_ids: torch.Tensor
-    completion_mask: torch.Tensor
-    teacher_input_ids: torch.Tensor
-    teacher_attention_mask: torch.Tensor
-    old_per_token_logps: torch.Tensor | None = None
-    self_distillation_mask: torch.Tensor | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, torch.Tensor | Any]:
-        output: dict[str, torch.Tensor | Any] = {
-            "prompt_ids": self.prompt_ids,
-            "prompt_mask": self.prompt_mask,
-            "completion_ids": self.completion_ids,
-            "completion_mask": self.completion_mask,
-            "teacher_input_ids": self.teacher_input_ids,
-            "teacher_attention_mask": self.teacher_attention_mask,
-        }
-        if self.old_per_token_logps is not None:
-            output["old_per_token_logps"] = self.old_per_token_logps
-        if self.self_distillation_mask is not None:
-            output["self_distillation_mask"] = self.self_distillation_mask
-        output.update(self.metadata)
-        return output
+TrainingBatch = dict[str, torch.Tensor | Any]
 
 
 class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
@@ -392,7 +365,7 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
         if mode == "train":
             generate_every = self.args.steps_per_generation * self.num_iterations
             if self._step % generate_every == 0 or self._buffered_inputs is None:
-                buffered_batch = self._build_buffered_batch(generation_batch)
+                buffered_batch = self._prepare_training_batch(generation_batch)
                 self._buffered_inputs = split_tensor_dict(buffered_batch, self.args.steps_per_generation)
                 self._dispatch_self_distillation_callback(
                     "on_generation_batch_built",
@@ -400,29 +373,26 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
                     steps_per_generation=self.args.steps_per_generation,
                 )
             return self._buffered_inputs[self._step % self.args.steps_per_generation]
-        return self._build_buffered_batch(generation_batch)
+        return self._prepare_training_batch(generation_batch)
 
-    def _build_buffered_batch(self, inputs: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
-        return self.build_training_batch(inputs).to_dict()
+    def _prepare_training_batch(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
+        rollout_batch = self.sample_rollouts(inputs)
 
-    def build_training_batch(self, inputs: list[dict[str, Any]]) -> SelfDistillationBatch:
-        rollout_batch = self.build_rollout_batch(inputs)
-
-        batch = self.augment_training_batch(inputs, rollout_batch)
+        batch = self.finalize_batch(inputs, rollout_batch)
         self._validate_training_batch(batch)
 
         self._dispatch_self_distillation_callback(
             "on_self_distillation_batch_prepared",
-            old_per_token_logps=batch.old_per_token_logps,
-            prompt_ids=batch.prompt_ids,
-            completion_ids=batch.completion_ids,
-            teacher_input_ids=batch.teacher_input_ids,
-            teacher_attention_mask=batch.teacher_attention_mask,
-            self_distillation_mask=batch.self_distillation_mask,
+            old_per_token_logps=batch.get("old_per_token_logps"),
+            prompt_ids=batch["prompt_ids"],
+            completion_ids=batch["completion_ids"],
+            teacher_input_ids=batch["teacher_input_ids"],
+            teacher_attention_mask=batch["teacher_attention_mask"],
+            self_distillation_mask=batch.get("self_distillation_mask"),
         )
         return batch
 
-    def build_rollout_batch(self, inputs: list[dict[str, Any]]) -> SelfDistillationRolloutBatch:
+    def sample_rollouts(self, inputs: list[dict[str, Any]]) -> RolloutBatch:
         prompts, _ = self._split_prompt_and_privileged_context(inputs)
         generation_prompts = prompts
         generation_prompt_text = self.prompt_tokenizer.apply_prompt_template(generation_prompts)
@@ -446,24 +416,22 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
             eos_and_pad = [self.eos_token_id, self.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
-        old_per_token_logps = self.compute_rollout_logps(
+        old_per_token_logps = self._compute_rollout_logps(
             prompt_ids=prompt_ids,
             prompt_mask=prompt_mask,
             completion_ids=completion_ids,
             completion_mask=completion_mask,
         )
 
-        return SelfDistillationRolloutBatch(
+        return RolloutBatch(
             prompt_ids=prompt_ids,
             prompt_mask=prompt_mask,
             completion_ids=completion_ids,
             completion_mask=completion_mask,
             old_per_token_logps=old_per_token_logps,
-            metadata={
-                "raw_completion_lengths": torch.tensor(
-                    [len(ids) for ids in completion_ids_list], device=device, dtype=torch.long
-                )
-            },
+            raw_completion_lengths=torch.tensor(
+                [len(ids) for ids in completion_ids_list], device=device, dtype=torch.long
+            ),
         )
 
     def _generate(self, prompts: list[Any]) -> tuple[list[list[int]], list[list[int]]]:
@@ -533,7 +501,7 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
         completion_ids_list = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=False)]
         return prompt_ids_list, completion_ids_list
 
-    def compute_rollout_logps(
+    def _compute_rollout_logps(
         self,
         prompt_ids: torch.Tensor,
         prompt_mask: torch.Tensor,
@@ -578,26 +546,39 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
         entropies = entropy_from_logits(logits) if compute_entropy else None
         return selected_logps, entropies
 
-    def _validate_training_batch(self, batch: SelfDistillationBatch) -> None:
-        batch_size = batch.prompt_ids.size(0)
-        if batch.prompt_mask.size(0) != batch_size:
-            raise ValueError("`prompt_mask` must have the same batch size as `prompt_ids`.")
-        if batch.completion_ids.size(0) != batch_size or batch.completion_mask.size(0) != batch_size:
-            raise ValueError("`completion_ids` and `completion_mask` must match the student batch size.")
-        if batch.teacher_input_ids.size(0) != batch_size or batch.teacher_attention_mask.size(0) != batch_size:
-            raise ValueError("`teacher_input_ids` and `teacher_attention_mask` must match the student batch size.")
-        if batch.teacher_input_ids.size(1) != batch.teacher_attention_mask.size(1):
-            raise ValueError("`teacher_input_ids` and `teacher_attention_mask` must have the same sequence length.")
-        if batch.self_distillation_mask is not None and batch.self_distillation_mask.size(0) != batch_size:
-            raise ValueError("`self_distillation_mask` must match the batch size when provided.")
+    def _validate_training_batch(self, batch: TrainingBatch) -> None:
+        required_keys = {
+            "prompt_ids",
+            "prompt_mask",
+            "completion_ids",
+            "completion_mask",
+            "teacher_input_ids",
+            "teacher_attention_mask",
+        }
+        missing_keys = required_keys.difference(batch)
+        if missing_keys:
+            raise ValueError(f"`finalize_batch` must return all required batch keys. Missing: {sorted(missing_keys)}")
 
-    @abstractmethod
-    def augment_training_batch(
+        batch_size = batch["prompt_ids"].size(0)
+        if batch["prompt_mask"].size(0) != batch_size:
+            raise ValueError("`prompt_mask` must have the same batch size as `prompt_ids`.")
+        if batch["completion_ids"].size(0) != batch_size or batch["completion_mask"].size(0) != batch_size:
+            raise ValueError("`completion_ids` and `completion_mask` must match the student batch size.")
+        if batch["teacher_input_ids"].size(0) != batch_size or batch["teacher_attention_mask"].size(0) != batch_size:
+            raise ValueError("`teacher_input_ids` and `teacher_attention_mask` must match the student batch size.")
+        if batch["teacher_input_ids"].size(1) != batch["teacher_attention_mask"].size(1):
+            raise ValueError("`teacher_input_ids` and `teacher_attention_mask` must have the same sequence length.")
+        if "self_distillation_mask" in batch and batch["self_distillation_mask"] is not None:
+            if batch["self_distillation_mask"].size(0) != batch_size:
+                raise ValueError("`self_distillation_mask` must match the batch size when provided.")
+
+    def finalize_batch(
         self,
         inputs: list[dict[str, Any]],
-        rollout_batch: SelfDistillationRolloutBatch,
-    ) -> SelfDistillationBatch:
-        """Inject teacher-side inputs and algorithm-specific fields into a common student rollout batch."""
+        rollout_batch: RolloutBatch,
+    ) -> TrainingBatch:
+        """Build the final training batch from a shared student rollout batch."""
+        return rollout_batch.as_dict()
 
     def _get_teacher_context_for_self_distillation(self):
         teacher_model_kind = self.args.teacher_model_kind
