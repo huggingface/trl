@@ -645,7 +645,7 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         return self.args.distillation_weight * distillation_loss
 
     def _compute_hybrid_loss(self, model, inputs) -> torch.Tensor:
-        distillation_logits = self._compute_teacher_student_logits(model, inputs)
+        distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
         policy_loss = self._compute_policy_loss(inputs, distillation_logits.student_logits)
         weighted_distillation_loss = self._compute_weighted_self_distillation_loss(
             model,
@@ -662,7 +662,7 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
             return self._compute_hybrid_loss(model, inputs)
 
         if self.args.distillation_weight > 0.0:
-            distillation_logits = self._compute_teacher_student_logits(model, inputs)
+            distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
             return self._compute_weighted_self_distillation_loss(model, inputs, distillation_logits)
         else:
             student_logits = self._compute_student_distillation_logits(

@@ -292,9 +292,11 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         teacher_model_kind = self.args.teacher_model_kind
 
         if teacher_model_kind == "live":
+            self.teacher_model = self.model
             return
 
         if teacher_model_kind == "base" and is_peft_model(self.model):
+            self.teacher_model = self.model
             return
 
         if self._use_peft_ema_teacher_adapter():
@@ -307,6 +309,7 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
                     accelerator=self.accelerator,
                 )
             )
+            self.teacher_model = self.model
             return
 
         # create teacher model from student copy
@@ -506,7 +509,7 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
             ),
         )
 
-    def _split_prompt_and_privileged_context(inputs: list[dict[str, Any]]) -> tuple[list[Any], list[Any]]:
+    def _split_prompt_and_privileged_context(self, inputs: list[dict[str, Any]]) -> tuple[list[Any], list[Any]]:
         prompts = [example["prompt"] for example in inputs]
         privileged_contexts = [example.get("privileged_context") for example in inputs]
         return prompts, privileged_contexts
@@ -669,6 +672,7 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
     def _compute_teacher_student_logits(
         self,
         model,
+        teacher_model,
         inputs: TrainingBatch,
     ) -> DistillationLogits:
         prompt_ids = inputs["prompt_ids"]
@@ -691,7 +695,7 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         )
 
         teacher_logits = self._compute_teacher_distillation_logits(
-            model=model,
+            teacher_model=teacher_model,
             teacher_input_ids=inputs["teacher_input_ids"],
             teacher_attention_mask=inputs["teacher_attention_mask"],
             logits_to_keep=logits_to_keep,
@@ -734,15 +738,13 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
 
     def _compute_teacher_distillation_logits(
         self,
-        model,
         teacher_input_ids: torch.Tensor,
         teacher_attention_mask: torch.Tensor,
         logits_to_keep: int,
     ) -> torch.Tensor:
-        teacher_model = self._get_teacher_model_for_self_distillation(model)
         with torch.no_grad(), self._get_teacher_context_for_self_distillation():
             return self._forward_logits(
-                model=teacher_model,
+                model=self.teacher_model,
                 input_ids=teacher_input_ids,
                 attention_mask=teacher_attention_mask,
                 logits_to_keep=logits_to_keep,
@@ -807,25 +809,13 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         if not is_peft_model(self.model):
             return nullcontext()
 
-        target_model = self.teacher_model if self.teacher_model is not None else self.model
-        target_model = self.accelerator.unwrap_model(target_model)
+        target_model = self.accelerator.unwrap_model(self.teacher_model)
 
         if teacher_model_kind == "base":
             return use_adapter(target_model, adapter_name=None)
         if teacher_model_kind == "ema" and self._use_peft_ema_teacher_adapter():
-            teacher_adapter_name = self._get_teacher_adapter_name()
-            if teacher_adapter_name not in target_model.peft_config:
-                raise RuntimeError(
-                    f"Expected PEFT teacher adapter `{teacher_adapter_name}` to exist before teacher forward."
-                )
-            return use_adapter(target_model, adapter_name=teacher_adapter_name)
+            return use_adapter(target_model, adapter_name="teacher")
         return nullcontext()
-
-    def _get_teacher_model_for_self_distillation(self, model):
-        teacher_model = getattr(self, "teacher_model", None)
-        if teacher_model is None:
-            return model
-        return teacher_model
 
     def _log_self_distillation_metric(self, mode: str, value: float) -> None:
         metric_prefix = getattr(self, "_name", "self_distillation").lower().replace(" ", "_")

@@ -195,7 +195,7 @@ class SDFTTrainer(BaseSelfDistillationTrainer):
             completion_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
             inputs["completion_mask"] = completion_mask
 
-        distillation_logits = self._compute_teacher_student_logits(model, inputs)
+        distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
         loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
         accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
         return loss / accumulation_scale
