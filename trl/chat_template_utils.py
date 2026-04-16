@@ -419,7 +419,8 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
         {"role": "tool", "name": "dummy", "content": "dummy"},
     ]
 
-    if isinstance(tokenizer, ProcessorMixin):
+    is_vlm = isinstance(tokenizer, ProcessorMixin)
+    if is_vlm:
         from PIL import Image
 
         dummy_image = Image.new("RGB", (8, 8))
@@ -437,6 +438,11 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
         messages2[1]["tool_calls"] = dummy_tool_calls
         ids1 = tokenizer.apply_chat_template(messages1, tokenize=True, return_dict=False)
         ids2 = tokenizer.apply_chat_template(messages2, tokenize=True, return_dict=False, add_generation_prompt=True)
+
+    # VLM processors return batched output (list of lists), unbatch for single conversation
+    if is_vlm:
+        ids1 = ids1[0]
+        ids2 = ids2[0]
 
     return ids2[: len(ids1)] == ids1
 
