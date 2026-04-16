@@ -29,6 +29,7 @@ from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
@@ -41,7 +42,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available
 
-from ...data_utils import maybe_apply_chat_template
+from ...data_utils import is_conversational
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
@@ -75,8 +76,6 @@ logger = get_logger(__name__)
 
 @dataclass
 class RolloutBatch:
-    """Common student rollout batch produced before algorithm-specific finalization."""
-
     prompt_ids: torch.Tensor
     prompt_mask: torch.Tensor
     completion_ids: torch.Tensor
@@ -429,55 +428,32 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         )
         return batch
 
-    def _apply_chat_template_to_prompts(self, prompts: list[Any]) -> list[str]:
-        return [
-            maybe_apply_chat_template(
-                {"prompt": prompt},
-                self.processing_class,
+    def _tokenize_prompts(self, prompts: list[Any]) -> list[list[int]]:
+        if is_conversational({"prompt": prompts[0]}):
+            tokenized = self.processing_class.apply_chat_template(
+                conversation=prompts,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
                 **self.chat_template_kwargs,
-            )["prompt"]
-            for prompt in prompts
-        ]
-
-    def _tokenize_prompt_text(self, prompt_text: list[str]) -> dict[str, torch.Tensor]:
-        prompt_inputs = self.processing_class(
-            text=prompt_text,
-            return_tensors="pt",
-            padding=True,
-            padding_side="left",
-            max_length=self.max_prompt_length,
-            truncation=True,
-            add_special_tokens=False,
-        )
-        prompt_inputs = _BaseTrainer._prepare_inputs(self, prompt_inputs)
-        prompt_ids = [
-            input_ids[mask].to(device=self.accelerator.device)
-            for input_ids, mask in zip(
-                prompt_inputs["input_ids"],
-                prompt_inputs["attention_mask"].bool(),
-                strict=False,
             )
-        ]
-        prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
-        return {
-            "prompt_ids": pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left"),
-            "prompt_mask": pad(prompt_mask, padding_value=0, padding_side="left"),
-        }
-
-    def _tokenize_prompts(self, prompts: list[Any]) -> dict[str, torch.Tensor]:
-        return self._tokenize_prompt_text(self._apply_chat_template_to_prompts(prompts))
+            prompt_ids = tokenized["input_ids"]
+        else:
+            prompt_ids = self.processing_class(text=prompts)["input_ids"]
+        if self.max_prompt_length is not None:
+            prompt_ids = [ids[-self.max_prompt_length :] for ids in prompt_ids]
+        return prompt_ids
 
     def sample_rollouts(self, inputs: list[dict[str, Any]]) -> RolloutBatch:
         prompts, _ = self._split_prompt_and_privileged_context(inputs)
-        generation_prompts = prompts
-        generation_prompt_text = self._apply_chat_template_to_prompts(generation_prompts)
+        prompt_ids = self._tokenize_prompts(prompts)
         self._dispatch_self_distillation_callback(
             "on_generation_prompts_selected",
-            generation_prompts=generation_prompts,
-            generation_prompt_text=generation_prompt_text,
+            generation_prompts=prompts,
+            generation_prompt_text=None,
         )
 
-        prompt_ids_list, completion_ids_list = self._generate(generation_prompt_text)
+        prompt_ids_list, completion_ids_list = self._generate(prompt_ids)
         device = self.accelerator.device
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
@@ -514,25 +490,16 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         privileged_contexts = [example.get("privileged_context") for example in inputs]
         return prompts, privileged_contexts
 
-    def _generate(self, prompt_text: list[str]) -> tuple[list[list[int]], list[list[int]]]:
+    def _generate(self, prompt_ids: list[list[int]]) -> tuple[list[list[int]], list[list[int]]]:
         if self.use_vllm:
-            return self._generate_vllm(prompt_text)
-        return self._generate_transformers(prompt_text)
+            return self._generate_vllm(prompt_ids)
+        return self._generate_transformers(prompt_ids)
 
-    def _generate_vllm(self, prompt_text: list[str]) -> tuple[list[list[int]], list[list[int]]]:
+    def _generate_vllm(self, prompt_ids: list[list[int]]) -> tuple[list[list[int]], list[list[int]]]:
         if self.state.global_step != self._last_loaded_step:
             self.vllm_generation.sync_weights()
             self._last_loaded_step = self.state.global_step
 
-        tokenized = self.processing_class(
-            text=prompt_text,
-            return_tensors=None,
-            padding=False,
-            max_length=self.max_prompt_length,
-            truncation=True,
-            add_special_tokens=False,
-        )
-        prompt_ids = tokenized["input_ids"]
         mode = "train" if self.model.training else "eval"
         num_generations = self.num_generations if mode == "train" else self.num_generations_eval
         prompt_ids_out, completion_ids_list, _, _ = self.vllm_generation.generate(
@@ -542,16 +509,12 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         )
         return prompt_ids_out, completion_ids_list
 
-    def _generate_transformers(self, prompt_text: list[str]) -> tuple[list[list[int]], list[list[int]]]:
-        generate_inputs = self.processing_class(
-            text=prompt_text,
-            return_tensors="pt",
-            padding=True,
-            padding_side="left",
-            max_length=self.max_prompt_length,
-            truncation=True,
-            add_special_tokens=False,
-        )
+    def _generate_transformers(self, prompt_ids: list[list[int]]) -> tuple[list[list[int]], list[list[int]]]:
+        device = self.accelerator.device
+        prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
+        padded_ids = pad(prompt_tensors, padding_value=self.pad_token_id, padding_side="left")
+        attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
+        generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
         generate_inputs = _BaseTrainer._prepare_inputs(self, generate_inputs)
 
         with (
@@ -559,26 +522,26 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
                 self.model_wrapped,
                 self.accelerator,
                 gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                generation_kwargs=self.generation_kwargs,
             ) as unwrapped_model,
             torch.no_grad(),
+            FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
         ):
             prompt_completion_ids = unwrapped_model.generate(
                 **generate_inputs, generation_config=self.generation_config
             )
 
-        prompt_ids = generate_inputs["input_ids"]
-        prompt_mask = generate_inputs["attention_mask"]
-        prompt_length = prompt_ids.size(1)
+        prompt_length = generate_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
         is_eos = completion_ids == self.eos_token_id
-        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=completion_ids.device)
+        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-        seq_idx = torch.arange(is_eos.size(1), device=completion_ids.device).expand(is_eos.size(0), -1)
-        completion_mask = (seq_idx <= eos_idx.unsqueeze(1)).long()
-
-        prompt_ids_list = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool(), strict=False)]
-        completion_ids_list = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=False)]
-        return prompt_ids_list, completion_ids_list
+        seq_idx = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+        completion_mask = (seq_idx <= eos_idx.unsqueeze(1)).int()
+        completion_ids_list = [
+            c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
+        ]
+        return prompt_ids, completion_ids_list
 
     def _compute_rollout_logps(
         self,
@@ -738,13 +701,14 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
 
     def _compute_teacher_distillation_logits(
         self,
+        teacher_model,
         teacher_input_ids: torch.Tensor,
         teacher_attention_mask: torch.Tensor,
         logits_to_keep: int,
     ) -> torch.Tensor:
         with torch.no_grad(), self._get_teacher_context_for_self_distillation():
             return self._forward_logits(
-                model=self.teacher_model,
+                model=teacher_model,
                 input_ids=teacher_input_ids,
                 attention_mask=teacher_attention_mask,
                 logits_to_keep=logits_to_keep,

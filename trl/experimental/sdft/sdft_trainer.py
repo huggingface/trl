@@ -29,6 +29,7 @@ from transformers import (
 )
 from transformers.utils import is_peft_available
 
+from ...trainer.utils import pad
 from ..self_distillation.base_self_distillation_trainer import (
     BaseSelfDistillationTrainer,
     RolloutBatch,
@@ -102,9 +103,16 @@ class DemonstrationTeacherContextBuilder:
             self._compose_teacher_prompt(prompt, privileged_context)
             for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
         ]
-        teacher_batch = self.trainer._tokenize_prompts(teacher_prompts)
-        teacher_input_ids = torch.cat([teacher_batch["prompt_ids"], completion_ids], dim=1)
-        teacher_attention_mask = torch.cat([teacher_batch["prompt_mask"], completion_mask], dim=1)
+        teacher_prompt_ids_list = self.trainer._tokenize_prompts(teacher_prompts)
+        device = completion_ids.device
+        teacher_prompt_ids = [torch.tensor(ids) for ids in teacher_prompt_ids_list]
+        teacher_prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in teacher_prompt_ids]
+        teacher_prompt_ids = pad(teacher_prompt_ids, padding_value=self.trainer.pad_token_id, padding_side="left").to(
+            device=device
+        )
+        teacher_prompt_mask = pad(teacher_prompt_mask, padding_value=0, padding_side="left").to(device=device)
+        teacher_input_ids = torch.cat([teacher_prompt_ids, completion_ids], dim=1)
+        teacher_attention_mask = torch.cat([teacher_prompt_mask, completion_mask], dim=1)
         return {
             "teacher_input_ids": teacher_input_ids,
             "teacher_attention_mask": teacher_attention_mask,
