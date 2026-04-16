@@ -92,16 +92,6 @@ def reward_completion(completions, environments, **kwargs) -> list[float]:
     return [env.reward for env in environments]
 
 
-def reward_efficiency(completions, **kwargs) -> list[float]:
-    """Penalize extra tool calls beyond the first one."""
-    rewards = []
-    for comp in completions:
-        n_tool_calls = sum(1 for m in comp if isinstance(m, dict) and m.get("tool_calls"))
-        extra_calls = max(0, n_tool_calls - 1)
-        rewards.append(-0.1 * extra_calls)
-    return rewards
-
-
 def main() -> None:
     args = parse_args()
 
@@ -245,7 +235,7 @@ def main() -> None:
 
     trainer = GRPOTrainer(
         model=args.model_id,
-        reward_funcs=[reward_completion, reward_efficiency],
+        reward_funcs=reward_completion,
         train_dataset=dataset,
         args=GRPOConfig(
             use_vllm=True,
