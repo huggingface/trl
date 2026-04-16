@@ -13,6 +13,14 @@ Jinja2 chat templates stored here serve two purposes:
 
 Used for identity comparison only.
 
+### `deepseekv3.jinja`
+
+Original DeepSeek-V3 chat template.
+
+### `glm4moe.jinja`
+
+Original GLM-4-MoE chat template.
+
 ### `gptoss.jinja`
 
 Original GPT-OSS chat template.
@@ -21,6 +29,10 @@ Original GPT-OSS chat template.
 
 Original Qwen3 chat template.
 
+### `qwen3_vl.jinja`
+
+Original Qwen3-VL chat template. Unlike text-only Qwen3, this template is already prefix-preserving (no conditional thinking blocks), so no training patch is needed.
+
 ### `qwen3_5_2b_and_below.jinja` / `qwen3_5_4b_and_above.jinja`
 
 Original Qwen3.5 chat templates.
@@ -28,6 +40,13 @@ Original Qwen3.5 chat templates.
 ## Training templates
 
 Patched templates that fix training-specific issues. Swapped in at init when tools are enabled (GRPO) or when `assistant_only_loss=True` (SFT).
+
+### `deepseekv3_training.jinja`
+
+Patched DeepSeek-V3 template. Diff vs `deepseekv3.jinja`:
+
+- Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict` (the documented format per [transformers docs](https://huggingface.co/docs/transformers/en/chat_extras#tool-calling-example)). The original template uses raw string concatenation, which crashes on dict inputs.
+- Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss.
 
 ### `qwen3_training.jinja`
 

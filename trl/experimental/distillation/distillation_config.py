@@ -46,10 +46,10 @@ class DistillationConfig(_BaseConfig):
         temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling during generation and for computing the distillation loss. Higher values produce
             softer probability distributions.
-        lmbda (`float`, *optional*, defaults to `0.5`):
+        lmbda (`float`, *optional*, defaults to `1.0`):
             Probability of using on-policy (student-generated) data for each gradient accumulation slice. A value of
             `0.0` means fully off-policy (dataset completions only), `1.0` means fully on-policy.
-        beta (`float`, *optional*, defaults to `0.5`):
+        beta (`float`, *optional*, defaults to `1.0`):
             Interpolation coefficient for the Generalized Jensen-Shannon Divergence loss. When `0.0`, the loss is the
             forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
             JSD.
@@ -58,7 +58,7 @@ class DistillationConfig(_BaseConfig):
             actual completion token in the batch. `"argmax"` uses the student's highest-probability token. This
             setting does not affect the forward-KL support, which always uses the teacher's top-1 token. Ignored when
             `beta == 0` or `loss_top_k != 1`.
-        max_completion_length (`int`, *optional*, defaults to `256`):
+        max_completion_length (`int`, *optional*, defaults to `512`):
             Maximum number of tokens to generate per completion during on-policy generation.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the student model during training.
@@ -77,7 +77,7 @@ class DistillationConfig(_BaseConfig):
         teacher_model_server_url (`str` or `None`, *optional*):
             Base URL of a vLLM server hosting the teacher model (e.g., `"http://localhost:8000"`). When set, teacher
             logprobs are fetched from the server instead of running a local forward pass when `use_teacher_server=True`.
-        loss_top_k (`int`, *optional*, defaults to `0`):
+        loss_top_k (`int`, *optional*, defaults to `1`):
             Number of top tokens to use when computing the JSD/KL loss. Both student and teacher distributions are
             restricted to these K tokens and re-normalized before computing divergence. If 0, the full vocabulary
             is used. For local teachers, the general support rule is teacher top-k for forward KL, student top-k for
@@ -118,7 +118,7 @@ class DistillationConfig(_BaseConfig):
             Timeout for connecting to the student vLLM server.
         vllm_group_port (`int`, *optional*, defaults to `51216`):
             Port for the vLLM weight-update group (NCCL communicator).
-        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.9`):
+        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.3`):
             GPU memory utilization for the colocated student vLLM engine.
         vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Tensor parallel size for the colocated student vLLM engine.
@@ -136,7 +136,9 @@ class DistillationConfig(_BaseConfig):
         > Parameters that control logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
-            Whether to log a sample of (prompt, completion) pairs periodically.
+            Whether to log a sample of (prompt, completion) pairs every `log_completions_steps` steps. If `rich` is
+            installed, it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb`
+            and/or `trackio`.
         log_completions_steps (`int`, *optional*, defaults to `100`):
             Number of steps between logging completions. Only used if `log_completions` is `True`.
         num_completions_to_print (`int` or `None`, *optional*):
@@ -160,7 +162,7 @@ class DistillationConfig(_BaseConfig):
 
     # Overridden defaults
     learning_rate: float = field(
-        default=1e-7,
+        default=1e-6,
         metadata={"help": "The initial learning rate for AdamW."},
     )
 
@@ -172,14 +174,14 @@ class DistillationConfig(_BaseConfig):
         },
     )
     lmbda: float = field(
-        default=0.5,
+        default=1.0,
         metadata={
             "help": "Probability of using on-policy (student-generated) data per gradient accumulation slice. "
             "0.0 = fully off-policy, 1.0 = fully on-policy."
         },
     )
     beta: float = field(
-        default=0.5,
+        default=1.0,
         metadata={
             "help": "Interpolation coefficient for the Generalized JSD loss. "
             "0.0 = forward KL, 0.5 = JSD, 1.0 = reverse KL."
@@ -194,7 +196,7 @@ class DistillationConfig(_BaseConfig):
         },
     )
     max_completion_length: int = field(
-        default=256,
+        default=512,
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
     max_prompt_length: int | None = field(
@@ -239,7 +241,7 @@ class DistillationConfig(_BaseConfig):
         },
     )
     loss_top_k: int = field(
-        default=0,
+        default=1,
         metadata={
             "help": "Number of top tokens to use when computing the JSD/KL loss. "
             "Both student and teacher distributions are restricted to these K tokens "
@@ -311,7 +313,7 @@ class DistillationConfig(_BaseConfig):
         metadata={"help": "Port for the vLLM weight-update group (NCCL communicator)."},
     )
     vllm_gpu_memory_utilization: float = field(
-        default=0.9,
+        default=0.3,
         metadata={"help": "GPU memory utilization for the colocated student vLLM engine."},
     )
     vllm_tensor_parallel_size: int = field(
@@ -356,7 +358,11 @@ class DistillationConfig(_BaseConfig):
     # Logging
     log_completions: bool = field(
         default=False,
-        metadata={"help": "Whether to log a sample of (prompt, completion) pairs periodically."},
+        metadata={
+            "help": "Whether to log a sample of (prompt, completion) pairs every `log_completions_steps` steps. If `rich` is "
+            "installed, it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` "
+            "and/or `trackio`."
+        },
     )
     log_completions_steps: int = field(
         default=100,
