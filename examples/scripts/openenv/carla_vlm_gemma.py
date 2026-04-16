@@ -21,25 +21,23 @@
 
 
 """
-GRPO training with OpenEnv's CARLA environment for VLMs (Vision Language Models).
+GRPO training with OpenEnv's CARLA environment for Gemma VLMs.
 
-This script uses `environment_factory` with multimodal tool responses: each tool action
-returns a camera image from the vehicle alongside the text scene description, allowing the
-VLM to see the driving scene visually after each action.
-
-The CARLA environment simulates an emergency driving scenario where pedestrians are ahead
-and the model must learn to observe the scene and take the correct action (e.g., swerve
-to an empty lane) to minimize casualties.
+Gemma-specific variant of `carla_vlm.py` with LoRA support (memory-efficient training
+by excluding the vision encoder from adapter targets) and a tuned learning rate.
 
 Setup:
+
 ```sh
-pip install "openenv-carla-env @ git+https://huggingface.co/spaces/sergiopaniego/carla_env"
+uv pip install git+https://huggingface.co/spaces/sergiopaniego/carla_env
 ```
 
 Usage (requires at least 2 CARLA Spaces, each supports only 1 concurrent connection):
+
 ```sh
-python examples/scripts/openenv/carla_vlm.py \
-    --env-urls https://server1.hf.space https://server2.hf.space
+python examples/scripts/openenv/carla_vlm_gemma.py \
+    --env-urls https://server1.hf.space https://server2.hf.space \
+    --use-lora
 ```
 """
 
@@ -67,7 +65,7 @@ def parse_args():
     parser.add_argument("--dataset-size", type=int, default=1000)
     parser.add_argument("--max-completion-length", type=int, default=3072)
     parser.add_argument("--per-device-train-batch-size", type=int, default=None, help="Defaults to len(env-urls).")
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--max-steps", type=int, default=100)
     parser.add_argument("--image-size", type=int, default=256, help="Resize camera images to this size. 0 to disable.")
     parser.add_argument("--trackio-space-id", type=str, default=None, help="Trackio Space ID for logging.")
@@ -84,40 +82,12 @@ def parse_args():
         "--learning-rate", type=float, default=5e-6, help="Learning rate. Default 5e-6 (good for LoRA r=128)."
     )
     parser.add_argument("--hub-model-id", type=str, default=None)
-    parser.add_argument("--hub-private-repo", action="store_true", help="Make the Hub repo private.")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--report-to", type=str, default="trackio", help="Logging backend: wandb, trackio, none.")
     return parser.parse_args()
 
 
-SIM_TICKS = 10
-
-
-def reward_func(completions, environments, **kwargs):
-    rewards = []
-    for i, (comp, env) in enumerate(zip(completions, environments, strict=False)):
-        # Advance to episode end to capture rubric_reward
-        try:
-            final = env._advance_until_done()
-            if final and final.observation.rubric_reward:
-                env.reward = final.observation.rubric_reward
-        except Exception as e:
-            print(f"[WARN] _advance_until_done failed for gen={i}: {e}")
-        r = env.reward
-        tools = [
-            msg["tool_calls"][0]["function"]["name"] for msg in comp if isinstance(msg, dict) and msg.get("tool_calls")
-        ]
-        rewards.append(r)
-        print(f"[DEBUG reward] gen={i} tools={tools} env_reward={env.reward} total={r}")
-    return rewards
-
-
-def main():
-    args = parse_args()
-    env_url_iter = iter(args.env_urls)
-    image_size = args.image_size
-
-    prompt = """\
+PROMPT = """\
 You control an autonomous vehicle in an emergency. There are pedestrians ahead and you must \
 decide what to do immediately.
 
@@ -134,120 +104,127 @@ Observe the scene first, then decide the best course of action to minimize harm.
 Consider all available actions - sometimes avoiding the obstacle by changing lanes \
 is safer than stopping in its path."""
 
-    dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": prompt}] for _ in range(args.dataset_size)]})
 
-    class CarlaVLMEnv:
-        def __init__(self):
-            self.url = next(env_url_iter)
-            self.client = CarlaEnv(base_url=self.url, connect_timeout_s=30, message_timeout_s=120)
-            self.reward = 0.0
+SIM_TICKS = 10  # Number of simulation steps to advance after each action
 
-        @staticmethod
-        def _describe(obs) -> str:
-            parts = []
-            parts.append(f"Speed: {obs.speed_kmh:.1f} km/h.")
-            if obs.nearby_actors:
-                for actor in obs.nearby_actors:
-                    parts.append(f"- {actor.get('type', 'actor')} at {actor.get('distance', '?')}m")
-            else:
-                parts.append("No nearby actors detected.")
-            if obs.collision_detected:
-                parts.append(f"COLLISION detected with {obs.collided_with or 'unknown'}!")
-            return "\n".join(parts)
 
-        @staticmethod
-        def _decode_image(camera_image_b64, target_size):
-            """Decode base64 JPEG image and optionally resize."""
-            img_bytes = base64.b64decode(camera_image_b64)
-            img = Image.open(BytesIO(img_bytes))
-            if target_size > 0:
-                img.thumbnail((target_size, target_size), Image.LANCZOS)
-            return img
+class CarlaVLMEnv:
+    _env_url_iter = None
+    _image_size = 256
 
-        def _format_multimodal(self, obs) -> list:
-            """Format observation as multimodal content blocks (camera image + text)."""
-            content = []
-            if obs.camera_image is not None:
-                img = self._decode_image(obs.camera_image, image_size)
-                content.append({"type": "image", "image": img})
-            content.append({"type": "text", "text": self._describe(obs)})
-            return content
+    def __init__(self):
+        self.url = next(CarlaVLMEnv._env_url_iter)
+        self.client = CarlaEnv(base_url=self.url, connect_timeout_s=30, message_timeout_s=120)
+        self.reward = 0.0
 
-        def _advance(self, ticks: int = SIM_TICKS):
-            result = None
-            for _ in range(ticks):
-                result = self.client.step(CarlaAction(action_type="observe"))
-                if result.done:
-                    break
-            return result
+    @staticmethod
+    def _describe(obs) -> str:
+        parts = [f"Speed: {obs.speed_kmh:.1f} km/h."]
+        if obs.nearby_actors:
+            for actor in obs.nearby_actors:
+                parts.append(f"- {actor.get('type', 'actor')} at {actor.get('distance', '?')}m")
+        else:
+            parts.append("No nearby actors detected.")
+        if obs.collision_detected:
+            parts.append(f"COLLISION detected with {obs.collided_with or 'unknown'}!")
+        return "\n".join(parts)
 
-        def _advance_until_done(self, max_ticks: int = 50):
-            """Advance the simulation until the episode ends."""
-            result = None
-            for _ in range(max_ticks):
-                result = self.client.step(CarlaAction(action_type="observe"))
-                if result.done:
-                    break
-            return result
+    @staticmethod
+    def _decode_image(camera_image_b64, target_size):
+        """Decode base64 JPEG image and optionally resize."""
+        img = Image.open(BytesIO(base64.b64decode(camera_image_b64)))
+        if target_size > 0:
+            img.thumbnail((target_size, target_size), Image.LANCZOS)
+        return img
 
-        def _advance_and_capture(self, ticks: int = SIM_TICKS):
-            """Advance the simulation, then capture an image of the current state."""
-            result = self._advance(ticks)
-            capture_result = self.client.step(CarlaAction(action_type="capture_image"))
-            result.observation.camera_image = capture_result.observation.camera_image
-            return result
+    def _format_multimodal(self, obs) -> list:
+        """Format observation as multimodal content blocks (camera image + text)."""
+        content = []
+        if obs.camera_image is not None:
+            content.append({"type": "image", "image": self._decode_image(obs.camera_image, CarlaVLMEnv._image_size)})
+        content.append({"type": "text", "text": self._describe(obs)})
+        return content
 
-        def reset(self, **kwargs) -> str | None:
-            for attempt in range(3):
-                try:
-                    result = self.client.reset(scenario_name="trolley_micro_escape_exists")
-                    self.reward = 0.0
-                    return self._describe(result.observation)
-                except Exception as e:
-                    if attempt == 2:
-                        raise
-                    print(f"[WARN] reset failed (attempt {attempt + 1}/3): {e}. Reconnecting...")
-                    self.client = CarlaEnv(base_url=self.url, connect_timeout_s=30, message_timeout_s=120)
+    def _advance_and_capture(self, ticks: int = SIM_TICKS):
+        """Advance the simulation, then capture an image of the current state."""
+        result = None
+        for _ in range(ticks):
+            result = self.client.step(CarlaAction(action_type="observe"))
+            if result.done:
+                break
+        capture_result = self.client.step(CarlaAction(action_type="capture_image"))
+        result.observation.camera_image = capture_result.observation.camera_image
+        return result
 
-        def observe(self) -> list:
-            """
-            Get the current scene with a camera image and description.
+    def reset(self, **kwargs) -> str | None:
+        for attempt in range(3):
+            try:
+                result = self.client.reset(scenario_name="trolley_micro_escape_exists")
+                self.reward = 0.0
+                return self._describe(result.observation)
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                print(f"[WARN] reset failed (attempt {attempt + 1}/3): {e}. Reconnecting...")
+                self.client = CarlaEnv(base_url=self.url, connect_timeout_s=30, message_timeout_s=120)
 
-            Returns:
-                The camera image and scene description with vehicle state and nearby actors.
-            """
-            result = self._advance_and_capture()
-            self.reward = result.observation.rubric_reward or 0.0
-            return self._format_multimodal(result.observation)
+    def observe(self) -> list:
+        """
+        Get the current scene with a camera image and description.
 
-        def emergency_stop(self) -> list:
-            """
-            Apply maximum braking to stop the vehicle.
+        Returns:
+            The camera image and scene description with vehicle state and nearby actors.
+        """
+        result = self._advance_and_capture()
+        self.reward = result.observation.rubric_reward or 0.0
+        return self._format_multimodal(result.observation)
 
-            Returns:
-                The camera image and scene description after braking.
-            """
-            self.client.step(CarlaAction(action_type="emergency_stop"))
-            result = self._advance_and_capture()
-            self.reward = result.observation.rubric_reward or 0.0
-            print(f"[DEBUG env] emergency_stop: done={result.done}, reward={self.reward}")
-            return self._format_multimodal(result.observation)
+    def emergency_stop(self) -> list:
+        """
+        Apply maximum braking to stop the vehicle.
 
-        def lane_change(self, direction: str) -> list:
-            """
-            Change lane to avoid obstacles.
+        Returns:
+            The camera image and scene description after braking.
+        """
+        self.client.step(CarlaAction(action_type="emergency_stop"))
+        result = self._advance_and_capture()
+        self.reward = result.observation.rubric_reward or 0.0
+        print(f"[DEBUG env] emergency_stop: done={result.done}, reward={self.reward}")
+        return self._format_multimodal(result.observation)
 
-            Args:
-                direction: Direction to change lane, either "left" or "right".
+    def lane_change(self, direction: str) -> list:
+        """
+        Change lane to avoid obstacles.
 
-            Returns:
-                The camera image and scene description after changing lane.
-            """
-            self.client.step(CarlaAction(action_type="lane_change", lane_direction=direction))
-            result = self._advance_and_capture()
-            self.reward = result.observation.rubric_reward or 0.0
-            print(f"[DEBUG env] lane_change({direction}): done={result.done}, reward={self.reward}")
-            return self._format_multimodal(result.observation)
+        Args:
+            direction: Direction to change lane, either "left" or "right".
+
+        Returns:
+            The camera image and scene description after changing lane.
+        """
+        self.client.step(CarlaAction(action_type="lane_change", lane_direction=direction))
+        result = self._advance_and_capture()
+        self.reward = result.observation.rubric_reward or 0.0
+        print(f"[DEBUG env] lane_change({direction}): done={result.done}, reward={self.reward}")
+        return self._format_multimodal(result.observation)
+
+
+def reward_func(completions, environments, **kwargs):
+    rewards = [env.reward for env in environments]
+    for i, (comp, env) in enumerate(zip(completions, environments, strict=False)):
+        tools = [
+            msg["tool_calls"][0]["function"]["name"] for msg in comp if isinstance(msg, dict) and msg.get("tool_calls")
+        ]
+        print(f"[DEBUG reward] gen={i} tools={tools} env_reward={env.reward}")
+    return rewards
+
+
+def main():
+    args = parse_args()
+    CarlaVLMEnv._env_url_iter = iter(args.env_urls)
+    CarlaVLMEnv._image_size = args.image_size
+
+    dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": PROMPT}] for _ in range(args.dataset_size)]})
 
     peft_config = None
     if args.use_lora:
@@ -288,7 +265,6 @@ is safer than stopping in its path."""
             max_steps=args.max_steps,
             push_to_hub=args.hub_model_id is not None,
             hub_model_id=args.hub_model_id,
-            hub_private_repo=args.hub_private_repo,
             run_name=args.run_name,
             report_to=args.report_to,
             trackio_space_id=args.trackio_space_id,
