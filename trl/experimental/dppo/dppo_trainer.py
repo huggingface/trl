@@ -333,7 +333,7 @@ class DPPOTrainer(GRPOTrainer):
             return prompt_ids, completion_ids, sampled_logprobs, topk_logprobs, topk_token_ids
         else:
             prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
-            padded_ids = pad(prompt_tensors, padding_value=self.pad_token_id, padding_side="left")
+            padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
             attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
             generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
             for key, value in multimodal_fields.items():
@@ -396,7 +396,7 @@ class DPPOTrainer(GRPOTrainer):
                     topk_logps_chunks.append(topk_lp_t.cpu())
 
             # Mask everything after the first EOS token
-            is_eos = completion_ids == self.eos_token_id
+            is_eos = completion_ids == self._tokenizer.eos_token_id
             has_eos = is_eos.any(dim=1)
             eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
             eos_idx[has_eos] = is_eos.int().argmax(dim=1)[has_eos]
@@ -714,7 +714,7 @@ class DPPOTrainer(GRPOTrainer):
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
-        eos_and_pad = [self.eos_token_id, self.pad_token_id]
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
@@ -895,7 +895,7 @@ class DPPOTrainer(GRPOTrainer):
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
         prompt_ids = pad(
             prompt_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="left",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -906,7 +906,7 @@ class DPPOTrainer(GRPOTrainer):
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         completion_ids = pad(
             completion_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -948,7 +948,7 @@ class DPPOTrainer(GRPOTrainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions for attention and loss masking
         if self.mask_truncated_completions:
-            eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
