@@ -359,8 +359,6 @@ class OnlineDPOTrainer(_BaseTrainer):
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
         self.pad_token = self._tokenizer.pad_token
-        self.pad_token_id = self._tokenizer.pad_token_id
-        self.eos_token_id = self._tokenizer.eos_token_id
 
         # Vision tokens for VLM support
         self.image_token_id = getattr(processing_class, "image_token_id", None)
@@ -373,7 +371,7 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         # Define the collator if not provided
         if data_collator is None:
-            data_collator = DPODataCollatorWithPadding(pad_token_id=self.pad_token_id)
+            data_collator = DPODataCollatorWithPadding(pad_token_id=self._tokenizer.pad_token_id)
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
@@ -506,9 +504,9 @@ class OnlineDPOTrainer(_BaseTrainer):
             generation_kwargs = {
                 "max_new_tokens": args.max_new_tokens,
                 "do_sample": True,
-                "pad_token_id": self.pad_token_id,
+                "pad_token_id": self._tokenizer.pad_token_id,
                 "bos_token_id": self._tokenizer.bos_token_id,
-                "eos_token_id": self.eos_token_id,
+                "eos_token_id": self._tokenizer.eos_token_id,
                 "temperature": self.temperature,
                 "top_k": self.top_k,
                 "top_p": self.top_p,
@@ -584,8 +582,8 @@ class OnlineDPOTrainer(_BaseTrainer):
         return model
 
     def _generate_vllm(self, prompts, images=None):
-        eos_token_id = self.eos_token_id
-        pad_token_id = self.pad_token_id
+        eos_token_id = self._tokenizer.eos_token_id
+        pad_token_id = self._tokenizer.pad_token_id
 
         # Generate completion_ids and prompt_ids based on mode
         if self.vllm_mode == "server":
@@ -894,8 +892,8 @@ class OnlineDPOTrainer(_BaseTrainer):
     def _generate(self, model, prompts, images=None):
         """Generate completions using the model"""
         device = next(model.parameters()).device
-        eos_token_id = self.eos_token_id
-        pad_token_id = self.pad_token_id
+        eos_token_id = self._tokenizer.eos_token_id
+        pad_token_id = self._tokenizer.pad_token_id
 
         # Apply chat template and tokenize the input
         inputs = [{"prompt": prompt} for prompt in prompts]
@@ -1119,7 +1117,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         else:
             prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts, images)
 
-        contain_eos_token = torch.any(completion_ids == self.eos_token_id, dim=-1)
+        contain_eos_token = torch.any(completion_ids == self._tokenizer.eos_token_id, dim=-1)
 
         # Extract vision inputs if available for VLM support
         vision_inputs = None
