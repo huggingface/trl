@@ -46,7 +46,7 @@ python trl/experimental/sdft/sdft.py \
     --learning_rate 2e-5 \
     --max_prompt_length 1024 \
     --max_completion_length 512 \
-    --teacher_regularization ema \
+    --teacher_model_kind ema \
     --teacher_sync_steps 1 \
     --teacher_update_rate 0.01 \
     --eval_strategy steps \
@@ -77,7 +77,7 @@ from trl import (
 )
 from trl.data_utils import maybe_apply_chat_template
 from trl.experimental.sdft import SDFTConfig
-from trl.experimental.sdft.sdft_trainer_transition import SDFTTrainer
+from trl.experimental.sdft.sdft_trainer import SDFTTrainer
 from trl.models import unwrap_model_for_generation
 
 

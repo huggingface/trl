@@ -284,20 +284,18 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
         self.model_accepts_loss_kwargs = False
 
     def _setup_teacher_model(self) -> None:
-        """Prepare teacher state according to the shared teacher policy."""
+        """Prepare teacher state according to the semantic teacher choice."""
 
-        teacher_regularization = self.args.teacher_regularization
-        peft_teacher_mode = self._resolve_peft_teacher_mode()
-        self._validate_teacher_policy(teacher_regularization, peft_teacher_mode)
+        teacher_model_kind = self.args.teacher_model_kind
 
-        if teacher_regularization == "none":
+        if teacher_model_kind in {"base", "live"}:
             return
 
-        if is_peft_available() and is_peft_model(self.model) and peft_teacher_mode == "teacher_adapter":
+        if self._use_peft_ema_teacher_adapter():
             self.add_callback(
                 PEFTAdapterEMACallback(
                     model=self.model,
-                    teacher_adapter_name=self.args.teacher_adapter_name,
+                    teacher_adapter_name="teacher",
                     update_rate=self.args.teacher_update_rate,
                     sync_steps=self.args.teacher_sync_steps,
                     accelerator=self.accelerator,
@@ -319,27 +317,24 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
 
         self.add_callback(SyncTeacherModelCallback(teacher_model=self.teacher_model, accelerator=self.accelerator))
 
-    def _resolve_peft_teacher_mode(self) -> str:
-        peft_teacher_mode = self.args.peft_teacher_mode
+    def _use_peft_ema_teacher_adapter(self) -> bool:
+        return self.args.teacher_model_kind == "ema" and self._is_pure_lora_training()
+
+    def _is_pure_lora_training(self) -> bool:
         if not (is_peft_available() and is_peft_model(self.model)):
-            if peft_teacher_mode in {"disable_adapter", "teacher_adapter"}:
-                raise ValueError(f"PEFT teacher mode `{peft_teacher_mode}` requires a PEFT model.")
-            return "inherit_adapter"
+            return False
 
-        if peft_teacher_mode == "auto":
-            if self.args.teacher_regularization == "ema":
-                return "teacher_adapter"
-            return "disable_adapter"
+        model = self.accelerator.unwrap_model(self.model)
+        adapter_name = getattr(model, "active_adapter", None) or "default"
+        adapter_config = model.peft_config.get(adapter_name)
+        peft_type = getattr(adapter_config, "peft_type", None)
+        if peft_type is None or str(peft_type).split(".")[-1] != "LORA":
+            return False
 
-        return peft_teacher_mode
-
-    def _validate_teacher_policy(self, teacher_regularization: str, peft_teacher_mode: str) -> None:
-        if teacher_regularization not in {"none", "ema"}:
-            raise ValueError(f"Unsupported teacher regularization mode: {teacher_regularization}")
-        if peft_teacher_mode not in {"inherit_adapter", "disable_adapter", "teacher_adapter"}:
-            raise ValueError(f"Unsupported PEFT teacher mode: {peft_teacher_mode}")
-        if peft_teacher_mode == "teacher_adapter" and teacher_regularization != "ema":
-            raise ValueError("PEFT teacher mode `teacher_adapter` requires EMA teacher regularization.")
+        for name, param in model.named_parameters():
+            if param.requires_grad and "lora_" not in name:
+                return False
+        return True
 
     def get_train_dataloader(self):
         if self.train_dataset is None:
@@ -605,24 +600,23 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer, ABC):
         """Inject teacher-side inputs and algorithm-specific fields into a common student rollout batch."""
 
     def _get_teacher_context_for_self_distillation(self):
-        peft_teacher_mode = self._resolve_peft_teacher_mode()
-        if not (is_peft_available() and isinstance(self.model, PeftModel)) or peft_teacher_mode == "inherit_adapter":
+        teacher_model_kind = self.args.teacher_model_kind
+        if not (is_peft_available() and isinstance(self.model, PeftModel)):
             return nullcontext()
 
         target_model = self.teacher_model if self.teacher_model is not None else self.model
         target_model = self.accelerator.unwrap_model(target_model)
 
-        if peft_teacher_mode == "disable_adapter":
+        if teacher_model_kind == "base":
             return use_adapter(target_model, adapter_name=None)
-        if peft_teacher_mode == "teacher_adapter":
-            teacher_adapter_name = self.args.teacher_adapter_name
+        if teacher_model_kind == "ema" and self._use_peft_ema_teacher_adapter():
+            teacher_adapter_name = self._get_teacher_adapter_name()
             if teacher_adapter_name not in target_model.peft_config:
                 raise RuntimeError(
                     f"Expected PEFT teacher adapter `{teacher_adapter_name}` to exist before teacher forward."
                 )
             return use_adapter(target_model, adapter_name=teacher_adapter_name)
-
-        raise ValueError(f"Unsupported PEFT teacher mode: {peft_teacher_mode}")
+        return nullcontext()
 
     @abstractmethod
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):

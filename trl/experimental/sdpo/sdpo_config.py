@@ -39,10 +39,10 @@ class SDPOConfig(SelfDistillationConfig):
 
         > Parameters that control the teacher
 
-        teacher_regularization (`str`, *optional*, defaults to `"ema"`):
-            Teacher update strategy. Supported: `ema`, `none`.
+        teacher_model_kind (`str`, *optional*, defaults to `"ema"`):
+            Semantic teacher choice. Supported: `base`, `live`, `ema`.
         teacher_update_rate (`float`, *optional*, defaults to `0.05`):
-            EMA update rate used when `teacher_regularization="ema"`.
+            EMA update rate used when `teacher_model_kind="ema"`.
         teacher_sync_steps (`int`, *optional*, defaults to `1`):
             Number of optimizer steps between teacher EMA updates.
 
@@ -74,9 +74,9 @@ class SDPOConfig(SelfDistillationConfig):
         default="distillation_only",
         metadata={"help": "SDPO policy loss mode. Supported: `distillation_only`, `hybrid`."},
     )
-    teacher_regularization: str = field(
+    teacher_model_kind: str = field(
         default="ema",
-        metadata={"help": "Teacher regularization mode. Supported: `ema`, `none`."},
+        metadata={"help": "Semantic teacher choice. Supported: `base`, `live`, `ema`."},
     )
     teacher_update_rate: float = field(
         default=0.05,

@@ -79,7 +79,7 @@ from trl import (
 )
 from trl.data_utils import maybe_apply_chat_template
 from trl.experimental.sdpo import SDPOConfig
-from trl.experimental.sdpo.sdpo_trainer_transition import SDPOTrainer
+from trl.experimental.sdpo.sdpo_trainer import SDPOTrainer
 
 
 SYSTEM_PROMPT = (
