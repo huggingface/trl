@@ -80,12 +80,14 @@ jobs:
           source .venv/bin/activate
           uv pip install ".[dev]"
 
-      - name: pause
+      - name: debug
         run: |
-          sleep 20m
+          python3 -c "import os; print('cpu_count:', os.cpu_count())"
+
       - name: Test with pytest
         run: |
           source .venv/bin/activate
+          python3 -c "import os; print('cpu_count:', os.cpu_count())"
           make test
 
       - name: Post to Slack
