@@ -922,9 +922,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                 else:
                     # If the chat template doesn't use the image token, remove all instances
                     if self.vision_end_token_id is not None:
-                        escaped_eoi_token = re.escape(
-                            self.processing_class.tokenizer.decode([self.vision_end_token_id])
-                        )
+                        escaped_eoi_token = re.escape(self._tokenizer.decode([self.vision_end_token_id]))
                         prompts_text = [
                             re.sub(rf"({escaped_img_token})+{escaped_eoi_token}", "", text) for text in prompts_text
                         ]
