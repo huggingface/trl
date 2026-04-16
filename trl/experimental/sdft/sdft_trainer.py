@@ -34,7 +34,7 @@ from ..self_distillation.base_self_distillation_trainer import (
     RolloutBatch,
     TrainingBatch,
 )
-from ..self_distillation.teacher_context import _split_prompt_and_privileged_context, extract_last_user_text
+from ..self_distillation.prompt_utils import extract_last_user_text
 from .sdft_config import SDFTConfig
 
 
@@ -167,7 +167,7 @@ class SDFTTrainer(BaseSelfDistillationTrainer):
         inputs: list[dict[str, Any]],
         rollout_batch: RolloutBatch,
     ) -> TrainingBatch:
-        prompts, privileged_contexts = _split_prompt_and_privileged_context(inputs)
+        prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
         teacher_batch = self.teacher_context_builder.build(
             prompts,
             privileged_contexts,
@@ -195,6 +195,7 @@ class SDFTTrainer(BaseSelfDistillationTrainer):
             completion_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
             inputs["completion_mask"] = completion_mask
 
-        loss = self._compute_self_distillation_loss(model, inputs)
+        distillation_logits = self._compute_teacher_student_logits(model, inputs)
+        loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
         accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
         return loss / accumulation_scale

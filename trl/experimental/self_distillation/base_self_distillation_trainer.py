@@ -48,17 +48,21 @@ from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     get_config_model_id,
     identity,
     pad,
-    selective_log_softmax,
     split_tensor_dict,
     use_adapter,
 )
 from ..utils import prepare_peft_model
+from .loss_utils import (
+    apply_importance_sampling_clipping,
+    compute_full_logit_self_distillation_loss,
+    compute_sampled_token_self_distillation_loss,
+    compute_topk_self_distillation_loss,
+    select_token_log_probs,
+)
 from .self_distillation_config import SelfDistillationConfig
-from .self_distillation_loss import SelfDistillationLossComputer
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback
 
 
@@ -95,6 +99,17 @@ class RolloutBatch:
 
 
 TrainingBatch = dict[str, torch.Tensor | Any]
+
+
+@dataclass
+class DistillationLogits:
+    """Aligned logits and masks used to compute a self-distillation objective."""
+
+    completion_ids: torch.Tensor
+    completion_mask: torch.Tensor
+    response_mask: torch.Tensor
+    student_logits: torch.Tensor
+    teacher_logits: torch.Tensor
 
 
 class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
@@ -252,7 +267,6 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
-        self._self_distillation_loss = SelfDistillationLossComputer(self)
         self.model_accepts_loss_kwargs = False
 
     def _set_signature_columns_if_needed(self):
@@ -492,6 +506,11 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
             ),
         )
 
+    def _split_prompt_and_privileged_context(inputs: list[dict[str, Any]]) -> tuple[list[Any], list[Any]]:
+        prompts = [example["prompt"] for example in inputs]
+        privileged_contexts = [example.get("privileged_context") for example in inputs]
+        return prompts, privileged_contexts
+
     def _generate(self, prompt_text: list[str]) -> tuple[list[list[int]], list[list[int]]]:
         if self.use_vllm:
             return self._generate_vllm(prompt_text)
@@ -573,13 +592,13 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
             attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
             logits_to_keep = completion_ids.size(1)
             with torch.no_grad():
-                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                logits = self._forward_logits(
                     self.model,
                     prompt_completion_ids,
                     attention_mask,
                     logits_to_keep,
-                    compute_entropy=False,
                 )
+                old_per_token_logps = select_token_log_probs(logits, completion_ids)
 
         return old_per_token_logps
 
@@ -590,28 +609,164 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         self,
         model,
         inputs: TrainingBatch,
+        distillation_logits: DistillationLogits,
     ) -> torch.Tensor:
-        return self._self_distillation_loss.compute_loss(model, inputs)
+        if distillation_logits.response_mask.sum() == 0:
+            mode = "train" if model.training else "eval"
+            self._log_self_distillation_metric(mode, 0.0)
+            return torch.tensor(0.0, device=distillation_logits.completion_ids.device, requires_grad=True)
 
-    def _get_per_token_logps_and_entropies(
+        use_topk_distillation = self.args.distillation_topk is not None and (
+            self.args.full_logit_distillation or self._allow_topk_without_full_logit_distillation()
+        )
+        if use_topk_distillation:
+            per_token_loss = compute_topk_self_distillation_loss(
+                distillation_logits.student_logits,
+                distillation_logits.teacher_logits,
+                distillation_topk=self.args.distillation_topk,
+                distillation_alpha=self.args.distillation_alpha,
+                distillation_add_tail=self.args.distillation_add_tail,
+            )
+        elif self.args.full_logit_distillation:
+            per_token_loss = compute_full_logit_self_distillation_loss(
+                distillation_logits.student_logits,
+                distillation_logits.teacher_logits,
+                distillation_alpha=self.args.distillation_alpha,
+            )
+        else:
+            per_token_loss = compute_sampled_token_self_distillation_loss(
+                distillation_logits.student_logits,
+                distillation_logits.teacher_logits,
+                distillation_logits.completion_ids,
+                distillation_alpha=self.args.distillation_alpha,
+            )
+
+        old_per_token_logps = inputs.get("old_per_token_logps")
+        if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
+            student_per_token_logps = select_token_log_probs(
+                distillation_logits.student_logits,
+                distillation_logits.completion_ids,
+            )
+            per_token_loss = apply_importance_sampling_clipping(
+                per_token_loss,
+                student_per_token_logps,
+                old_per_token_logps,
+                self.args.distillation_is_clip,
+            )
+
+        loss = self._aggregate_self_distillation_loss(per_token_loss, distillation_logits.response_mask)
+
+        mode = "train" if model.training else "eval"
+        mean_distill_loss = (
+            per_token_loss * distillation_logits.response_mask
+        ).sum() / distillation_logits.response_mask.sum().clamp(min=1.0)
+        self._log_self_distillation_metric(
+            mode,
+            self.accelerator.gather(mean_distill_loss).mean().item(),
+        )
+        return loss
+
+    def _compute_teacher_student_logits(
         self,
         model,
-        input_ids,
-        attention_mask,
-        logits_to_keep,
-        compute_entropy=False,
-    ):
-        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
+        inputs: TrainingBatch,
+    ) -> DistillationLogits:
+        prompt_ids = inputs["prompt_ids"]
+        prompt_mask = inputs["prompt_mask"]
+        completion_ids = inputs["completion_ids"]
+        completion_mask = inputs["completion_mask"]
+        logits_to_keep = completion_ids.size(1)
+
+        response_mask = self._build_self_distillation_response_mask(
+            completion_mask,
+            inputs.get("self_distillation_mask"),
+        )
+        student_logits = self._compute_student_distillation_logits(
+            model=model,
+            prompt_ids=prompt_ids,
+            prompt_mask=prompt_mask,
+            completion_ids=completion_ids,
+            completion_mask=completion_mask,
+            logits_to_keep=logits_to_keep,
+        )
+
+        teacher_logits = self._compute_teacher_distillation_logits(
+            model=model,
+            teacher_input_ids=inputs["teacher_input_ids"],
+            teacher_attention_mask=inputs["teacher_attention_mask"],
+            logits_to_keep=logits_to_keep,
+        )
+
+        return DistillationLogits(
+            completion_ids=completion_ids,
+            completion_mask=completion_mask,
+            response_mask=response_mask,
+            student_logits=student_logits,
+            teacher_logits=teacher_logits,
+        )
+
+    @staticmethod
+    def _build_self_distillation_response_mask(
+        completion_mask: torch.Tensor,
+        self_distillation_mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if self_distillation_mask is None:
+            return completion_mask
+        return completion_mask * self_distillation_mask.unsqueeze(1)
+
+    def _compute_student_distillation_logits(
+        self,
+        model,
+        prompt_ids: torch.Tensor,
+        prompt_mask: torch.Tensor,
+        completion_ids: torch.Tensor,
+        completion_mask: torch.Tensor,
+        logits_to_keep: int,
+    ) -> torch.Tensor:
+        student_input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        student_attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        return self._forward_logits(
+            model=model,
+            input_ids=student_input_ids,
+            attention_mask=student_attention_mask,
+            logits_to_keep=logits_to_keep,
+        )
+
+    def _compute_teacher_distillation_logits(
+        self,
+        model,
+        teacher_input_ids: torch.Tensor,
+        teacher_attention_mask: torch.Tensor,
+        logits_to_keep: int,
+    ) -> torch.Tensor:
+        teacher_model = self._get_teacher_model_for_self_distillation(model)
+        with torch.no_grad(), self._get_teacher_context_for_self_distillation():
+            return self._forward_logits(
+                model=teacher_model,
+                input_ids=teacher_input_ids,
+                attention_mask=teacher_attention_mask,
+                logits_to_keep=logits_to_keep,
+            )
+
+    def _forward_logits(
+        self,
+        model,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        logits_to_keep: int,
+    ) -> torch.Tensor:
+        model_inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "use_cache": False,
+        }
         if "logits_to_keep" in self.model_kwarg_keys:
             model_inputs["logits_to_keep"] = logits_to_keep + 1
+
         logits = model(**model_inputs).logits
         logits = logits[:, :-1, :]
         logits = logits[:, -logits_to_keep:, :]
-        logits = logits / self.temperature
-        completion_ids = input_ids[:, -logits_to_keep:]
-        selected_logps = selective_log_softmax(logits, completion_ids)
-        entropies = entropy_from_logits(logits) if compute_entropy else None
-        return selected_logps, entropies
+        return logits / self.temperature
 
     def _validate_training_batch(self, batch: TrainingBatch) -> None:
         required_keys = {
@@ -671,6 +826,28 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         if teacher_model is None:
             return model
         return teacher_model
+
+    def _log_self_distillation_metric(self, mode: str, value: float) -> None:
+        metric_prefix = getattr(self, "_name", "self_distillation").lower().replace(" ", "_")
+        self._metrics[mode]["self_distillation/distillation_loss"].append(value)
+        self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
+
+    def _aggregate_self_distillation_loss(
+        self,
+        per_token_loss: torch.Tensor,
+        response_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        loss_type = self.loss_type
+        if loss_type == "grpo":
+            loss = (per_token_loss * response_mask).sum(-1) / response_mask.sum(-1).clamp(min=1.0)
+            return loss.mean()
+        if loss_type == "bnpo":
+            return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
+        if loss_type == "dr_grpo":
+            return (per_token_loss * response_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+        if loss_type in ["dapo", "luspo", "cispo", "sapo"]:
+            return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
+        raise ValueError(f"Unsupported loss_type for self-distillation: {loss_type}")
 
     @abstractmethod
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):

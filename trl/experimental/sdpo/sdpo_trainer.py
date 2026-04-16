@@ -36,10 +36,12 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import get_config_model_id, pad
 from ..self_distillation.base_self_distillation_trainer import (
     BaseSelfDistillationTrainer,
+    DistillationLogits,
     RolloutBatch,
     TrainingBatch,
 )
-from ..self_distillation.teacher_context import _split_prompt_and_privileged_context, extract_last_user_text
+from ..self_distillation.loss_utils import select_token_log_probs
+from ..self_distillation.prompt_utils import extract_last_user_text
 from .sdpo_config import SDPOConfig
 
 
@@ -403,7 +405,7 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
     ) -> TrainingBatch:
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
-        prompts, privileged_contexts = _split_prompt_and_privileged_context(inputs)
+        prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
         raw_completion_lengths = rollout_batch.raw_completion_lengths.detach().cpu().tolist()
         completion_ids_list = [
             ids[:length].tolist()
@@ -593,19 +595,14 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         if count == 1 or count % interval == 0:
             logger.warning("%s Consecutive degenerate steps: %s.", message, count)
 
-    def _compute_policy_loss(self, model, inputs) -> torch.Tensor:
-        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
-        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
-        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)
-        per_token_logps, _ = self._get_per_token_logps_and_entropies(
-            model,
-            input_ids,
-            attention_mask,
-            logits_to_keep,
-            compute_entropy=False,
-        )
+    def _compute_policy_loss(
+        self,
+        inputs,
+        student_logits,
+    ) -> torch.Tensor:
+        completion_ids = inputs["completion_ids"]
+        completion_mask = inputs["completion_mask"]
+        per_token_logps = select_token_log_probs(student_logits, completion_ids)
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
         advantages = inputs["advantages"]
@@ -630,24 +627,50 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         accumulation_scale = self.current_gradient_accumulation_steps if mode == "train" else 1.0
         return loss / accumulation_scale
 
-    def _compute_weighted_self_distillation_loss(self, model, inputs) -> torch.Tensor | None:
-        if self.args.distillation_weight <= 0.0:
-            return None
-
+    def _compute_weighted_self_distillation_loss(
+        self,
+        model,
+        inputs,
+        distillation_logits: DistillationLogits,
+    ) -> torch.Tensor:
         accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
-        distillation_loss = self._compute_self_distillation_loss(model, inputs) / accumulation_scale
+        distillation_loss = (
+            self._compute_self_distillation_loss(
+                model,
+                inputs,
+                distillation_logits,
+            )
+            / accumulation_scale
+        )
         return self.args.distillation_weight * distillation_loss
+
+    def _compute_hybrid_loss(self, model, inputs) -> torch.Tensor:
+        distillation_logits = self._compute_teacher_student_logits(model, inputs)
+        policy_loss = self._compute_policy_loss(inputs, distillation_logits.student_logits)
+        weighted_distillation_loss = self._compute_weighted_self_distillation_loss(
+            model,
+            inputs,
+            distillation_logits,
+        )
+        return policy_loss + weighted_distillation_loss
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The SDPOTrainer does not support returning outputs")
 
         if self.args.sdpo_policy_loss_mode == "hybrid":
-            policy_loss = self._compute_policy_loss(model, inputs)
-            weighted_distillation_loss = self._compute_weighted_self_distillation_loss(model, inputs)
-            return policy_loss if weighted_distillation_loss is None else policy_loss + weighted_distillation_loss
+            return self._compute_hybrid_loss(model, inputs)
 
-        weighted_distillation_loss = self._compute_weighted_self_distillation_loss(model, inputs)
-        if weighted_distillation_loss is not None:
-            return weighted_distillation_loss
-        return self._compute_policy_loss(model, inputs)
+        if self.args.distillation_weight > 0.0:
+            distillation_logits = self._compute_teacher_student_logits(model, inputs)
+            return self._compute_weighted_self_distillation_loss(model, inputs, distillation_logits)
+        else:
+            student_logits = self._compute_student_distillation_logits(
+                model=model,
+                prompt_ids=inputs["prompt_ids"],
+                prompt_mask=inputs["prompt_mask"],
+                completion_ids=inputs["completion_ids"],
+                completion_mask=inputs["completion_mask"],
+                logits_to_keep=inputs["completion_ids"].size(1),
+            )
+            return self._compute_policy_loss(inputs, student_logits)

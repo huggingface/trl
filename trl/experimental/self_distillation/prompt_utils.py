@@ -17,15 +17,9 @@ from __future__ import annotations
 from typing import Any
 
 
-def _split_prompt_and_privileged_context(inputs: list[dict[str, Any]]) -> tuple[list[Any], list[Any]]:
-    prompts = [example["prompt"] for example in inputs]
-    privileged_contexts = [example.get("privileged_context") for example in inputs]
-    return prompts, privileged_contexts
-
-
-def extract_last_user_text(prompt: list[dict[str, Any]]) -> str:
+def extract_last_user_text(messages: list[dict[str, Any]]) -> str:
     """Extract the text content from the last user message in a conversational prompt."""
-    last_message = prompt[-1]
+    last_message = messages[-1]
     if last_message.get("role") != "user":
         raise ValueError(
             f"Self-distillation teacher prompt construction expects the conversation to end with a user turn, "

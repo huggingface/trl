@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from .self_distillation_config import SelfDistillationConfig
-from .self_distillation_loss import SelfDistillationLossComputer
 
 
-__all__ = ["SelfDistillationConfig", "SelfDistillationLossComputer"]
+__all__ = ["SelfDistillationConfig"]
