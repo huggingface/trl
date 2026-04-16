@@ -122,6 +122,8 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
+        self.pad_token_id = tokenizer.pad_token_id
+        self.eos_token_id = tokenizer.eos_token_id
         self.temperature = args.temperature
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
