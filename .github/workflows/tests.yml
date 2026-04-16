@@ -79,7 +79,10 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
-        
+
+      - name: pause
+        run: |
+          sleep 20m
       - name: Test with pytest
         run: |
           source .venv/bin/activate
