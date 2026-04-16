@@ -92,19 +92,16 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 
 Patched GPT-OSS template. Diff vs `gptoss.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `llama3_training.jinja`
 
 Patched Llama 3 template. Diff vs `llama3.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `qwen2_5_training.jinja`
 
 Patched Qwen2.5 template. Diff vs `qwen2_5.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
