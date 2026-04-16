@@ -349,18 +349,18 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
-            tokenizer = processing_class.tokenizer
+            self._tokenizer = processing_class.tokenizer
         elif isinstance(processing_class, PreTrainedTokenizerBase):
-            tokenizer = processing_class
+            self._tokenizer = processing_class
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        self.pad_token = tokenizer.pad_token
-        self.pad_token_id = tokenizer.pad_token_id
-        self.eos_token_id = tokenizer.eos_token_id
+        self.pad_token = self._tokenizer.pad_token
+        self.pad_token_id = self._tokenizer.pad_token_id
+        self.eos_token_id = self._tokenizer.eos_token_id
 
         # Vision tokens for VLM support
         self.image_token_id = getattr(processing_class, "image_token_id", None)
@@ -369,7 +369,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Get the image token string for token collapsing
         self.image_token = None
         if self.image_token_id is not None:
-            self.image_token = tokenizer.decode([self.image_token_id])
+            self.image_token = self._tokenizer.decode([self.image_token_id])
 
         # Define the collator if not provided
         if data_collator is None:
@@ -507,7 +507,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                 "max_new_tokens": args.max_new_tokens,
                 "do_sample": True,
                 "pad_token_id": self.pad_token_id,
-                "bos_token_id": tokenizer.bos_token_id,
+                "bos_token_id": self._tokenizer.bos_token_id,
                 "eos_token_id": self.eos_token_id,
                 "temperature": self.temperature,
                 "top_k": self.top_k,
