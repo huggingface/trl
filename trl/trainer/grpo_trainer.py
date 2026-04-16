@@ -1275,17 +1275,8 @@ class GRPOTrainer(_BaseTrainer):
         """Tokenize prompts and extract images/multimodal fields for generation."""
         if is_conversational({"prompt": prompts[0]}):
             # Normalize string content to content blocks for VLM processors that don't handle plain strings.
-            # Use copies to avoid mutating the original prompts.
             if self._is_vlm:
-                prompts = [
-                    [
-                        {**msg, "content": [{"type": "text", "text": msg["content"]}]}
-                        if isinstance(msg.get("content"), str)
-                        else msg
-                        for msg in prompt
-                    ]
-                    for prompt in prompts
-                ]
+                prompts = [prepare_multimodal_messages(prompt) for prompt in prompts]
 
             # Extract images from messages for VLM support
             images = []
