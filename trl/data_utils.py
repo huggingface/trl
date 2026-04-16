@@ -53,6 +53,8 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
           the function transforms them into the structured format by wrapping text in `{"type": "text", "text": ...}`
           and inserting `{"type": "image"}` placeholders for the images *before* the first user message.
           If the number of placeholders does not match the number of provided images, an error is raised.
+        - Existing image blocks that already include an `"image"` payload are preserved as-is. Only unfilled image
+          placeholders are counted and populated from `images`.
 
     Example:
     ```python
@@ -94,7 +96,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
 
     # Then, check that the number of image placeholders matches the number of images provided
     num_placeholders = sum(
-        sum(1 for part in message["content"] if part["type"] == "image")
+        sum(1 for part in message["content"] if part["type"] == "image" and "image" not in part)
         for message in new_messages
         if message.get("content") and message["role"] != "tool"
     )
@@ -104,18 +106,19 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
         )
 
     # Then, fill in the actual images in the placeholders
-    img_idx = 0
-    for i, message in enumerate(new_messages):
-        if not message.get("content") or message["role"] == "tool":
-            continue
-        new_content = []
-        for part in message["content"]:
-            if part["type"] == "image":
-                new_content.append({**part, "image": images[img_idx]})
-                img_idx += 1
-            else:
-                new_content.append(part)
-        new_messages[i] = {**message, "content": new_content}
+    if images:
+        img_idx = 0
+        for i, message in enumerate(new_messages):
+            if not message.get("content") or message["role"] == "tool":
+                continue
+            new_content = []
+            for part in message["content"]:
+                if part["type"] == "image" and "image" not in part:
+                    new_content.append({**part, "image": images[img_idx]})
+                    img_idx += 1
+                else:
+                    new_content.append(part)
+            new_messages[i] = {**message, "content": new_content}
 
     return new_messages
 
