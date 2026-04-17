@@ -719,7 +719,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -749,7 +749,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -782,7 +782,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -820,7 +820,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -860,7 +860,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -909,7 +909,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
