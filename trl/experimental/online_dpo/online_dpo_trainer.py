@@ -358,8 +358,6 @@ class OnlineDPOTrainer(_BaseTrainer):
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        self.pad_token = self._tokenizer.pad_token
-
         # Vision tokens for VLM support
         self.image_token_id = getattr(processing_class, "image_token_id", None)
         self.vision_start_token_id = getattr(processing_class, "vision_start_token_id", None)
