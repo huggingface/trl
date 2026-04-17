@@ -15,6 +15,7 @@ Two bandwidth metrics are reported, following the [NCCL-tests convention](https:
 **Algorithm Bandwidth (AlgBW)** = `data_size / time`. Measures how fast the operation completes from the application's perspective. `data_size` is the per-rank input size for allreduce and all_to_all, or total output size for allgather, or total input size for reduce_scatter.
 
 **Bus Bandwidth (BusBW)** = AlgBW × correction factor. Estimates the actual bandwidth on the hardware links by accounting for the communication pattern:
+
 - **allreduce**: `AlgBW × 2(N-1)/N` — ring sends data twice around (reduce + broadcast)
 - **allgather, reduce_scatter, all_to_all**: `AlgBW × (N-1)/N` — ring sends data once
 
@@ -64,6 +65,7 @@ All intra-node ops achieve 330-450 GB/s bus bandwidth, consistent with NVLink.
 ### allreduce vs allgather/reduce_scatter time
 
 allreduce (4.17ms) is faster than allgather (20.88ms) despite both being ring-based because of data size:
+
 - **allreduce**: 1GB in, 1GB out (same size)
 - **allgather**: 1GB in per rank, 8GB out total (8× more data movement with 8 GPUs)
 
@@ -89,16 +91,16 @@ allreduce = reduce_scatter + allgather pipelined in a ring, but operates on the 
 
 The busbw formula `algbw × (N-1)/N` is designed for ring-based ops and is misleading for all_to_all. A fairer comparison of actual inter-node utilization:
 
-| Op | Inter-node BW achieved | EFA capacity | Utilization |
-|---|---|---|---|
-| allreduce | ~300 GB/s bidirectional | 400 GB/s | ~75% |
-| allgather | ~240 GB/s bidirectional | 400 GB/s | ~60% |
-| reduce_scatter | ~250 GB/s bidirectional | 400 GB/s | ~63% |
-| all_to_all | ~295 GB/s bidirectional | 400 GB/s | ~37% per direction |
+| Op             | Inter-node BW achieved  | EFA capacity | Utilization        |
+| -------------- | ----------------------- | ------------ | ------------------ |
+| allreduce      | ~300 GB/s bidirectional | 400 GB/s     | ~75%               |
+| allgather      | ~240 GB/s bidirectional | 400 GB/s     | ~60%               |
+| reduce_scatter | ~250 GB/s bidirectional | 400 GB/s     | ~63%               |
+| all_to_all     | ~295 GB/s bidirectional | 400 GB/s     | ~37% per direction |
 
 The all_to_all inter-node gap is **~2x** (37% vs 60-75% utilization), not 9x as the raw busbw numbers suggest. The 9x ratio in busbw comes from the formula not accounting for all_to_all's mixed intra/inter-node traffic pattern.
 
-## Impact on MoE training
+## Impact off MoE training
 
 | Strategy             | Key collectives            | 1-node BusBW   | 2-node BusBW   | Training impact            |
 | -------------------- | -------------------------- | -------------- | -------------- | -------------------------- |

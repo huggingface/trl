@@ -1,0 +1,286 @@
+model_name_or_path: Qwen/Qwen3-32B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+
+runs:
+  # ============================================================
+  # FSDP2 — baseline (sdpa, no liger)
+  # ============================================================
+
+  # 2 nodes, 16k — DP=16 (matches 30B: 22.5% MFU with EP)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+
+  # 4 nodes, 16k — DP=32 (matches 30B: 22.3% MFU with EP)
+  - context_length: 16384
+    nodes: 4
+    backend: fsdp2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+
+  # 2 nodes, 32k — CP=2 (matches 30B: 13.2% MFU with EP+CP)
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 1
+
+  # ============================================================
+  # FSDP2 + liger
+  # ============================================================
+
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    extra_args: "--use_liger_kernel true"
+
+  - context_length: 16384
+    nodes: 4
+    backend: fsdp2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    extra_args: "--use_liger_kernel true"
+
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 1
+    extra_args: "--use_liger_kernel true"
+
+  # ============================================================
+  # FSDP2 + liger + FA3
+  # ============================================================
+
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: "--use_liger_kernel true"
+
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: "--use_liger_kernel true"
+
+  # ============================================================
+  # FSDP2 — 32k DP-only (may OOM, liger might save it)
+  # ============================================================
+
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    extra_args: "--use_liger_kernel true"
+
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: "--use_liger_kernel true"
+
+  # 4 nodes, 32k — CP=2
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 1
+
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 1
+    extra_args: "--use_liger_kernel true"
+
+  # ============================================================
+  # DeepSpeed ZeRO-3 — 32k DP-only
+  # ============================================================
+
+  - context_length: 32768
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+
+  # ============================================================
+  # DeepSpeed ZeRO-3 — baseline (no SP)
+  # ============================================================
+
+  - context_length: 16384
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+
+  - context_length: 16384
+    nodes: 4
+    backend: deepspeed_zero3
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+
+  # ============================================================
+  # DeepSpeed ZeRO-3 + SP=2 (FA2, matches 30B SP runs)
+  # ============================================================
+
+  - context_length: 32768
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 2
+    ep: 1
+    attn_implementation: flash_attention_2
+
+  # ============================================================
+  # DeepSpeed ZeRO-3 + SP=2 + FA3
+  # ============================================================
+
+  - context_length: 32768
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 2
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+
+  # ============================================================
+  # DeepSpeed ZeRO-3 + SP=2 + liger (previously OOM without liger)
+  # ============================================================
+
+  - context_length: 32768
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 2
+    ep: 1
+    attn_implementation: flash_attention_2
+    extra_args: "--use_liger_kernel true"
+
+  - context_length: 32768
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 2
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: "--use_liger_kernel true"
+
+  # ============================================================
+  # FSDP2 + TP (intra-node, 64 Q heads / 8 KV heads)
+  # ============================================================
+
+  # ============================================================
+  # FSDP2 + TP + liger (TP without liger OOMs — 79 GB baseline)
+  # ============================================================
+
+  # 2 nodes, 16k — TP=2 + liger
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 8
+    tp: 2
+    pp: 1
+    cp: 1
+    ep: 1
+    extra_args: "--use_liger_kernel true"
+
+  # 2 nodes, 16k — TP=4 + liger
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 4
+    tp: 4
+    pp: 1
+    cp: 1
+    ep: 1
+    extra_args: "--use_liger_kernel true"
+
+  # 2 nodes, 16k — TP=8 + liger
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 1
+    extra_args: "--use_liger_kernel true"

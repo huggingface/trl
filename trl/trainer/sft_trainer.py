@@ -14,7 +14,6 @@
 
 import contextlib
 import json
-import os
 import warnings
 from collections import defaultdict
 from collections.abc import Callable
@@ -692,14 +691,35 @@ class SFTTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             if args.enable_expert_parallel:
+                import os
+
                 import torch.distributed as dist
                 from transformers.distributed.configuration_utils import DistributedConfig
 
                 model_init_kwargs["distributed_config"] = DistributedConfig(enable_expert_parallel=True)
                 model_init_kwargs.pop("device_map", None)  # device_map is incompatible with tp_plan
                 if dist.is_initialized():
+                    # If DeepSpeed SP is configured, initialize deepspeed.comm before model loading.
+                    # accelerate sets this env var but only calls ds_comm.init_distributed inside
+                    # Accelerator(), which runs after model loading. SP needs it earlier because
+                    # distribute_model() (called inside from_pretrained with EP) creates process
+                    # groups that interact with DeepSpeed's comm layer.
+                    sp_size = int(os.environ.get("ACCELERATE_PARALLELISM_CONFIG_SP_SIZE", "1"))
+                    if sp_size > 1:
+                        from deepspeed import comm as ds_comm
+
+                        if not ds_comm.is_initialized():
+                            ds_comm.init_distributed("nccl")
                     world_size = dist.get_world_size()
-                    model_init_kwargs["device_mesh"] = dist.init_device_mesh("cuda", (world_size,))
+                    # EP size = tp_size in the mesh (defaults to world_size)
+                    ep_size = getattr(args, "expert_parallel_size", None) or world_size
+                    if ep_size < world_size:
+                        dp_size = world_size // ep_size
+                        model_init_kwargs["device_mesh"] = dist.init_device_mesh(
+                            "cuda", (dp_size, ep_size), mesh_dim_names=("dp", "tp")
+                        )
+                    else:
+                        model_init_kwargs["device_mesh"] = dist.init_device_mesh("cuda", (world_size,))
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
@@ -1424,12 +1444,13 @@ class SFTTrainer(_BaseTrainer):
             runtime = time.time() - start_time
             if runtime > 0:
                 tps = self.state.num_input_tokens_seen / runtime
-                # TODO(transformers): num_input_tokens_seen overcounts by cp_size with context parallelism.
-                # The Trainer counts tokens before CP splits the inputs, and gather().sum() across all ranks
-                # includes CP ranks that each report the full sequence length. Divide by cp_size to correct.
-                # This should be fixed upstream in transformers' _inner_training_loop token counting.
-                cp_size = getattr(getattr(self.accelerator, "parallelism_config", None), "cp_size", 1) or 1
-                tps = tps / cp_size
+                # TODO(transformers): num_input_tokens_seen overcounts with CP and SP.
+                # Both split sequences across ranks, but the Trainer counts full sequence length
+                # per sample. Divide by cp_size and sp_size to get actual unique tokens/second.
+                pc = getattr(self.accelerator, "parallelism_config", None)
+                cp_size = getattr(pc, "cp_size", 1) or 1
+                sp_size = getattr(pc, "sp_size", 1) or 1
+                tps = tps / (cp_size * sp_size)
                 logs["mfu"] = compute_mfu(self._flops_per_token, tps, self._world_size)
 
         super().log(logs, start_time)

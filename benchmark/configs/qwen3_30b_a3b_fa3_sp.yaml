@@ -1,0 +1,16 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+attn_implementation: "kernels-community/vllm-flash-attn3"
+
+runs:
+  # SP=2 + FA3 (baseline with flash_attention_2: 13.1% MFU)
+  - context_length: 32768
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 2
+    ep: 1

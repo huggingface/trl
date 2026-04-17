@@ -38,6 +38,6 @@ parallelism_config:
   parallelism_config_sp_size: {{ sp }}
   parallelism_config_sp_backend: deepspeed
   parallelism_config_sp_seq_length_is_variable: true
-  parallelism_config_sp_attn_implementation: flash_attention_2
+  parallelism_config_sp_attn_implementation: {{ sp_attn_implementation | default('flash_attention_2') }}
 {%- endif %}
 {%- endif %}

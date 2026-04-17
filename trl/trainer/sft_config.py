@@ -156,6 +156,14 @@ class SFTConfig(_BaseConfig):
             "Requires the model to have an `ep_plan` defined in its config class."
         },
     )
+    expert_parallel_size: int | None = field(
+        default=None,
+        metadata={
+            "help": "Number of GPUs for expert parallelism. Must divide num_experts evenly. "
+            "Also shards attention via TP, so must divide num_kv_heads. "
+            "If `None`, uses all GPUs (world_size). For Qwen3-30B-A3B (4 KV heads), max is 4."
+        },
+    )
     fuse_moe_experts: bool = field(
         default=False,
         metadata={

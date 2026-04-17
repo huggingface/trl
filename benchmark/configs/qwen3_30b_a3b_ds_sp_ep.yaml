@@ -1,0 +1,18 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+attn_implementation: flash_attention_2
+extra_args: --enable_expert_parallel
+
+runs:
+  # 1 node, 16k — SP=2, EP=8 (16 local experts per GPU)
+  # Simplest SP+EP+DS test: all intra-node, minimal communication overhead
+  - context_length: 16384
+    nodes: 1
+    backend: deepspeed_zero3
+    dp: 4
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 2
+    ep: 8

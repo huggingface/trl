@@ -3,6 +3,7 @@ source {{ venv_path | default('/fsx/amine_dirhoussi/trl/.venv/bin/activate') }}
 
 export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
 export MASTER_PORT={{ master_port | default(29500) }}
+export HF_HOME=/fsx/amine_dirhoussi/.cache
 
 accelerate launch \
   --config_file {{ accelerate_config_path }} \

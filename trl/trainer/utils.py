@@ -1020,7 +1020,8 @@ def create_model_from_path(
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
-    kwargs["device_map"] = kwargs.get("device_map", "auto")
+    if "distributed_config" not in kwargs:
+        kwargs["device_map"] = kwargs.get("device_map", "auto")
     if architecture is None:
         config = AutoConfig.from_pretrained(model_id)
         architecture = getattr(transformers, config.architectures[0])
@@ -1414,6 +1415,10 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
     attn_flops = qkv_flops + o_proj_flops + attn_score_flops
 
     # MLP FLOPs per layer
+    # TODO(@aminediro): Mixtral uses `intermediate_size` for experts, not `moe_intermediate_size`.
+    #   Accessing `config.moe_intermediate_size` will crash. Fall back to `intermediate_size`.
+    # TODO(@aminediro): Qwen2MoE shared experts are not counted. Each MoE layer runs a dense shared
+    #   expert (2 * 3 * h * shared_expert_intermediate_size FLOPs/token) plus a gating linear.
     num_experts = getattr(config, "num_local_experts", None) or getattr(config, "num_experts", None)
     is_moe = num_experts is not None
     if is_moe:
@@ -1433,6 +1438,11 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
     # Per-layer forward FLOPs
     if is_moe:
         # Some MoE models have dense MLP layers interspersed (decoder_sparse_step)
+        # TODO(@aminediro): `mlp_only_layers` is not checked. Transformers uses both
+        #   `mlp_only_layers` and `decoder_sparse_step` to decide MoE vs dense per layer.
+        # TODO(@aminediro): indexing differs from transformers: we use `layer_idx % step`
+        #   but transformers uses `(layer_idx + 1) % step`. Total count is the same for
+        #   any step, but individual layer assignments are shifted.
         sparse_step = getattr(config, "decoder_sparse_step", 1)
         total_layer_flops = 0
         for layer_idx in range(L):

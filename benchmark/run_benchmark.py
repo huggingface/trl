@@ -36,7 +36,7 @@ def build_run_id(config: dict, run: dict) -> str:
         f"ctx{ctx_k}k",
         f"n{run['nodes']}",
         run["backend"],
-        f"dp{run['dp']}",
+        f"dp{run['nodes'] if run.get('ep', 1) > 1 and run.get('ep', 1) < run['nodes'] * config.get('gpus_per_node', 8) else (1 if run.get('ep', 1) >= run['nodes'] * config.get('gpus_per_node', 8) else run['dp'])}",
         f"tp{run['tp']}",
         f"pp{run['pp']}",
         f"cp{run['cp']}",
@@ -46,9 +46,14 @@ def build_run_id(config: dict, run: dict) -> str:
         parts.append(f"sp{run['sp']}")
     attn = run.get("attn_implementation", config.get("attn_implementation", "sdpa"))
     if attn != "sdpa":
-        parts.append(attn.replace("_", ""))
+        parts.append(attn.replace("_", "").replace("/", "-").replace("kernels-community-", ""))
     if run.get("cpu_offload", False):
         parts.append("offload")
+    extra = run.get("extra_args", config.get("extra_args", ""))
+    if "torch_compile" in extra:
+        parts.append("compile")
+    if "use_liger_kernel" in extra:
+        parts.append("liger")
     return "_".join(parts)
 
 
@@ -70,6 +75,10 @@ def render_accelerate_config(env: Environment, run: dict, config: dict) -> str:
         "cpu_ram_efficient_loading": run.get(
             "cpu_ram_efficient_loading", config.get("cpu_ram_efficient_loading", True)
         ),
+        "sp_attn_implementation": "flash_attention_3"
+        if "flash-attn3" in run.get("attn_implementation", config.get("attn_implementation", ""))
+        or "flash_attention_3" in run.get("attn_implementation", config.get("attn_implementation", ""))
+        else "flash_attention_2",
     }
 
     # Compute DP shard/replicate sizes for parallelism_config

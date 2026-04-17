@@ -1,0 +1,37 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+extra_args: --enable_expert_parallel --use_liger_kernel true
+
+runs:
+  # Top MFU configs with EP + liger kernel
+
+  # 2 nodes, 16k — EP=16 (baseline without liger: 22.5% MFU)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 16
+
+  # 4 nodes, 16k — EP=32 (baseline without liger: 22.3% MFU)
+  - context_length: 16384
+    nodes: 4
+    backend: fsdp2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+
+  # 2 nodes, 32k — CP=2, EP=16 (baseline without liger: 13.2% MFU)
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 16

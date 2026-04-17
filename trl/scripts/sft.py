@@ -62,6 +62,16 @@ python trl/scripts/sft.py \
 
 import argparse
 
+# Workaround for PyTorch 2.10+ inductor crash with torch.compile + TF32.
+# Transformers' enable_tf32() sets torch.backends.fp32_precision (new API), but
+# inductor reads torch.backends.cuda.matmul.allow_tf32 (legacy API), and PyTorch
+# errors on mixed API usage. Setting the legacy flags first makes both APIs agree.
+import torch  # noqa: E402
+
+
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
 
 def main(script_args, training_args, model_args, dataset_args):
     from accelerate import logging
@@ -89,15 +99,22 @@ def main(script_args, training_args, model_args, dataset_args):
         model_kwargs["quantization_config"] = quantization_config
 
     # Create model
-    config = AutoConfig.from_pretrained(model_args.model_name_or_path)
-    valid_image_text_architectures = MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.values()
-
-    if config.architectures and any(arch in valid_image_text_architectures for arch in config.architectures):
-        from transformers import AutoModelForImageTextToText
-
-        model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+    # When enable_expert_parallel is set, pass model as string to SFTTrainer so it handles
+    # EP device mesh creation and distributed_config inside from_pretrained.
+    if training_args.enable_expert_parallel:
+        # Pass model as string so SFTTrainer handles EP device mesh + distributed_config.
+        model = model_args.model_name_or_path
+        training_args.model_init_kwargs = model_kwargs
     else:
-        model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+        config = AutoConfig.from_pretrained(model_args.model_name_or_path)
+        valid_image_text_architectures = MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.values()
+
+        if config.architectures and any(arch in valid_image_text_architectures for arch in config.architectures):
+            from transformers import AutoModelForImageTextToText
+
+            model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
@@ -131,8 +148,9 @@ def main(script_args, training_args, model_args, dataset_args):
     trainer.accelerator.print("✅ Training completed.")
 
     # Save and push to Hub
-    trainer.save_model(training_args.output_dir)
-    trainer.accelerator.print(f"💾 Model saved to {training_args.output_dir}.")
+    if training_args.save_strategy != "no":
+        trainer.save_model(training_args.output_dir)
+        trainer.accelerator.print(f"💾 Model saved to {training_args.output_dir}.")
 
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)

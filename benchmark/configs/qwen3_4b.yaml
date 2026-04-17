@@ -96,3 +96,59 @@ runs:
     pp: 1
     cp: 8
     ep: 1
+
+  # 1 node, 32k context — liger kernel test (previously OOMs without liger)
+  - context_length: 32768
+    nodes: 1
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    extra_args: "--use_liger_kernel true"
+
+  # 1 node, 32k context — liger + CP=2
+  - context_length: 32768
+    nodes: 1
+    backend: fsdp2
+    dp: 4
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 1
+    extra_args: "--use_liger_kernel true"
+
+  # 1 node, 64k context — liger + CP=2
+  - context_length: 65536
+    nodes: 1
+    backend: fsdp2
+    dp: 4
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 1
+    extra_args: "--use_liger_kernel true"
+
+  # 1 node, 64k context — liger + CP=4
+  - context_length: 65536
+    nodes: 1
+    backend: fsdp2
+    dp: 2
+    tp: 1
+    pp: 1
+    cp: 4
+    ep: 1
+    extra_args: "--use_liger_kernel true"
+
+  # 1 node, 32k context — liger + flash-attn3
+  - context_length: 32768
+    nodes: 1
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: "--use_liger_kernel true"

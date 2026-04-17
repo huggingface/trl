@@ -1,0 +1,56 @@
+model_name_or_path: Qwen/Qwen3-235B-A22B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+extra_args: --enable_expert_parallel
+cpu_ram_efficient_loading: true
+
+runs:
+  # 8 nodes (EP=64), 16k — CP=4 (each GPU handles 4k)
+  - context_length: 16384
+    nodes: 8
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 4
+    ep: 64
+
+  # 8 nodes (EP=64), 16k — CP=8 (each GPU handles 2k)
+  - context_length: 16384
+    nodes: 8
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 8
+    ep: 64
+
+  # 8 nodes (EP=64), 32k — CP=8 (each GPU handles 4k)
+  - context_length: 32768
+    nodes: 8
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 8
+    ep: 64
+
+  # 8 nodes (EP=64), 16k — CP=2 (OOM data point)
+  - context_length: 16384
+    nodes: 8
+    backend: fsdp2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 64
+
+  # 8 nodes (EP=64), 16k — DP only (OOM data point)
+  - context_length: 16384
+    nodes: 8
+    backend: fsdp2
+    dp: 64
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 64

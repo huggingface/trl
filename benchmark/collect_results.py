@@ -54,11 +54,11 @@ ERROR_PATTERNS = [
 # Pattern to detect successful training completion
 SUCCESS_PATTERN = re.compile(r"Training completed|train_runtime|'train_runtime'")
 
-# Pattern to extract metrics from trainer output
+# Pattern to extract metrics from trainer output (handles both numeric and string values)
 METRICS_PATTERN = re.compile(
-    r"'train_tokens_per_second':\s*([\d.]+)|"
-    r"'mfu':\s*([\d.]+)|"
-    r"'train_runtime':\s*([\d.]+)"
+    r"'train_tokens_per_second':\s*'?([\d.eE+\-]+)'?|"
+    r"'mfu':\s*'?([\d.eE+\-]+)'?|"
+    r"'train_runtime':\s*'?([\d.eE+\-]+)'?"
 )
 
 
@@ -84,10 +84,16 @@ def parse_run_name(run_name: str) -> dict:
     if sp_match:
         result["sp"] = int(sp_match.group(1))
     # Extract attention implementation
-    if "flashattention2" in run_name:
-        result["attn"] = "flash_attention_2"
+    if "vllm-flash-attn3" in run_name:
+        result["attn"] = "FA3"
+    elif "flashattention2" in run_name:
+        result["attn"] = "FA2"
     else:
         result["attn"] = "sdpa"
+    # Extract liger
+    result["liger"] = "liger" in run_name
+    # Extract torch compile
+    result["compile"] = "compile" in run_name
     # Extract model name
     model_match = re.search(r"bench-(.*?)_ctx", run_name)
     if model_match:
@@ -191,6 +197,10 @@ def collect_from_logs(logs_dir: str) -> list[dict]:
 
         gc = metrics.get("gradient_checkpointing", False)
 
+        # wandb run name = run_id from the log filename (bench-<run_id>-<job_id>.out)
+        parts = basename.rsplit("-", 1)
+        run_id = parts[0].removeprefix("bench-") if len(parts) == 2 else basename
+
         results.append(
             {
                 "Model": parsed.get("model", basename),
@@ -209,8 +219,10 @@ def collect_from_logs(logs_dir: str) -> list[dict]:
                 "MFU": round(mfu, 2) if mfu else "-",
                 "TPS": round(tps, 2) if tps else "-",
                 "TPS/GPU": tps_per_gpu if tps_per_gpu else "-",
+                "Peak GPU Mem": "-",
                 "wandb": "on",
                 "Success?": status,
+                "_wandb_run_name": run_id,
             }
         )
 
@@ -271,10 +283,39 @@ def collect_from_wandb(project: str, entity: str | None = None, logs_dir: str | 
                 "TPS/GPU": tps_per_gpu if tps_per_gpu else "-",
                 "wandb": "on" if run.url else "off",
                 "Success?": status,
+                "_wandb_run_name": run.name,
             }
         )
 
     return results
+
+
+def fetch_wandb_peak_memory(project: str, entity: str | None = None) -> dict[str, str]:
+    """Fetch peak GPU memory from wandb system metrics. Returns {run_name: "XX.X GB (YY%)"}."""
+    import wandb as wb
+
+    api = wb.Api()
+    path = f"{entity}/{project}" if entity else project
+    runs = api.runs(path)
+
+    memory_map = {}
+    for run in runs:
+        if run.state != "finished":
+            continue
+        try:
+            sys_events = run.history(stream="events", pandas=False, samples=500)
+            peak_pct = max((e.get("system.gpu.0.memoryAllocated", 0) or 0 for e in sys_events), default=0)
+            peak_bytes = max((e.get("system.gpu.0.memoryAllocatedBytes", 0) or 0 for e in sys_events), default=0)
+            if peak_bytes > 0:
+                peak_gb = peak_bytes / (1024**3)
+            elif peak_pct > 0:
+                peak_gb = peak_pct * 80 / 100  # H100 80GB
+            else:
+                continue
+            memory_map[run.name] = f"{peak_gb:.1f} GB ({peak_pct:.0f}%)"
+        except Exception:
+            continue
+    return memory_map
 
 
 def main():
@@ -299,6 +340,19 @@ def main():
         print("No runs found.", file=sys.stderr)
         return
 
+    # Enrich with peak GPU memory from wandb system metrics
+    if args.wandb_project:
+        print("Fetching peak GPU memory from wandb...", file=sys.stderr)
+        memory_map = fetch_wandb_peak_memory(args.wandb_project, args.wandb_entity)
+        for row in results:
+            # Try matching by wandb_run_name first, then by Model field
+            run_name = row.get("_wandb_run_name", row.get("Model", ""))
+            row["Peak GPU Mem"] = memory_map.get(run_name, "-")
+            row.pop("_wandb_run_name", None)
+    else:
+        for row in results:
+            row["Peak GPU Mem"] = "-"
+
     fieldnames = [
         "Model",
         "Context length (k tokens)",
@@ -316,6 +370,7 @@ def main():
         "MFU",
         "TPS",
         "TPS/GPU",
+        "Peak GPU Mem",
         "wandb",
         "Success?",
     ]

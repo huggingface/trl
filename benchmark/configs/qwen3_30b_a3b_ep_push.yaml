@@ -1,4 +1,4 @@
-model_name_or_path: /fsx/amine_dirhoussi/Qwen3-30B-A3B-fused
+model_name_or_path: Qwen/Qwen3-30B-A3B
 dataset_name: THUDM/LongAlign-10k
 gpus_per_node: 8
 extra_args: --enable_expert_parallel

@@ -1,10 +1,22 @@
-model_name_or_path: /fsx/amine_dirhoussi/Qwen3-30B-A3B-fused
+model_name_or_path: Qwen/Qwen3-30B-A3B
 dataset_name: THUDM/LongAlign-10k
 gpus_per_node: 8
 extra_args: --enable_expert_parallel
 
 runs:
-  # 2 nodes (EP=16), 16k — DP only
+  # --- Expert-only EP (fixed RouterParallel + grouped_mm sentinel handling) ---
+
+  # 1 node, 16k — EP=8 (16 local experts)
+  - context_length: 16384
+    nodes: 1
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+
+  # 2 nodes, 16k — EP=16 (8 local experts)
   - context_length: 16384
     nodes: 2
     backend: fsdp2
@@ -14,7 +26,7 @@ runs:
     cp: 1
     ep: 16
 
-  # 4 nodes (EP=32), 16k — DP only
+  # 4 nodes, 16k — EP=32 (4 local experts)
   - context_length: 16384
     nodes: 4
     backend: fsdp2
@@ -24,7 +36,7 @@ runs:
     cp: 1
     ep: 32
 
-  # 2 nodes (EP=16), 32k — CP=2
+  # 2 nodes, 32k — EP=16, CP=2
   - context_length: 32768
     nodes: 2
     backend: fsdp2
@@ -34,7 +46,7 @@ runs:
     cp: 2
     ep: 16
 
-  # 4 nodes (EP=32), 32k — CP=2
+  # 4 nodes, 32k — EP=32, CP=2
   - context_length: 32768
     nodes: 4
     backend: fsdp2
@@ -44,22 +56,22 @@ runs:
     cp: 2
     ep: 32
 
-  # 2 nodes, 32k — DP only (OOM data point)
-  - context_length: 32768
-    nodes: 2
+  # 8 nodes, 16k — EP=64 (2 local experts)
+  - context_length: 16384
+    nodes: 8
     backend: fsdp2
-    dp: 16
+    dp: 64
     tp: 1
     pp: 1
     cp: 1
-    ep: 16
+    ep: 64
 
-  # 4 nodes, 32k — DP only (OOM data point)
+  # 8 nodes, 32k — EP=64, CP=2
   - context_length: 32768
-    nodes: 4
+    nodes: 8
     backend: fsdp2
     dp: 32
     tp: 1
     pp: 1
-    cp: 1
-    ep: 32
+    cp: 2
+    ep: 64
