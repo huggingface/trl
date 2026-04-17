@@ -450,7 +450,7 @@ def supports_tool_calling(processing_class) -> bool:
     return all(s in rendered for s in (_name_sentinel, _arg_key_sentinel, _arg_val_sentinel, _content_sentinel))
 
 
-def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
+def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | ProcessorMixin) -> bool:
     """
     Check whether the chat template preserves prefixes when applied.
 
@@ -459,8 +459,8 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
     tokenizations with and without tool messages appended.
 
     Args:
-        tokenizer (`PreTrainedTokenizer`):
-            Tokenizer instance to check.
+        processing_class (`PreTrainedTokenizer` or `ProcessorMixin`):
+            Tokenizer or processor instance to check.
 
     Returns:
         `bool`:
@@ -477,18 +477,26 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
         {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
         {"role": "tool", "name": "dummy", "content": "dummy"},
     ]
+    # VLM processors expect structured list-of-blocks content, and image-token expansion only kicks in when an image
+    # is actually present, so include a dummy image to exercise the real code path.
+    if isinstance(processing_class, ProcessorMixin):
+        from PIL import Image
+
+        dummy_image = Image.new("RGB", (8, 8))
+        messages1 = prepare_multimodal_messages(messages1, images=[dummy_image])
+        messages2 = prepare_multimodal_messages(messages2, images=[dummy_image])
 
     try:
-        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
-        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+        text1 = processing_class.apply_chat_template(messages1, tokenize=False)
+        text2 = processing_class.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
     except TypeError:
         # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
         # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
         dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
         messages1[1]["tool_calls"] = dummy_tool_calls
         messages2[1]["tool_calls"] = dummy_tool_calls
-        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
-        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+        text1 = processing_class.apply_chat_template(messages1, tokenize=False)
+        text2 = processing_class.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
 
     return text2.startswith(text1)
 
