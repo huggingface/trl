@@ -1030,6 +1030,7 @@ class TestForwardMaskedLogits:
             "trl-internal-testing/tiny-Phi3ForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3ForCausalLM",
+            "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
         ],
     )
     def test_llm(self, model_id):
@@ -1233,6 +1234,7 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-Phi3ForCausalLM",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
 ]
 
 
