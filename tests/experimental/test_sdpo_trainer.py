@@ -100,14 +100,6 @@ class TestSDPOTrainer(TrlTestCase):
         assert config.vllm_model_impl == "vllm"
 
     def test_generate_vllm_syncs_on_step_change_and_uses_mode_specific_num_generations(self):
-        class FakeTokenizer:
-            def __call__(self, text, **kwargs):
-                token_map = {
-                    "Solve 2+2.": [11, 12],
-                    "Check 3+3.": [21, 22],
-                }
-                return {"input_ids": [token_map[prompt] for prompt in text]}
-
         class FakeVLLMGeneration:
             def __init__(self):
                 self.sync_weights_call_count = 0
@@ -135,11 +127,9 @@ class TestSDPOTrainer(TrlTestCase):
         trainer.model = SimpleNamespace(training=True)
         trainer.state = SimpleNamespace(global_step=4)
         trainer._last_loaded_step = 3
-        trainer.processing_class = FakeTokenizer()
         trainer.vllm_generation = FakeVLLMGeneration()
-        trainer._apply_prompt_template = lambda prompts: prompts
 
-        prompt_ids, completion_ids = trainer._generate(["Solve 2+2.", "Solve 2+2."])
+        prompt_ids, completion_ids = trainer._generate([[11, 12], [11, 12]])
 
         assert prompt_ids == [[11, 12], [11, 12]]
         assert completion_ids == [[100], [101]]
@@ -154,7 +144,7 @@ class TestSDPOTrainer(TrlTestCase):
         ]
 
         trainer.model.training = False
-        eval_prompt_ids, eval_completion_ids = trainer._generate(["Check 3+3.", "Check 3+3.", "Check 3+3."])
+        eval_prompt_ids, eval_completion_ids = trainer._generate([[21, 22], [21, 22], [21, 22]])
 
         assert eval_prompt_ids == [[21, 22], [21, 22], [21, 22]]
         assert eval_completion_ids == [[100], [101], [102]]
@@ -167,7 +157,7 @@ class TestSDPOTrainer(TrlTestCase):
 
         trainer.model.training = True
         trainer.state.global_step = 5
-        trainer._generate(["Solve 2+2.", "Solve 2+2."])
+        trainer._generate([[11, 12], [11, 12]])
 
         assert trainer.vllm_generation.sync_weights_call_count == 2
         assert trainer._last_loaded_step == 5
