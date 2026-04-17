@@ -1892,7 +1892,7 @@ class GRPOTrainer(_BaseTrainer):
 
             advantages = rewards - mean_grouped_rewards
             if self.scale_rewards == "mean":
-                advantages = advantages / (mean_grouped_rewards + 1e-4)
+                advantages = advantages / (mean_grouped_rewards.abs() + 1e-4)
             elif self.scale_rewards != "none":
                 advantages = advantages / (std_rewards + 1e-4)
             is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging

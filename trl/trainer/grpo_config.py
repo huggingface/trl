@@ -832,6 +832,12 @@ class GRPOConfig(_BaseConfig):
 
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
 
+        if self.scale_rewards == "mean" and self.multi_objective_aggregation != "sum_then_normalize":
+            raise ValueError(
+                "scale_rewards='mean' is only supported with multi_objective_aggregation='sum_then_normalize'. "
+                f"Got multi_objective_aggregation='{self.multi_objective_aggregation}'."
+            )
+
         if self.log_completions_hub_repo is not None and not self.log_completions:
             raise ValueError(
                 "log_completions_hub_repo is set, but log_completions is False. Enable log_completions to upload "

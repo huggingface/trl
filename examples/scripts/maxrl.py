@@ -15,8 +15,6 @@
 # /// script
 # dependencies = [
 #     "trl",
-#     "math-verify",
-#     "latex2sympy2_extended",
 # ]
 # ///
 
@@ -75,9 +73,30 @@ SYSTEM_PROMPT = (
 
 
 def extract_boxed(text: str) -> str | None:
-    """Return the last \\boxed{...} content from text, or None if absent."""
-    matches = re.findall(r"\\boxed\{([^}]*)\}", text)
-    return matches[-1].strip() if matches else None
+    """Return the last \\boxed{...} content from text, or None if absent.
+
+    Uses balanced brace matching to correctly handle nested braces such as
+    ``\\boxed{\\frac{1}{3}}``.
+    """
+    results = []
+    search_from = 0
+    while True:
+        idx = text.find(r"\boxed{", search_from)
+        if idx == -1:
+            break
+        start = idx + len(r"\boxed{")
+        depth = 1
+        j = start
+        while j < len(text) and depth > 0:
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+            j += 1
+        if depth == 0:
+            results.append(text[start : j - 1])
+        search_from = idx + 1
+    return results[-1].strip() if results else None
 
 
 def get_completion_text(completion) -> str:
