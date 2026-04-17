@@ -1,5 +1,11 @@
 # Chat template utilities
 
+For an overview of the chat templates bundled with TRL and the rationale behind the training patches, see [Chat Templates](chat_templates).
+
+## add_response_schema
+
+[[autodoc]] add_response_schema
+
 ## clone_chat_template
 
 [[autodoc]] clone_chat_template
