@@ -486,7 +486,7 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | P
         messages1 = prepare_multimodal_messages(messages1, images=[dummy_image])
         messages2 = prepare_multimodal_messages(messages2, images=[dummy_image])
 
-    is_vlm = isinstance(tokenizer, ProcessorMixin)
+    is_vlm = isinstance(processing_class, ProcessorMixin)
     if is_vlm:
         from PIL import Image
 
@@ -495,16 +495,20 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | P
         messages2 = prepare_multimodal_messages(messages2, images=[dummy_image])
 
     try:
-        ids1 = tokenizer.apply_chat_template(messages1, tokenize=True, return_dict=False)
-        ids2 = tokenizer.apply_chat_template(messages2, tokenize=True, return_dict=False, add_generation_prompt=True)
+        ids1 = processing_class.apply_chat_template(messages1, tokenize=True, return_dict=False)
+        ids2 = processing_class.apply_chat_template(
+            messages2, tokenize=True, return_dict=False, add_generation_prompt=True
+        )
     except TypeError:
         # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
         # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
         dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
         messages1[1]["tool_calls"] = dummy_tool_calls
         messages2[1]["tool_calls"] = dummy_tool_calls
-        ids1 = tokenizer.apply_chat_template(messages1, tokenize=True, return_dict=False)
-        ids2 = tokenizer.apply_chat_template(messages2, tokenize=True, return_dict=False, add_generation_prompt=True)
+        ids1 = processing_class.apply_chat_template(messages1, tokenize=True, return_dict=False)
+        ids2 = processing_class.apply_chat_template(
+            messages2, tokenize=True, return_dict=False, add_generation_prompt=True
+        )
 
     # VLM processors return batched output (list of lists), unbatch for single conversation
     if is_vlm:
