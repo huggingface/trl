@@ -682,9 +682,8 @@ class KTOTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
-        # Add tags for models that have been loaded with the correct transformers version
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
 
         if not hasattr(self, "accelerator"):
             raise AttributeError(
