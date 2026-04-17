@@ -99,6 +99,10 @@ class RLOOConfig(_BaseConfig):
             tokens.
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
+        max_tool_calling_iterations (`int`, *optional*):
+            Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
+            stops when the model generates a response turn with no tool calls or when the total response length reaches
+            `max_model_length`.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -356,6 +360,14 @@ class RLOOConfig(_BaseConfig):
     cache_implementation: str | None = field(
         default=None,
         metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
+    )
+    max_tool_calling_iterations: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
+            "generation stops when the model generates a response turn with no tool calls or when the total response "
+            "length reaches `max_model_length`."
+        },
     )
 
     # Parameters that control generation acceleration powered by vLLM

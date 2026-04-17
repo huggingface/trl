@@ -17,6 +17,7 @@ import atexit
 import copy
 import inspect
 import math
+import sys
 import textwrap
 import time
 from collections import defaultdict, deque
@@ -51,9 +52,11 @@ from transformers import (
 )
 from transformers.utils import is_peft_available, is_rich_available
 
+from ..chat_template_utils import add_response_schema, get_training_chat_template, parse_response
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
+from ..import_utils import is_jmespath_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -198,6 +201,13 @@ class RLOOTrainer(_BaseTrainer):
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
+        tools (list of `Callable`, *optional*):
+            A list of callable tool functions (sync or async) that the model can invoke during generation. Each tool
+            should be a standard Python function with properly type-hinted arguments and return values, and a
+            Google-style docstring describing its purpose, arguments, and return value. For more details, see:
+            https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
+            type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
+            use and that it has been fine-tuned for tool calling.
     """
 
     _tag_names = ["trl", "rloo"]
@@ -230,6 +240,7 @@ class RLOOTrainer(_BaseTrainer):
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
+        tools: list[Callable] | None = None,
     ):
         # Args
         if args is None:
@@ -334,12 +345,12 @@ class RLOOTrainer(_BaseTrainer):
 
         self._has_async_reward_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
         if self._has_async_reward_funcs:
-            self.async_reward_loop_thread, self.async_reward_loop, self.async_reward_loop_ready_event = (
-                start_event_loop_in_daemon(name="RLOOTrainer-AsyncRewardLoop")
+            self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
+                name="RLOOTrainer-AsyncRewardLoop"
             )
             # wait until the event loop is running in the daemon thread
-            self.async_reward_loop_ready_event.wait()
-            atexit.register(shutdown_event_loop_in_daemon, self.async_reward_loop_thread, self.async_reward_loop)
+            self.async_loop_ready_event.wait()
+            atexit.register(shutdown_event_loop_in_daemon, self.async_loop_thread, self.async_loop)
 
         # Reward weights
         if args.reward_weights is not None:
@@ -378,9 +389,60 @@ class RLOOTrainer(_BaseTrainer):
 
         self.reward_processing_classes = reward_processing_classes
 
+        # Tools
+        if tools:
+            if not Version(transformers.__version__) >= Version("5.0.0"):
+                raise ImportError(
+                    "Using tools with RLOOTrainer requires transformers version 5.0.0 or higher. Please upgrade "
+                    "transformers with `pip install --upgrade transformers` to use this feature."
+                )
+            if not is_jmespath_available():
+                raise ImportError(
+                    "Using tools with RLOOTrainer requires the jmespath library for response parsing. Please install "
+                    "it with `pip install jmespath` to use this feature."
+                )
+
+        generation_batch_size = args.per_device_train_batch_size * args.steps_per_generation
+        tools = tools or []
+        self._sync_tool_dicts = [{} for _ in range(generation_batch_size)]
+        self._async_tool_dicts = [{} for _ in range(generation_batch_size)]
+        for i in range(generation_batch_size):
+            for tool in tools:
+                if inspect.iscoroutinefunction(tool):
+                    self._async_tool_dicts[i][tool.__name__] = tool
+                else:
+                    self._sync_tool_dicts[i][tool.__name__] = tool
+
+        self.tools = tools
+
+        # Check for async functions to start an event loop on a daemon thread
+        self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.tools)
+
+        if self._has_async_funcs:
+            self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
+                name="RLOOTrainer-AsyncLoop"
+            )
+            # wait until the event loop is running in the daemon thread
+            self.async_loop_ready_event.wait()
+            atexit.register(shutdown_event_loop_in_daemon, self.async_loop_thread, self.async_loop)
+
+        # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
+        # While waiting for broader adoption, we provide this utility function to manually set the response schema for
+        # known chat templates.
+        # We need `getattr`` until the base class sets a default None value for response_schema
+        if self.tools and not getattr(processing_class, "response_schema", None):
+            processing_class = add_response_schema(processing_class)
+        # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
+        # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
+        if self.tools:
+            self.chat_template = get_training_chat_template(processing_class)
+        else:
+            self.chat_template = None
+
         # Training arguments
         self.max_completion_length = args.max_completion_length
         self.num_generations = args.num_generations
+        self.max_tool_calling_iterations = args.max_tool_calling_iterations or sys.maxsize
         self.num_generations_eval = args.num_generations_eval or self.num_generations
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.temperature = args.temperature
@@ -866,7 +928,7 @@ class RLOOTrainer(_BaseTrainer):
         # Execute async custom functions in parallel using asyncio.gather
         if async_funcs_info:
 
-            async def _invoke_async_reward(index, func, func_name):
+            async def _invoke_async(index, func, func_name):
                 with profiling_context(self, func_name):
                     output = await func(
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
@@ -875,10 +937,10 @@ class RLOOTrainer(_BaseTrainer):
                     return index, output
 
             async def _run_async_funcs():
-                coros = [_invoke_async_reward(i, func, func_name) for (i, func, func_name) in async_funcs_info]
+                coros = [_invoke_async(i, func, func_name) for (i, func, func_name) in async_funcs_info]
                 return await asyncio.gather(*coros)
 
-            async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_reward_loop).result()
+            async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_loop).result()
             for idx, output_reward_func in async_results:
                 rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
@@ -925,6 +987,8 @@ class RLOOTrainer(_BaseTrainer):
             needs_padding_workaround = Version("5.3.0") <= Version(transformers.__version__) < Version("5.4.0")
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
+                tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+                chat_template=self.chat_template,
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
@@ -959,7 +1023,7 @@ class RLOOTrainer(_BaseTrainer):
                     self.vllm_generation.sync_weights()
                 self._last_loaded_step = self.state.global_step
 
-            # Generate using vLLM (note: RLOO doesn't use logprobs from generation, so we ignore them)
+            # Generate using vLLM with raw token IDs
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
             _, completion_ids, _, _ = self.vllm_generation.generate(
                 prompts=prompt_ids,
@@ -1037,6 +1101,206 @@ class RLOOTrainer(_BaseTrainer):
 
         return completion_ids
 
+    def _get_tool_suffix_ids(self, tool_messages):
+        """Get token IDs for tool result formatting by using a minimal dummy conversation."""
+        dummy_messages = [{"role": "user", "content": "dummy"}, {"role": "assistant", "content": "dummy"}]
+        prefix_ids = self.processing_class.apply_chat_template(
+            dummy_messages,
+            add_generation_prompt=False,
+            chat_template=self.chat_template,
+            return_dict=False,
+            **self.chat_template_kwargs,
+        )
+        full_ids = self.processing_class.apply_chat_template(
+            dummy_messages + tool_messages,
+            add_generation_prompt=True,
+            chat_template=self.chat_template,
+            return_dict=False,
+            **self.chat_template_kwargs,
+        )
+
+        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
+        # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
+        # EOS (not EOS + newline).
+        last_eos_idx = max(i for i, tok_id in enumerate(prefix_ids) if tok_id == self.eos_token_id)
+        prefix_ids = prefix_ids[: last_eos_idx + 1]
+
+        if full_ids[: len(prefix_ids)] != prefix_ids:
+            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
+
+        return full_ids[len(prefix_ids) :]
+
+    def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, images, multimodal_fields):
+        # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
+        tool_calls = [completion[0].get("tool_calls") for completion in completions]
+        idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
+        tool_calls = [tool_calls[idx] for idx in idxs_with_tool]
+        tool_mask = [[1] * len(ids) for ids in completion_ids]  # 0 for tool result tokens, 1 elsewhere
+        tool_call_count = 0
+        tool_failure_count = 0
+        iteration_num = 0
+        while idxs_with_tool and iteration_num < self.max_tool_calling_iterations:
+            prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
+
+            # Call the tools, and build the new prompt for generation
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                tool_call_list = tool_calls[idx]
+                prompt_completion_tool = prompt_completion_tools[idx]
+                sync_tool_dict = self._sync_tool_dicts[idx_with_tool]
+                async_tool_dict = self._async_tool_dicts[idx_with_tool]
+                # Append the last assistant message (which triggered tool_calls) to the prompt
+                prompt_completion_tool.append(completions[idx_with_tool][-1])
+                async_coros = []
+                tool_call_results = []
+                for tool_call in tool_call_list:
+                    tool_call_count += 1
+                    if tool_call["type"] == "function":
+                        function = tool_call["function"]
+                        name = function["name"]
+                        try:
+                            if name in sync_tool_dict:
+                                tool_call_results.append((name, sync_tool_dict[name](**function["arguments"])))
+                            elif name in async_tool_dict:
+                                async_coros.append((name, async_tool_dict[name](**function["arguments"])))
+                            else:
+                                raise ValueError(f"Tool {name} not found.")
+                        except Exception as e:
+                            tool_failure_count += 1
+                            result = {"error": str(e)}
+                            tool_call_results.append((name, result))
+                    else:
+                        tool_failure_count += 1
+                        name = tool_call.get("name", "unknown")
+                        tool_call_results.append((name, {"error": f"Unsupported tool call type: {tool_call['type']}"}))
+
+                if async_coros:
+
+                    async def _run_async_tools(async_coros):
+                        coros = [coro for _, coro in async_coros]
+                        results = await asyncio.gather(*coros, return_exceptions=True)
+                        return [(name, result) for (name, _), result in zip(async_coros, results, strict=False)]
+
+                    async_results = asyncio.run_coroutine_threadsafe(
+                        _run_async_tools(async_coros), self.async_loop
+                    ).result()
+
+                    for name, result in async_results:
+                        if isinstance(result, Exception):
+                            tool_failure_count += 1
+                            tool_call_results.append((name, {"error": str(result)}))
+                        else:
+                            tool_call_results.append((name, result))
+
+                for name, result in tool_call_results:
+                    tool_message = {"role": "tool", "name": name, "content": str(result)}
+                    prompt_completion_tool.append(tool_message)
+                    completions[idx_with_tool].append(tool_message)
+
+            # Build token IDs by concatenation: prompt + completion + tool_suffix.
+            prompt_completion_tool_ids = []
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                # Extract trailing tool messages from completions
+                tool_messages = []
+                for message in reversed(completions[idx_with_tool]):
+                    if message["role"] == "tool":
+                        tool_messages.insert(0, message)
+                    else:
+                        break
+                suffix_ids = self._get_tool_suffix_ids(tool_messages)
+                prompt_completion_tool_ids.append(
+                    prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids
+                )
+
+            # Filter samples whose length exceeds max allowed length. This is important, because both
+            # vLLM and transformers will error out if the input is longer than the model's max length.
+            if self.use_vllm and self.vllm_mode == "colocate":
+                max_model_len = self.vllm_generation.llm.llm_engine.model_config.max_model_len
+            elif self.use_vllm and self.vllm_mode == "server":
+                max_model_len = self.model.config.max_position_embeddings
+            elif not self.use_vllm:
+                max_model_len = self.model.config.max_position_embeddings
+            else:
+                raise NotImplementedError(
+                    f"Unsupported mode detected: use_vllm={self.use_vllm}, vllm_mode={self.vllm_mode}"
+                )
+            overlong = [len(pct) >= max_model_len for pct in prompt_completion_tool_ids]
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                if overlong[idx]:
+                    prompt_length = len(prompt_ids[idx_with_tool])
+                    ct = prompt_completion_tool_ids[idx][prompt_length : prompt_length + self.max_completion_length]
+                    completion_ids[idx_with_tool] = ct
+                    tool_mask[idx_with_tool] += [1] * (len(ct) - len(tool_mask[idx_with_tool]))
+            # Keep only non-overlong items for further processing
+            idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
+            prompt_completion_tools = [pct for pct, o in zip(prompt_completion_tools, overlong, strict=True) if not o]
+            prompt_completion_tool_ids = [
+                pct for pct, o in zip(prompt_completion_tool_ids, overlong, strict=True) if not o
+            ]
+            if not idxs_with_tool:
+                break  # all overlong, exit tool loop
+
+            # Filter images and multimodal fields to match the current subset (index into full batch)
+            loop_images = [images[i] for i in idxs_with_tool] if images else None
+            loop_multimodal_fields = (
+                {k: [v[i] for i in idxs_with_tool] for k, v in multimodal_fields.items()} if multimodal_fields else {}
+            )
+
+            # Generate new completions after tool execution (using concatenated IDs, no re-tokenization)
+            post_tool_ids = self._generate_single_turn(prompt_completion_tool_ids, loop_images, loop_multimodal_fields)
+
+            # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                prompt_len = len(prompt_ids[idx_with_tool])
+                completion_tool_ids = prompt_completion_tool_ids[idx][prompt_len:]
+                excess_length = len(completion_tool_ids) + len(post_tool_ids[idx]) - self.max_completion_length
+                if excess_length > 0:
+                    # If exceeding max length, truncate post_tool_ids
+                    post_tool_ids[idx] = post_tool_ids[idx][:-excess_length]
+                    excess_length = len(completion_tool_ids) + len(post_tool_ids[idx]) - self.max_completion_length
+                    if excess_length > 0:
+                        # If still exceeding max length, truncate completion_tool_ids as well
+                        prompt_completion_tool_ids[idx] = prompt_completion_tool_ids[idx][:-excess_length]
+
+            # Update tool_mask: the tool result should be 0 and the post-tool 1
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                prompt_completion_tool_length = len(prompt_completion_tool_ids[idx])
+                prompt_length = len(prompt_ids[idx_with_tool])
+                completion_length = len(completion_ids[idx_with_tool])
+                post_tool_length = len(post_tool_ids[idx])
+                tool_length = prompt_completion_tool_length - prompt_length - completion_length
+                tool_mask[idx_with_tool] += [0] * tool_length + [1] * post_tool_length
+
+            # Update completion_ids with the new completions (after tool execution)
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                prompt_length = len(prompt_ids[idx_with_tool])
+                pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
+                completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
+
+            # Decode post-tool completions
+            post_tool_completions = [
+                parse_response(self.processing_class, ids) if ids else {} for ids in post_tool_ids
+            ]
+
+            # Add post-tool completions to the existing completions
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                if post_tool_completions[idx]:  # {} if post-tool completions completely truncated
+                    completions[idx_with_tool].append(post_tool_completions[idx])
+
+            # Check for further tool calls
+            tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
+            idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
+            tool_calls = [tool_call for tool_call in tool_calls if tool_call]
+            iteration_num += 1
+
+        return tool_mask, completions, completion_ids, tool_call_count, tool_failure_count
+
     def _generate(self, prompts: list):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
@@ -1049,14 +1313,37 @@ class RLOOTrainer(_BaseTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
-            contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-            completions = [[{"role": "assistant", "content": content}] for content in contents]
+            if (
+                Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
+                and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
+                and hasattr(self.processing_class, "response_schema")  # attribute not set by default for now
+                and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
+            ):
+                completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
+            else:
+                contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+                completions = [[{"role": "assistant", "content": content}] for content in contents]
         else:
             completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
 
+        # Extract tool calls from the completions and (possibly) execute them
+        if self.tools:
+            (
+                tool_mask,
+                completions,
+                completion_ids,
+                tool_call_count,
+                tool_failure_count,
+            ) = self._tool_call_loop(prompts, prompt_ids, completion_ids, completions, images, multimodal_fields)
+        else:
+            tool_mask = None
+
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
-        completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
+        if tool_mask is not None:  # count only model-generated tokens (tool_mask=1)
+            completion_lengths = torch.tensor([sum(mask) for mask in tool_mask], device=device)
+        else:
+            completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
         total_prompt_tokens = agg_prompt_lengths.sum()
@@ -1084,7 +1371,17 @@ class RLOOTrainer(_BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids, completions
+        if self.tools:
+            agg_tool_call_count = self.accelerator.gather(torch.tensor(tool_call_count, device=device)).sum()
+            tool_call_frequency = (agg_tool_call_count / len(agg_prompt_lengths)).item()
+            self._metrics[mode]["tools/call_frequency"].append(tool_call_frequency)
+            agg_tool_failure_count = self.accelerator.gather(torch.tensor(tool_failure_count, device=device)).sum()
+            failure_frequency = (
+                (agg_tool_failure_count / agg_tool_call_count).item() if agg_tool_call_count > 0 else 0.0
+            )
+            self._metrics[mode]["tools/failure_frequency"].append(failure_frequency)
+
+        return prompt_ids, completion_ids, tool_mask, completions
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, torch.Tensor | Any]]
@@ -1120,7 +1417,7 @@ class RLOOTrainer(_BaseTrainer):
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
-        prompt_ids_list, completion_ids_list, completions = self._generate(prompts)
+        prompt_ids_list, completion_ids_list, tool_mask_list, completions = self._generate(prompts)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
@@ -1145,13 +1442,23 @@ class RLOOTrainer(_BaseTrainer):
         completion_mask = pad(
             completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
+        if tool_mask_list is not None:
+            tool_mask = [torch.tensor(mask) for mask in tool_mask_list]
+            tool_mask = pad(
+                tool_mask, padding_value=1, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            ).to(device=device)
+        else:
+            tool_mask = None
 
-        # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
+        # If mask_truncated_completions is enabled, zero out truncated completions for attention and loss masking
         if self.mask_truncated_completions:
             eos_and_pad = [self.eos_token_id, self.pad_token_id]
-            # Mask completion_mask for attention masking
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+            # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
+            # Also mask tool_mask for consistency in multi-turn training
+            if tool_mask is not None:
+                tool_mask = tool_mask * (~is_truncated).unsqueeze(1).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
@@ -1165,7 +1472,9 @@ class RLOOTrainer(_BaseTrainer):
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
             prompts_text = [
-                apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
+                apply_chat_template(
+                    {"prompt": prompt}, self.processing_class, tools=self.tools, **self.chat_template_kwargs
+                )["prompt"]
                 for prompt in prompts
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
@@ -1205,6 +1514,8 @@ class RLOOTrainer(_BaseTrainer):
         # When gradient checkpointing is enabled with use_reentrant=True (non default), calling the model inside a
         # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
         # Temporarily disable checkpointing to avoid this warning during inference.
+        mask = completion_mask if tool_mask is None else completion_mask * tool_mask
+
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             # Compute the per-token log probabilities for the current model
             old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
@@ -1216,7 +1527,7 @@ class RLOOTrainer(_BaseTrainer):
                 num_images=num_images,
                 **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
             )
-            old_logps = (old_per_token_logps * completion_mask).sum(1)  # mask out padding and tokens after EOS
+            old_logps = (old_per_token_logps * mask).sum(1)  # mask out padding, tokens after EOS, and tool results
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
@@ -1269,7 +1580,7 @@ class RLOOTrainer(_BaseTrainer):
         if self.beta != 0.0:
             per_token_kl = old_per_token_logps - ref_per_token_logps
             # Apply sequence-level KL penalty to rewards (sum KL across tokens first, then apply to each sequence)
-            kl = (per_token_kl * completion_mask).sum(-1)
+            kl = (per_token_kl * mask).sum(-1)
             kl = gather(kl)  # rewards are gathered, so kl must be too
             rewards = rewards - self.beta * kl
 
@@ -1305,7 +1616,7 @@ class RLOOTrainer(_BaseTrainer):
 
         # Calculate and log the mean KL divergence between current and reference model
         if self.beta != 0.0:
-            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            mean_kl = (per_token_kl * mask).sum() / mask.sum().clamp(min=1.0)
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
@@ -1370,6 +1681,8 @@ class RLOOTrainer(_BaseTrainer):
             output["image_position_ids"] = forward_kwargs["image_position_ids"]
         if images is not None:
             output["num_images"] = num_images
+        if tool_mask is not None:
+            output["tool_mask"] = tool_mask
         return output
 
     @profiling_decorator
@@ -1385,6 +1698,7 @@ class RLOOTrainer(_BaseTrainer):
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
 
         # Compute the per_token_logps and the entropy at each position in the completion
         per_token_logps, entropies = self._get_per_token_logps_and_entropies(
@@ -1403,7 +1717,7 @@ class RLOOTrainer(_BaseTrainer):
             image_position_ids=inputs.get("image_position_ids"),
         )
 
-        logps = (per_token_logps * completion_mask).sum(1)  # mask out padding and tokens after EOS
+        logps = (per_token_logps * mask).sum(1)  # mask out padding, tokens after EOS, and tool results
         old_logps = inputs["old_logps"]
         log_ratio = logps - old_logps
 
@@ -1420,7 +1734,7 @@ class RLOOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
 
         # Entropy
-        mean_entropy = (entropies * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        mean_entropy = (entropies * mask).sum() / mask.sum().clamp(min=1.0)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
         # Compute the clipped probability ratios

@@ -104,6 +104,10 @@ class GRPOConfig(_BaseConfig):
             tokens.
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
+        max_tool_calling_iterations (`int`, *optional*):
+            Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
+            stops when the model generates a response turn with no tool calls or when the total response length reaches
+            `max_model_length`.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -279,10 +283,6 @@ class GRPOConfig(_BaseConfig):
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
             `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
-        max_tool_calling_iterations (`int`, *optional*):
-            Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
-            stops when the model generates a response turn with no tool calls or when the total response length reaches
-            `max_model_length`.
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
             recomputed training logprobs. If set to `False`, no IS is applied regardless of
@@ -489,6 +489,14 @@ class GRPOConfig(_BaseConfig):
     cache_implementation: str | None = field(
         default=None,
         metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
+    )
+    max_tool_calling_iterations: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
+            "generation stops when the model generates a response turn with no tool calls or when the total "
+            "response length reaches `max_model_length`."
+        },
     )
 
     # Parameters that control generation acceleration powered by vLLM
@@ -779,14 +787,6 @@ class GRPOConfig(_BaseConfig):
             "[0.0-1.0]. A value of `0.0` masks all but the highest entropy token; `1.0` keeps all tokens. The paper "
             "recommends a value of `0.2`. If used with `mask_truncated_completions=True`, only tokens from "
             "non-truncated completions are considered."
-        },
-    )
-    max_tool_calling_iterations: int | None = field(
-        default=None,
-        metadata={
-            "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
-            "generation stops when the model generates a response turn with no tool calls or when the total "
-            "response length reaches `max_model_length`."
         },
     )
     vllm_importance_sampling_correction: bool = field(

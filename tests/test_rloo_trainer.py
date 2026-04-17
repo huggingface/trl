@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Callable
 from unittest.mock import patch
 
 import pytest
@@ -29,11 +30,39 @@ from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
 
-from .testing_utils import TrlTestCase, require_peft, require_vision, require_vllm
+from .testing_utils import TrlTestCase, require_jmespath, require_peft, require_vision, require_vllm
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
+
+
+def multiply_tool(a: int, b: int) -> int:
+    """
+    Multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
+
+
+async def async_multiply_tool(a: int, b: int) -> int:
+    """
+    Asynchronously multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
 
 
 class TestRLOOTrainer(TrlTestCase):
@@ -1620,6 +1649,150 @@ class TestRLOOTrainer(TrlTestCase):
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_jmespath
+    @pytest.mark.parametrize("tools", [[multiply_tool], [async_multiply_tool]])
+    def test_training_with_tools(self, tools: list[Callable]):
+        # In this test, we define a simple tool that multiplies two integers. Regardless of the input prompt,
+        # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
+        # succeed and the other will fail (because of a wrong argument name).
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            tools=tools,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        tool_name = tools[0].__name__
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 3:  # first call
+                # fmt: off
+                if tool_name == "multiply_tool":
+                    completion_ids = torch.tensor(
+                        [
+                            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+                            [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
+                            # an invalid tool call with wrong argument name
+                            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
+                            [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
+                            # "I don't know any tool<|im_end|>"
+                            [40, 1513, 944, 1414, 894, 5392, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                        ],
+                        device=input_ids.device,
+                    )
+                elif tool_name == "async_multiply_tool":
+                    completion_ids = torch.tensor(
+                        [
+                            # '<tool_call>\n{"name": "async_multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+                            [151657, 198, 4913, 606, 788, 330, 7692, 93054, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
+                            # an invalid tool call with wrong argument name
+                            # '<tool_call>\n{"name": "async_multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
+                            [151657, 198, 4913, 606, 788, 330, 7692, 93054, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
+                            # "I don't know any tool<|im_end|>"
+                            [40, 1513, 944, 1414, 894, 5392, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                        ],
+                        device=input_ids.device,
+                    )
+                # fmt: on
+            else:  # second call will only have two inputs in the batch, because two examples have a tool call.
+                completion_ids = torch.tensor(
+                    [
+                        # 'Done!<|im_end|>'
+                        [17453, 0, 151645],
+                        # 'Done!<|im_end|>'
+                        [17453, 0, 151645],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] is not None
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_jmespath
+    def test_training_with_malformed_tool_calls(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            # If input_ids.shape[0] < 3, it means that it's a second call, which should not happen here
+            assert input_ids.shape[0] == 3
+            # fmt: off
+            completion_ids = torch.tensor(
+                [
+                    # '<tool_call>\n{"arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+                    [151657, 198, 4913, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645, 151643, 151643, 151643, 151643, 151643],
+                    # '<toolcall>\n{"arguments": {"a": 3, "b": 4}}\n</toolcall><|im_end|>'
+                    [27, 14172, 6659, 397, 4913, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 522, 14172, 6659, 29, 151645],
+                    # '<tool_call>\n{"arguments": {a: 3, b: 4}}\n</tool_call><|im_end|>'
+                    [151657, 198, 4913, 16370, 788, 314, 64, 25, 220, 18, 11, 293, 25, 220, 19, 11248, 151658, 151645, 151643, 151643, 151643, 151643, 151643, 151643],
+                ],
+                device=input_ids.device,
+            )
+            # fmt: on
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
