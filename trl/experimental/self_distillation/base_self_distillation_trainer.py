@@ -76,6 +76,8 @@ logger = get_logger(__name__)
 
 @dataclass
 class RolloutBatch:
+    """Student-side rollout produced by `sample_rollouts`, consumed by `finalize_batch` to form a `TrainingBatch`."""
+
     prompt_ids: torch.Tensor
     prompt_mask: torch.Tensor
     completion_ids: torch.Tensor
@@ -286,7 +288,25 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
                 )
 
     def _setup_teacher_model(self) -> None:
-        """Prepare teacher state according to the semantic teacher choice."""
+        """Prepare teacher state according to the semantic teacher choice.
+
+        Resolve `teacher_model_kind` × PEFT state into the effective teacher:
+
+            - `"live"` (any model):
+                Teacher is the student. No divergence, no callback.
+            - `"base"` + PEFT model:
+                Teacher reuses `self.model`; the base weights are recovered downstream by disabling the adapter
+                via `use_adapter` during teacher forward.
+            - `"base"` + non-PEFT model:
+                Teacher is a frozen deepcopy of the initial student (falls through to the copy branch below).
+            - `"ema"` + pure-LoRA training:
+                Teacher reuses `self.model`; a dedicated `"teacher"` LoRA adapter is attached and updated by
+                `PEFTAdapterEMACallback`. Teacher forward switches to that adapter downstream.
+            - `"ema"` (otherwise):
+                Teacher is a frozen deepcopy synchronized each step by `SyncTeacherModelCallback`.
+
+        Must be called after `super().__init__` so that `self.callback_handler` is available.
+        """
 
         teacher_model_kind = self.args.teacher_model_kind
 
@@ -299,6 +319,7 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
             return
 
         if self._use_peft_ema_teacher_adapter():
+            # Must run after super().__init__ so self.callback_handler exists.
             self.add_callback(
                 PEFTAdapterEMACallback(
                     model=self.model,
@@ -330,6 +351,7 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         return self.args.teacher_model_kind == "ema" and self._is_pure_lora_training()
 
     def _is_pure_lora_training(self) -> bool:
+        """Return `True` when the active adapter is LoRA and every trainable parameter is a LoRA parameter."""
         if not is_peft_model(self.model):
             return False
 
@@ -397,6 +419,11 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         return output
 
     def _prepare_inputs(self, generation_batch):
+        """Return the per-step training batch, regenerating rollouts and buffering them for reuse in train mode.
+
+        In train mode, rollouts are generated once every `steps_per_generation * num_iterations` steps and split
+        into per-step slices reused until the next regeneration. In eval mode, every batch is freshly prepared.
+        """
         mode = "train" if self.model.training else "eval"
         if mode == "train":
             generate_every = self.args.steps_per_generation * self.num_iterations
@@ -412,10 +439,10 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         return self._prepare_training_batch(generation_batch)
 
     def _prepare_training_batch(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
+        """Sample student rollouts and let the subclass finalize them into the final `TrainingBatch`."""
         rollout_batch = self.sample_rollouts(inputs)
 
         batch = self.finalize_batch(inputs, rollout_batch)
-        self._validate_training_batch(batch)
 
         self._dispatch_self_distillation_callback(
             "on_self_distillation_batch_prepared",
@@ -428,7 +455,7 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         )
         return batch
 
-    def _tokenize_prompts(self, prompts: list[Any]) -> list[list[int]]:
+    def _tokenize_prompts_untruncated(self, prompts: list[Any]) -> list[list[int]]:
         if is_conversational({"prompt": prompts[0]}):
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
@@ -440,6 +467,10 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
             prompt_ids = tokenized["input_ids"]
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
+        return prompt_ids
+
+    def _tokenize_prompts(self, prompts: list[Any]) -> list[list[int]]:
+        prompt_ids = self._tokenize_prompts_untruncated(prompts)
         if self.max_prompt_length is not None:
             prompt_ids = [ids[-self.max_prompt_length :] for ids in prompt_ids]
         return prompt_ids
@@ -568,24 +599,31 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
 
         return old_per_token_logps
 
-    def _allow_topk_without_full_logit_distillation(self) -> bool:
-        return True
-
     def _compute_self_distillation_loss(
         self,
         model,
         inputs: TrainingBatch,
         distillation_logits: DistillationLogits,
     ) -> torch.Tensor:
+        """Compute the per-token distillation loss and aggregate it according to `loss_type`.
+
+        Dispatches between three objectives based on config:
+
+            - `distillation_topk` is not `None`: top-k approximation of the divergence, optionally with a tail
+              bucket for the remaining probability mass (`distillation_add_tail`).
+            - `full_logit_distillation` is `True`: full-vocab divergence.
+            - otherwise: token-level (reverse-KL) distillation on sampled `completion_ids`.
+
+        When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a
+        clipped importance-sampling ratio between the current student and the student at rollout time.
+        """
         if distillation_logits.response_mask.sum() == 0:
             mode = "train" if model.training else "eval"
             self._log_self_distillation_metric(mode, 0.0)
-            return torch.tensor(0.0, device=distillation_logits.completion_ids.device, requires_grad=True)
+            # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
+            return distillation_logits.student_logits.sum() * 0.0
 
-        use_topk_distillation = self.args.distillation_topk is not None and (
-            self.args.full_logit_distillation or self._allow_topk_without_full_logit_distillation()
-        )
-        if use_topk_distillation:
+        if self.args.distillation_topk is not None:
             per_token_loss = compute_topk_self_distillation_loss(
                 distillation_logits.student_logits,
                 distillation_logits.teacher_logits,
@@ -638,6 +676,10 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         teacher_model,
         inputs: TrainingBatch,
     ) -> DistillationLogits:
+        """Run student and teacher forwards on their respective inputs and pack aligned logits into a `DistillationLogits`.
+
+        The teacher forward runs under the teacher context resolved by `_get_teacher_context_for_self_distillation`.
+        """
         prompt_ids = inputs["prompt_ids"]
         prompt_mask = inputs["prompt_mask"]
         completion_ids = inputs["completion_ids"]
@@ -721,6 +763,7 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         attention_mask: torch.Tensor,
         logits_to_keep: int,
     ) -> torch.Tensor:
+        """Forward the model and return temperature-scaled logits aligned to the completion tokens."""
         model_inputs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
@@ -734,41 +777,34 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         logits = logits[:, -logits_to_keep:, :]
         return logits / self.temperature
 
-    def _validate_training_batch(self, batch: TrainingBatch) -> None:
-        required_keys = {
-            "prompt_ids",
-            "prompt_mask",
-            "completion_ids",
-            "completion_mask",
-            "teacher_input_ids",
-            "teacher_attention_mask",
-        }
-        missing_keys = required_keys.difference(batch)
-        if missing_keys:
-            raise ValueError(f"`finalize_batch` must return all required batch keys. Missing: {sorted(missing_keys)}")
-
-        batch_size = batch["prompt_ids"].size(0)
-        if batch["prompt_mask"].size(0) != batch_size:
-            raise ValueError("`prompt_mask` must have the same batch size as `prompt_ids`.")
-        if batch["completion_ids"].size(0) != batch_size or batch["completion_mask"].size(0) != batch_size:
-            raise ValueError("`completion_ids` and `completion_mask` must match the student batch size.")
-        if batch["teacher_input_ids"].size(0) != batch_size or batch["teacher_attention_mask"].size(0) != batch_size:
-            raise ValueError("`teacher_input_ids` and `teacher_attention_mask` must match the student batch size.")
-        if batch["teacher_input_ids"].size(1) != batch["teacher_attention_mask"].size(1):
-            raise ValueError("`teacher_input_ids` and `teacher_attention_mask` must have the same sequence length.")
-        if "self_distillation_mask" in batch and batch["self_distillation_mask"] is not None:
-            if batch["self_distillation_mask"].size(0) != batch_size:
-                raise ValueError("`self_distillation_mask` must match the batch size when provided.")
-
     def finalize_batch(
         self,
         inputs: list[dict[str, Any]],
         rollout_batch: RolloutBatch,
     ) -> TrainingBatch:
-        """Build the final training batch from a shared student rollout batch."""
+        """Build the final training batch from a shared student rollout batch.
+
+        Subclasses must return a `dict` with at least the following keys, all first-dim-aligned to the student
+        batch size `B`:
+
+            - `prompt_ids`: student prompt ids.
+            - `prompt_mask`: student prompt mask.
+            - `completion_ids`: student completion ids.
+            - `completion_mask`: student completion mask.
+            - `teacher_input_ids`: teacher input ids.
+            - `teacher_attention_mask`: teacher attention mask.
+        """
         return rollout_batch.as_dict()
 
     def _get_teacher_context_for_self_distillation(self):
+        """Return the context manager that routes the teacher forward to the correct weights.
+
+        For non-PEFT models this is a no-op. For PEFT models:
+
+            - `teacher_model_kind == "base"`: disable the student adapter so the teacher forward uses the base weights.
+            - `teacher_model_kind == "ema"` under pure-LoRA training: switch to the `"teacher"` LoRA adapter.
+            - otherwise: no-op; the teacher is a separate deepcopy.
+        """
         teacher_model_kind = self.args.teacher_model_kind
         if not is_peft_model(self.model):
             return nullcontext()
@@ -782,7 +818,7 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         return nullcontext()
 
     def _log_self_distillation_metric(self, mode: str, value: float) -> None:
-        metric_prefix = getattr(self, "_name", "self_distillation").lower().replace(" ", "_")
+        metric_prefix = self._name.lower().replace(" ", "_")
         self._metrics[mode]["self_distillation/distillation_loss"].append(value)
         self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
 

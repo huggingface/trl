@@ -45,12 +45,8 @@ class SelfDistillationConfig(_BaseConfig):
 
         > Parameters that control the online policy objective
 
-        beta (`float`, *optional*, defaults to `0.0`):
-            Reference-model KL coefficient for online policy optimization.
         loss_type (`str`, *optional*, defaults to `"dapo"`):
             Policy-loss aggregation mode. Supported: `grpo`, `bnpo`, `dr_grpo`, `dapo`.
-        scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
-            Reward normalization mode. Supported: `group`, `batch`, `none`.
 
         > Parameters that control teacher construction
 
@@ -212,33 +208,9 @@ class SelfDistillationConfig(_BaseConfig):
         default=None,
         metadata={"help": "Model context length for vLLM. Inferred from model config if not set."},
     )
-    beta: float = field(
-        default=0.0,
-        metadata={"help": "Reference-model KL coefficient for online policy optimization."},
-    )
     num_iterations: int = field(
         default=1,
         metadata={"help": "Number of optimization iterations per generated batch."},
-    )
-    epsilon: float = field(
-        default=0.2,
-        metadata={"help": "Lower clipping coefficient for GRPO-style policy loss."},
-    )
-    epsilon_high: float | None = field(
-        default=None,
-        metadata={"help": "Upper clipping coefficient. Defaults to `epsilon` when unset."},
-    )
-    importance_sampling_level: str = field(
-        default="token",
-        metadata={"help": "Importance-sampling granularity. Supported: `token`, `sequence`."},
-    )
-    reward_weights: list[float] | None = field(
-        default=None,
-        metadata={"help": "Optional weights for multiple reward functions."},
-    )
-    scale_rewards: str | bool = field(
-        default="group",
-        metadata={"help": "Reward normalization mode. Supported: `group`, `batch`, `none`."},
     )
     loss_type: str = field(
         default="dapo",
@@ -307,12 +279,6 @@ class SelfDistillationConfig(_BaseConfig):
     def __post_init__(self):
         super().__post_init__()
 
-        self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
-        if self.scale_rewards not in ["group", "batch", "none"]:
-            raise ValueError("scale_rewards must be one of: 'group', 'batch', 'none'")
-
-        if self.importance_sampling_level not in ["token", "sequence"]:
-            raise ValueError("importance_sampling_level must be either 'token' or 'sequence'")
         if self.loss_type not in ["grpo", "bnpo", "dr_grpo", "dapo"]:
             raise ValueError("loss_type must be one of: 'grpo', 'bnpo', 'dr_grpo', 'dapo'")
         if self.teacher_model_kind not in {"base", "live", "ema"}:
@@ -364,6 +330,3 @@ class SelfDistillationConfig(_BaseConfig):
                     f"The global eval batch size ({self.per_device_eval_batch_size} * {num_processes}) must be "
                     f"divisible by the number of generations used for evaluation ({num_generations_eval})."
                 )
-
-        if self.epsilon_high is None:
-            self.epsilon_high = self.epsilon

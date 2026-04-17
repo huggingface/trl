@@ -156,6 +156,9 @@ class SDFTTrainer(BaseSelfDistillationTrainer):
         ):
             raise NotImplementedError("Iterable eval datasets are not yet supported in SDFTTrainer.")
 
+        self.num_loss_tokens_to_skip = args.num_loss_tokens_to_skip
+        self.teacher_context_builder = DemonstrationTeacherContextBuilder(self)
+
         super().__init__(
             model=model,
             args=args,
@@ -166,9 +169,6 @@ class SDFTTrainer(BaseSelfDistillationTrainer):
             optimizers=optimizers,
             peft_config=peft_config,
         )
-
-        self.num_loss_tokens_to_skip = args.num_loss_tokens_to_skip
-        self.teacher_context_builder = DemonstrationTeacherContextBuilder(self)
 
     def finalize_batch(
         self,
@@ -196,14 +196,24 @@ class SDFTTrainer(BaseSelfDistillationTrainer):
         if return_outputs:
             raise ValueError("The SDFTTrainer does not support returning outputs")
 
-        if self.num_loss_tokens_to_skip > 0:
-            inputs = dict(inputs)
-            completion_mask = inputs["completion_mask"].clone()
-            token_positions = torch.arange(completion_mask.size(1), device=completion_mask.device).unsqueeze(0)
-            completion_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
-            inputs["completion_mask"] = completion_mask
-
         distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
         loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
         accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
         return loss / accumulation_scale
+
+    def _build_self_distillation_response_mask(
+        self,
+        completion_mask: torch.Tensor,
+        self_distillation_mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        response_mask = BaseSelfDistillationTrainer._build_self_distillation_response_mask(
+            completion_mask,
+            self_distillation_mask,
+        )
+        if self.num_loss_tokens_to_skip <= 0:
+            return response_mask
+
+        # SDFT skips the first few completion tokens only in the distillation loss to suppress teacher-prompt artifacts.
+        token_positions = torch.arange(response_mask.size(1), device=response_mask.device).unsqueeze(0)
+        skip_mask = (token_positions >= self.num_loss_tokens_to_skip).long()
+        return response_mask * skip_mask

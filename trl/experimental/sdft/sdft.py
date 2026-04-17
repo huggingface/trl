@@ -117,14 +117,6 @@ class SDFTScriptArguments(ScriptArguments):
     )
 
 
-@dataclass
-class ExampleSDFTConfig(SDFTConfig):
-    scale_rewards: str = field(
-        default="group",
-        metadata={"help": "Reward normalization mode. Supported: `group`, `batch`, `none`."},
-    )
-
-
 def _extract_prompt_text(prompt: Any) -> str:
     if isinstance(prompt, str):
         return prompt
@@ -318,7 +310,7 @@ def _run_tooluse_eval(
 
 
 if __name__ == "__main__":
-    parser = TrlParser((SDFTScriptArguments, ExampleSDFTConfig, ModelConfig))
+    parser = TrlParser((SDFTScriptArguments, SDFTConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
 
     if model_args.model_name_or_path is None:

@@ -65,30 +65,12 @@ class SuccessfulRolloutTeacherContextBuilder:
     def _tokenize_teacher_messages(
         self, teacher_messages_list: list[str | list[dict[str, Any]]]
     ) -> dict[str, torch.Tensor]:
-        teacher_prompt_ids_list = []
         device = self.trainer.accelerator.device
-        chat_template_kwargs = getattr(self.trainer, "chat_template_kwargs", {})
-        for msg in teacher_messages_list:
-            if isinstance(msg, list) and isinstance(msg[0], dict):
-                tokenized = self.trainer.processing_class.apply_chat_template(
-                    msg,
-                    tokenize=True,
-                    add_generation_prompt=True,
-                    return_tensors="pt",
-                    **chat_template_kwargs,
-                )
-                if isinstance(tokenized, torch.Tensor):
-                    ids = tokenized.squeeze(0)
-                else:
-                    ids = tokenized["input_ids"].squeeze(0)
-            else:
-                ids = self.trainer.processing_class.encode(msg, return_tensors="pt").squeeze(0)
-
-            if ids.shape[0] > self.trainer.args.max_reprompt_len:
-                ids = ids[-self.trainer.args.max_reprompt_len :]
-            teacher_prompt_ids_list.append(ids)
-
-        teacher_prompt_ids = [ids.to(device) for ids in teacher_prompt_ids_list]
+        teacher_prompt_ids_list = self.trainer._tokenize_prompts_untruncated(teacher_messages_list)
+        teacher_prompt_ids = [
+            torch.as_tensor(ids[-self.trainer.args.max_reprompt_len :], device=device)
+            for ids in teacher_prompt_ids_list
+        ]
         teacher_prompt_mask = [torch.ones(len(ids), dtype=torch.long, device=device) for ids in teacher_prompt_ids]
         return {
             "prompt_ids": pad(teacher_prompt_ids, padding_value=self.trainer.pad_token_id, padding_side="left"),
@@ -350,9 +332,6 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
                     self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
         self.teacher_context_builder = SuccessfulRolloutTeacherContextBuilder(self)
-
-    def _allow_topk_without_full_logit_distillation(self) -> bool:
-        return False
 
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
         device = self.accelerator.device
@@ -661,10 +640,11 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         if self.args.sdpo_policy_loss_mode == "hybrid":
             return self._compute_hybrid_loss(model, inputs)
 
-        if self.args.distillation_weight > 0.0:
+        elif self.args.sdpo_policy_loss_mode == "distillation_only":
             distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
             return self._compute_weighted_self_distillation_loss(model, inputs, distillation_logits)
-        else:
+
+        elif self.args.sdpo_policy_loss_mode == "policy_only":
             student_logits = self._compute_student_distillation_logits(
                 model=model,
                 prompt_ids=inputs["prompt_ids"],

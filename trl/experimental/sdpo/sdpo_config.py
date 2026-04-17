@@ -26,11 +26,26 @@ class SDPOConfig(SelfDistillationConfig):
     parameters used by Self-Distillation Policy Optimization (SDPO).
 
     Parameters:
+        > Parameters that control the online policy objective
+
+        beta (`float`, *optional*, defaults to `0.0`):
+            Reference-model KL coefficient for online policy optimization.
+        epsilon (`float`, *optional*, defaults to `0.2`):
+            Lower clipping coefficient for GRPO-style policy loss.
+        epsilon_high (`float` or `None`, *optional*):
+            Upper clipping coefficient. Defaults to `epsilon` when unset.
+        importance_sampling_level (`str`, *optional*, defaults to `"token"`):
+            Importance-sampling granularity. Supported: `token`, `sequence`.
+        reward_weights (`list[float]` or `None`, *optional*):
+            Optional weights for multiple reward functions.
+        scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
+            Reward normalization mode. Supported: `group`, `batch`, `none`.
+
         > Parameters that control the SDPO loss
 
         sdpo_policy_loss_mode (`str`, *optional*, defaults to `"distillation_only"`):
             How SDPO combines the online policy loss and self-distillation loss. Supported: `distillation_only`,
-            `hybrid`.
+            `policy_only`, `hybrid`.
         distillation_alpha (`float`, *optional*, defaults to `1.0`):
             Divergence interpolation coefficient. Token-level SDPO requires the official reverse-KL setting
             `distillation_alpha=1.0`.
@@ -61,6 +76,30 @@ class SDPOConfig(SelfDistillationConfig):
         default=True,
         metadata={"help": "Skip reprompting when model generates correct response."},
     )
+    beta: float = field(
+        default=0.0,
+        metadata={"help": "Reference-model KL coefficient for online policy optimization."},
+    )
+    epsilon: float = field(
+        default=0.2,
+        metadata={"help": "Lower clipping coefficient for GRPO-style policy loss."},
+    )
+    epsilon_high: float | None = field(
+        default=None,
+        metadata={"help": "Upper clipping coefficient. Defaults to `epsilon` when unset."},
+    )
+    importance_sampling_level: str = field(
+        default="token",
+        metadata={"help": "Importance-sampling granularity. Supported: `token`, `sequence`."},
+    )
+    reward_weights: list[float] | None = field(
+        default=None,
+        metadata={"help": "Optional weights for multiple reward functions."},
+    )
+    scale_rewards: str | bool = field(
+        default="group",
+        metadata={"help": "Reward normalization mode. Supported: `group`, `batch`, `none`."},
+    )
     distillation_alpha: float = field(
         default=1.0,
         metadata={
@@ -73,7 +112,7 @@ class SDPOConfig(SelfDistillationConfig):
     )
     sdpo_policy_loss_mode: str = field(
         default="distillation_only",
-        metadata={"help": "SDPO policy loss mode. Supported: `distillation_only`, `hybrid`."},
+        metadata={"help": "SDPO policy loss mode. Supported: `distillation_only`, `policy_only`, `hybrid`."},
     )
     teacher_model_kind: str = field(
         default="ema",
@@ -129,8 +168,19 @@ class SDPOConfig(SelfDistillationConfig):
 
     def __post_init__(self):
         super().__post_init__()
-        if self.sdpo_policy_loss_mode not in {"distillation_only", "hybrid"}:
-            raise ValueError("sdpo_policy_loss_mode must be one of: 'distillation_only', 'hybrid'")
+
+        self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
+        if self.scale_rewards not in ["group", "batch", "none"]:
+            raise ValueError("scale_rewards must be one of: 'group', 'batch', 'none'")
+
+        if self.importance_sampling_level not in ["token", "sequence"]:
+            raise ValueError("importance_sampling_level must be either 'token' or 'sequence'")
+
+        if self.epsilon_high is None:
+            self.epsilon_high = self.epsilon
+
+        if self.sdpo_policy_loss_mode not in {"distillation_only", "policy_only", "hybrid"}:
+            raise ValueError("sdpo_policy_loss_mode must be one of: 'distillation_only', 'policy_only', 'hybrid'")
         if self.sdpo_policy_loss_mode == "distillation_only" and self.distillation_weight <= 0:
             raise ValueError("distillation_only mode requires `distillation_weight > 0`.")
         if self.sdpo_policy_loss_mode == "hybrid" and self.distillation_weight <= 0:
