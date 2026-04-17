@@ -660,7 +660,8 @@ class TestParseResponse:
             prefix = prefix[0]
             text = text[0]
         response = text[len(prefix) :]
-        parsed = parse_response(processing_class, response)
+        tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
+        parsed = parse_response(tokenizer, response)
         assert parsed == expected
 
     def test_parse_response_with_reasoning_content(self, model_name):
@@ -690,7 +691,8 @@ class TestParseResponse:
             prefix = prefix[0]
             text = text[0]
         response = text[len(prefix) :]
-        parsed = parse_response(processing_class, response)
+        tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
+        parsed = parse_response(tokenizer, response)
         assert parsed == expected
 
     def test_parse_response_tool_call(self, model_name):
@@ -716,7 +718,8 @@ class TestParseResponse:
             prefix = prefix[0]
             text = text[0]
         response = text[len(prefix) :]
-        parsed = parse_response(processing_class, response)
+        tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
+        parsed = parse_response(tokenizer, response)
         assert parsed == expected
 
     def test_parse_response_tool_call_with_content(self, model_name):
@@ -741,7 +744,8 @@ class TestParseResponse:
             prefix = prefix[0]
             text = text[0]
         response = text[len(prefix) :]
-        parsed = parse_response(processing_class, response)
+        tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
+        parsed = parse_response(tokenizer, response)
         assert parsed == expected
 
     def test_parse_response_tool_call_without_arguments(self, model_name):
@@ -767,7 +771,8 @@ class TestParseResponse:
             prefix = prefix[0]
             text = text[0]
         response = text[len(prefix) :]
-        parsed = parse_response(processing_class, response)
+        tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
+        parsed = parse_response(tokenizer, response)
         assert parsed == expected
 
     def test_parse_response_multiple_tool_calls(self, model_name):
@@ -802,7 +807,8 @@ class TestParseResponse:
             prefix = prefix[0]
             text = text[0]
         response = text[len(prefix) :]
-        parsed = parse_response(processing_class, response)
+        tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
+        parsed = parse_response(tokenizer, response)
         assert parsed == expected
 
     def test_parse_response_malformed_tool_call(self, model_name):
