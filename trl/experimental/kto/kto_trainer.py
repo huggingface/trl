@@ -624,6 +624,7 @@ class KTOTrainer(_BaseTrainer):
         args: KTOConfig | None,
         dataset_name: str,
     ) -> Dataset:
+        tokenizer = getattr(processing_class, "tokenizer", processing_class)
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().main_process_first():
@@ -649,7 +650,7 @@ class KTOTrainer(_BaseTrainer):
             dataset = dataset.map(
                 _tokenize,
                 batched=True,
-                fn_kwargs={"tokenizer": processing_class},
+                fn_kwargs={"tokenizer": tokenizer},
                 num_proc=args.dataset_num_proc,
                 desc=f"Tokenizing {dataset_name} dataset",
             )
@@ -658,7 +659,7 @@ class KTOTrainer(_BaseTrainer):
                 _process_tokens,
                 fn_kwargs={
                     "prefix": "",
-                    "tokenizer": processing_class,
+                    "tokenizer": tokenizer,
                     "max_length": self.max_length,
                 },
                 num_proc=args.dataset_num_proc,
@@ -681,7 +682,7 @@ class KTOTrainer(_BaseTrainer):
                     _process_tokens,
                     fn_kwargs={
                         "prefix": "KL_",
-                        "tokenizer": processing_class,
+                        "tokenizer": tokenizer,
                         "max_length": self.max_length,
                     },
                     num_proc=args.dataset_num_proc,
