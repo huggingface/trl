@@ -182,6 +182,12 @@ if __name__ == "__main__":
     # train and save the model
     trainer.train()
 
+    # Run a final evaluation pass and persist the metrics
+    if training_args.eval_strategy != "no":
+        metrics = trainer.evaluate()
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
+
     # Save and push to hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
