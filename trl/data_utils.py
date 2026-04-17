@@ -199,7 +199,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
 
 def apply_chat_template(
     example: dict[str, list[dict[str, str]]],
-    tokenizer: PreTrainedTokenizerBase | ProcessorMixin,
+    processing_class: PreTrainedTokenizerBase | ProcessorMixin,
     tools: list[dict | Callable] | None = None,
     **template_kwargs,
 ) -> dict[str, str]:
@@ -224,7 +224,7 @@ def apply_chat_template(
 
     # Apply the chat template to the whole conversation
     if "messages" in example:
-        messages = tokenizer.apply_chat_template(
+        messages = processing_class.apply_chat_template(
             example["messages"],
             tools=tools,
             tokenize=False,
@@ -243,7 +243,7 @@ def apply_chat_template(
             continue_final_message = True
         else:
             raise ValueError(f"Invalid role in the last message: {last_role}")
-        prompt = tokenizer.apply_chat_template(
+        prompt = processing_class.apply_chat_template(
             example["prompt"],
             tools=tools,
             continue_final_message=continue_final_message,
@@ -256,7 +256,7 @@ def apply_chat_template(
     # Apply the chat template to the entire prompt + completion
     if "prompt" in example:  # explicit prompt and prompt-completion case
         if "chosen" in example:
-            prompt_chosen = tokenizer.apply_chat_template(
+            prompt_chosen = processing_class.apply_chat_template(
                 example["prompt"] + example["chosen"],
                 tools=tools,
                 tokenize=False,
@@ -270,7 +270,7 @@ def apply_chat_template(
 
             chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
-            prompt_rejected = tokenizer.apply_chat_template(
+            prompt_rejected = processing_class.apply_chat_template(
                 example["prompt"] + example["rejected"],
                 tools=tools,
                 tokenize=False,
@@ -283,7 +283,7 @@ def apply_chat_template(
             )
             rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
-            prompt_completion = tokenizer.apply_chat_template(
+            prompt_completion = processing_class.apply_chat_template(
                 example["prompt"] + example["completion"],
                 tools=tools,
                 tokenize=False,
@@ -297,7 +297,7 @@ def apply_chat_template(
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
-            chosen = tokenizer.apply_chat_template(
+            chosen = processing_class.apply_chat_template(
                 example["chosen"],
                 tools=tools,
                 tokenize=False,
@@ -305,7 +305,7 @@ def apply_chat_template(
                 **template_kwargs,
             )
         if "rejected" in example:
-            rejected = tokenizer.apply_chat_template(
+            rejected = processing_class.apply_chat_template(
                 example["rejected"],
                 tools=tools,
                 tokenize=False,
@@ -333,7 +333,7 @@ def apply_chat_template(
 
 def maybe_apply_chat_template(
     example: dict[str, list[dict[str, str]]],
-    tokenizer: PreTrainedTokenizerBase,
+    processing_class: PreTrainedTokenizerBase | ProcessorMixin,
     tools: list[dict | Callable] | None = None,
     **template_kwargs: Any,
 ) -> dict[str, str]:
@@ -356,7 +356,7 @@ def maybe_apply_chat_template(
             messages, where each message is a dictionary with keys `"role"` and `"content"`. Additionally, the example
             may contain a `"chat_template_kwargs"` key, which is a dictionary of additional keyword arguments to pass
             to the chat template renderer.
-        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
             Tokenizer to apply the chat template with.
         tools (`list[dict | Callable]`, *optional*):
             A list of tools (callable functions) that will be accessible to the model. If the template does not support
@@ -390,7 +390,7 @@ def maybe_apply_chat_template(
     ```
     """
     if is_conversational(example):
-        return apply_chat_template(example, tokenizer, tools, **template_kwargs)
+        return apply_chat_template(example, processing_class, tools, **template_kwargs)
     else:
         return example
 

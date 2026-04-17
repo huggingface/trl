@@ -18,12 +18,7 @@ import textwrap
 import pytest
 import transformers
 from packaging.version import Version
-from transformers import (
-    AutoModelForCausalLM,
-    AutoModelForSequenceClassification,
-    AutoProcessor,
-    AutoTokenizer,
-)
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoProcessor, AutoTokenizer
 
 from trl import clone_chat_template
 from trl.chat_template_utils import (
@@ -35,7 +30,7 @@ from trl.chat_template_utils import (
 )
 from trl.data_utils import prepare_multimodal_messages
 
-from .testing_utils import TrlTestCase, require_jmespath
+from .testing_utils import TrlTestCase, require_jmespath, require_vision
 
 
 class TestCloneChatTemplate(TrlTestCase):
@@ -345,6 +340,70 @@ class TestIsChatTemplatePrefixPreserving:
             {%- endif %}
         {%- endif %}""")
         assert is_chat_template_prefix_preserving(tokenizer) is False
+
+    @require_vision
+    def test_prefix_preserving_template_processor(self):
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration")
+        # Simple prefix-preserving template that mirrors how Qwen-VL templates emit image tokens: a list-of-blocks
+        # content is iterated, and `{"type": "image"}` blocks are rendered as `<|vision_start|><|image_pad|><|vision_end|>`.
+        # docstyle-ignore
+        processor.chat_template = textwrap.dedent(r"""
+        {%- for message in messages %}
+
+        {%- if message.role == 'user' %}
+            {{- '<|im_start|>user\n' }}
+            {%- if message.content is string %}
+                {{- message.content }}
+            {%- else %}
+                {%- for content in message.content %}
+                    {%- if content.type == 'image' or 'image' in content %}
+                        {{- '<|vision_start|><|image_pad|><|vision_end|>' }}
+                    {%- elif 'text' in content %}
+                        {{- content.text }}
+                    {%- endif %}
+                {%- endfor %}
+            {%- endif %}
+            {{- '<|im_end|>\n' }}
+        {%- elif message.role == 'assistant' %}
+            {{- '<|im_start|>assistant\n' }}
+            {%- if message.content is string %}
+                {{- message.content }}
+            {%- else %}
+                {%- for content in message.content %}
+                    {%- if 'text' in content %}
+                        {{- content.text }}
+                    {%- endif %}
+                {%- endfor %}
+            {%- endif %}
+            {%- if message.tool_calls %}
+                {%- for tool_call in message.tool_calls %}
+                    {%- if tool_call.function %}
+                        {%- set tool_call = tool_call.function %}
+                    {%- endif %}
+                    {{- '<tool_call>' + tool_call.name + '</tool_call>' }}
+                {%- endfor %}
+            {%- endif %}
+            {{- '<|im_end|>\n' }}
+        {%- elif message.role == 'tool' %}
+            {{- '<|im_start|>tool\n' }}
+            {%- if message.content is string %}
+                {{- message.content }}
+            {%- else %}
+                {%- for content in message.content %}
+                    {%- if 'text' in content %}
+                        {{- content.text }}
+                    {%- endif %}
+                {%- endfor %}
+            {%- endif %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+
+        {%- endfor %}
+
+        {%- if add_generation_prompt %}
+            {{- '<|im_start|>assistant\n' }}
+        {%- endif %}""")
+        assert is_chat_template_prefix_preserving(processor) is True
 
 
 @pytest.mark.parametrize(
