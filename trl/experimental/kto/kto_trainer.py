@@ -526,14 +526,14 @@ class KTOTrainer(_BaseTrainer):
             train_dataset = train_dataset.map(
                 _tokenize,
                 batched=True,
-                fn_kwargs={"tokenizer": processing_class},
+                fn_kwargs={"tokenizer": tokenizer},
                 num_proc=args.dataset_num_proc,
                 desc="Tokenizing train dataset",
             )
 
             fn_kwargs = {
                 "prefix": "",
-                "tokenizer": processing_class,
+                "tokenizer": tokenizer,
                 "max_length": self.max_length,
             }
 
@@ -548,7 +548,7 @@ class KTOTrainer(_BaseTrainer):
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
                     _tokenize,
-                    fn_kwargs={"tokenizer": processing_class},
+                    fn_kwargs={"tokenizer": tokenizer},
                     batched=True,
                     num_proc=args.dataset_num_proc,
                     desc="Tokenizing eval dataset",
