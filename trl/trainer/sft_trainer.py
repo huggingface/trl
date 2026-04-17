@@ -61,8 +61,12 @@ from .utils import (
     flush_left,
     get_config_model_id,
     pad,
+    patch_chunked_ce_lm_head,
     selective_log_softmax,
 )
+
+
+_CHUNKED_LM_HEAD_CHUNK_SIZE = 1024
 
 
 if is_peft_available():
@@ -976,8 +980,22 @@ class SFTTrainer(_BaseTrainer):
                         "passing a `compute_loss_func` is not allowed."
                     )
                 compute_loss_func = dft_loss
+            elif args.loss_type == "chunked_nll":
+                # Same math as `"nll"` but the `lm_head` matmul is skipped on ignored tokens and
+                # the CE is computed in chunks of tokens. Implemented by patching the model's
+                # forward before `super().__init__` so accelerate wraps the patched forward.
+                if self._is_vlm:
+                    raise ValueError("`loss_type='chunked_nll'` is not supported for VLM models yet.")
+                if peft_config is not None or is_peft_model(model):
+                    raise ValueError("`loss_type='chunked_nll'` is not supported with PEFT.")
+                patch_chunked_ce_lm_head(model, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE)
             else:
-                raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
+                raise ValueError(
+                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
+                    "'chunked_nll'."
+                )
+        elif args.loss_type == "chunked_nll":
+            raise ValueError("`loss_type='chunked_nll'` is not compatible with `use_liger_kernel=True`.")
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
@@ -1286,23 +1304,38 @@ class SFTTrainer(_BaseTrainer):
         )
 
         # Compute entropy
-        if not self.args.use_liger_kernel:  # liger doesn't return logits
+        if self.args.loss_type == "chunked_nll":
+            # Chunked-NLL path returns a scalar entropy directly (computed only on non-ignored tokens).
+            entropy = self.accelerator.gather_for_metrics(outputs.entropy).mean().item()
+            self._metrics[mode]["entropy"].append(entropy)
+        elif not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
-                per_token_entropy = entropy_from_logits(outputs.logits)
-                # When using Prompt Tuning, skip the virtual tokens in logits before entropy computation, since they
-                # do not correspond to actual input tokens.
+                # Shift logits/labels so entropy is averaged over the same set of tokens the loss is computed on
+                # (positions with `labels == -100` are skipped). This keeps the metric comparable across
+                # `completion_only_loss`, packing, and `chunked_nll`, which otherwise disagree on which
+                # positions to include.
+                if "shift_labels" in inputs:
+                    # When using CP or SP, labels are pre-shifted.
+                    shift_logits = outputs.logits.contiguous()
+                    shift_labels = inputs["shift_labels"]
+                else:
+                    shift_logits = outputs.logits[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+
+                # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
                 if (
                     self.num_virtual_tokens > 0
                     and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
                 ):
-                    per_token_entropy = per_token_entropy[:, self.num_virtual_tokens :]
-                if "attention_mask" in inputs:
-                    attention_mask = inputs["attention_mask"]
-                    entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
-                elif "position_ids" in inputs:
-                    entropy = torch.mean(per_token_entropy)
+                    shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
+
+                per_token_entropy = entropy_from_logits(shift_logits)
+                mask = shift_labels != -100
+                total = mask.sum()
+                if total > 0:
+                    entropy = (per_token_entropy * mask).sum() / total
                 else:
-                    raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+                    entropy = per_token_entropy.new_zeros(())
                 entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
             self._metrics[mode]["entropy"].append(entropy)
 
@@ -1319,11 +1352,11 @@ class SFTTrainer(_BaseTrainer):
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        if self.args.use_liger_kernel:
+        if self.args.use_liger_kernel or self.args.loss_type == "chunked_nll":
             if hasattr(outputs, "token_accuracy") and outputs.token_accuracy is not None:
                 token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
                 self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
-            else:
+            elif self.args.use_liger_kernel:
                 warnings.warn(
                     "liger-kernel did not return token_accuracy when requested. The mean_token_accuracy metric will "
                     "not be logged. This is unexpected; please report it to the liger-kernel repository.",
