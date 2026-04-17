@@ -322,7 +322,7 @@ qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text()
 
 qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text()
 
-qwen3_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_2507.jinja").read_text()
+qwen3_instruct_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507.jinja").read_text()
 
 qwen3_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl.jinja").read_text()
 
@@ -380,7 +380,7 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer.response_schema = gptoss_schema
     elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
         tokenizer.response_schema = llama3_schema
-    elif chat_template in [qwen3_chat_template, qwen3_2507_chat_template, qwen3_vl_chat_template]:
+    elif chat_template in [qwen3_chat_template, qwen3_instruct_2507_chat_template, qwen3_vl_chat_template]:
         tokenizer.response_schema = qwen3_schema
     elif chat_template in [qwen3_5_chat_template_2b_and_below, qwen3_5_chat_template_4b_and_above]:
         tokenizer.response_schema = qwen3_5_schema
@@ -503,7 +503,7 @@ qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja"
 
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text()
 
-qwen3_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_2507_training.jinja").read_text()
+qwen3_instruct_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507_training.jinja").read_text()
 
 gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text()
 
@@ -578,8 +578,8 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     if tokenizer.chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
 
-    if tokenizer.chat_template == qwen3_2507_chat_template:
-        return qwen3_2507_training_chat_template
+    if tokenizer.chat_template == qwen3_instruct_2507_chat_template:
+        return qwen3_instruct_2507_training_chat_template
 
     raise ValueError(
         "The tokenizer's chat template is not training-compatible (missing prefix-preservation or "
