@@ -645,7 +645,9 @@ class BCOTrainer(_BaseTrainer):
             )
             # Apply the chat template if needed
             train_dataset = train_dataset.map(
-                maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
+                maybe_apply_chat_template,
+                fn_kwargs={"processing_class": processing_class},
+                num_proc=args.dataset_num_proc,
             )
             if eval_dataset is not None:
                 # Extract the prompt if needed
@@ -658,7 +660,7 @@ class BCOTrainer(_BaseTrainer):
                 )
                 eval_dataset = eval_dataset.map(
                     maybe_apply_chat_template,
-                    fn_kwargs={"tokenizer": processing_class},
+                    fn_kwargs={"processing_class": processing_class},
                     num_proc=args.dataset_num_proc,
                 )
 
