@@ -479,13 +479,6 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | P
     ]
     # VLM processors expect structured list-of-blocks content, and image-token expansion only kicks in when an image
     # is actually present, so include a dummy image to exercise the real code path.
-    if isinstance(processing_class, ProcessorMixin):
-        from PIL import Image
-
-        dummy_image = Image.new("RGB", (8, 8))
-        messages1 = prepare_multimodal_messages(messages1, images=[dummy_image])
-        messages2 = prepare_multimodal_messages(messages2, images=[dummy_image])
-
     is_vlm = isinstance(processing_class, ProcessorMixin)
     if is_vlm:
         from PIL import Image
