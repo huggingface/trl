@@ -32,9 +32,8 @@ from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
-    BaseImageProcessor,
+    AutoProcessor,
     DataCollator,
-    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
@@ -238,7 +237,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
 
 
 class KTOTrainer(_BaseTrainer):
-    r"""
+    """
     Initialize KTOTrainer.
 
     Args:
@@ -264,10 +263,11 @@ class KTOTrainer(_BaseTrainer):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`]):
             The dataset to use for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
-            Processing class used to process the data. If provided, will be used to automatically process the inputs
-            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
-            reuse the fine-tuned model.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
+            Processing class used to process the data. The padding side must be set to "left". If `None`, the
+            processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
+            padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
+            `tokenizer.eos_token` will be used as the default.
         data_collator ([`~transformers.DataCollator`], *optional*):
             The data collator to use for training. If None is specified, the default data collator
             ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
@@ -311,11 +311,7 @@ class KTOTrainer(_BaseTrainer):
         args: KTOConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
-        processing_class: PreTrainedTokenizerBase
-        | BaseImageProcessor
-        | FeatureExtractionMixin
-        | ProcessorMixin
-        | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         data_collator: DataCollator | None = None,
         model_init: Callable[[], PreTrainedModel] | None = None,
         callbacks: list[TrainerCallback] | None = None,
@@ -351,6 +347,18 @@ class KTOTrainer(_BaseTrainer):
                 "`model` and `ref_model` cannot be the same object. In most cases you should omit `ref_model` and "
                 "we'll initialize it to a copy of `model` for you."
             )
+
+        # Processing class
+        if processing_class is None:
+            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
+        if isinstance(processing_class, ProcessorMixin):
+            tokenizer = processing_class.tokenizer
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            tokenizer = processing_class
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
@@ -430,10 +438,6 @@ class KTOTrainer(_BaseTrainer):
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
-        if processing_class is None:
-            raise ValueError(
-                "max_length or a processing_class must be specified when using the default DPODataCollatorWithPadding"
-            )
         if args.max_length is None:
             logger.warning(
                 "When using DPODataCollatorWithPadding, you should set `max_length` in the KTOTrainer's init"
@@ -445,7 +449,7 @@ class KTOTrainer(_BaseTrainer):
 
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
-                pad_token_id=processing_class.pad_token_id,
+                pad_token_id=tokenizer.pad_token_id,
             )
 
             if args.remove_unused_columns:
@@ -462,7 +466,6 @@ class KTOTrainer(_BaseTrainer):
 
         self.loss_type = args.loss_type
         self.max_length = max_length
-        self.processing_class = processing_class
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
         # Not all losses require a KL calculation
@@ -523,14 +526,14 @@ class KTOTrainer(_BaseTrainer):
             train_dataset = train_dataset.map(
                 _tokenize,
                 batched=True,
-                fn_kwargs={"tokenizer": self.processing_class},
+                fn_kwargs={"tokenizer": tokenizer},
                 num_proc=args.dataset_num_proc,
                 desc="Tokenizing train dataset",
             )
 
             fn_kwargs = {
                 "prefix": "",
-                "tokenizer": self.processing_class,
+                "tokenizer": tokenizer,
                 "max_length": self.max_length,
             }
 
@@ -545,7 +548,7 @@ class KTOTrainer(_BaseTrainer):
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
                     _tokenize,
-                    fn_kwargs={"tokenizer": self.processing_class},
+                    fn_kwargs={"tokenizer": tokenizer},
                     batched=True,
                     num_proc=args.dataset_num_proc,
                     desc="Tokenizing eval dataset",
@@ -682,9 +685,8 @@ class KTOTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
-        # Add tags for models that have been loaded with the correct transformers version
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
 
         if not hasattr(self, "accelerator"):
             raise AttributeError(
