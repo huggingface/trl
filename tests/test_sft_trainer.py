@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import gc
 import json
 import pathlib
@@ -19,6 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+import torch.nn.functional as F
 import transformers
 from accelerate.utils.memory import release_memory
 from datasets import load_dataset
@@ -29,7 +31,12 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, dft_loss
+from trl.trainer.sft_trainer import (
+    DataCollatorForLanguageModeling,
+    _chunked_cross_entropy_loss,
+    _patch_chunked_ce_lm_head,
+    dft_loss,
+)
 
 from .testing_utils import (
     TrlTestCase,
@@ -2308,3 +2315,203 @@ class TestSFTTrainerSlow(TrlTestCase):
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
         release_memory(trainer.model, trainer)
+
+
+_CHUNKED_CE_MODEL_IDS = [
+    "trl-internal-testing/tiny-CohereForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Gemma2ForCausalLM",
+    "trl-internal-testing/tiny-GemmaForCausalLM",
+    "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+    "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.1",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    "trl-internal-testing/tiny-Phi3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+]
+
+
+class TestChunkedCrossEntropyLoss:
+    B, S, H, V = 2, 8, 4, 16
+    CHUNK_SIZE = 3  # deliberately small to force multiple chunks and a partial final chunk
+
+    def _inputs(self, seed=0, ignore_positions=None, requires_grad=False):
+        torch.manual_seed(seed)
+        hidden = torch.randn(self.B, self.S, self.H, dtype=torch.float32, requires_grad=requires_grad)
+        weight = torch.randn(self.V, self.H, dtype=torch.float32, requires_grad=requires_grad)
+        labels = torch.randint(0, self.V, (self.B, self.S))
+        if ignore_positions is not None:
+            labels[:, ignore_positions] = -100
+        return hidden, weight, labels
+
+    @staticmethod
+    def _reference(hidden, weight, labels, num_items_in_batch=None):
+        shift_h = hidden[..., :-1, :].reshape(-1, hidden.size(-1))
+        shift_l = labels[..., 1:].reshape(-1)
+        logits = shift_h.float() @ weight.float().t()
+        if num_items_in_batch is None:
+            loss = F.cross_entropy(logits, shift_l, ignore_index=-100, reduction="mean")
+        else:
+            loss = F.cross_entropy(logits, shift_l, ignore_index=-100, reduction="sum")
+            loss = loss / num_items_in_batch
+        valid = shift_l != -100
+        if valid.any():
+            log_p = F.log_softmax(logits, dim=-1)
+            preds = logits.argmax(dim=-1)
+            accuracy = (preds[valid] == shift_l[valid]).float().mean()
+            entropy = -(log_p.exp() * log_p).sum(dim=-1)[valid].mean()
+        else:
+            accuracy = torch.zeros((), dtype=torch.float32)
+            entropy = torch.zeros((), dtype=torch.float32)
+        return loss, accuracy, entropy
+
+    def test_forward_matches_cross_entropy(self):
+        """With no ignored tokens, chunked loss equals standard mean cross-entropy."""
+        hidden, weight, labels = self._inputs()
+        loss_c, acc_c, ent_c = _chunked_cross_entropy_loss(hidden, weight, labels, chunk_size=self.CHUNK_SIZE)
+        loss_r, acc_r, ent_r = self._reference(hidden, weight, labels)
+        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(acc_c, acc_r, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(ent_c, ent_r, atol=1e-5, rtol=1e-5)
+
+    def test_forward_ignore_index(self):
+        """Ignored labels are excluded from loss, accuracy and entropy (matches F.cross_entropy)."""
+        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
+        loss_c, acc_c, ent_c = _chunked_cross_entropy_loss(hidden, weight, labels, chunk_size=self.CHUNK_SIZE)
+        loss_r, acc_r, ent_r = self._reference(hidden, weight, labels)
+        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(acc_c, acc_r, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(ent_c, ent_r, atol=1e-5, rtol=1e-5)
+
+    def test_num_items_in_batch_reduction(self):
+        """When num_items_in_batch is provided, loss is sum / num_items_in_batch."""
+        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
+        num_items = 5  # arbitrary global denominator, != local valid count
+        loss_c, *_ = _chunked_cross_entropy_loss(
+            hidden, weight, labels, chunk_size=self.CHUNK_SIZE, num_items_in_batch=num_items
+        )
+        loss_r, *_ = self._reference(hidden, weight, labels, num_items_in_batch=num_items)
+        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
+
+    def test_num_items_in_batch_tensor(self):
+        """A tensor `num_items_in_batch` is accepted and produces the same result as the int form."""
+        hidden, weight, labels = self._inputs()
+        num_items_tensor = torch.tensor(7, dtype=torch.float32)
+        loss_t, *_ = _chunked_cross_entropy_loss(
+            hidden, weight, labels, chunk_size=self.CHUNK_SIZE, num_items_in_batch=num_items_tensor
+        )
+        loss_i, *_ = _chunked_cross_entropy_loss(
+            hidden, weight, labels, chunk_size=self.CHUNK_SIZE, num_items_in_batch=7
+        )
+        torch.testing.assert_close(loss_t, loss_i, atol=1e-6, rtol=1e-6)
+
+    def test_backward_matches_reference(self):
+        """Gradients on hidden_states and lm_head weight match the standard CE path."""
+        hidden_c, weight_c, labels = self._inputs(ignore_positions=slice(0, 3), requires_grad=True)
+        hidden_r = hidden_c.detach().clone().requires_grad_(True)
+        weight_r = weight_c.detach().clone().requires_grad_(True)
+
+        loss_c, *_ = _chunked_cross_entropy_loss(hidden_c, weight_c, labels, chunk_size=self.CHUNK_SIZE)
+        loss_c.backward()
+
+        loss_r, *_ = self._reference(hidden_r, weight_r, labels)
+        loss_r.backward()
+
+        torch.testing.assert_close(hidden_c.grad, hidden_r.grad, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(weight_c.grad, weight_r.grad, atol=1e-5, rtol=1e-5)
+
+    def test_all_ignored_returns_zero(self):
+        """If every label is ignored, loss, accuracy and entropy are zero - no NaN."""
+        hidden, weight, labels = self._inputs()
+        labels[:] = -100
+        loss, acc, ent = _chunked_cross_entropy_loss(hidden, weight, labels, chunk_size=self.CHUNK_SIZE)
+        assert loss.item() == 0.0
+        assert acc.item() == 0.0
+        assert ent.item() == 0.0
+        assert not torch.isnan(loss)
+        assert not torch.isnan(acc)
+        assert not torch.isnan(ent)
+
+
+@require_torch_accelerator
+class TestPatchChunkedCELMHead:
+    """Patched `forward` must be numerically equivalent to the standard HF causal-LM loss path."""
+
+    CHUNK_SIZE = 5  # small, to exercise the chunk loop
+
+    def _setup(self, model_id):
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32).to(torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
+
+        B, S = 2, 16
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100  # prompt-like mask
+        num_items = int((labels[..., 1:] != -100).sum())
+        return ref_model, chunked_model, input_ids, labels, num_items
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_CE_MODEL_IDS)
+    def test_forward_matches_reference(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        assert out.logits is None
+        assert out.token_accuracy is not None
+        assert 0.0 <= out.token_accuracy.item() <= 1.0
+        assert out.entropy is not None
+        assert out.entropy.item() >= 0.0
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_CE_MODEL_IDS)
+    def test_backward_matches_reference(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        ref_out.loss.backward()
+
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        out.loss.backward()
+
+        # lm_head gradient
+        torch.testing.assert_close(
+            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
+        )
+        # Base decoder gradients
+        for name, ref_param in ref_model.model.named_parameters():
+            if ref_param.grad is None:
+                continue
+            chunked_param = chunked_model.model.get_parameter(name)
+            torch.testing.assert_close(
+                chunked_param.grad, ref_param.grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+            )
+
+    def test_forward_without_labels_uses_original_path(self):
+        """With labels=None the patched forward returns real logits (for generation / eval)."""
+        _, chunked_model, input_ids, _, _ = self._setup("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+        with torch.no_grad():
+            out = chunked_model(input_ids=input_ids)
+        assert out.logits is not None
+        assert out.logits.shape[-1] == chunked_model.config.vocab_size

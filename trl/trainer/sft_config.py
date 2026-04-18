@@ -104,11 +104,10 @@ class SFTConfig(_BaseConfig):
             - `"nll"`: standard negative log-likelihood (default).
             - `"dft"`: Dynamic Fine-Tuning, as described in
               [this paper](https://huggingface.co/papers/2508.05629).
-            - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on
-              non-ignored tokens only (positions with `labels == -100` are dropped before the
-              matmul) and the cross-entropy is processed in chunks of tokens to reduce peak
-              activation memory. Not compatible with `use_liger_kernel`, PEFT, VLM models, or
-              models with `final_logit_softcapping`.
+            - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
+              only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
+              in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`, PEFT, or
+              VLM models.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
 
@@ -264,13 +263,10 @@ class SFTConfig(_BaseConfig):
     loss_type: str = field(
         default="nll",
         metadata={
-            "help": (
-                'Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default), `"dft"` '
-                "(Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), and `\"chunked_nll\"` "
-                "(same math as `nll` but skips the `lm_head` matmul on ignored tokens and chunks the CE to "
-                "reduce peak memory; not compatible with Liger, PEFT, VLM, or `final_logit_softcapping`)."
-            ),
-            "choices": ["nll", "dft", "chunked_nll"],
+            "help": "Type of loss to use. Possible values are `'nll'` (negative log-likelihood, default), `'dft'` "
+            "(Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), and `'chunked_nll'` (same math as "
+            "`'nll'` but skips the `'lm_head'` matmul on ignored tokens and chunks the CE to reduce peak memory; not "
+            "compatible with Liger, PEFT, VLM, or `'final_logit_softcapping'`)."
         },
     )
     activation_offloading: bool = field(
