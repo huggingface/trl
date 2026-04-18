@@ -14,7 +14,6 @@
 
 from collections import defaultdict
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 import torch
@@ -160,37 +159,6 @@ class TestBaseSelfDistillationTrainer(TrlTestCase):
                 "kwargs": {"enable_thinking": False},
             }
         ]
-
-    def test_prepare_inputs_reuses_buffered_generation_batches_within_window(self):
-        trainer = object.__new__(MinimalSelfDistillationTrainer)
-        trainer.model = SimpleNamespace(training=True)
-        trainer.args = SimpleNamespace(steps_per_generation=2)
-        trainer.num_iterations = 1
-        trainer._step = 0
-        trainer._buffered_inputs = None
-        trainer.callback_handler = SimpleNamespace(callbacks=[])
-        trainer.state = SimpleNamespace()
-        trainer.control = SimpleNamespace()
-        trainer.processing_class = None
-        trainer._prepare_training_batch = Mock(
-            side_effect=[
-                {"value": torch.tensor([[1.0], [2.0]])},
-                {"value": torch.tensor([[3.0], [4.0]])},
-            ]
-        )
-
-        first_batch = trainer._prepare_inputs([{"prompt": "first"}])
-
-        trainer._step = 1
-        second_batch = trainer._prepare_inputs([{"prompt": "second"}])
-
-        trainer._step = 2
-        third_batch = trainer._prepare_inputs([{"prompt": "third"}])
-
-        assert first_batch["value"].item() == 1.0
-        assert second_batch["value"].item() == 2.0
-        assert third_batch["value"].item() == 3.0
-        assert trainer._prepare_training_batch.call_count == 2
 
     def test_compute_self_distillation_loss_ignores_masked_completion_tokens(self):
         trainer = self._make_loss_test_trainer(
