@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from contextlib import nullcontext
+from collections import defaultdict
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -20,7 +20,10 @@ import pytest
 import torch
 from datasets import Dataset
 
-from trl.experimental.self_distillation.base_self_distillation_trainer import BaseSelfDistillationTrainer
+from trl.experimental.self_distillation.base_self_distillation_trainer import (
+    BaseSelfDistillationTrainer,
+    DistillationLogits,
+)
 from trl.experimental.self_distillation.self_distillation_config import SelfDistillationConfig
 
 from ..testing_utils import TrlTestCase
@@ -61,6 +64,28 @@ class FakeChatProcessor:
 
 
 class TestBaseSelfDistillationTrainer(TrlTestCase):
+    @staticmethod
+    def _make_loss_test_trainer(**args_overrides):
+        trainer = object.__new__(MinimalSelfDistillationTrainer)
+        args = {
+            "distillation_topk": None,
+            "full_logit_distillation": False,
+            "distillation_alpha": 1.0,
+            "distillation_add_tail": False,
+            "distillation_is_clip": None,
+        }
+        args.update(args_overrides)
+        trainer.args = SimpleNamespace(**args)
+        trainer.loss_type = "dapo"
+        trainer.max_completion_length = 2
+        trainer.accelerator = SimpleNamespace(gather=lambda tensor: tensor)
+        trainer._metrics = {
+            "train": defaultdict(list),
+            "eval": defaultdict(list),
+        }
+        trainer._name = "Minimal Self Distillation"
+        return trainer
+
     def test_teacher_model_kind_live_uses_student_model(self):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
         training_args = SelfDistillationConfig(
@@ -167,21 +192,67 @@ class TestBaseSelfDistillationTrainer(TrlTestCase):
         assert third_batch["value"].item() == 3.0
         assert trainer._prepare_training_batch.call_count == 2
 
-    def test_prediction_step_prepares_list_batches_before_computing_loss(self):
-        trainer = object.__new__(MinimalSelfDistillationTrainer)
-        prepared_inputs = {"prompt_ids": torch.tensor([[1, 2]])}
-        trainer._prepare_inputs = Mock(return_value=prepared_inputs)
-        trainer.compute_loss = Mock(return_value=torch.tensor(3.5, requires_grad=True))
-        trainer.compute_loss_context_manager = lambda: nullcontext()
+    def test_compute_self_distillation_loss_ignores_masked_completion_tokens(self):
+        trainer = self._make_loss_test_trainer(
+            full_logit_distillation=True,
+            distillation_alpha=0.0,
+        )
+        model = SimpleNamespace(training=True)
 
-        loss, logits, labels = trainer.prediction_step(
-            model=None,
-            inputs=[{"prompt": "Solve 2+2."}],
-            prediction_loss_only=True,
+        # Token 0 is active and has a known non-zero divergence.
+        # Token 1 is intentionally very different but masked out, so it must not affect the loss.
+        student_probs = torch.tensor([[[0.8, 0.2], [0.01, 0.99]]], dtype=torch.float32)
+        teacher_probs = torch.tensor([[[0.5, 0.5], [0.99, 0.01]]], dtype=torch.float32)
+        distillation_logits = DistillationLogits(
+            completion_ids=torch.tensor([[0, 1]], dtype=torch.long),
+            completion_mask=torch.tensor([[1, 1]], dtype=torch.long),
+            response_mask=torch.tensor([[1, 0]], dtype=torch.long),
+            student_logits=student_probs.log(),
+            teacher_logits=teacher_probs.log(),
         )
 
-        trainer._prepare_inputs.assert_called_once()
-        trainer.compute_loss.assert_called_once_with(None, prepared_inputs)
-        assert loss.item() == 3.5
-        assert logits is None
-        assert labels is None
+        loss = trainer._compute_self_distillation_loss(model, {}, distillation_logits)
+
+        expected_active_token_loss = teacher_probs[0, 0, 0] * (
+            teacher_probs[0, 0, 0].log() - student_probs[0, 0, 0].log()
+        ) + teacher_probs[0, 0, 1] * (teacher_probs[0, 0, 1].log() - student_probs[0, 0, 1].log())
+        torch.testing.assert_close(loss, expected_active_token_loss)
+        torch.testing.assert_close(
+            torch.tensor(trainer._metrics["train"]["self_distillation/distillation_loss"]),
+            expected_active_token_loss.unsqueeze(0),
+        )
+
+    def test_compute_self_distillation_loss_applies_importance_sampling_clip(self):
+        trainer = self._make_loss_test_trainer(distillation_is_clip=2.0)
+        model = SimpleNamespace(training=True)
+
+        student_token_probs = torch.tensor([[0.2, 0.4]], dtype=torch.float32)
+        teacher_token_probs = torch.tensor([[0.5, 0.5]], dtype=torch.float32)
+        old_token_probs = torch.tensor([[0.05, 0.4]], dtype=torch.float32)
+        clip_coeff = trainer.args.distillation_is_clip
+
+        distillation_logits = DistillationLogits(
+            completion_ids=torch.tensor([[0, 1]], dtype=torch.long),
+            completion_mask=torch.tensor([[1, 1]], dtype=torch.long),
+            response_mask=torch.tensor([[1, 1]], dtype=torch.long),
+            student_logits=torch.log(torch.tensor([[[0.2, 0.8], [0.6, 0.4]]], dtype=torch.float32)),
+            teacher_logits=torch.log(torch.tensor([[[0.5, 0.5], [0.5, 0.5]]], dtype=torch.float32)),
+        )
+
+        loss = trainer._compute_self_distillation_loss(
+            model,
+            {"old_per_token_logps": old_token_probs.log()},
+            distillation_logits,
+        )
+
+        raw_per_token_loss = (student_token_probs.log() - teacher_token_probs.log()) * student_token_probs.log()
+        clipped_ratio = torch.minimum(
+            student_token_probs / old_token_probs, torch.full_like(student_token_probs, clip_coeff)
+        )
+        expected_loss = (raw_per_token_loss * clipped_ratio).mean()
+
+        torch.testing.assert_close(loss, expected_loss)
+        torch.testing.assert_close(
+            torch.tensor(trainer._metrics["train"]["self_distillation/distillation_loss"]),
+            expected_loss.unsqueeze(0),
+        )
