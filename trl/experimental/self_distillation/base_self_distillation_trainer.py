@@ -57,6 +57,7 @@ from ...trainer.utils import (
 )
 from ..utils import prepare_peft_model
 from .loss_utils import (
+    aggregate_loss,
     apply_importance_sampling_clipping,
     compute_full_logit_self_distillation_loss,
     compute_sampled_token_self_distillation_loss,
@@ -666,7 +667,12 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
                 self.args.distillation_is_clip,
             )
 
-        loss = self._aggregate_self_distillation_loss(per_token_loss, distillation_logits.response_mask)
+        loss = aggregate_loss(
+            per_token_loss,
+            distillation_logits.response_mask,
+            loss_type=self.loss_type,
+            max_completion_length=self.max_completion_length,
+        )
 
         mode = "train" if model.training else "eval"
         mean_distill_loss = (
@@ -829,23 +835,6 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         metric_prefix = self._name.lower().replace(" ", "_")
         self._metrics[mode]["self_distillation/distillation_loss"].append(value)
         self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
-
-    def _aggregate_self_distillation_loss(
-        self,
-        per_token_loss: torch.Tensor,
-        response_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        loss_type = self.loss_type
-        if loss_type == "grpo":
-            loss = (per_token_loss * response_mask).sum(-1) / response_mask.sum(-1).clamp(min=1.0)
-            return loss.mean()
-        if loss_type == "bnpo":
-            return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
-        if loss_type == "dr_grpo":
-            return (per_token_loss * response_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
-        if loss_type in ["dapo", "luspo", "cispo", "sapo"]:
-            return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
-        raise ValueError(f"Unsupported loss_type for self-distillation: {loss_type}")
 
     @abstractmethod
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):

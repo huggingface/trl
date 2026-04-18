@@ -40,7 +40,7 @@ from ..self_distillation.base_self_distillation_trainer import (
     RolloutBatch,
     TrainingBatch,
 )
-from ..self_distillation.loss_utils import select_token_log_probs
+from ..self_distillation.loss_utils import aggregate_loss, select_token_log_probs
 from ..self_distillation.prompt_utils import extract_last_user_text
 from .sdpo_config import SDPOConfig
 
@@ -596,7 +596,12 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
         per_token_loss = -torch.min(coef_1 * advantages, coef_2 * advantages)
 
-        loss = self._aggregate_self_distillation_loss(per_token_loss, completion_mask)
+        loss = aggregate_loss(
+            per_token_loss,
+            completion_mask,
+            loss_type=self.loss_type,
+            max_completion_length=self.max_completion_length,
+        )
 
         mode = "train" if self.model.training else "eval"
         self._metrics[mode]["self_distillation/policy_loss"].append(
