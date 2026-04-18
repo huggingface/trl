@@ -256,6 +256,12 @@ class GRPOConfig(_BaseConfig):
             - `"vespo"`: Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth,
               asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in
               the [VESPO paper](https://huggingface.co/papers/2602.10693).
+            - `"tpo"`: Target Policy Optimization loss. Builds a target distribution over each prompt's sampled
+              completions from the rollout policy probabilities and normalized rewards, then fits the current policy
+              to that target with cross-entropy.
+        tpo_target_temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature used to build the Target Policy Optimization target distribution when `loss_type="tpo"`.
+            Lower values make the target more concentrated on high-scoring completions.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -738,7 +744,17 @@ class GRPOConfig(_BaseConfig):
             "paper](https://huggingface.co/papers/2602.05261)."
             "'vespo': Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth, "
             "asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in "
-            "the [VESPO paper](https://huggingface.co/papers/2602.10693)."
+            "the [VESPO paper](https://huggingface.co/papers/2602.10693). "
+            "'tpo': Target Policy Optimization loss. Builds a target distribution over each prompt's sampled "
+            "completions from rollout policy probabilities and normalized rewards, then fits the current policy to "
+            "that target with cross-entropy."
+        },
+    )
+    tpo_target_temperature: float = field(
+        default=1.0,
+        metadata={
+            "help": "Temperature used to build the Target Policy Optimization target distribution when "
+            "`loss_type='tpo'`. Lower values make the target more concentrated on high-scoring completions."
         },
     )
     mask_truncated_completions: bool = field(
@@ -943,3 +959,17 @@ class GRPOConfig(_BaseConfig):
 
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
+
+        if self.tpo_target_temperature <= 0.0:
+            raise ValueError(
+                f"tpo_target_temperature must be greater than 0.0. You provided {self.tpo_target_temperature}."
+            )
+
+        if self.loss_type == "tpo":
+            if self.use_liger_kernel:
+                raise ValueError("Liger kernel does not support the TPO loss yet.")
+            if self.steps_per_generation != 1:
+                raise ValueError(
+                    "TPO requires `steps_per_generation=1` so every prompt group is available in a single loss "
+                    "step. Use `TPOConfig`, which sets this default automatically, or set `steps_per_generation=1`."
+                )
