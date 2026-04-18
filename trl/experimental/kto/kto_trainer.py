@@ -616,9 +616,7 @@ class KTOTrainer(_BaseTrainer):
         dataset_name: str,
     ) -> Dataset:
         # Build the kwargs for the `map` function
-        map_kwargs = {}
-        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
-            map_kwargs["num_proc"] = args.dataset_num_proc
+        map_kwargs = {"num_proc": args.dataset_num_proc}
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
