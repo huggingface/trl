@@ -560,6 +560,7 @@ class GRPOTrainer(_BaseTrainer):
         self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
+        self.tpo_target_temperature = args.tpo_target_temperature
         self.multi_objective_aggregation = args.multi_objective_aggregation
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
@@ -1141,7 +1142,8 @@ class GRPOTrainer(_BaseTrainer):
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 generation_batch = self._generate_and_score_completions(generation_batch)
                 generation_batch = split_pixel_values_by_grid(generation_batch)
-                generation_batch = shuffle_sequence_dict(generation_batch)
+                if self.loss_type != "tpo":
+                    generation_batch = shuffle_sequence_dict(generation_batch)
                 generation_batches = split_tensor_dict(generation_batch, self.args.steps_per_generation)
                 self._buffered_inputs = [unsplit_pixel_values_by_grid(batch) for batch in generation_batches]
             inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
@@ -2032,8 +2034,10 @@ class GRPOTrainer(_BaseTrainer):
             # When using vLLM, we always compute old_per_token_logps for importance sampling, it was shown that the
             # distribution mismatch between vLLM and the training model can be large and harm the training.
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
-            if self.args.gradient_accumulation_steps % generate_every != 0 or (
-                self.use_vllm and self.vllm_importance_sampling_correction
+            if (
+                self.loss_type == "tpo"
+                or self.args.gradient_accumulation_steps % generate_every != 0
+                or (self.use_vllm and self.vllm_importance_sampling_correction)
             ):
                 old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                     self.model,
@@ -2178,6 +2182,24 @@ class GRPOTrainer(_BaseTrainer):
             (self.accelerator.process_index + 1) * len(prompts),
         )
         all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
+        tpo_targets = None
+        if self.loss_type == "tpo":
+            if old_per_token_logps is None:
+                raise RuntimeError("TPO requires rollout-time log probabilities to build the target distribution.")
+            loss_mask = completion_mask if tool_mask is None else completion_mask * tool_mask
+            old_sequence_logps = (old_per_token_logps * loss_mask).sum(dim=-1)
+            all_process_old_sequence_logps = gather(old_sequence_logps)
+            all_process_tpo_targets = self.get_tpo_targets(
+                all_process_old_sequence_logps,
+                all_process_advantages,
+                num_generations=num_generations,
+                temperature=self.tpo_target_temperature,
+            )
+            tpo_targets = all_process_tpo_targets[process_slice]
+            target_groups = all_process_tpo_targets.view(-1, num_generations)
+            target_entropy = -(target_groups * target_groups.clamp_min(torch.finfo(target_groups.dtype).tiny).log())
+            target_entropy = target_entropy.sum(dim=1).mean()
+            self._metrics[mode]["tpo/target_entropy"].append(target_entropy.item())
         advantages = advantages[process_slice]
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
@@ -2264,6 +2286,8 @@ class GRPOTrainer(_BaseTrainer):
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
+        if tpo_targets is not None:
+            output["tpo_targets"] = tpo_targets
         if self.use_vllm and self.vllm_importance_sampling_correction:
             output["importance_sampling_ratio"] = vllm_importance_sampling_ratio
         if sampling_per_token_logps is not None:
@@ -2372,6 +2396,36 @@ class GRPOTrainer(_BaseTrainer):
         return (is_pos_adv | is_low_kl).to(dtype=mask.dtype)  # (B, 1)
 
     @staticmethod
+    def get_tpo_targets(
+        old_sequence_logps: torch.Tensor,
+        scores: torch.Tensor,
+        num_generations: int,
+        temperature: float = 1.0,
+    ) -> torch.Tensor:
+        """
+        Build the Target Policy Optimization target distribution for each prompt group.
+
+        The target is q_i ∝ p_i_old * exp(score_i / temperature), where p_i_old is the rollout policy distribution
+        over the sampled completions in a prompt group.
+        """
+        if temperature <= 0.0:
+            raise ValueError(f"temperature must be greater than 0.0. You provided {temperature}.")
+
+        old_sequence_logps = old_sequence_logps.view(-1, num_generations)
+        scores = scores.view(-1, num_generations)
+        target_logits = torch.log_softmax(old_sequence_logps, dim=1) + scores / temperature
+        return torch.softmax(target_logits, dim=1).view(-1).detach()
+
+    @staticmethod
+    def _gather_tensor_with_grad(tensor: torch.Tensor) -> torch.Tensor:
+        if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+            return tensor
+
+        from torch.distributed.nn.functional import all_gather
+
+        return torch.cat(all_gather(tensor), dim=0)
+
+    @staticmethod
     @torch.no_grad()
     def get_gamma_weights(
         advantages: torch.Tensor,
@@ -2465,6 +2519,48 @@ class GRPOTrainer(_BaseTrainer):
         # for importance sampling
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
+
+        if self.loss_type == "tpo":
+            if "tpo_targets" not in inputs:
+                raise RuntimeError("TPO loss requires `tpo_targets` in the prepared inputs.")
+            if self.off_policy_mask_threshold is not None:
+                raise ValueError("TPO loss does not support `off_policy_mask_threshold`.")
+            if self.top_entropy_quantile < 1.0:
+                raise ValueError("TPO loss does not support `top_entropy_quantile < 1.0`.")
+
+            mode = "train" if self.model.training else "eval"
+            num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+            sequence_logps = (per_token_logps * mask).sum(dim=-1)
+            all_sequence_logps = self._gather_tensor_with_grad(sequence_logps)
+            all_logps = torch.log_softmax(all_sequence_logps.view(-1, num_generations), dim=1).view(-1)
+            process_slice = slice(
+                self.accelerator.process_index * sequence_logps.size(0),
+                (self.accelerator.process_index + 1) * sequence_logps.size(0),
+            )
+            logps = all_logps[process_slice]
+            tpo_targets = inputs["tpo_targets"].to(logps.dtype)
+            loss = -(tpo_targets * logps).sum() * num_generations / tpo_targets.numel()
+
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+            loss = loss / normalizer
+
+            if self.beta != 0.0:
+                ref_per_token_logps = inputs["ref_per_token_logps"]
+                per_token_kl = (
+                    torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+                )
+                if self.args.use_bias_correction_kl:
+                    per_token_kl = per_token_kl * torch.exp(per_token_logps - old_per_token_logps)
+                kl_normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+                kl_loss = (per_token_kl * mask).sum() / kl_normalizer
+                loss = loss + self.beta * kl_loss / normalizer
+                self._metrics[mode]["kl"].append(self.accelerator.gather(kl_loss).nanmean().item())
+
+            completion_token_count = mask.sum().clamp(min=1.0)
+            mean_entropy = (entropies * mask).sum() / completion_token_count
+            self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+
+            return loss
 
         if self.off_policy_mask_threshold is not None:
             # OPSM should use inference-time logprobs to detect both sources of off-policyness:

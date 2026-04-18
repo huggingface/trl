@@ -23,6 +23,8 @@
     title: RLOO
   - local: sft_trainer
     title: SFT
+  - local: tpo_trainer
+    title: TPO
   title: Trainers
 - sections:
   - local: clis

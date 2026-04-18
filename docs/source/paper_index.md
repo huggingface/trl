@@ -2,6 +2,33 @@
 
 <!-- Within sections, papers are sorted by publish dates -->
 
+## Target Policy Optimization
+
+Papers relating to the [`TPOTrainer`].
+
+### Target Policy Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2604.06159
+
+Target Policy Optimization (TPO) builds a target distribution over each prompt's sampled completions,
+\\(q_i \propto p_i^{\text{old}} \exp(u_i / \eta)\\), and trains the policy to match that target with
+cross-entropy. In TRL, use [`TPOTrainer`] for online RL with reward functions and prompt-only datasets.
+
+```python
+from trl import TPOConfig, TPOTrainer
+
+training_args = TPOConfig(
+    num_generations=8,
+    tpo_target_temperature=1.0,
+    scale_rewards="group",
+)
+
+trainer = TPOTrainer(
+    ...,
+    args=training_args,
+)
+```
+
 ## Group Relative Policy Optimization
 
 Papers relating to the [`GRPOTrainer`].

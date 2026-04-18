@@ -22,7 +22,7 @@ import yaml
 from .testing_utils import TrlTestCase
 
 
-@pytest.mark.parametrize("command", ["dpo", "grpo", "kto", "reward", "rloo", "sft"])
+@pytest.mark.parametrize("command", ["dpo", "grpo", "kto", "reward", "rloo", "sft", "tpo"])
 def test_help_no_type_error(command):
     # Regression test for https://github.com/huggingface/trl/issues/5099:
     # TrainingArguments help strings with unescaped "%" caused TypeError in argparse.

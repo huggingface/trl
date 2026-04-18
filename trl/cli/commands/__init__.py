@@ -29,6 +29,7 @@ def get_commands() -> list[Command]:
         TrainingCommand("reward"),
         TrainingCommand("rloo"),
         TrainingCommand("sft"),
+        TrainingCommand("tpo"),
         SkillsCommand(),
         VllmServeCommand(),
     ]
