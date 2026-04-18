@@ -2189,9 +2189,10 @@ class GRPOTrainer(_BaseTrainer):
             loss_mask = completion_mask if tool_mask is None else completion_mask * tool_mask
             old_sequence_logps = (old_per_token_logps * loss_mask).sum(dim=-1)
             all_process_old_sequence_logps = gather(old_sequence_logps)
+            tpo_scores = self.get_tpo_scores(rewards, num_generations)
             all_process_tpo_targets = self.get_tpo_targets(
                 all_process_old_sequence_logps,
-                all_process_advantages,
+                tpo_scores,
                 num_generations=num_generations,
                 temperature=self.tpo_target_temperature,
             )
@@ -2415,6 +2416,14 @@ class GRPOTrainer(_BaseTrainer):
         scores = scores.view(-1, num_generations)
         target_logits = torch.log_softmax(old_sequence_logps, dim=1) + scores / temperature
         return torch.softmax(target_logits, dim=1).view(-1).detach()
+
+    @staticmethod
+    def get_tpo_scores(scores: torch.Tensor, num_generations: int) -> torch.Tensor:
+        scores = scores.view(-1, num_generations)
+        mean_scores = scores.mean(dim=1, keepdim=True)
+        std_scores = scores.std(dim=1, unbiased=False, keepdim=True)
+        scores = torch.where(std_scores > 1e-6, (scores - mean_scores) / std_scores, scores - mean_scores)
+        return scores.view(-1)
 
     @staticmethod
     def _gather_tensor_with_grad(tensor: torch.Tensor) -> torch.Tensor:

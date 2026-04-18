@@ -41,6 +41,24 @@ class TestTPOConfig(TrlTestCase):
 
 
 class TestTPOLoss:
+    def test_tpo_scores_match_population_whitened_skill(self):
+        scores = torch.tensor([0.0, 1.0, 0.0, 0.0])
+
+        tpo_scores = GRPOTrainer.get_tpo_scores(scores, num_generations=2)
+
+        expected = torch.tensor([-1.0, 1.0, 0.0, 0.0])
+        torch.testing.assert_close(tpo_scores, expected)
+
+    def test_tpo_targets_use_population_whitened_scores(self):
+        old_sequence_logps = torch.zeros(2)
+        scores = torch.tensor([0.0, 1.0])
+        tpo_scores = GRPOTrainer.get_tpo_scores(scores, num_generations=2)
+
+        targets = GRPOTrainer.get_tpo_targets(old_sequence_logps, tpo_scores, num_generations=2)
+
+        expected = torch.softmax(torch.tensor([-1.0, 1.0]), dim=0)
+        torch.testing.assert_close(targets, expected)
+
     def test_tpo_targets_match_closed_form(self):
         old_sequence_logps = torch.log(torch.tensor([0.7, 0.3, 0.2, 0.8]))
         scores = torch.tensor([1.0, -1.0, 0.0, 0.0])
