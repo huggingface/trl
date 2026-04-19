@@ -137,7 +137,7 @@ class TestDistillationTrainerServerPath(TrlTestCase):
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
         cls.model_id = model_id
 
-    def _run_one_step(self, beta, monkeypatch):
+    def _run_one_step(self, bs, ga, monkeypatch):
         from trl.generation import vllm_client as vllm_client_module
 
         fake_client = MagicMock()
@@ -146,8 +146,8 @@ class TestDistillationTrainerServerPath(TrlTestCase):
 
         config = DistillationConfig(
             output_dir=self.tmp_dir,
-            per_device_train_batch_size=1,
-            gradient_accumulation_steps=2,
+            per_device_train_batch_size=bs,
+            gradient_accumulation_steps=ga,
             learning_rate=1e-4,
             max_length=64,
             max_prompt_length=32,
@@ -155,7 +155,7 @@ class TestDistillationTrainerServerPath(TrlTestCase):
             use_teacher_server=True,
             teacher_model_server_url="http://fake-teacher.invalid:8000",
             loss_top_k=1,
-            beta=beta,
+            beta=1.0,
             lmbda=0.0,
             loss_add_tail=True,
             save_strategy="no",
@@ -173,15 +173,9 @@ class TestDistillationTrainerServerPath(TrlTestCase):
         trainer.train()
         return [rec for rec in trainer.state.log_history if "grad_norm" in rec]
 
-    def test_reverse_kl_finite_grad_under_ga2_with_ragged_batch(self, monkeypatch):
-        records = self._run_one_step(beta=1.0, monkeypatch=monkeypatch)
-        assert records, "Expected at least one grad_norm log entry during training"
-        for record in records:
-            assert math.isfinite(record["grad_norm"]), f"grad_norm={record['grad_norm']} leaked -inf into backward"
-            assert math.isfinite(record["loss"])
-
-    def test_jsd_finite_grad_under_ga2_with_ragged_batch(self, monkeypatch):
-        records = self._run_one_step(beta=0.5, monkeypatch=monkeypatch)
+    @pytest.mark.parametrize(("bs", "ga"), [(1, 2), (2, 1)])
+    def test_reverse_kl_finite_grad_with_ragged_batch(self, bs, ga, monkeypatch):
+        records = self._run_one_step(bs=bs, ga=ga, monkeypatch=monkeypatch)
         assert records, "Expected at least one grad_norm log entry during training"
         for record in records:
             assert math.isfinite(record["grad_norm"]), f"grad_norm={record['grad_norm']} leaked -inf into backward"
