@@ -111,7 +111,7 @@ class TestDataCollatorForPreference(TrlTestCase):
         examples = [
             {
                 "chosen_ids": [1,2,3], 
-                "rejected": [4,5]
+                "rejected_ids": [4,5]
             },
             {
                 "chosen_ids": [6,7,8],
