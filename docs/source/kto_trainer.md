@@ -96,6 +96,8 @@ accelerate launch trl/scripts/kto.py \
     --output_dir Qwen2-0.5B-KTO
 ```
 
+A minimal alternative example is also available at [`trl/experimental/kto/kto.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/kto/kto.py).
+
 ## Usage tips
 
 ### For Mixture of Experts Models: Enabling the auxiliary loss

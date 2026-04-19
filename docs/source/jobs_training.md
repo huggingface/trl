@@ -181,7 +181,7 @@ TRL example scripts are fully uv-compatible, so you can run a complete training 
 hf jobs uv run \
     --flavor a100-large \
     --secrets HF_TOKEN \
-    https://raw.githubusercontent.com/huggingface/trl/refs/heads/main/examples/scripts/prm.py \
+    https://raw.githubusercontent.com/huggingface/trl/refs/heads/main/trl/experimental/prm/prm.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/prm800k \
     --output_dir Qwen2-0.5B-Reward \
@@ -194,7 +194,7 @@ hf jobs uv run \
 ```python
 from huggingface_hub import run_uv_job
 run_uv_job(
-    "https://raw.githubusercontent.com/huggingface/trl/refs/heads/main/examples/scripts/prm.py",
+    "https://raw.githubusercontent.com/huggingface/trl/refs/heads/main/trl/experimental/prm/prm.py",
     flavor="a100-large",
     secrets={"HF_TOKEN": "hf_..."},
     script_args=[

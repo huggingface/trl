@@ -85,12 +85,12 @@ Although the [`experimental.orpo.ORPOTrainer`] supports both explicit and implic
 
 ## Example script
 
-We provide an example script to train a model using the ORPO method. The script is available in [`examples/scripts/orpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/orpo.py)
+We provide an example script to train a model using the ORPO method. The script is available in [`trl/experimental/orpo/orpo.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/orpo/orpo.py)
 
 To test the ORPO script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) on the [UltraFeedback dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized), run the following command:
 
 ```bash
-accelerate launch examples/scripts/orpo.py \
+accelerate launch trl/experimental/orpo/orpo.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/ultrafeedback_binarized \
     --num_train_epochs 1 \

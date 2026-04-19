@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[peft]",
 #     "trackio",
 #     "kernels",
 # ]
@@ -23,35 +23,29 @@
 """
 Usage:
 
-python examples/scripts/nash_md.py \
+python trl/experimental/online_dpo/online_dpo.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
     --learning_rate 5.0e-7 \
-    --output_dir pythia-1b-tldr-nash-md \
-    --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 32 \
-    --num_train_epochs 3 \
-    --max_new_tokens 64 \
+    --output_dir pythia-1b-tldr-online-dpo \
+    --per_device_train_batch_size 8 \
+    --gradient_accumulation_steps 16 \
     --warmup_steps 0.1 \
-    --missing_eos_penalty 1.0 \
-    --push_to_hub
+    --missing_eos_penalty 1.0
 
-
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
-    examples/scripts/nash_md.py \
+With LoRA:
+python trl/experimental/online_dpo/online_dpo.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
-    --learning_rate 5.0e-7 \
-    --output_dir pythia-1b-tldr-nash-md \
-    --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 32 \
-    --num_train_epochs 3 \
-    --max_new_tokens 64 \
+    --learning_rate 5.0e-6 \
+    --output_dir pythia-1b-tldr-online-dpo \
+    --per_device_train_batch_size 16 \
+    --gradient_accumulation_steps 8 \
     --warmup_steps 0.1 \
     --missing_eos_penalty 1.0 \
-    --push_to_hub
+    --use_peft
 """
 
 import torch
@@ -64,13 +58,14 @@ from trl import (
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
+    get_peft_config,
     get_quantization_config,
 )
-from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
 
 if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, NashMDConfig, ModelConfig))
+    parser = TrlParser((ScriptArguments, OnlineDPOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
@@ -90,9 +85,6 @@ if __name__ == "__main__":
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
-    ref_model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-    )
 
     if training_args.reward_model_path is not None:
         reward_model = AutoModelForSequenceClassification.from_pretrained(
@@ -101,25 +93,38 @@ if __name__ == "__main__":
             trust_remote_code=model_args.trust_remote_code,
             **model_kwargs,
         )
+        reward_tokenizer = AutoTokenizer.from_pretrained(
+            training_args.reward_model_path,
+            trust_remote_code=model_args.trust_remote_code,
+            truncation=True,
+            truncation_side="left",  # since we judge the completion, truncating left is more appropriate
+        )
+        if reward_tokenizer.pad_token_id is None:
+            reward_tokenizer.pad_token = reward_tokenizer.eos_token
     else:
         reward_model = None
+        reward_tokenizer = None
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, padding_side="left", trust_remote_code=model_args.trust_remote_code
+        model_args.model_name_or_path,
+        padding_side="left",
+        trust_remote_code=model_args.trust_remote_code,
+        **model_kwargs,
     )
-    if tokenizer.pad_token is None:
+    if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
-    trainer = NashMDTrainer(
+    trainer = OnlineDPOTrainer(
         model=model,
-        ref_model=ref_model,
         reward_funcs=reward_model,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         processing_class=tokenizer,
+        reward_processing_classes=reward_tokenizer,
+        peft_config=get_peft_config(model_args),
     )
 
     if training_args.eval_strategy != "no":

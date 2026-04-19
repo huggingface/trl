@@ -37,7 +37,7 @@ from trl.experimental.ppo import PPOConfig, PPOTrainer
 
 
 """
-python examples/scripts/ppo/ppo_tldr.py \
+python trl/experimental/ppo/ppo_tldr.py \
     --dataset_name trl-lib/tldr \
     --dataset_test_split validation \
     --output_dir pythia-1b-deduped-tldr-preference-sft-trl-style-ppo \
@@ -54,7 +54,7 @@ python examples/scripts/ppo/ppo_tldr.py \
     --eval_steps 100
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
-    examples/scripts/ppo/ppo_tldr.py \
+    trl/experimental/ppo/ppo_tldr.py \
     --dataset_name trl-lib/tldr \
     --dataset_test_split validation \
     --output_dir pythia-1b-deduped-tldr-preference-sft-trl-style-ppo \

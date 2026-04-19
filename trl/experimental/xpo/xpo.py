@@ -23,7 +23,7 @@
 """
 Usage:
 
-python examples/scripts/xpo.py \
+python trl/experimental/xpo/xpo.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \

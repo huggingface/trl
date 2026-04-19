@@ -93,12 +93,12 @@ This callback logs the model's generated completions directly to Weights & Biase
 
 ## Example script
 
-We provide an example script to train a model using the online DPO method. The script is available in [`examples/scripts/dpo_online.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/dpo_online.py)
+We provide an example script to train a model using the online DPO method. The script is available in [`trl/experimental/online_dpo/online_dpo.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/online_dpo/online_dpo.py).
 
 To test the online DPO script with the [Qwen2.5 0.5B model](https://huggingface.co/trl-lib/Qwen/Qwen2.5-0.5B-Instruct) on the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback), run the following command:
 
 ```bash
-python examples/scripts/dpo_online.py \
+python trl/experimental/online_dpo/online_dpo.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --reward_model_path trl-lib/Qwen2-0.5B-Reward \
     --dataset_name trl-lib/ultrafeedback-prompt \
@@ -134,7 +134,7 @@ To validate the online DPO implementation works, we ran experiments with the Pyt
 ```shell
 # 1B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml \
-    examples/scripts/dpo_online.py \
+    trl/experimental/online_dpo/online_dpo.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
@@ -152,7 +152,7 @@ accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml \
 
 # 2.8B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
-    examples/scripts/dpo_online.py \
+    trl/experimental/online_dpo/online_dpo.py \
     --model_name_or_path trl-lib/pythia-2.8b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-2.8b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
@@ -170,7 +170,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
 
 # 6.9B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
-    examples/scripts/dpo_online.py \
+    trl/experimental/online_dpo/online_dpo.py \
     --model_name_or_path trl-lib/pythia-6.9b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-6.9b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \

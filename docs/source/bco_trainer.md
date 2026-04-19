@@ -4,7 +4,7 @@
 
 TRL supports the Binary Classifier Optimization (BCO).
 The [BCO](https://huggingface.co/papers/2404.04656) authors train a binary classifier whose logit serves as a reward so that the classifier maps {prompt, chosen completion} pairs to 1 and {prompt, rejected completion} pairs to 0.
-For a full example have a look at  [`examples/scripts/bco.py`].
+For a full example have a look at  [`trl/experimental/bco/bco.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/bco/bco.py).
 
 ## Expected dataset type
 
@@ -17,7 +17,7 @@ The BCO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that 
 
 ## Using the `BCOTrainer`
 
-For a detailed example have a look at the `examples/scripts/bco.py` script. At a high level we need to initialize the `BCOTrainer` with a `model` we wish to train and a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and rejected response.
+For a detailed example have a look at the `trl/experimental/bco/bco.py` script. At a high level we need to initialize the `BCOTrainer` with a `model` we wish to train and a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and rejected response.
 
 The `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above. Note that the `model` and `ref_model` need to have the same architecture (ie decoder only or encoder-decoder).
 

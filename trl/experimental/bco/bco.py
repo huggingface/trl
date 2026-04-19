@@ -27,7 +27,7 @@
 Run the BCO training script with the commands below. In general, the optimal configuration for BCO will be similar to that of KTO.
 
 # Full training:
-python examples/scripts/bco.py \
+python trl/experimental/bco/bco.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --trust_remote_code \
     --dataset_name trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness \
@@ -45,7 +45,7 @@ python examples/scripts/bco.py \
     --warmup_steps 0.1
 
 # QLoRA:
-python examples/scripts/bco.py \
+python trl/experimental/bco/bco.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --trust_remote_code \
     --dataset_name trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness \
