@@ -568,6 +568,9 @@ class GRPOTrainer(_BaseTrainer):
             raise ValueError("Liger kernel does not support off-policy sequence masking yet.")
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
+        self.entropy_coef = args.entropy_coef
+        self.entropy_final_coef = args.entropy_final_coef
+        self.entropy_decay_steps = args.entropy_decay_steps
         if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
@@ -2589,6 +2592,14 @@ class GRPOTrainer(_BaseTrainer):
 
         mean_entropy = masked_batch_mean(entropies)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+
+        if self.entropy_coef != 0.0:
+            step = self.state.global_step if mode == "train" else 0
+            decay_t = min(step / max(self.entropy_decay_steps, 1), 1.0)
+            effective_coef = self.entropy_coef + (self.entropy_final_coef - self.entropy_coef) * decay_t
+            grad_accum = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+            loss = loss - (effective_coef / grad_accum) * mean_entropy
+            self._metrics[mode]["entropy_coef"].append(effective_coef)
 
         if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
             # Compute the clipped probability ratios

@@ -781,6 +781,29 @@ class GRPOConfig(_BaseConfig):
             "non-truncated completions are considered."
         },
     )
+    entropy_coef: float = field(
+        default=0.0,
+        metadata={
+            "help": "Coefficient for the entropy regularization term added to the GRPO loss "
+            "(L = L_GRPO - entropy_coef * H(pi)). Encourages exploration by penalizing low-entropy "
+            "(overconfident) distributions. Set to `0.0` to disable. Use `entropy_final_coef` and "
+            "`entropy_decay_steps` to linearly decay the coefficient over training steps."
+        },
+    )
+    entropy_final_coef: float = field(
+        default=0.0,
+        metadata={
+            "help": "Final entropy regularization coefficient after linear decay over `entropy_decay_steps` "
+            "steps. When equal to `entropy_coef`, no decay is applied. Ignored when `entropy_coef=0.0`."
+        },
+    )
+    entropy_decay_steps: int = field(
+        default=1000,
+        metadata={
+            "help": "Number of training steps to linearly decay the entropy regularization coefficient "
+            "from `entropy_coef` to `entropy_final_coef`. Ignored when `entropy_coef == entropy_final_coef`."
+        },
+    )
     max_tool_calling_iterations: int | None = field(
         default=None,
         metadata={
