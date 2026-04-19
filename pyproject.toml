@@ -79,7 +79,7 @@ test = [
     "pytest"
 ]
 vllm = [
-    "vllm>=0.11.0,<=0.18.0",
+    "vllm>=0.11.0,<0.19.0",
     "fastapi",
     "pydantic",
     "aiohttp>=3.13.3",
