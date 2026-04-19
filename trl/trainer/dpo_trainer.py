@@ -179,10 +179,13 @@ class DataCollatorForPreference(DataCollatorMixin):
         input_ids = [torch.tensor(ids) for ids in input_ids]
         attention_mask = [torch.tensor(m, dtype=torch.long) for m in attention_mask]
         completion_mask = [torch.tensor(m, dtype=torch.long) for m in completion_mask]
-        if "ref_chosen_logps" in examples[0]:
-            ref_chosen_logps = torch.tensor([example["ref_chosen_logps"] for example in examples])
-        if "ref_rejected_logps" in examples[0]:
-            ref_rejected_logps = torch.tensor([example["ref_rejected_logps"] for example in examples])
+
+        has_ref_chosen_logps = any("ref_chosen_logps" in example for example in examples)
+        if has_ref_chosen_logps:
+            ref_chosen_logps = torch.tensor([example.get("ref_chosen_logps", 0.0) for example in examples])
+        has_ref_rejected_logps = any("ref_rejected_logps" in example for example in examples)
+        if has_ref_rejected_logps:
+            ref_rejected_logps = torch.tensor([example.get("ref_rejected_logps", 0.0) for example in examples])
 
         # Pad
         output = {}
@@ -204,9 +207,9 @@ class DataCollatorForPreference(DataCollatorMixin):
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         )
-        if "ref_chosen_logps" in examples[0]:
+        if has_ref_chosen_logps:
             output["ref_chosen_logps"] = ref_chosen_logps
-        if "ref_rejected_logps" in examples[0]:
+        if has_ref_rejected_logps:
             output["ref_rejected_logps"] = ref_rejected_logps
         return output
 

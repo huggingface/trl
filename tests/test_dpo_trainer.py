@@ -131,6 +131,21 @@ class TestDataCollatorForPreference(TrlTestCase):
         assert set(result.keys()) == {"input_ids", "attention_mask", "completion_mask"}
         torch.testing.assert_close(result["input_ids"], expected_input_ids)
 
+    def test_missing_reference_logps(self):
+        collator = DataCollatorForPreference(pad_token_id=0, pad_to_multiple_of=5)
+        examples = [
+            {"prompt_ids": [1], "chosen_ids": [2], "rejected_ids": [3]},
+            {"prompt_ids": [4, 5], "chosen_ids": [6, 7], "rejected_ids": [8, 9], "ref_chosen_logps": 0.2},
+            {"prompt_ids": [10, 11], "chosen_ids": [12, 13], "rejected_ids": [14, 15], "ref_rejected_logps": 0.3},
+        ]
+        result = collator(examples)
+
+        expected_ref_chosen_logps = torch.tensor([0.0, 0.2, 0.0])
+        expected_ref_rejected_logps = torch.tensor([0.0, 0.0, 0.3])
+
+        torch.testing.assert_close(result["ref_chosen_logps"], expected_ref_chosen_logps)
+        torch.testing.assert_close(result["ref_rejected_logps"], expected_ref_rejected_logps)
+
 
 class TestDataCollatorForVisionPreference(TrlTestCase):
     @pytest.mark.skipif(
