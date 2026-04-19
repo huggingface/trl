@@ -174,11 +174,15 @@ class TestDistillationTrainerServerPath(TrlTestCase):
         return [rec for rec in trainer.state.log_history if "grad_norm" in rec]
 
     def test_reverse_kl_finite_grad_under_ga2_with_ragged_batch(self, monkeypatch):
-        for record in self._run_one_step(beta=1.0, monkeypatch=monkeypatch):
+        records = self._run_one_step(beta=1.0, monkeypatch=monkeypatch)
+        assert records, "Expected at least one grad_norm log entry during training"
+        for record in records:
             assert math.isfinite(record["grad_norm"]), f"grad_norm={record['grad_norm']} leaked -inf into backward"
             assert math.isfinite(record["loss"])
 
     def test_jsd_finite_grad_under_ga2_with_ragged_batch(self, monkeypatch):
-        for record in self._run_one_step(beta=0.5, monkeypatch=monkeypatch):
+        records = self._run_one_step(beta=0.5, monkeypatch=monkeypatch)
+        assert records, "Expected at least one grad_norm log entry during training"
+        for record in records:
             assert math.isfinite(record["grad_norm"]), f"grad_norm={record['grad_norm']} leaked -inf into backward"
             assert math.isfinite(record["loss"])
