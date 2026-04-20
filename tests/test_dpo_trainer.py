@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from contextlib import nullcontext
-from unittest.mock import patch
 
 import pytest
 import torch
@@ -187,27 +185,13 @@ class TestDPOTrainer(TrlTestCase):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # NemotronH (hybrid Mamba-Attention) does not support gradient checkpointing.
-        # Workaround: hide kernels package so transformers doesn't unconditionally load mamba CUDA kernels.
-        # See: https://github.com/huggingface/transformers/pull/44853
-        kwargs = {}
-        ctx = (
-            patch("transformers.integrations.hub_kernels.lazy_load_kernel", return_value=None)
-            if "NemotronH" in model_id
-            else nullcontext()
-        )
-        if "NemotronH" in model_id:
-            kwargs["gradient_checkpointing"] = False
-
         # Initialize the trainer
-        with ctx:
-            training_args = DPOConfig(
-                output_dir=self.tmp_dir,
-                learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-                report_to="none",
-                **kwargs,
-            )
-            trainer = DPOTrainer(model=model_id, args=training_args, train_dataset=dataset)
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = DPOTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
         # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}

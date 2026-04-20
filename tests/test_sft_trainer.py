@@ -15,7 +15,6 @@
 import gc
 import json
 import pathlib
-from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -372,22 +371,9 @@ class TestSFTTrainer(TrlTestCase):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        # NemotronH (hybrid Mamba-Attention) does not support gradient checkpointing.
-        # Workaround: hide kernels package so transformers doesn't unconditionally load mamba CUDA kernels.
-        # See: https://github.com/huggingface/transformers/pull/44853
-        kwargs = {}
-        ctx = (
-            patch("transformers.integrations.hub_kernels.lazy_load_kernel", return_value=None)
-            if "NemotronH" in model_id
-            else nullcontext()
-        )
-        if "NemotronH" in model_id:
-            kwargs["gradient_checkpointing"] = False
-
         # Initialize the trainer
-        with ctx:
-            training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", **kwargs)
-            trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
         # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
