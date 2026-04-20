@@ -343,7 +343,7 @@ class KTOTrainer(_BaseTrainer):
                 logger.warning(
                     "You are using an `IterableDataset` for training with `dispatch_batches=True`. `dispatch_batches` "
                     "is forced to `False` when using an `IterableDataset`. To remove this warning, unset "
-                    "`dispatch_batches` in `DPOConfig` or set it to `False`."
+                    "`dispatch_batches` in `KTOConfig` or set it to `False`."
                 )
             args.accelerator_config.dispatch_batches = False
 
