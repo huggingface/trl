@@ -44,7 +44,6 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import (
     extract_prompt,
-    maybe_apply_chat_template,
     unpair_preference_dataset,
 )
 from ...import_utils import is_liger_kernel_available
@@ -632,14 +631,6 @@ class KTOTrainer(_BaseTrainer):
             if "chosen" in first_example and "rejected" in first_example:
                 map_kwargs["desc"] = f"Unpairing {dataset_name} dataset"
                 dataset = unpair_preference_dataset(dataset, **map_kwargs)
-
-            # Apply the chat template if needed
-            dataset = dataset.map(
-                maybe_apply_chat_template,
-                fn_kwargs={"processing_class": processing_class},
-                num_proc=args.dataset_num_proc,
-                desc=f"Applying chat template to {dataset_name} dataset",
-            )
 
             tokenizer = getattr(processing_class, "tokenizer", processing_class)
             # Tokenize dataset
