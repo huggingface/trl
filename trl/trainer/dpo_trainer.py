@@ -457,7 +457,7 @@ class DPOTrainer(_BaseTrainer):
               and content).
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
@@ -742,9 +742,10 @@ class DPOTrainer(_BaseTrainer):
 
         # Reference model
         if ref_model is None:
-            if is_peft_model(self.model):
+            if is_peft_model(self.model) or args.precompute_ref_log_probs:
                 # If PEFT is used, the reference model is not needed since the adapter can be disabled to revert to the
-                # initial model.
+                # initial model. If precompute_ref_log_probs is True, the reference model does not need to be kept in
+                # memory during training.
                 self.ref_model = None
             else:
                 ref_model_init_kwargs = args.model_init_kwargs or {}
@@ -778,7 +779,7 @@ class DPOTrainer(_BaseTrainer):
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
-            if self.ref_model is None:
+            if is_peft_model(self.model):
                 raise NotImplementedError(
                     "You passed `sync_ref_model=True` while using a PEFT model, which is currently not supported. "
                     "With PEFT, DPOTrainer does not keep a separate reference model in memory; instead, it recovers "
@@ -1030,9 +1031,12 @@ class DPOTrainer(_BaseTrainer):
         model_kwargs["use_cache"] = False
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if is_peft_model(self.model) and self.ref_model is None:
-                model = self.accelerator.unwrap_model(self.model)
-                with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+            if self.ref_model is None:
+                if is_peft_model(self.model):
+                    model = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                        ref_outputs = self.model(**model_kwargs)
+                else:
                     ref_outputs = self.model(**model_kwargs)
             else:
                 ref_outputs = self.ref_model(**model_kwargs)
