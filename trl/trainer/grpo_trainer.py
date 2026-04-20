@@ -2254,6 +2254,16 @@ class GRPOTrainer(_BaseTrainer):
                 nanmax(self.accelerator.gather(max_importance_sampling_ratio)).item()
             )
 
+        # When all completions in a reward group receive identical rewards, advantages
+        # are zero and the policy loss contributes no gradient. However, the per-token
+        # KL penalty (beta * per_token_kl in compute_loss) still fires because
+        # per_token_logps retains gradients while ref_per_token_logps is detached.
+        # Zeroing completion_mask for zero-std groups suppresses both the policy loss
+        # and the spurious KL gradient simultaneously. See issue #5588.
+        if self.beta != 0.0:
+            is_std_zero_local = is_std_zero[process_slice]  # shape: (local_completions,)
+            completion_mask = completion_mask * (~is_std_zero_local).unsqueeze(1).int()
+
         output = {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
