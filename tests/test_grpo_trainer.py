@@ -238,6 +238,76 @@ class TestGRPORolloutDispatch:
             trainer._generate(["prompt"])
 
 
+class TestGRPOGenerationBackendDispatch:
+    def _make_trainer(self):
+        trainer = object.__new__(GRPOTrainer)
+        trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+        trainer.args = SimpleNamespace(
+            report_to=[],
+            ds3_gather_for_generation=False,
+            bf16=False,
+            fp16=False,
+            cast_lm_head_to_fp32=False,
+        )
+        trainer.model = SimpleNamespace(training=True)
+        trainer.state = SimpleNamespace(global_step=2)
+        trainer._last_loaded_step = 1
+        trainer.num_generations = 3
+        trainer.num_generations_eval = 2
+        trainer.use_vllm = False
+        trainer.use_transformers_paged = False
+        trainer.vllm_generation = SimpleNamespace(sync_weights=MagicMock(), generate=MagicMock())
+        trainer.model_wrapped = object()
+        trainer.generation_config = object()
+        trainer.is_fsdp_enabled = False
+        trainer.generation_kwargs = {}
+        trainer.eos_token_id = 2
+        trainer.pad_token_id = 0
+        return trainer
+
+    def test_generate_single_turn_vllm_syncs_weights_and_formats_logprobs(self):
+        trainer = self._make_trainer()
+        trainer.use_vllm = True
+        trainer.vllm_generation.generate.return_value = (
+            None,
+            [[101, 102]],
+            [[[-0.5, -1.0], [-0.3, -0.8]]],
+            None,
+        )
+
+        completion_ids, logprobs = trainer._generate_single_turn(prompt_ids=[[1, 2, 3]], images=None, multimodal_fields={})
+
+        assert completion_ids == [[101, 102]]
+        assert logprobs == [[-0.5, -0.3]]
+        trainer.vllm_generation.sync_weights.assert_called_once()
+        assert trainer._last_loaded_step == trainer.state.global_step
+
+    def test_generate_single_turn_dispatches_to_transformers_paged_helper(self):
+        trainer = self._make_trainer()
+        trainer.use_transformers_paged = True
+
+        with patch("trl.trainer.grpo_trainer._generate_with_transformers_paged", return_value=[[301, 302]]) as mock_helper:
+            completion_ids, logprobs = trainer._generate_single_turn(
+                prompt_ids=[[9, 9]], images=None, multimodal_fields={}
+            )
+
+        assert completion_ids == [[301, 302]]
+        assert logprobs is None
+        mock_helper.assert_called_once()
+
+    def test_generate_single_turn_dispatches_to_transformers_helper(self):
+        trainer = self._make_trainer()
+
+        with patch("trl.trainer.grpo_trainer._generate_with_transformers", return_value=[[401]]) as mock_helper:
+            completion_ids, logprobs = trainer._generate_single_turn(
+                prompt_ids=[[8, 8]], images=None, multimodal_fields={"dummy": [1, 2]}
+            )
+
+        assert completion_ids == [[401]]
+        assert logprobs is None
+        mock_helper.assert_called_once()
+
+
 class TestGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
         # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset

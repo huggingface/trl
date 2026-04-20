@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -34,6 +35,66 @@ from .testing_utils import TrlTestCase, require_peft, require_vision, require_vl
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
+
+
+class TestRLOOGenerationBackendDispatch:
+    def _make_trainer(self):
+        trainer = object.__new__(RLOOTrainer)
+        trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+        trainer.args = SimpleNamespace(
+            report_to=[],
+            ds3_gather_for_generation=False,
+            bf16=False,
+            fp16=False,
+            cast_lm_head_to_fp32=False,
+        )
+        trainer.model = SimpleNamespace(training=True)
+        trainer.state = SimpleNamespace(global_step=2)
+        trainer._last_loaded_step = 1
+        trainer.num_generations = 3
+        trainer.num_generations_eval = 2
+        trainer.use_vllm = False
+        trainer.use_transformers_paged = False
+        trainer.vllm_generation = SimpleNamespace(sync_weights=MagicMock(), generate=MagicMock())
+        trainer.model_wrapped = object()
+        trainer.generation_config = object()
+        trainer.is_fsdp_enabled = False
+        trainer.generation_kwargs = {}
+        trainer.eos_token_id = 2
+        trainer.pad_token_id = 0
+        return trainer
+
+    def test_generate_single_turn_vllm_syncs_weights(self):
+        trainer = self._make_trainer()
+        trainer.use_vllm = True
+        trainer.vllm_generation.generate.return_value = (None, [[101, 102]], None, None)
+
+        completion_ids = trainer._generate_single_turn(prompt_ids=[[1, 2, 3]], images=None, multimodal_fields={})
+
+        assert completion_ids == [[101, 102]]
+        trainer.vllm_generation.sync_weights.assert_called_once()
+        assert trainer._last_loaded_step == trainer.state.global_step
+
+    def test_generate_single_turn_dispatches_to_transformers_paged_helper(self):
+        trainer = self._make_trainer()
+        trainer.use_transformers_paged = True
+
+        with patch("trl.trainer.rloo_trainer._generate_with_transformers_paged", return_value=[[301, 302]]) as mock_helper:
+            completion_ids = trainer._generate_single_turn(prompt_ids=[[9, 9]], images=None, multimodal_fields={})
+
+        assert completion_ids == [[301, 302]]
+        mock_helper.assert_called_once()
+
+    def test_generate_single_turn_dispatches_to_transformers_helper(self):
+        trainer = self._make_trainer()
+
+        with patch("trl.trainer.rloo_trainer._generate_with_transformers", return_value=[[401]]) as mock_helper:
+            completion_ids = trainer._generate_single_turn(
+                prompt_ids=[[8, 8]], images=None, multimodal_fields={"dummy": [1, 2]}
+            )
+
+        assert completion_ids == [[401]]
+        mock_helper.assert_called_once()
 
 
 class TestRLOOTrainer(TrlTestCase):

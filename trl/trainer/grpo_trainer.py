@@ -130,6 +130,124 @@ class _SupportsReset(Protocol):
 EnvironmentFactory = Callable[[], _SupportsReset]
 
 
+def _generate_with_vllm(
+    prompt_ids,
+    images,
+    mode,
+    state_global_step,
+    last_loaded_step,
+    num_generations,
+    num_generations_eval,
+    vllm_generation,
+    profiler_owner,
+):
+    # Sync weights if training step changed
+    if state_global_step != last_loaded_step:
+        with profiling_context(profiler_owner, "sync_weights"):
+            vllm_generation.sync_weights()
+        last_loaded_step = state_global_step
+
+    # Generate using vLLM with raw token IDs
+    num_generations = num_generations if mode == "train" else num_generations_eval
+    _, completion_ids, logprobs, _ = vllm_generation.generate(
+        prompts=prompt_ids,
+        images=images,
+        num_generations=num_generations,
+        profiler=profiling_context(profiler_owner, "vLLM.generate"),
+    )
+    # vLLM returns per-token top-k logprobs; keep only the top-1 (sampled token) logprob
+    logprobs = [[lp[0] for lp in seq] for seq in logprobs]
+    return completion_ids, logprobs, last_loaded_step
+
+
+def _generate_with_transformers_paged(
+    prompt_ids,
+    model_wrapped,
+    accelerator,
+    args,
+    generation_config,
+    is_fsdp_enabled,
+    profiler_owner,
+):
+    with (
+        profiling_context(profiler_owner, "transformers.generate_batch"),
+        unwrap_model_for_generation(
+            model_wrapped, accelerator, gather_deepspeed3_params=args.ds3_gather_for_generation
+        ) as unwrapped_model,
+        torch.no_grad(),
+        FSDP.summon_full_params(model_wrapped, recurse=False) if is_fsdp_enabled else nullcontext(),
+    ):
+        # Cast to the appropriate dtype based on training configuration
+        if args.bf16:
+            unwrapped_model.to(torch.bfloat16)
+        elif args.fp16:
+            unwrapped_model.to(torch.float16)
+        if args.cast_lm_head_to_fp32:
+            unwrapped_model.lm_head.to(torch.float32)
+        with torch.inference_mode():
+            # Continuous batching API expects 'inputs' arg only
+            all_outputs = unwrapped_model.generate_batch(prompt_ids, generation_config=generation_config, progress_bar=False)
+            unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
+    return [output.generated_tokens for output in all_outputs.values()]
+
+
+def _generate_with_transformers(
+    prompt_ids,
+    multimodal_fields,
+    pad_token_id,
+    model_wrapped,
+    accelerator,
+    args,
+    generation_kwargs,
+    generation_config,
+    is_fsdp_enabled,
+    eos_token_id,
+    device,
+    prepare_inputs,
+    profiler_owner,
+):
+    # Regular generation path: left-pad token IDs into tensors
+    prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
+    padded_ids = pad(prompt_tensors, padding_value=pad_token_id, padding_side="left")
+    attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
+    generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
+    # For VLMs, include multimodal fields as tensors (pixel_values, image_grid_thw, etc.)
+    for k, v in multimodal_fields.items():
+        if isinstance(v, torch.Tensor):
+            generate_inputs[k] = v
+        elif isinstance(v, list) and v and isinstance(v[0], list):
+            # Per-token field (e.g., token_type_ids): left-pad like input_ids
+            generate_inputs[k] = pad([torch.tensor(x) for x in v], padding_value=0, padding_side="left")
+        else:
+            generate_inputs[k] = torch.tensor(np.array(v))
+    generate_inputs = prepare_inputs(generate_inputs)
+
+    with (
+        profiling_context(profiler_owner, "transformers.generate"),
+        unwrap_model_for_generation(
+            model_wrapped,
+            accelerator,
+            gather_deepspeed3_params=args.ds3_gather_for_generation,
+            generation_kwargs=generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+        ) as unwrapped_model,
+        torch.no_grad(),
+        FSDP.summon_full_params(model_wrapped, recurse=False) if is_fsdp_enabled else nullcontext(),
+    ):
+        prompt_completion_ids = unwrapped_model.generate(**generate_inputs, generation_config=generation_config)
+
+    # Compute prompt length and extract completion ids
+    prompt_length = generate_inputs["input_ids"].size(1)
+    completion_ids = prompt_completion_ids[:, prompt_length:]
+
+    # Mask everything after the first EOS token
+    is_eos = completion_ids == eos_token_id
+    eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+    eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+    sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+    completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+    return [c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)]
+
+
 class GRPOTrainer(_BaseTrainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -1319,98 +1437,56 @@ class GRPOTrainer(_BaseTrainer):
             multimodal_fields = {}
         return prompt_ids, images, multimodal_fields
 
+    def _prepare_generation_inputs(self, generation_inputs: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
+        # Route to the base Trainer implementation to avoid invoking this class's generation-aware _prepare_inputs.
+        return super()._prepare_inputs(generation_inputs)
+
     def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
-            # Sync weights if training step changed
-            if self.state.global_step != self._last_loaded_step:
-                with profiling_context(self, "sync_weights"):
-                    self.vllm_generation.sync_weights()
-                self._last_loaded_step = self.state.global_step
-
-            # Generate using vLLM with raw token IDs
-            num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-            _, completion_ids, logprobs, _ = self.vllm_generation.generate(
-                prompts=prompt_ids,
+            completion_ids, logprobs, self._last_loaded_step = _generate_with_vllm(
+                prompt_ids=prompt_ids,
                 images=images,
-                num_generations=num_generations,
-                profiler=profiling_context(self, "vLLM.generate"),
+                mode=mode,
+                state_global_step=self.state.global_step,
+                last_loaded_step=self._last_loaded_step,
+                num_generations=self.num_generations,
+                num_generations_eval=self.num_generations_eval,
+                vllm_generation=self.vllm_generation,
+                profiler_owner=self,
             )
-            # vLLM returns per-token top-k logprobs; keep only the top-1 (sampled token) logprob
-            logprobs = [[lp[0] for lp in seq] for seq in logprobs]
 
         elif self.use_transformers_paged:
-            with (
-                profiling_context(self, "transformers.generate_batch"),
-                unwrap_model_for_generation(
-                    self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
-                ) as unwrapped_model,
-                torch.no_grad(),
-                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
-            ):
-                # Cast to the appropriate dtype based on training configuration
-                if self.args.bf16:
-                    unwrapped_model.to(torch.bfloat16)
-                elif self.args.fp16:
-                    unwrapped_model.to(torch.float16)
-                if self.args.cast_lm_head_to_fp32:
-                    unwrapped_model.lm_head.to(torch.float32)
-                with torch.inference_mode():
-                    # Continuous batching API expects 'inputs' arg only
-                    all_outputs = unwrapped_model.generate_batch(
-                        prompt_ids, generation_config=self.generation_config, progress_bar=False
-                    )
-                    unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
-            completion_ids = [output.generated_tokens for output in all_outputs.values()]
+            completion_ids = _generate_with_transformers_paged(
+                prompt_ids=prompt_ids,
+                model_wrapped=self.model_wrapped,
+                accelerator=self.accelerator,
+                args=self.args,
+                generation_config=self.generation_config,
+                is_fsdp_enabled=self.is_fsdp_enabled,
+                profiler_owner=self,
+            )
             logprobs = None  # not used in this case
 
         else:
-            # Regular generation path: left-pad token IDs into tensors
-            prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
-            padded_ids = pad(prompt_tensors, padding_value=self.pad_token_id, padding_side="left")
-            attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
-            generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
-            # For VLMs, include multimodal fields as tensors (pixel_values, image_grid_thw, etc.)
-            for k, v in multimodal_fields.items():
-                if isinstance(v, torch.Tensor):
-                    generate_inputs[k] = v
-                elif isinstance(v, list) and v and isinstance(v[0], list):
-                    # Per-token field (e.g., token_type_ids): left-pad like input_ids
-                    generate_inputs[k] = pad([torch.tensor(x) for x in v], padding_value=0, padding_side="left")
-                else:
-                    generate_inputs[k] = torch.tensor(np.array(v))
-            generate_inputs = super()._prepare_inputs(generate_inputs)
-
-            with (
-                profiling_context(self, "transformers.generate"),
-                unwrap_model_for_generation(
-                    self.model_wrapped,
-                    self.accelerator,
-                    gather_deepspeed3_params=self.args.ds3_gather_for_generation,
-                    generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
-                ) as unwrapped_model,
-                torch.no_grad(),
-                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
-            ):
-                prompt_completion_ids = unwrapped_model.generate(
-                    **generate_inputs, generation_config=self.generation_config
-                )
-            # Compute prompt length and extract completion ids
-            prompt_length = generate_inputs["input_ids"].size(1)
-            completion_ids = prompt_completion_ids[:, prompt_length:]
-
-            # Mask everything after the first EOS token
-            is_eos = completion_ids == self.eos_token_id
-            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
-            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
-            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-            completion_ids = [
-                c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
-            ]
+            completion_ids = _generate_with_transformers(
+                prompt_ids=prompt_ids,
+                multimodal_fields=multimodal_fields,
+                pad_token_id=self.pad_token_id,
+                model_wrapped=self.model_wrapped,
+                accelerator=self.accelerator,
+                args=self.args,
+                generation_kwargs=self.generation_kwargs,
+                generation_config=self.generation_config,
+                is_fsdp_enabled=self.is_fsdp_enabled,
+                eos_token_id=self.eos_token_id,
+                device=device,
+                prepare_inputs=self._prepare_generation_inputs,
+                profiler_owner=self,
+            )
             logprobs = None  # not used in this case
 
         return completion_ids, logprobs
