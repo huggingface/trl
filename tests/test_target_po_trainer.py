@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from datasets import load_dataset
 
 from trl import TargetPOConfig, TargetPOTrainer
 from trl.trainer.grpo_trainer import GRPOTrainer
@@ -55,6 +56,36 @@ class TestTargetPOConfig(TrlTestCase):
     def test_trainer_metadata(self):
         assert TargetPOTrainer._name == "TargetPO"
         assert TargetPOTrainer._tag_names == ["trl", "tpo"]
+
+
+class TestTargetPOTrainer(TrlTestCase):
+    def test_training(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = TargetPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            report_to="none",
+        )
+        trainer = TargetPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
 
 class TestTPOLoss:
