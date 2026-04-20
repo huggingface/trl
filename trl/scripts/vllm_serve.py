@@ -215,6 +215,10 @@ class ScriptArguments:
             Distributed executor backend for vLLM. Set to `"ray"` to distribute tensor parallel workers across multiple
             nodes via a Ray cluster. Required when `tensor_parallel_size` exceeds the number of local GPUs. If not set,
             vLLM defaults to the multiproc backend (single-node only).
+        speculative_config (`str`, *optional*):
+            JSON string for vLLM speculative decoding config, forwarded to `LLM(speculative_config=...)`. When unset,
+            speculative decoding is disabled. Example:
+            `'{"method": "qwen3_next_mtp", "num_speculative_tokens": 5}'`.
     """
 
     model: str = field(
