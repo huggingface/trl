@@ -17,6 +17,7 @@ import base64
 import logging
 import math
 import os
+import json
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -330,8 +331,6 @@ class ScriptArguments:
 def llm_worker(
     script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection
 ) -> None:
-    import json
-
     from vllm import LLM
 
     # Set required environment variables for DP to work with vLLM
