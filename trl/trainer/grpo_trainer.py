@@ -41,6 +41,7 @@ from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, creat
 from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.nn.functional import all_gather as _all_gather_with_grad
 from torch.utils.data import Sampler
 from transformers import (
     AutoModelForSequenceClassification,
@@ -2421,12 +2422,11 @@ class GRPOTrainer(_BaseTrainer):
 
     @staticmethod
     def _gather_tensor_with_grad(tensor: torch.Tensor) -> torch.Tensor:
+        # Autograd-aware all_gather: required when a TPO prompt group spans DP ranks, so the log-softmax
+        # normalizer's gradient routes back to the owning rank.
         if not torch.distributed.is_available() or not torch.distributed.is_initialized():
             return tensor
-
-        from torch.distributed.nn.functional import all_gather
-
-        return torch.cat(all_gather(tensor), dim=0)
+        return torch.cat(_all_gather_with_grad(tensor), dim=0)
 
     @staticmethod
     @torch.no_grad()
