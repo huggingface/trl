@@ -836,6 +836,15 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         self._metrics[mode]["self_distillation/distillation_loss"].append(value)
         self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
 
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        mode = "train" if self.model.training else "eval"
+        metrics = {k: sum(v) / len(v) for k, v in self._metrics[mode].items() if v}
+        if mode == "eval":
+            metrics = {f"eval_{k}": v for k, v in metrics.items()}
+        logs = {**logs, **metrics}
+        super().log(logs, start_time)
+        self._metrics[mode].clear()
+
     @abstractmethod
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """Subclasses own algorithm-specific loss composition on the final batch contract."""
