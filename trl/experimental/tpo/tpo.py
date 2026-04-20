@@ -21,25 +21,27 @@
 # ///
 
 """
-Run the TPO training script with the following command with some example arguments.
-TPO requires a *triple-preference* dataset where each example contains a `chosen`, a `rejected` and a `reference`
-(gold) completion for the same prompt.
+Triple Preference Optimization (TPO) training.
 
-Two dataset paths are supported out of the box:
+TPO requires a *triple-preference* dataset where each example contains a `chosen`, a `rejected` and a `reference`
+(gold) completion for the same prompt. Two dataset paths are supported out of the box:
 
 - Use the published
   [`tpo-alignment/triple-preference-ultrafeedback-40K`](https://huggingface.co/datasets/tpo-alignment/triple-preference-ultrafeedback-40K)
   dataset directly. It already has the `prompt` / `reference` / `chosen` / `rejected` schema.
-- Pass `--dataset_name openbmb/UltraFeedback` and the script automatically builds the triple-preference dataset
-  as described in the TPO paper (Saeidi et al., 2025): the response with the highest `overall_score` becomes
-  `reference`, the second-highest becomes `chosen`, and the lowest becomes `rejected`.
+- Pass `--dataset_name openbmb/UltraFeedback` and the script automatically builds the triple-preference dataset as
+  described in the TPO paper (Saeidi et al., 2025): the response with the highest `overall_score` becomes `reference`,
+  the second-highest becomes `chosen`, and the lowest becomes `rejected`.
 
-In both cases, if the dataset is in standard (plain-string) format it is auto-wrapped into the conversational
-format so that the model's chat template is applied — this matches how Instruct models like `Qwen/Qwen3-0.6B`
-are trained.
+In both cases, if the dataset is in standard (plain-string) format it is auto-wrapped into the conversational format so
+that the model's chat template is applied — this matches how Instruct models like `Qwen/Qwen3-0.6B` are trained.
 
-# Full training:
-python examples/scripts/tpo.py \
+Usage:
+
+Full training:
+
+```bash
+python trl/experimental/tpo/tpo.py \
     --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
@@ -50,9 +52,12 @@ python examples/scripts/tpo.py \
     --tpo_alpha 1.0 \
     --output_dir Qwen3-0.6B-TPO \
     --no_remove_unused_columns
+```
 
-# TPO-L (length-normalized variant with target reward margin):
-python examples/scripts/tpo.py \
+TPO-L (length-normalized variant with target reward margin):
+
+```bash
+python trl/experimental/tpo/tpo.py \
     --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
@@ -65,9 +70,12 @@ python examples/scripts/tpo.py \
     --tpo_l_gamma 5.4 \
     --output_dir Qwen3-0.6B-TPO-L \
     --no_remove_unused_columns
+```
 
-# LoRA:
-python examples/scripts/tpo.py \
+LoRA:
+
+```bash
+python trl/experimental/tpo/tpo.py \
     --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
@@ -79,6 +87,7 @@ python examples/scripts/tpo.py \
     --use_peft \
     --lora_r 32 \
     --lora_alpha 16
+```
 """
 
 from datasets import load_dataset
@@ -97,10 +106,10 @@ def build_triple_preference_from_ultrafeedback(example):
     - the second-highest as `chosen`,
     - the lowest as `rejected`.
 
-    Emits the *conversational* format so that [`TPOTrainer`] applies the model's chat template automatically
-    (see `trl.data_utils.is_conversational`). Completions with a missing `overall_score` or `response` are
-    filtered out; if fewer than 3 valid completions remain, the returned example contains `None` values and
-    should be filtered out downstream.
+    Emits the *conversational* format so that [`TPOTrainer`] applies the model's chat template automatically (see
+    `trl.data_utils.is_conversational`). Completions with a missing `overall_score` or `response` are filtered out; if
+    fewer than 3 valid completions remain, the returned example contains `None` values and should be filtered out
+    downstream.
     """
     scored = [c for c in example["completions"] if c.get("overall_score") is not None and c.get("response")]
     if len(scored) < 3:
@@ -117,8 +126,8 @@ def build_triple_preference_from_ultrafeedback(example):
 def to_conversational(example):
     """
     Wrap a standard-format triple-preference example (plain strings) in the *conversational* format, so that
-    [`TPOTrainer`] applies the model's chat template automatically. This is the format expected by Instruct
-    models; for non-Instruct base models the standard format can be used directly.
+    [`TPOTrainer`] applies the model's chat template automatically. This is the format expected by Instruct models; for
+    non-Instruct base models the standard format can be used directly.
     """
     return {
         "prompt": [{"role": "user", "content": example["prompt"]}],
