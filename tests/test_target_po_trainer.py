@@ -18,26 +18,26 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from trl import TPOConfig, TPOTrainer
+from trl import TargetPOConfig, TargetPOTrainer
 from trl.trainer.grpo_trainer import GRPOTrainer
 
 from .testing_utils import TrlTestCase
 
 
-class TestTPOConfig(TrlTestCase):
+class TestTargetPOConfig(TrlTestCase):
     def test_defaults_to_one_step_per_generation(self):
-        config = TPOConfig(output_dir=self.tmp_dir, gradient_accumulation_steps=4)
+        config = TargetPOConfig(output_dir=self.tmp_dir, gradient_accumulation_steps=4)
 
         assert config.loss_type == "tpo"
         assert config.steps_per_generation == 1
 
     def test_requires_one_step_per_generation(self):
         with pytest.raises(ValueError, match="steps_per_generation=1"):
-            TPOConfig(output_dir=self.tmp_dir, steps_per_generation=2)
+            TargetPOConfig(output_dir=self.tmp_dir, steps_per_generation=2)
 
     def test_trainer_metadata(self):
-        assert TPOTrainer._name == "TPO"
-        assert TPOTrainer._tag_names == ["trl", "tpo"]
+        assert TargetPOTrainer._name == "TargetPO"
+        assert TargetPOTrainer._tag_names == ["trl", "tpo"]
 
 
 class TestTPOLoss:

@@ -971,5 +971,6 @@ class GRPOConfig(_BaseConfig):
             if self.steps_per_generation != 1:
                 raise ValueError(
                     "TPO requires `steps_per_generation=1` so every prompt group is available in a single loss "
-                    "step. Use `TPOConfig`, which sets this default automatically, or set `steps_per_generation=1`."
+                    "step. Use `TargetPOConfig`, which sets this default automatically, or set "
+                    "`steps_per_generation=1`."
                 )

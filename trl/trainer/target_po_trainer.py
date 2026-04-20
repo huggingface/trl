@@ -21,7 +21,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixi
 from transformers.utils import is_peft_available
 
 from .grpo_trainer import EnvironmentFactory, GRPOTrainer, RewardFunc, RolloutFunc
-from .tpo_config import TPOConfig
+from .target_po_config import TargetPOConfig
 from .utils import get_config_model_id
 
 
@@ -32,18 +32,18 @@ else:
     PeftModel = PreTrainedModel
 
 
-class TPOTrainer(GRPOTrainer):
+class TargetPOTrainer(GRPOTrainer):
     """
-    Trainer for Target Policy Optimization (TPO).
+    Trainer for Target Policy Optimization (TargetPO).
 
-    TPO reuses the [`GRPOTrainer`] online rollout and reward stack, but fits the current policy to a frozen target
-    distribution over sampled completions.
+    TargetPO reuses the [`GRPOTrainer`] online rollout and reward stack, but fits the current policy to a frozen
+    target distribution over sampled completions.
 
     See [`GRPOTrainer`] for the supported model, dataset, reward function, and rollout arguments.
     """
 
     _tag_names = ["trl", "tpo"]
-    _name = "TPO"
+    _name = "TargetPO"
     _paper = {
         "title": "Target Policy Optimization",
         "id": "2604.06159",
@@ -60,7 +60,7 @@ class TPOTrainer(GRPOTrainer):
         self,
         model: "str | PreTrainedModel | PeftModel",
         reward_funcs: RewardFunc | list[RewardFunc],
-        args: TPOConfig | None = None,
+        args: TargetPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
@@ -75,7 +75,7 @@ class TPOTrainer(GRPOTrainer):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
-            args = TPOConfig(f"{model_name}-TPO")
+            args = TargetPOConfig(f"{model_name}-TargetPO")
 
         super().__init__(
             model=model,

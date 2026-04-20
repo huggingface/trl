@@ -18,16 +18,16 @@ from .grpo_config import GRPOConfig
 
 
 @dataclass
-class TPOConfig(GRPOConfig):
+class TargetPOConfig(GRPOConfig):
     r"""
-    Configuration class for the [`TPOTrainer`].
+    Configuration class for the [`TargetPOTrainer`].
 
     This class extends [`GRPOConfig`] with defaults for Target Policy Optimization. For a full list of training
     arguments, please refer to [`~transformers.TrainingArguments`] and [`GRPOConfig`].
 
     Parameters:
         loss_type (`str`, *optional*, defaults to `"tpo"`):
-            Loss formulation. `TPOConfig` requires this to stay set to `"tpo"`.
+            Loss formulation. `TargetPOConfig` requires this to stay set to `"tpo"`.
         tpo_target_temperature (`float`, *optional*, defaults to `1.0`):
             Temperature used to build the TPO target distribution. Lower values make the target more concentrated on
             high-scoring completions.
@@ -35,7 +35,7 @@ class TPOConfig(GRPOConfig):
 
     loss_type: str = field(
         default="tpo",
-        metadata={"help": "Loss formulation. `TPOConfig` requires this to stay set to `tpo`."},
+        metadata={"help": "Loss formulation. `TargetPOConfig` requires this to stay set to `tpo`."},
     )
 
     def __post_init__(self):
@@ -45,4 +45,4 @@ class TPOConfig(GRPOConfig):
         super().__post_init__()
 
         if self.loss_type != "tpo":
-            raise ValueError(f"TPOConfig requires loss_type='tpo'. You provided {self.loss_type!r}.")
+            raise ValueError(f"TargetPOConfig requires loss_type='tpo'. You provided {self.loss_type!r}.")
