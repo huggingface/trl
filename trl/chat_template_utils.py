@@ -230,6 +230,46 @@ qwen3_schema = {
     },
 }
 
+llama3_schema = {
+    # Llama 3.1 / 3.2 render a tool call as a single bare JSON object using the key "parameters" instead of
+    # "arguments": `{"name": "<name>", "parameters": <args_json>}<|eot_id|>`. There is no surrounding marker, no
+    # support for content alongside a tool call, and at most one tool call per assistant turn (the template raises
+    # otherwise). Either we match a tool call (capturing the JSON) or we treat the response as plain content.
+    "x-regex": r'^(?:(?P<tool_calls>\{"name":\s*".+?",\s*"parameters":\s*.+\})|(?P<content>.*?))(?:<\|eot_id\|>|$)',
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "tool_calls": {
+            "type": "array",
+            "x-regex-iterator": r'(\{"name":\s*".+?",\s*"parameters":\s*.+\})',
+            "items": {
+                # Rewrite "parameters" → "arguments" so the JSON parses into the standard tool-call shape. Anchored
+                # on the leading `{"name": "..."` so a stray `"parameters"` inside argument values is not touched.
+                "x-regex-substitutions": [
+                    [r'^(\{"name":\s*"[^"]+",\s*)"parameters":', r'\1"arguments":'],
+                ],
+                "x-parser": "json",
+                "x-parser-args": {"transform": "{type: 'function', function: @}"},
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "arguments": {
+                                "type": "object",
+                                "additionalProperties": {},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
 qwen3_5_schema = {
     "x-regex": r"^(?:(?:<think>\n?)?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n+(?=<tool_call>))?(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
@@ -273,6 +313,10 @@ glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text()
 
 llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text()
+
+llama3_1_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1.jinja").read_text()
+
+llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text()
 
 qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text()
 
@@ -332,6 +376,8 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer.response_schema = glm4moe_schema
     elif chat_template == gptoss_chat_template:
         tokenizer.response_schema = gptoss_schema
+    elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
+        tokenizer.response_schema = llama3_schema
     elif chat_template in [qwen3_chat_template, qwen3_vl_chat_template]:
         tokenizer.response_schema = qwen3_schema
     elif chat_template in [qwen3_5_chat_template_2b_and_below, qwen3_5_chat_template_4b_and_above]:
@@ -404,7 +450,7 @@ def supports_tool_calling(processing_class) -> bool:
     return all(s in rendered for s in (_name_sentinel, _arg_key_sentinel, _arg_val_sentinel, _content_sentinel))
 
 
-def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
+def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | ProcessorMixin) -> bool:
     """
     Check whether the chat template preserves prefixes when applied.
 
@@ -413,8 +459,8 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
     tokenizations with and without tool messages appended.
 
     Args:
-        tokenizer (`PreTrainedTokenizer`):
-            Tokenizer instance to check.
+        processing_class (`PreTrainedTokenizer` or `ProcessorMixin`):
+            Tokenizer or processor instance to check.
 
     Returns:
         `bool`:
@@ -431,18 +477,26 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
         {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
         {"role": "tool", "name": "dummy", "content": "dummy"},
     ]
+    # VLM processors expect structured list-of-blocks content, and image-token expansion only kicks in when an image
+    # is actually present, so include a dummy image to exercise the real code path.
+    if isinstance(processing_class, ProcessorMixin):
+        from PIL import Image
+
+        dummy_image = Image.new("RGB", (8, 8))
+        messages1 = prepare_multimodal_messages(messages1, images=[dummy_image])
+        messages2 = prepare_multimodal_messages(messages2, images=[dummy_image])
 
     try:
-        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
-        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+        text1 = processing_class.apply_chat_template(messages1, tokenize=False)
+        text2 = processing_class.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
     except TypeError:
         # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
         # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
         dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
         messages1[1]["tool_calls"] = dummy_tool_calls
         messages2[1]["tool_calls"] = dummy_tool_calls
-        text1 = tokenizer.apply_chat_template(messages1, tokenize=False)
-        text2 = tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+        text1 = processing_class.apply_chat_template(messages1, tokenize=False)
+        text2 = processing_class.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
 
     return text2.startswith(text1)
 
