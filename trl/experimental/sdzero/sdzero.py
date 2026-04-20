@@ -26,8 +26,7 @@ Trains a model with on-policy self-distillation via revision feedback. The model
 checkpoint) acts as both student and frozen teacher. The student generates responses on-policy, a binary verifier
 determines correctness, and the student is trained to match the teacher's revision distribution.
 
-The dataset must expose a `problem` column (the question) and an `answer` column (the gold final answer). A HF
-hub dataset or a local disk dataset saved with `datasets.save_to_disk` is accepted.
+The dataset must expose a `problem` column (the question) and an `answer` column (the gold final answer).
 
 Example:
 

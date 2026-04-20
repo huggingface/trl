@@ -1740,6 +1740,69 @@ Expected dataset columns:
 
 For more details, see the [SSD Trainer documentation](ssd_trainer).
 
+### Self-Distillation Zero: Self-Revision Turns Binary Rewards into Dense Supervision
+
+**📜 Paper**: https://huggingface.co/papers/2604.12002
+
+SD-ZERO turns binary verifier rewards into dense supervision in two phases. Phase 1 — **Self-Revision Training (SRT)** — collects traces where the model is prompted to revise its own initial attempt conditioned on an outcome-aware control phrase (`"Let me rephrase the above solution."` when the first attempt is correct, `"Wait, this response is not correct, let me start over."` otherwise) and keeps only traces whose revised answer verifies as correct. It then fine-tunes a single model with the joint objective `L_SRT = L_revision + L_generation`, teaching the model both to produce a correct revision given `(x, y_init, P_r)` and to generate the full `[y_init, P_r, y_revised]` sequence from `x` alone. Phase 1 is implemented in TRL as [`experimental.sdzero.SRTTrainer`]; it consumes a pre-collected self-revision dataset (produced by `trl/experimental/sdzero/srt_collect.py`) and trains with standard completion-only cross-entropy over two records per row (one masked to `y_revised`, one masked to `[y_init, P_r, y_revised]`).
+
+```python
+from datasets import load_from_disk
+
+from trl.experimental.sdzero import SRTConfig, SRTTrainer
+
+training_args = SRTConfig(
+    include_revision_loss=True,     # L_revision term
+    include_generation_loss=True,   # L_generation term
+    separator="\n\n",               # Separator between y_init / P_r / y_revised
+)
+
+trainer = SRTTrainer(
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    args=training_args,
+    train_dataset=load_from_disk("/path/to/revision_dataset"),
+)
+trainer.train()
+```
+
+Expected dataset columns:
+
+- `problem`
+- `y_init`
+- `control_prompt`
+- `y_revised`
+
+Phase 2 — **On-Policy Self-Distillation** — initializes the student from the Phase 1 checkpoint, which also acts as the frozen teacher. At each training step, the student generates a response `y_init` on-policy; the binary verifier selects the control prompt `P_r`; and the teacher's next-token distribution, conditioned on `(x, y_init, P_r)`, provides token-level supervision via KL divergence. This distills the reviser's knowledge back into the generator. Phase 2 is implemented as [`experimental.sdzero.SDZeroTrainer`], which extends `BaseSelfDistillationTrainer` and builds the teacher context dynamically from each on-policy rollout.
+
+```python
+from datasets import Dataset
+
+from trl.experimental.sdzero import SDZeroConfig, SDZeroTrainer
+
+training_args = SDZeroConfig(
+    teacher_model_kind="base",  # Freeze the loaded model as the Phase 1 teacher
+    separator="\n\n",           # Must match the separator used in Phase 1
+    num_generations=1,          # One on-policy rollout per step
+    max_completion_length=512,
+)
+
+dataset = Dataset.from_list([
+    {"prompt": [{"role": "user", "content": "...problem..."}], "answer": "...gold answer..."},
+])
+
+trainer = SDZeroTrainer(
+    model="path/to/srt-checkpoint",  # Phase 1 model — used as both student and frozen teacher
+    args=training_args,
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
+Expected dataset columns:
+
+- `prompt` (conversational list or plain string)
+- `answer` (gold answer; passed to the binary verifier)
+
 ## Distributed Training
 
 ### ZeRO: Memory Optimizations Toward Training Trillion Parameter Models

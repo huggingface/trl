@@ -100,12 +100,7 @@ def load_seed(dataset_name: str, dataset_split: str, num_problems: int) -> list[
 
 
 class Generator:
-    """Backend-agnostic generator for data collection.
-
-    Exposes a single `.generate(prompts, num_return_sequences, max_new_tokens, temperature, top_p, seed)` method
-    that returns a `list[list[str]]` (outer: one per prompt; inner: `num_return_sequences` decoded completions),
-    regardless of whether the backing engine is `transformers` or `vllm`.
-    """
+    """Backend-agnostic generator for data collection."""
 
     def __init__(self, model_name_or_path: str, *, use_vllm: bool, batch_size: int = 16):
         self.use_vllm = use_vllm

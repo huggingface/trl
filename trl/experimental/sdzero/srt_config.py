@@ -38,17 +38,22 @@ class SRTConfig(SFTConfig):
         default="\n\n",
         metadata={
             "help": "Text inserted between `y_init`, the control prompt, and `y_revised` when composing the assistant turn."
+            "Must match the separator used when collecting the dataset"
         },
     )
     include_generation_loss: bool = field(
         default=True,
         metadata={
-            "help": "Whether to include the generation loss term (full assistant turn supervised given only the problem)."
+            "help": "Whether to include the generation loss term, which supervises the model on the full assistant turn"
+            "(initial answer, control prompt, and revised answer) given only the problem"
         },
     )
     include_revision_loss: bool = field(
         default=True,
-        metadata={"help": "Whether to include the revision loss term (revised answer supervised given full context)."},
+        metadata={
+            "help": "Whether to include the revision loss term, which supervises the model only on the revised"
+            "answer given the full context (problem, initial answer, control prompt)."
+        },
     )
 
     def __post_init__(self):

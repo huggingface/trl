@@ -50,14 +50,13 @@ RESTART_PROMPT = "Wait, this response is not correct, let me start over."
 
 class SDZeroTrainer(BaseSelfDistillationTrainer):
     """
-    Trainer for Phase 2 of SD-Zero (On-Policy Self-Distillation via Revision Feedback) from
+    On-policy self-distillation via revision feedback. See
     [Self-Distillation Zero](https://huggingface.co/papers/2604.12002).
 
-    Phase 2 distills the revision behavior learned in Phase 1 back into the generator. At each training step,
-    the student generates a response to a problem. A binary verifier determines whether the response is correct,
-    and a control prompt is selected accordingly. The frozen Phase 1 model (teacher) then provides a next-token
-    distribution over the student's response, conditioned on having seen the full response and the control prompt.
-    The student is updated via KL divergence to match the teacher's distribution.
+    At each step, the student generates a response, a binary verifier judges it, and a control prompt is
+    selected accordingly. The teacher provides a next-token distribution over the student's response,
+    conditioned on the response and the control prompt. The student is updated via KL divergence to match
+    the teacher's distribution.
 
     The dataset must contain two columns: `prompt` (the problem as a conversational list or plain string) and
     `answer` (the gold answer used by the binary verifier).
@@ -72,7 +71,7 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
         {"prompt": [{"role": "user", "content": "What is 2+2?"}], "answer": "4"},
     ])
     trainer = SDZeroTrainer(
-        model="path/to/srt-checkpoint",
+        model="model-id-or-path",
         args=SDZeroConfig(output_dir="sdzero-model", max_steps=100),
         train_dataset=dataset,
     )
@@ -81,8 +80,8 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
 
     Args:
         model (`str` or [`~transformers.PreTrainedModel`] or [`~peft.PeftModel`]):
-            Model to be trained. Typically the Phase 1 SRT checkpoint. Can be a model id string, a local
-            directory path, or a pre-instantiated model object.
+            Model to be trained. Can be a model id string, a local directory path, or a pre-instantiated
+            model object.
         args ([`SDZeroConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`]):

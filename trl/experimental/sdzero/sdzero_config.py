@@ -26,23 +26,44 @@ class SDZeroConfig(SelfDistillationConfig):
         separator (`str`, *optional*, defaults to `"\n\n"`):
             Text inserted between the student's initial response and the control prompt when composing the
             teacher context. Should match the separator used during Phase 1 data collection.
-        teacher_model_kind (`str`, *optional*, defaults to `"base"`):
-            Semantic teacher choice. `base` freezes the weights at initialization — pass the Phase 1 SRT
-            checkpoint as the `model` argument to use it as the static teacher. `live` and `ema` are
-            supported via the base class.
+        teacher_model_kind (`str`, *optional*, defaults to `"ema"`):
+            Semantic teacher choice. Defaults to `"ema"` with `teacher_update_rate=1.0` to implement the
+            paper's "iterative self-evolution". Set to `"base"` to freeze the teacher throughout Phase 2.
+        teacher_update_rate (`float`, *optional*, defaults to `1.0`):
+            EMA update rate used when `teacher_model_kind="ema"`. Defaults to `1.0` to implement periodic
+            teacher sync.
+        teacher_sync_steps (`int`, *optional*, defaults to `512`):
+            Number of optimizer steps between EMA teacher updates.
         num_generations (`int`, *optional*, defaults to `1`):
-            Number of rollouts sampled per prompt per training step. SD-Zero Phase 2 uses one rollout.
+            Number of rollouts sampled per prompt per training step.
     """
 
     separator: str = field(
         default="\n\n",
-        metadata={"help": "Text inserted between the student response and the control prompt in the teacher context."},
+        metadata={
+            "help": "Text inserted between the student's initial response and the control prompt when composing "
+            "the teacher context. Should match the separator used during Phase 1 data collection."
+        },
     )
     teacher_model_kind: str = field(
-        default="base",
-        metadata={"help": "Semantic teacher choice. Defaults to 'base' to freeze the Phase 1 SRT model."},
+        default="ema",
+        metadata={
+            "help": "Semantic teacher choice. Defaults to 'ema' with teacher_update_rate=1.0 to implement the "
+            "paper's 'iterative self-evolution'. Set to 'base' to freeze the teacher throughout Phase 2."
+        },
+    )
+    teacher_update_rate: float = field(
+        default=1.0,
+        metadata={
+            "help": "EMA update rate used when teacher_model_kind='ema'. Defaults to 1.0 to implement periodic "
+            "teacher sync."
+        },
+    )
+    teacher_sync_steps: int = field(
+        default=512,
+        metadata={"help": "Number of optimizer steps between EMA teacher updates."},
     )
     num_generations: int = field(
         default=1,
-        metadata={"help": "Number of rollouts per prompt. SD-Zero Phase 2 uses 1."},
+        metadata={"help": "Number of rollouts sampled per prompt per training step."},
     )
