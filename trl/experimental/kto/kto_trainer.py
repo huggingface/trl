@@ -20,7 +20,6 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -44,6 +43,7 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import (
     extract_prompt,
+    is_conversational,
     maybe_apply_chat_template,
     unpair_preference_dataset,
 )
@@ -69,7 +69,7 @@ if is_peft_available():
 
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedModel, PreTrainedTokenizer
+    from transformers import PreTrainedModel
 
 
 logger = logging.get_logger(__name__)
@@ -88,66 +88,6 @@ def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     return batch
 
 
-def _tokenize(
-    batch: dict[str, list[Any]],
-    tokenizer: "PreTrainedTokenizer",
-) -> dict[str, list[Any]]:
-    """Tokenize a batch from a KTO specific dataset."""
-    prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
-    prompt_input_ids = prompt_tokenized["input_ids"]
-    prompt_attention_mask = prompt_tokenized["attention_mask"]
-    prompt_and_completion = [
-        prompt + completion for prompt, completion in zip(batch["prompt"], batch["completion"], strict=True)
-    ]
-    full_tokenized = tokenizer(prompt_and_completion, add_special_tokens=False)
-    full_input_ids = full_tokenized["input_ids"]
-    full_attention_mask = full_tokenized["attention_mask"]
-
-    answer_input_ids = [f[len(p) :] for f, p in zip(full_input_ids, prompt_input_ids, strict=True)]
-    answer_attention_mask = [f[len(p) :] for f, p in zip(full_attention_mask, prompt_attention_mask, strict=True)]
-
-    # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
-    full_concat_input_ids = [np.concatenate([p, a]) for p, a in zip(prompt_input_ids, answer_input_ids, strict=True)]
-    # Prepare input tokens for token by token comparison
-    full_input_ids = [np.array(f) for f in full_input_ids]
-    for full, concat in zip(full_input_ids, full_concat_input_ids, strict=True):
-        if len(full) != len(concat):
-            raise ValueError(
-                "The elements in 'full_input_ids' and 'full_concat_input_ids' must have the same pairwise length."
-            )
-
-    # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
-    # can be merged together when tokenizing prompt+answer. This could result
-    # on the last token from the prompt being different when tokenized on its own
-    # vs when done as prompt+answer.
-    response_token_ids_start_idx = [len(p) for p in prompt_input_ids]
-
-    # If tokenized prompt is different than both prompt+answer, then it means the
-    # last token has changed due to merging.
-    for idx, (p, f, r) in enumerate(zip(prompt_input_ids, full_input_ids, response_token_ids_start_idx, strict=True)):
-        if not np.array_equal(p, f[:r]):
-            response_token_ids_start_idx[idx] -= 1
-
-    prompt_input_ids = [f[:r] for f, r in zip(full_input_ids, response_token_ids_start_idx, strict=True)]
-    prompt_attention_mask = [f[:r] for f, r in zip(full_attention_mask, response_token_ids_start_idx, strict=True)]
-
-    for p, m in zip(prompt_input_ids, prompt_attention_mask, strict=True):
-        if len(p) != len(m):
-            raise ValueError("Prompt input ids and attention mask should have the same length.")
-
-    answer_input_ids = [f[r:] for f, r in zip(full_input_ids, response_token_ids_start_idx, strict=True)]
-    answer_attention_mask = [f[r:] for f, r in zip(full_attention_mask, response_token_ids_start_idx, strict=True)]
-
-    output = dict(
-        prompt_input_ids=prompt_input_ids,
-        prompt_attention_mask=prompt_attention_mask,
-        answer_input_ids=answer_input_ids,
-        answer_attention_mask=answer_attention_mask,
-    )
-
-    return output
-
-
 def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **kwargs) -> dict:
     """Process tokens of a KTO specific dataset.
 
@@ -157,25 +97,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     We also create the labels for the completion responses, which are of length equal to the sum of the length of the
     prompt and the completion response, with `-100` for the prompt tokens.
     """
-    prompt = example["prompt"]
-    completion = example["completion"]
-
-    batch = {
-        f"{kwargs['prefix']}prompt": prompt,
-        f"{kwargs['prefix']}completion": completion,
-        f"{kwargs['prefix']}label": example["label"],
-    }
-
-    # Check issues below for more details
-    #  1. https://github.com/huggingface/trl/issues/907
-    #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
-    #  3. https://github.com/LianjiaTech/BELLE/issues/337
-
-    if not isinstance(prompt, str):
-        raise ValueError(f"prompt should be an str but got {type(prompt)}")
-
-    if not isinstance(completion, str):
-        raise ValueError(f"completion should be an str but got {type(completion)}")
+    batch = {f"{kwargs['prefix']}label": example["label"]}
 
     # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
     all_tokens = {
@@ -265,7 +187,7 @@ class KTOTrainer(_BaseTrainer):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
-        eval_dataset ([`~datasets.Dataset`]):
+        eval_dataset ([`~datasets.Dataset`] or `dict[str, Dataset]`):
             The dataset to use for evaluation.
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
@@ -501,7 +423,13 @@ class KTOTrainer(_BaseTrainer):
         # Dataset
         train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
         if eval_dataset is not None:
-            eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
+            if isinstance(eval_dataset, dict):
+                eval_dataset = {
+                    key: self._prepare_dataset(dataset, processing_class, args, key)
+                    for key, dataset in eval_dataset.items()
+                }
+            else:
+                eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
@@ -608,6 +536,34 @@ class KTOTrainer(_BaseTrainer):
                         self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                     )
 
+    def _tokenize(
+        self,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
+        input: str | list,
+        **kwargs,
+    ) -> dict[str, list]:
+        """Tokenize a single example for dataset preprocessing.
+
+        Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
+        non-conversational input (str).
+
+        Args:
+            processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
+                The tokenizer or processor to use.
+            input (`str` or `list`):
+                A string for non-conversational input, or a list of message dicts for conversational input.
+            **kwargs:
+                Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
+
+        Returns:
+            `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
+        """
+        if isinstance(input, list):  # conversational: list of message dicts
+            result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
+        else:  # non-conversational: plain text string
+            result = processing_class(text=input)
+        return result
+
     def _prepare_dataset(
         self,
         dataset: Dataset,
@@ -642,14 +598,39 @@ class KTOTrainer(_BaseTrainer):
             )
 
             tokenizer = getattr(processing_class, "tokenizer", processing_class)
+
             # Tokenize dataset
-            dataset = dataset.map(
-                _tokenize,
-                batched=True,
-                fn_kwargs={"tokenizer": tokenizer},
-                num_proc=args.dataset_num_proc,
-                desc=f"Tokenizing {dataset_name} dataset",
-            )
+            def tokenize_fn(example, processing_class):
+                if is_conversational(example):
+                    prompt_ids = self._tokenize(processing_class, example["prompt"], add_generation_prompt=True)[
+                        "input_ids"
+                    ]
+                    prompt_completion_ids = self._tokenize(
+                        processing_class, example["prompt"] + example["completion"]
+                    )["input_ids"]
+                else:
+                    prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_completion_ids = self._tokenize(
+                        processing_class, example["prompt"] + example["completion"]
+                    )["input_ids"]
+
+                if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
+                    logger.warning(
+                        "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
+                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
+                        "token handling. Verify that the tokenizer is processing text consistently."
+                    )
+
+                return {
+                    "prompt_input_ids": prompt_ids,
+                    "prompt_attention_mask": [1] * len(prompt_ids),
+                    "answer_input_ids": prompt_completion_ids[len(prompt_ids) :],
+                    "answer_attention_mask": [1] * (len(prompt_completion_ids) - len(prompt_ids)),
+                }
+
+            map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
+            dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
+
             # Process dataset
             dataset = dataset.map(
                 _process_tokens,
