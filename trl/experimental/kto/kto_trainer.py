@@ -608,6 +608,34 @@ class KTOTrainer(_BaseTrainer):
                         self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                     )
 
+    def _tokenize(
+        self,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
+        input: str | list,
+        **kwargs,
+    ) -> dict[str, list]:
+        """Tokenize a single example for dataset preprocessing.
+
+        Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
+        non-conversational input (str).
+
+        Args:
+            processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
+                The tokenizer or processor to use.
+            input (`str` or `list`):
+                A string for non-conversational input, or a list of message dicts for conversational input.
+            **kwargs:
+                Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
+
+        Returns:
+            `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
+        """
+        if isinstance(input, list):  # conversational: list of message dicts
+            result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
+        else:  # non-conversational: plain text string
+            result = processing_class(text=input)
+        return result
+
     def _prepare_dataset(
         self,
         dataset: Dataset,
