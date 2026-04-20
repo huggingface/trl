@@ -97,25 +97,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     We also create the labels for the completion responses, which are of length equal to the sum of the length of the
     prompt and the completion response, with `-100` for the prompt tokens.
     """
-    prompt = example["prompt"]
-    completion = example["completion"]
-
-    batch = {
-        f"{kwargs['prefix']}prompt": prompt,
-        f"{kwargs['prefix']}completion": completion,
-        f"{kwargs['prefix']}label": example["label"],
-    }
-
-    # Check issues below for more details
-    #  1. https://github.com/huggingface/trl/issues/907
-    #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
-    #  3. https://github.com/LianjiaTech/BELLE/issues/337
-
-    if not isinstance(prompt, str):
-        raise ValueError(f"prompt should be an str but got {type(prompt)}")
-
-    if not isinstance(completion, str):
-        raise ValueError(f"completion should be an str but got {type(completion)}")
+    batch = {f"{kwargs['prefix']}label": example["label"]}
 
     # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
     all_tokens = {
