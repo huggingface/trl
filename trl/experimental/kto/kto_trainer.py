@@ -44,6 +44,7 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import (
     extract_prompt,
+    is_conversational,
     maybe_apply_chat_template,
     unpair_preference_dataset,
 )
@@ -670,14 +671,39 @@ class KTOTrainer(_BaseTrainer):
             )
 
             tokenizer = getattr(processing_class, "tokenizer", processing_class)
+
             # Tokenize dataset
-            dataset = dataset.map(
-                _tokenize,
-                batched=True,
-                fn_kwargs={"tokenizer": tokenizer},
-                num_proc=args.dataset_num_proc,
-                desc=f"Tokenizing {dataset_name} dataset",
-            )
+            def tokenize_fn(example, processing_class):
+                if is_conversational(example):
+                    prompt_ids = self._tokenize(processing_class, example["prompt"], add_generation_prompt=True)[
+                        "input_ids"
+                    ]
+                    prompt_completion_ids = self._tokenize(
+                        processing_class, example["prompt"] + example["completion"]
+                    )["input_ids"]
+                else:
+                    prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_completion_ids = self._tokenize(
+                        processing_class, example["prompt"] + example["completion"]
+                    )["input_ids"]
+
+                if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
+                    logger.warning(
+                        "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
+                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
+                        "token handling. Verify that the tokenizer is processing text consistently."
+                    )
+
+                return {
+                    "prompt_input_ids": prompt_ids,
+                    "prompt_attention_mask": [1] * len(prompt_ids),
+                    "answer_input_ids": prompt_completion_ids[len(prompt_ids) :],
+                    "answer_attention_mask": [1] * (len(prompt_completion_ids) - len(prompt_ids)),
+                }
+
+            map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
+            dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
+
             # Process dataset
             dataset = dataset.map(
                 _process_tokens,
