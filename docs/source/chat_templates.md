@@ -1,53 +1,26 @@
 # Chat Templates
 
-TRL ships a small collection of Jinja2 chat templates under [`trl/chat_templates/`](https://github.com/huggingface/trl/tree/main/trl/chat_templates). They serve two purposes:
+A [chat template](https://huggingface.co/docs/transformers/en/chat_templating) is a Jinja2 snippet that formats messages into the string a model was trained on. For example:
 
-1. **Identity comparison**: detecting which model is being used (by comparing `processing_class.chat_template` against known templates) to add the appropriate response schema (`add_response_schema`) or swap in a training template (`get_training_chat_template`).
-2. **Training patches**: modified templates that fix training-specific issues (prefix-preservation for GRPO, `&#123;% generation %&#125;` markers for SFT assistant-only loss).
+```python
+>>> from transformers import AutoTokenizer
+>>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+>>> tokenizer.chat_template
+"{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n' }}{% endif %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
+>>> tokenizer.apply_chat_template([{"role": "user", "content": "Hi!"}], tokenize=False)
+'<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nHi!<|im_end|>\n'
+```
 
-**Why prefix-preserving?** The GRPO tool call loop extracts tool response formatting tokens by comparing tokenizations with and without tool messages appended (`_get_tool_suffix_ids`). This requires the chat template to be *prefix-preserving*: appending messages must not change how earlier messages are rendered.
+In most cases you don't need to worry about chat templates: models ship their template along with the tokenizer, and TRL applies it for you. The whole thing is transparent. But some TRL recipes rely on features that most shipped templates don't include:
 
-**Why generation-tagged?** SFT with `assistant_only_loss=True` requires the chat template to include `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers around assistant output, so `return_assistant_tokens_mask=True` can produce correct masks. Most model templates don't include these markers natively.
+- **SFT with `assistant_only_loss=True`** needs `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers around assistant output, so the loss mask can target only assistant tokens.
+- **GRPO with tool calls** needs the template to be *prefix-preserving*: appending a tool message must not change how earlier messages are rendered.
 
-## Original templates
+TRL ships patched templates under [`trl/chat_templates/`](https://github.com/huggingface/trl/tree/main/trl/chat_templates) for common families (Qwen, Llama, DeepSeek-V3, GPT-OSS, ...) and swaps them in automatically for supported models. For any other model, you'll need to patch its template yourself. The rest of this page catalogs what's bundled.
 
-Used for identity comparison only.
+## Supported model families
 
-### `deepseekv3.jinja`
-
-Original DeepSeek-V3 chat template.
-
-### `glm4moe.jinja`
-
-Original GLM-4-MoE chat template.
-
-### `gptoss.jinja`
-
-Original GPT-OSS chat template.
-
-### `llama3.jinja`
-
-Original Llama 3 chat template.
-
-### `llama3_1.jinja` / `llama3_2.jinja`
-
-Original Llama 3.1 / 3.2 chat templates. Both render tool calls as a single bare JSON object using the key `parameters` (instead of `arguments`) and support at most one tool call per assistant turn.
-
-### `qwen2_5.jinja`
-
-Original Qwen2.5 chat template.
-
-### `qwen3.jinja`
-
-Original Qwen3 chat template.
-
-### `qwen3_vl.jinja`
-
-Original Qwen3-VL chat template. Unlike text-only Qwen3, this template is already prefix-preserving (no conditional thinking blocks), so no training patch is needed.
-
-### `qwen3_5_2b_and_below.jinja` / `qwen3_5_4b_and_above.jinja`
-
-Original Qwen3.5 chat templates.
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: DeepSeek-V3, GLM-4-MoE, GPT-OSS, Llama 3 / 3.1 / 3.2, Qwen2.5, Qwen3, Qwen3-VL, Qwen3.5.
 
 ## Training templates
 
