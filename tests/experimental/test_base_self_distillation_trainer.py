@@ -29,6 +29,13 @@ from ..testing_utils import TrlTestCase
 
 
 class MinimalSelfDistillationTrainer(BaseSelfDistillationTrainer):
+    def finalize_batch(self, inputs, rollout_batch):
+        del inputs
+        batch = rollout_batch.as_dict()
+        batch["teacher_input_ids"] = rollout_batch.prompt_ids
+        batch["teacher_attention_mask"] = rollout_batch.prompt_mask
+        return batch
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         del inputs, num_items_in_batch
         anchor = next(model.parameters())

@@ -183,7 +183,7 @@ class SDFTTrainer(BaseSelfDistillationTrainer):
             rollout_batch.completion_mask,
         )
 
-        batch = super().finalize_batch(inputs, rollout_batch)
+        batch = rollout_batch.as_dict()
         batch.update(
             {
                 "teacher_input_ids": teacher_batch["teacher_input_ids"],

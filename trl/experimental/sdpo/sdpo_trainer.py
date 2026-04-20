@@ -445,7 +445,6 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         rollout_dict = rollout_batch.as_dict()
         rollout_dict["rewards"] = local_rewards
         rollout_dict["advantages"] = local_advantages
-        rollout_dict["num_items_in_batch"] = rollout_batch.completion_mask.sum().detach()
         teacher_context = self.teacher_context_builder.build(
             rollout_dict,
             prompts,
@@ -466,7 +465,7 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
             self_distillation_mask=teacher_context["self_distillation_mask"],
         )
 
-        batch = super().finalize_batch(inputs, rollout_batch)
+        batch = rollout_batch.as_dict()
         batch.update(
             {
                 "teacher_input_ids": teacher_context["teacher_input_ids"],
@@ -644,12 +643,10 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
 
         if self.args.sdpo_policy_loss_mode == "hybrid":
             return self._compute_hybrid_loss(model, inputs)
-
-        elif self.args.sdpo_policy_loss_mode == "distillation_only":
+        if self.args.sdpo_policy_loss_mode == "distillation_only":
             distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
             return self._compute_weighted_self_distillation_loss(model, inputs, distillation_logits)
-
-        elif self.args.sdpo_policy_loss_mode == "policy_only":
+        if self.args.sdpo_policy_loss_mode == "policy_only":
             student_logits = self._compute_student_distillation_logits(
                 model=model,
                 prompt_ids=inputs["prompt_ids"],
@@ -659,3 +656,8 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
                 logits_to_keep=inputs["completion_ids"].size(1),
             )
             return self._compute_policy_loss(inputs, student_logits)
+
+        raise ValueError(
+            "Unsupported `sdpo_policy_loss_mode`: "
+            f"{self.args.sdpo_policy_loss_mode!r}. Expected one of: 'hybrid', 'distillation_only', 'policy_only'."
+        )

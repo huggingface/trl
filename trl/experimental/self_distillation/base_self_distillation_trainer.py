@@ -791,6 +791,7 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         logits = logits[:, -logits_to_keep:, :]
         return logits / self.temperature
 
+    @abstractmethod
     def finalize_batch(
         self,
         inputs: list[dict[str, Any]],
@@ -808,7 +809,6 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
             - `teacher_input_ids`: teacher input ids.
             - `teacher_attention_mask`: teacher attention mask.
         """
-        return rollout_batch.as_dict()
 
     def _get_teacher_context_for_self_distillation(self):
         """Return the context manager that routes the teacher forward to the correct weights.

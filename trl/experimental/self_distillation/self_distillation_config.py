@@ -30,45 +30,117 @@ class SelfDistillationConfig(_BaseConfig):
     [`trl.trainer.base_config._BaseConfig`].
 
     Parameters:
-        > Parameters that control generation and rollout reuse
+        > Parameters that control the model
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments used when the `model` argument is passed as a string.
+            Keyword arguments for model initialization when the `model` argument is passed as a string.
+        disable_dropout (`bool`, *optional*, defaults to `False`):
+            Whether to disable dropout in the student model.
+        remove_unused_columns (`bool`, *optional*, defaults to `False`):
+            Whether to drop dataset columns unused by the trainer.
+
+        > Parameters that control generation and rollout reuse
+
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum prompt length. Longer prompts are truncated from the left.
         num_generations (`int`, *optional*, defaults to `8`):
             Number of sampled generations per prompt.
+        num_generations_eval (`int` or `None`, *optional*):
+            Number of sampled generations per prompt during evaluation.
+        max_completion_length (`int` or `None`, *optional*, defaults to `256`):
+            Maximum generated completion length.
+        ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
+            Whether to gather ZeRO-3 weights for generation.
+        shuffle_dataset (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the training dataset.
         generation_batch_size (`int` or `None`, *optional*):
             Global batch size used for generation. Mutually exclusive with `steps_per_generation`.
         steps_per_generation (`int` or `None`, *optional*):
             Number of optimizer steps that reuse one generated batch. Mutually exclusive with `generation_batch_size`.
 
+        > Parameters that control sampling
+
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Sampling temperature.
+        top_p (`float`, *optional*, defaults to `1.0`):
+            Top-p sampling parameter.
+        top_k (`int`, *optional*, defaults to `0`):
+            Top-k sampling parameter. `0` disables top-k filtering.
+        min_p (`float` or `None`, *optional*):
+            Minimum token probability for sampling.
+        generation_kwargs (`dict[str, Any]` or `None`, *optional*):
+            Extra generation kwargs passed to `GenerationConfig`.
+        chat_template_kwargs (`dict[str, Any]` or `None`, *optional*):
+            Extra kwargs forwarded to chat template application.
+        repetition_penalty (`float`, *optional*, defaults to `1.0`):
+            Repetition penalty used during generation.
+        use_transformers_paged (`bool`, *optional*, defaults to `False`):
+            Reserved for paged generation support.
+        cache_implementation (`str` or `None`, *optional*):
+            Cache implementation used by transformers generation.
+
+        > Parameters that control vLLM generation
+
+        use_vllm (`bool`, *optional*, defaults to `False`):
+            Whether to use vLLM for generation.
+        vllm_mode (`str`, *optional*, defaults to `"colocate"`):
+            vLLM mode: `"colocate"` (shared GPU) or `"server"` (separate vLLM server).
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation for vLLM: `"vllm"` or `"transformers"`.
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Whether to enable sleep mode for colocated vLLM engine.
+        vllm_server_base_url (`str` or `None`, *optional*):
+            Base URL for the vLLM server. If provided, `vllm_server_host` and `vllm_server_port` are ignored.
+        vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+            Host of the vLLM server (server mode only).
+        vllm_server_port (`int`, *optional*, defaults to `8000`):
+            Port of the vLLM server (server mode only).
+        vllm_group_port (`int`, *optional*, defaults to `51216`):
+            Port for the weight update group (server mode only).
+        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
+            Timeout in seconds to wait for the vLLM server.
+        vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
+            Tensor parallel size for colocated vLLM.
+        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.3`):
+            GPU memory utilization ratio for colocated vLLM.
+        vllm_max_model_length (`int` or `None`, *optional*):
+            Model context length for vLLM. Inferred from model config if not set.
+
         > Parameters that control the online policy objective
 
+        num_iterations (`int`, *optional*, defaults to `1`):
+            Number of optimization iterations per generated batch.
         loss_type (`str`, *optional*, defaults to `"dapo"`):
             Policy-loss aggregation mode. Supported: `grpo`, `bnpo`, `dr_grpo`, `dapo`.
+        mask_truncated_completions (`bool`, *optional*, defaults to `False`):
+            Whether to exclude truncated completions from the loss.
+        top_entropy_quantile (`float`, *optional*, defaults to `1.0`):
+            Reserved for entropy-based token filtering.
 
         > Parameters that control teacher construction
 
         teacher_model_kind (`str`, *optional*, defaults to `"live"`):
-            Semantic teacher choice. `live` uses the current student, `base` uses the student as it existed at the
-            start of training, and `ema` uses an exponentially averaged teacher.
+            Semantic teacher choice. `live` uses the current student, `base` uses the initial student, and `ema` uses
+            an exponentially averaged teacher.
         teacher_update_rate (`float`, *optional*, defaults to `0.6`):
-            EMA update rate used when `teacher_model_kind="ema"`.
+            EMA update rate used when `teacher_model_kind="ema"`. A value of `1.0` reduces the update to a hard
+            overwrite, periodically resyncing the teacher to the current student weights.
         teacher_sync_steps (`int`, *optional*, defaults to `512`):
-            Number of optimizer steps between EMA teacher updates.
+            Number of optimizer steps between teacher updates.
 
         > Parameters that control self-distillation
 
         distillation_alpha (`float`, *optional*, defaults to `0.5`):
-            Divergence interpolation coefficient using the official SDPO/SDFT convention: `0.0=forward KL`, `0.5=JSD`,
+            KL divergence direction: `0.0=forward KL`, `0.5=JSD`,
             `1.0=reverse KL`.
         distillation_topk (`int` or `None`, *optional*, defaults to `100`):
-            Number of top tokens to keep for top-k distillation. If `None`, all logits are used.
+            Number of top tokens for top-k distillation. If `None`, uses all tokens.
         full_logit_distillation (`bool`, *optional*, defaults to `False`):
             Whether to use full-logit distillation instead of token-level distillation.
         distillation_is_clip (`float` or `None`, *optional*, defaults to `2.0`):
-            Importance-sampling clip used by the official SDPO-style correction. `None` disables clipping.
+            Clipping coefficient for importance sampling in self-distillation. `None` disables clipping.
+        distillation_add_tail (`bool`, *optional*, defaults to `False`):
+            Whether to add a tail bucket for non-top-k probability mass.
         distillation_weight (`float`, *optional*, defaults to `1.0`):
             Weight applied to the self-distillation loss term.
 
@@ -124,7 +196,9 @@ class SelfDistillationConfig(_BaseConfig):
     )
     steps_per_generation: int | None = field(
         default=None,
-        metadata={"help": "Number of optimizer steps that reuse one generated batch."},
+        metadata={
+            "help": "Number of optimizer steps that reuse one generated batch. Mutually exclusive with `generation_batch_size`."
+        },
     )
     temperature: float = field(
         default=1.0,
@@ -229,11 +303,14 @@ class SelfDistillationConfig(_BaseConfig):
     )
     teacher_update_rate: float = field(
         default=0.6,
-        metadata={"help": "EMA update rate used when synchronizing the teacher model."},
+        metadata={
+            "help": 'EMA update rate used when `teacher_model_kind="ema"`. A value of `1.0` reduces the update '
+            "to a hard overwrite, periodically resyncing the teacher to the current student weights."
+        },
     )
     teacher_sync_steps: int = field(
         default=512,
-        metadata={"help": "How often to synchronize the teacher model."},
+        metadata={"help": "Number of optimizer steps between teacher updates."},
     )
     top_entropy_quantile: float = field(
         default=1.0,
@@ -245,7 +322,7 @@ class SelfDistillationConfig(_BaseConfig):
     )
     distillation_topk: int | None = field(
         default=100,
-        metadata={"help": "Number of top tokens for top-k distillation. If None, uses all tokens."},
+        metadata={"help": "Number of top tokens for top-k distillation. If `None`, uses all tokens."},
     )
     full_logit_distillation: bool = field(
         default=False,
@@ -253,7 +330,9 @@ class SelfDistillationConfig(_BaseConfig):
     )
     distillation_is_clip: float | None = field(
         default=2.0,
-        metadata={"help": "Clipping coefficient for importance sampling in self-distillation."},
+        metadata={
+            "help": "Clipping coefficient for importance sampling in self-distillation. `None` disables clipping."
+        },
     )
     distillation_add_tail: bool = field(
         default=False,
