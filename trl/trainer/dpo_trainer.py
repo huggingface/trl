@@ -56,11 +56,9 @@ from .utils import (
     disable_dropout_in_model,
     entropy_from_logits,
     flush_left,
-    flush_right,
     get_config_model_id,
     hash_module,
     pad,
-    remove_none_values,
     selective_log_softmax,
     use_adapter,
 )
@@ -159,15 +157,17 @@ class DataCollatorForPreference(DataCollatorMixin):
 
         if self.max_length is not None:
             if self.truncation_mode == "keep_start":
-                prompt_chosen_ids = [ids[: self.max_length] for ids in prompt_chosen_ids]
-                prompt_rejected_ids = [ids[: self.max_length] for ids in prompt_rejected_ids]
-                chosen_mask = [m[: self.max_length] for m in chosen_mask]
-                rejected_mask = [m[: self.max_length] for m in rejected_mask]
+                sl = slice(None, self.max_length)
             elif self.truncation_mode == "keep_end":
-                prompt_chosen_ids = [ids[-self.max_length :] for ids in prompt_chosen_ids]
-                prompt_rejected_ids = [ids[-self.max_length :] for ids in prompt_rejected_ids]
-                chosen_mask = [m[-self.max_length :] for m in chosen_mask]
-                rejected_mask = [m[-self.max_length :] for m in rejected_mask]
+                sl = slice(-self.max_length, None)
+            else:
+                raise ValueError(
+                    f"Unsupported truncation mode: {self.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                )
+            prompt_chosen_ids = [ids[sl] for ids in prompt_chosen_ids]
+            prompt_rejected_ids = [ids[sl] for ids in prompt_rejected_ids]
+            chosen_mask = [m[sl] for m in chosen_mask]
+            rejected_mask = [m[sl] for m in rejected_mask]
 
         chosen_attention_mask = [[1] * len(ids) for ids in prompt_chosen_ids]
         rejected_attention_mask = [[1] * len(ids) for ids in prompt_rejected_ids]
@@ -231,7 +231,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
     - `"pixel_values"`: Tensor representing image pixel values.
 
-    Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"image_position_ids"`.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
@@ -315,8 +315,8 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
                 example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
-                example["chosen"] = prepare_multimodal_messages(example["chosen"], images=[])
-                example["rejected"] = prepare_multimodal_messages(example["rejected"], images=[])
+                example["chosen"] = prepare_multimodal_messages(example["chosen"])
+                example["rejected"] = prepare_multimodal_messages(example["rejected"])
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples] * 2  # repeat for chosen and rejected
@@ -435,7 +435,7 @@ class DPOTrainer(_BaseTrainer):
               config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-        ref_model (`PreTrainedModel`, *optional*):
+        ref_model ([`~transformers.PreTrainedModel`], *optional*):
             Reference model used to compute the reference log probabilities.
 
             - If provided, this model is used directly as the reference policy.
@@ -446,7 +446,8 @@ class DPOTrainer(_BaseTrainer):
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`~trainer.dpo_trainer.DataCollatorForPreference`] if the model is a language model and
-            [`~trainer.dpo_trainer.DataCollatorForVisionPreference`] if the model is a vision-language model.
+            [`~trainer.dpo_trainer.DataCollatorForVisionPreference`] if the model is a vision-language model. Custom
+            collators must truncate sequences before padding; the trainer does not apply post-collation truncation.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
@@ -456,7 +457,7 @@ class DPOTrainer(_BaseTrainer):
               and content).
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
@@ -567,10 +568,6 @@ class DPOTrainer(_BaseTrainer):
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        self.pad_token = tokenizer.pad_token
-        self.pad_token_id = tokenizer.pad_token_id
-        self.eos_token_id = tokenizer.eos_token_id
-
         if is_peft_available() and is_peft_model(model) and peft_config is not None:
             raise ValueError(
                 "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
@@ -633,15 +630,15 @@ class DPOTrainer(_BaseTrainer):
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
             pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
-            pad_token_id = tokenizer.convert_tokens_to_ids(pad_token)
-            if pad_token_id is None:
+            if pad_token not in tokenizer.get_vocab():
                 raise ValueError(
                     f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
+            tokenizer.pad_token = pad_token
             data_collator = DataCollatorForPreference(
-                pad_token_id=pad_token_id,
+                pad_token_id=tokenizer.pad_token_id,
                 max_length=args.max_length,
                 truncation_mode=args.truncation_mode,
                 pad_to_multiple_of=args.pad_to_multiple_of,
@@ -745,9 +742,10 @@ class DPOTrainer(_BaseTrainer):
 
         # Reference model
         if ref_model is None:
-            if is_peft_model(self.model):
+            if is_peft_model(self.model) or args.precompute_ref_log_probs:
                 # If PEFT is used, the reference model is not needed since the adapter can be disabled to revert to the
-                # initial model.
+                # initial model. If precompute_ref_log_probs is True, the reference model does not need to be kept in
+                # memory during training.
                 self.ref_model = None
             else:
                 ref_model_init_kwargs = args.model_init_kwargs or {}
@@ -781,7 +779,7 @@ class DPOTrainer(_BaseTrainer):
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
-            if self.ref_model is None:
+            if is_peft_model(self.model):
                 raise NotImplementedError(
                     "You passed `sync_ref_model=True` while using a PEFT model, which is currently not supported. "
                     "With PEFT, DPOTrainer does not keep a separate reference model in memory; instead, it recovers "
@@ -808,17 +806,59 @@ class DPOTrainer(_BaseTrainer):
                     "Dataset or set `precompute_ref_log_probs=False`."
                 )
 
-            batch_size = self.args.precompute_ref_batch_size or self.args.per_device_train_batch_size
-            self.train_dataset = self._precompute_ref_logps(self.train_dataset, "train", batch_size)
+            self.train_dataset = self._precompute_ref_logps(
+                self.train_dataset,
+                "train",
+                self.args.precompute_ref_batch_size or self.args.per_device_train_batch_size,
+            )
             if self.eval_dataset is not None:
-                batch_size = self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
                 if isinstance(self.eval_dataset, dict):
                     self.eval_dataset = {
-                        name: self._precompute_ref_logps(dataset, name, batch_size)
+                        name: self._precompute_ref_logps(
+                            dataset, name, self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
+                        )
                         for name, dataset in self.eval_dataset.items()
                     }
                 else:
-                    self.eval_dataset = self._precompute_ref_logps(self.eval_dataset, "eval", batch_size)
+                    self.eval_dataset = self._precompute_ref_logps(
+                        self.eval_dataset,
+                        "eval",
+                        self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
+                    )
+
+    def _tokenize(
+        self,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
+        input: str | list,
+        **kwargs,
+    ) -> dict[str, list]:
+        """Tokenize a single example for dataset preprocessing.
+
+        Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
+        non-conversational input (str). For VLMs, normalizes the batch dimension that processors emit even for single
+        examples.
+
+        Args:
+            processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
+                The tokenizer or processor to use.
+            input (`str` or `list`):
+                A string for non-conversational input, or a list of message dicts for conversational input.
+            **kwargs:
+                Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
+
+        Returns:
+            `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
+        """
+        if isinstance(input, list):  # conversational: list of message dicts
+            if self._is_vlm:
+                input = prepare_multimodal_messages(input)
+            result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
+        else:  # non-conversational: plain text string
+            result = processing_class(text=input)
+        # VLMs emit a batch dimension even for single examples; unwrap it
+        if self._is_vlm:
+            return {k: v[0] for k, v in result.items()}
+        return result
 
     def _prepare_dataset(
         self,
@@ -827,11 +867,6 @@ class DPOTrainer(_BaseTrainer):
         args: DPOConfig,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
-        # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
-        # sampled data.
-        if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
-            dataset = dataset.with_transform(remove_none_values)
-
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
@@ -870,60 +905,33 @@ class DPOTrainer(_BaseTrainer):
                 tools = json.loads(tools) if isinstance(tools, str) else tools
                 output = {}
                 if is_conversational(example):
-                    if self._is_vlm:
-                        prompt = prepare_multimodal_messages(example["prompt"], images=[])
-                        chosen = prepare_multimodal_messages(example["chosen"], images=[])
-                        rejected = prepare_multimodal_messages(example["rejected"], images=[])
-                    else:
-                        prompt = example["prompt"]
-                        chosen = example["chosen"]
-                        rejected = example["rejected"]
-                    prompt_ids = processing_class.apply_chat_template(
-                        prompt,
+                    prompt_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"],
                         tools=tools,
                         add_generation_prompt=True,
-                        tokenize=True,
-                        return_dict=False,
                         **example.get("chat_template_kwargs", {}),
-                    )
-                    prompt_chosen_processed = processing_class.apply_chat_template(
-                        prompt + chosen,
+                    )["input_ids"]
+                    prompt_chosen_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"] + example["chosen"],
                         tools=tools,
-                        tokenize=True,
-                        return_dict=True,
                         **example.get("chat_template_kwargs", {}),
-                    )
-                    prompt_rejected_processed = processing_class.apply_chat_template(
-                        prompt + rejected,
+                    )["input_ids"]
+                    prompt_rejected_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"] + example["rejected"],
                         tools=tools,
-                        tokenize=True,
-                        return_dict=True,
                         **example.get("chat_template_kwargs", {}),
-                    )
-                    # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
-                    # even for single examples, while for LLMs it returns lists of ints.
-                    prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
-                    prompt_chosen_processed = {
-                        k: v[0] if isinstance(v[0], list) else v for k, v in prompt_chosen_processed.items()
-                    }
-                    prompt_rejected_processed = {
-                        k: v[0] if isinstance(v[0], list) else v for k, v in prompt_rejected_processed.items()
-                    }
-                    prompt_chosen_ids = prompt_chosen_processed["input_ids"]
-                    prompt_rejected_ids = prompt_rejected_processed["input_ids"]
+                    )["input_ids"]
                 else:
-                    prompt_ids = processing_class(text=example["prompt"])["input_ids"]
-                    prompt_chosen_ids = processing_class(text=example["prompt"] + example["chosen"])["input_ids"]
-                    prompt_rejected_ids = processing_class(text=example["prompt"] + example["rejected"])["input_ids"]
-                    # Fix transformers inconsistency: for VLMs, processing_class returns lists of lists
-                    # even for single examples, while for LLMs it returns lists of ints.
-                    prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
-                    prompt_chosen_ids = (
-                        prompt_chosen_ids[0] if isinstance(prompt_chosen_ids[0], list) else prompt_chosen_ids
-                    )
-                    prompt_rejected_ids = (
-                        prompt_rejected_ids[0] if isinstance(prompt_rejected_ids[0], list) else prompt_rejected_ids
-                    )
+                    prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_chosen_ids = self._tokenize(processing_class, example["prompt"] + example["chosen"])[
+                        "input_ids"
+                    ]
+                    prompt_rejected_ids = self._tokenize(processing_class, example["prompt"] + example["rejected"])[
+                        "input_ids"
+                    ]
 
                 # Check if the tokenized prompt starts with the tokenized prompt+completion
                 if not prompt_chosen_ids[: len(prompt_ids)] == prompt_ids:
@@ -1014,71 +1022,29 @@ class DPOTrainer(_BaseTrainer):
 
         return dataset
 
-    def _truncate_inputs(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        completion_mask: torch.Tensor,
-        *extra: torch.Tensor,
-    ) -> tuple[torch.Tensor, ...]:
-        if self.args.max_length is None:
-            return input_ids, attention_mask, completion_mask, *extra
-
-        if self.args.truncation_mode == "keep_start":
-            input_ids = input_ids[:, : self.args.max_length]
-            attention_mask = attention_mask[:, : self.args.max_length]
-            completion_mask = completion_mask[:, : self.args.max_length]
-            extra = tuple(t[:, : self.args.max_length] for t in extra)
-        elif self.args.truncation_mode == "keep_end":
-            attention_mask, input_ids, completion_mask, *extra = flush_right(
-                attention_mask, input_ids, completion_mask, *extra
-            )
-            input_ids = input_ids[:, -self.args.max_length :]
-            attention_mask = attention_mask[:, -self.args.max_length :]
-            completion_mask = completion_mask[:, -self.args.max_length :]
-            extra = tuple(t[:, -self.args.max_length :] for t in extra)
-            attention_mask, input_ids, completion_mask, *extra = flush_left(
-                attention_mask, input_ids, completion_mask, *extra
-            )
-            extra = tuple(extra)
-        else:
-            raise ValueError(
-                f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
-            )
-
-        return input_ids, attention_mask, completion_mask, *extra
-
     def compute_ref_log_probs(self, inputs):
         """Computes reference log probabilities for a single padded batch."""
         device = self.accelerator.device
 
-        input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
-        completion_mask = inputs["completion_mask"]
-        # token_type_ids and mm_token_type_ids are sequence-length-aligned: truncate to match input_ids
-        extra_keys = [k for k in ("token_type_ids", "mm_token_type_ids") if k in inputs]
-        input_ids, attention_mask, completion_mask, *extra = self._truncate_inputs(
-            input_ids, attention_mask, completion_mask, *[inputs[k] for k in extra_keys]
-        )
-
-        shift_labels = input_ids[..., 1:].contiguous()
-        shift_completion_mask = completion_mask[..., 1:].contiguous()
-
-        model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key, val in zip(extra_keys, extra, strict=False):
-            model_kwargs[key] = val
-        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes"):
-            if key in inputs:
-                model_kwargs[key] = inputs[key]
+        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
+        model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
+        model_kwargs["use_cache"] = False
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if is_peft_model(self.model) and self.ref_model is None:
-                model = self.accelerator.unwrap_model(self.model)
-                with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+            if self.ref_model is None:
+                if is_peft_model(self.model):
+                    model = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                        ref_outputs = self.model(**model_kwargs)
+                else:
                     ref_outputs = self.model(**model_kwargs)
             else:
                 ref_outputs = self.ref_model(**model_kwargs)
 
+        input_ids = inputs["input_ids"]
+        completion_mask = inputs["completion_mask"]
+        shift_labels = input_ids[..., 1:].contiguous()
+        shift_completion_mask = completion_mask[..., 1:].contiguous()
         ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
         ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
         ref_per_token_logps[shift_completion_mask == 0] = 0.0
@@ -1112,7 +1078,6 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
 
         decoder = model.get_decoder()
         outputs = decoder(input_ids, attention_mask=attention_mask, use_cache=False)
@@ -1182,23 +1147,13 @@ class DPOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         device = self.accelerator.device
 
-        input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
-        completion_mask = inputs["completion_mask"]
-        # token_type_ids and mm_token_type_ids are sequence-length-aligned: truncate to match input_ids
-        extra_keys = [k for k in ("token_type_ids", "mm_token_type_ids") if k in inputs]
-        input_ids, attention_mask, completion_mask, *extra = self._truncate_inputs(
-            input_ids, attention_mask, completion_mask, *[inputs[k] for k in extra_keys]
-        )
-
-        model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key, val in zip(extra_keys, extra, strict=False):
-            model_kwargs[key] = val
-        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes"):
-            if key in inputs:
-                model_kwargs[key] = inputs[key]
-
+        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
+        model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
+        model_kwargs["use_cache"] = False
         outputs = model(**model_kwargs)
+
+        input_ids = inputs["input_ids"]
+        completion_mask = inputs["completion_mask"]
         shift_logits = outputs.logits[..., :-1, :].contiguous()
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()

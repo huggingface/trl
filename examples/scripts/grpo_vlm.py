@@ -14,9 +14,8 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[peft]",
 #     "Pillow",
-#     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
 #     "torchvision",
@@ -63,8 +62,6 @@ accelerate launch \
 
 """
 
-import os
-
 import torch
 from datasets import load_dataset
 
@@ -79,10 +76,6 @@ from trl import (
     get_quantization_config,
 )
 from trl.rewards import accuracy_reward, think_format_reward
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":

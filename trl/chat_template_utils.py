@@ -12,7 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
+from pathlib import Path
+from typing import TypeVar
+
+from jinja2 import TemplateError
+from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, ProcessorMixin
+
+from .data_utils import prepare_multimodal_messages
+
+
+_CHAT_TEMPLATES_DIR = Path(__file__).parent / "chat_templates"
 
 
 def clone_chat_template(
@@ -109,6 +118,84 @@ def clone_chat_template(
     return model, tokenizer, added_tokens
 
 
+glm4moe_schema = {
+    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?$",
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "reasoning_content": {"type": "string"},
+        "tool_calls": {
+            "type": "array",
+            "x-regex-iterator": r"<tool_call>\s*(.+?)\s*</tool_call>",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "x-regex": r"^(\S+)"},
+                            "arguments": {
+                                "type": "object",
+                                "x-regex-key-value": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*\n<arg_value>(?P<value>.*?)</arg_value>",
+                                "default": {},
+                                "additionalProperties": {
+                                    "x-parser": "json",
+                                    "x-parser-args": {"allow_non_json": True},
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+gptoss_schema = {
+    # Normalize final content to analysis format so both map to the same "content" group.
+    "x-regex-substitutions": [
+        [r"<\|channel\|>final<\|message\|>(.*?)<\|return\|>", r"<|channel|>analysis<|message|>\1<|end|>"],
+    ],
+    "x-regex": r"^(?:<\|channel\|>analysis<\|message\|>(?P<content>.*?)<\|end\|>(?:<\|start\|>assistant)?)?\s*(?P<tool_calls>to=functions\.\S+<\|channel\|>commentary json<\|message\|>.*?<\|call\|>)?$",
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "tool_calls": {
+            "type": "array",
+            "x-regex-iterator": r"(to=functions\.\S+<\|channel\|>commentary json<\|message\|>.*?<\|call\|>)",
+            "items": {
+                # Convert "to=functions.NAME<|channel|>commentary json<|message|>ARGS<|call|>"
+                # into '{"name": "NAME", "arguments": ARGS}' so it can be parsed as JSON.
+                "x-regex-substitutions": [
+                    [
+                        r"to=functions\.(\S+)<\|channel\|>commentary json<\|message\|>(.*?)<\|call\|>",
+                        r'{"name": "\1", "arguments": \2}',
+                    ],
+                ],
+                "x-parser": "json",
+                "x-parser-args": {"transform": "{type: 'function', function: @}"},
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "arguments": {
+                                "type": "object",
+                                "additionalProperties": {},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
 # Adapted and corrected versions of the schemas from:
 # https://github.com/huggingface/transformers/blob/main/tests/utils/test_chat_parsing_utils.py
 qwen3_schema = {
@@ -143,7 +230,47 @@ qwen3_schema = {
     },
 }
 
-qwen35_schema = {
+llama3_schema = {
+    # Llama 3.1 / 3.2 render a tool call as a single bare JSON object using the key "parameters" instead of
+    # "arguments": `{"name": "<name>", "parameters": <args_json>}<|eot_id|>`. There is no surrounding marker, no
+    # support for content alongside a tool call, and at most one tool call per assistant turn (the template raises
+    # otherwise). Either we match a tool call (capturing the JSON) or we treat the response as plain content.
+    "x-regex": r'^(?:(?P<tool_calls>\{"name":\s*".+?",\s*"parameters":\s*.+\})|(?P<content>.*?))(?:<\|eot_id\|>|$)',
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "tool_calls": {
+            "type": "array",
+            "x-regex-iterator": r'(\{"name":\s*".+?",\s*"parameters":\s*.+\})',
+            "items": {
+                # Rewrite "parameters" → "arguments" so the JSON parses into the standard tool-call shape. Anchored
+                # on the leading `{"name": "..."` so a stray `"parameters"` inside argument values is not touched.
+                "x-regex-substitutions": [
+                    [r'^(\{"name":\s*"[^"]+",\s*)"parameters":', r'\1"arguments":'],
+                ],
+                "x-parser": "json",
+                "x-parser-args": {"transform": "{type: 'function', function: @}"},
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "arguments": {
+                                "type": "object",
+                                "additionalProperties": {},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+qwen3_5_schema = {
     "x-regex": r"^(?:(?:<think>\n?)?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n+(?=<tool_call>))?(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
     "properties": {
@@ -178,255 +305,34 @@ qwen35_schema = {
     },
 }
 
-# docstyle-ignore
-qwen3_chat_template = r"""{%- if tools %}
-    {{- '<|im_start|>system\n' }}
-    {%- if messages[0].role == 'system' %}
-        {{- messages[0].content + '\n\n' }}
-    {%- endif %}
-    {{- "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
-    {%- for tool in tools %}
-        {{- "\n" }}
-        {{- tool | tojson }}
-    {%- endfor %}
-    {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n" }}
-{%- else %}
-    {%- if messages[0].role == 'system' %}
-        {{- '<|im_start|>system\n' + messages[0].content + '<|im_end|>\n' }}
-    {%- endif %}
-{%- endif %}
-{%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}
-{%- for message in messages[::-1] %}
-    {%- set index = (messages|length - 1) - loop.index0 %}
-    {%- if ns.multi_step_tool and message.role == "user" and message.content is string and not(message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}
-        {%- set ns.multi_step_tool = false %}
-        {%- set ns.last_query_index = index %}
-    {%- endif %}
-{%- endfor %}
-{%- for message in messages %}
-    {%- if message.content is string %}
-        {%- set content = message.content %}
-    {%- else %}
-        {%- set content = '' %}
-    {%- endif %}
-    {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
-        {{- '<|im_start|>' + message.role + '\n' + content + '<|im_end|>' + '\n' }}
-    {%- elif message.role == "assistant" %}
-        {%- set reasoning_content = '' %}
-        {%- if message.reasoning_content is string %}
-            {%- set reasoning_content = message.reasoning_content %}
-        {%- else %}
-            {%- if '</think>' in content %}
-                {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
-                {%- set content = content.split('</think>')[-1].lstrip('\n') %}
-            {%- endif %}
-        {%- endif %}
-        {%- if loop.index0 > ns.last_query_index %}
-            {%- if loop.last or (not loop.last and reasoning_content) %}
-                {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
-            {%- else %}
-                {{- '<|im_start|>' + message.role + '\n' + content }}
-            {%- endif %}
-        {%- else %}
-            {{- '<|im_start|>' + message.role + '\n' + content }}
-        {%- endif %}
-        {%- if message.tool_calls %}
-            {%- for tool_call in message.tool_calls %}
-                {%- if (loop.first and content) or (not loop.first) %}
-                    {{- '\n' }}
-                {%- endif %}
-                {%- if tool_call.function %}
-                    {%- set tool_call = tool_call.function %}
-                {%- endif %}
-                {{- '<tool_call>\n{"name": "' }}
-                {{- tool_call.name }}
-                {{- '", "arguments": ' }}
-                {%- if tool_call.arguments is string %}
-                    {{- tool_call.arguments }}
-                {%- else %}
-                    {{- tool_call.arguments | tojson }}
-                {%- endif %}
-                {{- '}\n</tool_call>' }}
-            {%- endfor %}
-        {%- endif %}
-        {{- '<|im_end|>\n' }}
-    {%- elif message.role == "tool" %}
-        {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
-            {{- '<|im_start|>user' }}
-        {%- endif %}
-        {{- '\n<tool_response>\n' }}
-        {{- content }}
-        {{- '\n</tool_response>' }}
-        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
-            {{- '<|im_end|>\n' }}
-        {%- endif %}
-    {%- endif %}
-{%- endfor %}
-{%- if add_generation_prompt %}
-    {{- '<|im_start|>assistant\n' }}
-    {%- if enable_thinking is defined and enable_thinking is false %}
-        {{- '<think>\n\n</think>\n\n' }}
-    {%- endif %}
-{%- endif %}"""
 
-# docstyle-ignore
-qwen35_chat_template = r"""{%- set image_count = namespace(value=0) %}
-{%- set video_count = namespace(value=0) %}
-{%- macro render_content(content, do_vision_count, is_system_content=false) %}
-    {%- if content is string %}
-        {{- content }}
-    {%- elif content is iterable and content is not mapping %}
-        {%- for item in content %}
-            {%- if 'image' in item or 'image_url' in item or item.type == 'image' %}
-                {%- if is_system_content %}
-                    {{- raise_exception('System message cannot contain images.') }}
-                {%- endif %}
-                {%- if do_vision_count %}
-                    {%- set image_count.value = image_count.value + 1 %}
-                {%- endif %}
-                {%- if add_vision_id %}
-                    {{- 'Picture ' ~ image_count.value ~ ': ' }}
-                {%- endif %}
-                {{- '<|vision_start|><|image_pad|><|vision_end|>' }}
-            {%- elif 'video' in item or item.type == 'video' %}
-                {%- if is_system_content %}
-                    {{- raise_exception('System message cannot contain videos.') }}
-                {%- endif %}
-                {%- if do_vision_count %}
-                    {%- set video_count.value = video_count.value + 1 %}
-                {%- endif %}
-                {%- if add_vision_id %}
-                    {{- 'Video ' ~ video_count.value ~ ': ' }}
-                {%- endif %}
-                {{- '<|vision_start|><|video_pad|><|vision_end|>' }}
-            {%- elif 'text' in item %}
-                {{- item.text }}
-            {%- else %}
-                {{- raise_exception('Unexpected item type in content.') }}
-            {%- endif %}
-        {%- endfor %}
-    {%- elif content is none or content is undefined %}
-        {{- '' }}
-    {%- else %}
-        {{- raise_exception('Unexpected content type.') }}
-    {%- endif %}
-{%- endmacro %}
-{%- if not messages %}
-    {{- raise_exception('No messages provided.') }}
-{%- endif %}
-{%- if tools and tools is iterable and tools is not mapping %}
-    {{- '<|im_start|>system\n' }}
-    {{- "# Tools\n\nYou have access to the following functions:\n\n<tools>" }}
-    {%- for tool in tools %}
-        {{- "\n" }}
-        {{- tool | tojson }}
-    {%- endfor %}
-    {{- "\n</tools>" }}
-    {{- '\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>' }}
-    {%- if messages[0].role == 'system' %}
-        {%- set content = render_content(messages[0].content, false, true)|trim %}
-        {%- if content %}
-            {{- '\n\n' + content }}
-        {%- endif %}
-    {%- endif %}
-    {{- '<|im_end|>\n' }}
-{%- else %}
-    {%- if messages[0].role == 'system' %}
-        {%- set content = render_content(messages[0].content, false, true)|trim %}
-        {{- '<|im_start|>system\n' + content + '<|im_end|>\n' }}
-    {%- endif %}
-{%- endif %}
-{%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}
-{%- for message in messages[::-1] %}
-    {%- set index = (messages|length - 1) - loop.index0 %}
-    {%- if ns.multi_step_tool and message.role == "user" %}
-        {%- set content = render_content(message.content, false)|trim %}
-        {%- if not(content.startswith('<tool_response>') and content.endswith('</tool_response>')) %}
-            {%- set ns.multi_step_tool = false %}
-            {%- set ns.last_query_index = index %}
-        {%- endif %}
-    {%- endif %}
-{%- endfor %}
-{%- if ns.multi_step_tool %}
-    {{- raise_exception('No user query found in messages.') }}
-{%- endif %}
-{%- for message in messages %}
-    {%- set content = render_content(message.content, true)|trim %}
-    {%- if message.role == "system" %}
-        {%- if not loop.first %}
-            {{- raise_exception('System message must be at the beginning.') }}
-        {%- endif %}
-    {%- elif message.role == "user" %}
-        {{- '<|im_start|>' + message.role + '\n' + content + '<|im_end|>' + '\n' }}
-    {%- elif message.role == "assistant" %}
-        {%- set reasoning_content = '' %}
-        {%- if message.reasoning_content is string %}
-            {%- set reasoning_content = message.reasoning_content %}
-        {%- else %}
-            {%- if '</think>' in content %}
-                {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
-                {%- set content = content.split('</think>')[-1].lstrip('\n') %}
-            {%- endif %}
-        {%- endif %}
-        {%- set reasoning_content = reasoning_content|trim %}
-        {%- if loop.index0 > ns.last_query_index %}
-            {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content + '\n</think>\n\n' + content }}
-        {%- else %}
-            {{- '<|im_start|>' + message.role + '\n' + content }}
-        {%- endif %}
-        {%- if message.tool_calls and message.tool_calls is iterable and message.tool_calls is not mapping %}
-            {%- for tool_call in message.tool_calls %}
-                {%- if tool_call.function is defined %}
-                    {%- set tool_call = tool_call.function %}
-                {%- endif %}
-                {%- if loop.first %}
-                    {%- if content|trim %}
-                        {{- '\n\n<tool_call>\n<function=' + tool_call.name + '>\n' }}
-                    {%- else %}
-                        {{- '<tool_call>\n<function=' + tool_call.name + '>\n' }}
-                    {%- endif %}
-                {%- else %}
-                    {{- '\n<tool_call>\n<function=' + tool_call.name + '>\n' }}
-                {%- endif %}
-                {%- if tool_call.arguments is defined %}
-                    {%- for args_name, args_value in tool_call.arguments|items %}
-                        {{- '<parameter=' + args_name + '>\n' }}
-                        {%- set args_value = args_value | tojson | safe if args_value is mapping or (args_value is sequence and args_value is not string) else args_value | string %}
-                        {{- args_value }}
-                        {{- '\n</parameter>\n' }}
-                    {%- endfor %}
-                {%- endif %}
-                {{- '</function>\n</tool_call>' }}
-            {%- endfor %}
-        {%- endif %}
-        {{- '<|im_end|>\n' }}
-    {%- elif message.role == "tool" %}
-        {%- if loop.previtem and loop.previtem.role != "tool" %}
-            {{- '<|im_start|>user' }}
-        {%- endif %}
-        {{- '\n<tool_response>\n' }}
-        {{- content }}
-        {{- '\n</tool_response>' }}
-        {%- if not loop.last and loop.nextitem.role != "tool" %}
-            {{- '<|im_end|>\n' }}
-        {%- elif loop.last %}
-            {{- '<|im_end|>\n' }}
-        {%- endif %}
-    {%- else %}
-        {{- raise_exception('Unexpected message role.') }}
-    {%- endif %}
-{%- endfor %}
-{%- if add_generation_prompt %}
-    {{- '<|im_start|>assistant\n' }}
-    {%- if enable_thinking is defined and enable_thinking is true %}
-        {{- '<think>\n' }}
-    {%- else %}
-        {{- '<think>\n\n</think>\n\n' }}
-    {%- endif %}
-{%- endif %}"""
+deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
+
+glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
+
+gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text()
+
+llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text()
+
+llama3_1_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1.jinja").read_text()
+
+llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text()
+
+qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text()
+
+qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text()
+
+qwen3_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl.jinja").read_text()
+
+qwen3_5_chat_template_2b_and_below = (_CHAT_TEMPLATES_DIR / "qwen3_5_2b_and_below.jinja").read_text()
+
+qwen3_5_chat_template_4b_and_above = (_CHAT_TEMPLATES_DIR / "qwen3_5_4b_and_above.jinja").read_text()
 
 
-def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
+ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizer, ProcessorMixin)
+
+
+def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     r"""
     Adds the appropriate response schema to the given tokenizer based on its chat template.
 
@@ -434,13 +340,16 @@ def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     waiting for broader adoption, we provide this utility function to manually set the response schema for known chat
     templates.
 
+    When given a VLM processor, the schema is set on the inner tokenizer, since `parse_response` is a tokenizer method
+    and reads `self.response_schema` from the tokenizer instance.
+
     Args:
-        tokenizer (`PreTrainedTokenizer`):
-            Tokenizer to which the response schema will be added.
+        processing_class (`PreTrainedTokenizer` or `ProcessorMixin`):
+            Tokenizer or VLM processor to which the response schema will be added.
 
     Returns:
-        `PreTrainedTokenizer`:
-            Tokenizer with the added response schema.
+        `PreTrainedTokenizer` or `ProcessorMixin`:
+            The same object that was passed in, with the response schema set on the underlying tokenizer.
 
     Examples:
 
@@ -455,164 +364,161 @@ def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
     ```
     """
-    if tokenizer.chat_template == qwen3_chat_template:
+    # For VLM processors, set the schema on the inner tokenizer (where `parse_response` reads it from).
+    # Match against the top-level chat_template, since that's what was used historically and processors
+    # may carry their own VLM-specific template separate from the inner tokenizer's.
+    chat_template = processing_class.chat_template
+    if isinstance(processing_class, ProcessorMixin):
+        tokenizer = processing_class.tokenizer
+    else:
+        tokenizer = processing_class
+    if chat_template == glm4moe_chat_template:
+        tokenizer.response_schema = glm4moe_schema
+    elif chat_template == gptoss_chat_template:
+        tokenizer.response_schema = gptoss_schema
+    elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
+        tokenizer.response_schema = llama3_schema
+    elif chat_template in [qwen3_chat_template, qwen3_vl_chat_template]:
         tokenizer.response_schema = qwen3_schema
-        return tokenizer
-    if tokenizer.chat_template == qwen35_chat_template:
-        tokenizer.response_schema = qwen35_schema
-        return tokenizer
-    raise ValueError(
-        "Unrecognized chat template, failed to add response schema. Please manually set the response schema on the "
-        "tokenizer or processor. See the Transformers "
-        "[docs](https://huggingface.co/docs/transformers/main/en/chat_response_parsing#response-parsing) for more "
-        "details on response parsing."
-    )
+    elif chat_template in [qwen3_5_chat_template_2b_and_below, qwen3_5_chat_template_4b_and_above]:
+        tokenizer.response_schema = qwen3_5_schema
+    else:
+        raise ValueError(
+            "Unrecognized chat template, failed to add response schema. Please manually set the response schema on "
+            "the tokenizer or processor. See the Transformers "
+            "[docs](https://huggingface.co/docs/transformers/main/en/chat_response_parsing#response-parsing) for more "
+            "details on response parsing."
+        )
+    return processing_class
 
 
-def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
+def supports_tool_calling(processing_class) -> bool:
+    """
+    Check if the processing class's chat template can render a full tool-calling conversation.
+
+    This tests that (1) the template doesn't error when rendering a conversation with ``user → assistant (with
+    tool_calls) → tool`` roles, and (2) every part of the tool-calling exchange — the assistant's tool call name, its
+    arguments, and the tool message content — actually appears in the rendered output. Some templates silently swallow
+    `tool_calls` (e.g. the basic Llama 3 template, which only reads `message['content']`) or tool messages (e.g.
+    Cohere2, Phi3); both cases must be rejected.
+
+    For VLMs (processors), the messages are converted to multimodal format via
+    [`~trl.data_utils.prepare_multimodal_messages`] before rendering.
+
+    Args:
+        processing_class (`PreTrainedTokenizer` or `ProcessorMixin`):
+            Tokenizer or processor instance to check.
+
+    Returns:
+        `bool`:
+            `True` if the chat template supports tool-calling conversations, `False` otherwise.
+    """
+    if processing_class.chat_template is None:
+        return False
+
+    is_vlm = isinstance(processing_class, ProcessorMixin)
+    # Distinct sentinels so we can tell which part of the exchange a template drops.
+    _name_sentinel = "tool_name_a8f3e2b1"
+    _arg_key_sentinel = "tool_arg_key_b9d4f5c2"
+    _arg_val_sentinel = "tool_arg_val_d6e7a9f3"
+    _content_sentinel = "tool_content_c4f9a8e2"
+    tool_calls = [
+        {
+            "type": "function",
+            "function": {"name": _name_sentinel, "arguments": {_arg_key_sentinel: _arg_val_sentinel}},
+        }
+    ]
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        {"role": "tool", "name": _name_sentinel, "content": _content_sentinel},
+    ]
+    # VLMs expect content as [{"type": "text", "text": "..."}] instead of plain strings
+    if is_vlm:
+        messages = prepare_multimodal_messages(messages)
+
+    try:
+        rendered = processing_class.apply_chat_template(messages, tokenize=False)
+    except TemplateError:
+        # TemplateError: template rejects the role sequence (Cohere, FalconMamba, Gemma, Gemma2, Gemma3)
+        # UndefinedError (subclass): template indexes into content as a list for all roles, including tool
+        #   (Idefics2, Idefics3, LlavaNext, SmolVLM)
+        return False
+    # All four sentinels must survive: the tool name and arguments (assistant tool_calls) AND the tool message
+    # content. Templates that silently drop either side (basic Llama 3 drops tool_calls; Cohere2/Phi3 drop tool
+    # messages) will fail this check.
+    return all(s in rendered for s in (_name_sentinel, _arg_key_sentinel, _arg_val_sentinel, _content_sentinel))
+
+
+def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | ProcessorMixin) -> bool:
     """
     Check whether the chat template preserves prefixes when applied.
 
+    A prefix-preserving chat template renders earlier messages identically regardless of what messages follow. This
+    property is required by `_get_tool_suffix_ids`, which extracts tool response formatting tokens by comparing
+    tokenizations with and without tool messages appended.
+
     Args:
-        tokenizer (`PreTrainedTokenizer`):
-            Tokenizer instance to check.
+        processing_class (`PreTrainedTokenizer` or `ProcessorMixin`):
+            Tokenizer or processor instance to check.
 
     Returns:
         `bool`:
             `True` if the chat template preserves prefixes, `False` otherwise.
     """
+    # Use the same dummy messages as _get_tool_suffix_ids to test the exact property it relies on.
+    dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": {}}}]
     messages1 = [
-        {"role": "user", "content": "What color is the sky?"},
+        {"role": "user", "content": "dummy"},
+        {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
     ]
     messages2 = [
-        {"role": "user", "content": "What color is the sky?"},
-        {"role": "assistant", "content": "It is blue."},
+        {"role": "user", "content": "dummy"},
+        {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
+        {"role": "tool", "name": "dummy", "content": "dummy"},
     ]
-    messages3 = [
-        {"role": "user", "content": "What color is the sky?"},
-        {"role": "assistant", "content": "It is blue."},
-        {"role": "user", "content": "And at night?"},
-    ]
+    # VLM processors expect structured list-of-blocks content, and image-token expansion only kicks in when an image
+    # is actually present, so include a dummy image to exercise the real code path.
+    if isinstance(processing_class, ProcessorMixin):
+        from PIL import Image
 
-    text1 = tokenizer.apply_chat_template(messages1, tokenize=False, add_generation_prompt=True)
-    text2 = tokenizer.apply_chat_template(messages2, tokenize=False)
-    text3 = tokenizer.apply_chat_template(messages3, tokenize=False)
+        dummy_image = Image.new("RGB", (8, 8))
+        messages1 = prepare_multimodal_messages(messages1, images=[dummy_image])
+        messages2 = prepare_multimodal_messages(messages2, images=[dummy_image])
 
-    return text2.startswith(text1) and text3.startswith(text2)
+    try:
+        text1 = processing_class.apply_chat_template(messages1, tokenize=False)
+        text2 = processing_class.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+    except TypeError:
+        # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
+        # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
+        dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
+        messages1[1]["tool_calls"] = dummy_tool_calls
+        messages2[1]["tool_calls"] = dummy_tool_calls
+        text1 = processing_class.apply_chat_template(messages1, tokenize=False)
+        text2 = processing_class.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+
+    return text2.startswith(text1)
 
 
-# Modifications:
-# - {%- if '</think>' in content %}
-# + {%- if '<think>' in content and '</think>' in content %}
-#   Always check for both tags to avoid edge cases where the model generates only one tag, which would otherwise be parsed incorrectly
-# - {%- if loop.index0 > ns.last_query_index %} ... {%- endif %}
-# + {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
-#   Always include thinking block during training. It's important to have a prefix-preserving template.
-# docstyle-ignore
-qwen3_training_chat_template = r"""{%- if tools %}
-    {{- '<|im_start|>system\n' }}
-    {%- if messages[0].role == 'system' %}
-        {{- messages[0].content + '\n\n' }}
-    {%- endif %}
-    {{- "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
-    {%- for tool in tools %}
-        {{- "\n" }}
-        {{- tool | tojson }}
-    {%- endfor %}
-    {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n" }}
-{%- else %}
-    {%- if messages[0].role == 'system' %}
-        {{- '<|im_start|>system\n' + messages[0].content + '<|im_end|>\n' }}
-    {%- endif %}
-{%- endif %}
-{%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}
-{%- for message in messages[::-1] %}
-    {%- set index = (messages|length - 1) - loop.index0 %}
-    {%- if ns.multi_step_tool and message.role == "user" and message.content is string and not(message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}
-        {%- set ns.multi_step_tool = false %}
-        {%- set ns.last_query_index = index %}
-    {%- endif %}
-{%- endfor %}
-{%- for message in messages %}
-    {%- if message.content is string %}
-        {%- set content = message.content %}
-    {%- else %}
-        {%- set content = '' %}
-    {%- endif %}
-    {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
-        {{- '<|im_start|>' + message.role + '\n' + content + '<|im_end|>' + '\n' }}
-    {%- elif message.role == "assistant" %}
-        {%- set reasoning_content = '' %}
-        {%- if message.reasoning_content is string %}
-            {%- set reasoning_content = message.reasoning_content %}
-        {%- else %}
-            {%- if '<think>' in content and '</think>' in content %}
-                {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
-                {%- set content = content.split('</think>')[-1].lstrip('\n') %}
-            {%- endif %}
-        {%- endif %}
-        {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
-        {%- if message.tool_calls %}
-            {%- for tool_call in message.tool_calls %}
-                {%- if (loop.first and content) or (not loop.first) %}
-                    {{- '\n' }}
-                {%- endif %}
-                {%- if tool_call.function %}
-                    {%- set tool_call = tool_call.function %}
-                {%- endif %}
-                {{- '<tool_call>\n{"name": "' }}
-                {{- tool_call.name }}
-                {{- '", "arguments": ' }}
-                {%- if tool_call.arguments is string %}
-                    {{- tool_call.arguments }}
-                {%- else %}
-                    {{- tool_call.arguments | tojson }}
-                {%- endif %}
-                {{- '}\n</tool_call>' }}
-            {%- endfor %}
-        {%- endif %}
-        {{- '<|im_end|>\n' }}
-    {%- elif message.role == "tool" %}
-        {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
-            {{- '<|im_start|>user' }}
-        {%- endif %}
-        {{- '\n<tool_response>\n' }}
-        {{- content }}
-        {{- '\n</tool_response>' }}
-        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
-            {{- '<|im_end|>\n' }}
-        {%- endif %}
-    {%- endif %}
-{%- endfor %}
-{%- if add_generation_prompt %}
-    {{- '<|im_start|>assistant\n' }}
-    {%- if enable_thinking is defined and enable_thinking is false %}
-        {{- '<think>\n\n</think>\n\n' }}
-    {%- endif %}
-{%- endif %}"""
+deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text()
 
-# Modifications:
-# - {%- if '</think>' in content %}
-# + {%- if '<think>' in content and '</think>' in content %}
-#   Always check for both tags to avoid edge cases where the model generates only one tag, which would otherwise be parsed incorrectly
-# - {{- '<|im_start|>' + message.role + '\n' + content }}
-# + {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content + '\n</think>\n\n' + content }}
-#   Always include thinking block during training. It's important to have a prefix-preserving template.
-qwen35_training_chat_template = qwen35_chat_template.replace(
-    "{%- if '</think>' in content %}",
-    "{%- if '<think>' in content and '</think>' in content %}",
-).replace(
-    "{{- '<|im_start|>' + message.role + '\\n' + content }}",
-    "{{- '<|im_start|>' + message.role + '\\n<think>\\n' + reasoning_content + '\\n</think>\\n\\n' + content }}",
-)
+llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text()
+
+qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text()
+
+qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text()
+
+gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text()
 
 
 def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     r"""
-    Get a prefix-preserving chat template for training, if needed.
+    Get a training-compatible chat template, if needed.
 
-    If the tokenizer's template isn't prefix-preserving, returns a training-compatible template (currently Qwen3 and
-    Qwen3.5 supported). Otherwise, returns `None`.
+    Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
+    %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
+    requirements. Currently DeepSeek-V3, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -630,42 +536,57 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
     >>> messages1 = [
-    ...     {"role": "user", "content": "What color is the sky?"},
-    ...     {"role": "assistant", "content": "It is blue."},
+    ...     {"role": "user", "content": "What is 2 * 3?"},
+    ...     {
+    ...         "role": "assistant",
+    ...         "content": "",
+    ...         "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 2, "b": 3}}}],
+    ...     },
     ... ]
-    >>> messages2 = [
-    ...     {"role": "user", "content": "What color is the sky?"},
-    ...     {"role": "assistant", "content": "It is blue."},
-    ...     {"role": "user", "content": "And at night?"},
+    >>> messages2 = messages1 + [
+    ...     {"role": "tool", "name": "multiply", "content": "6"},
     ... ]
     >>> tokenizer.apply_chat_template(messages1, tokenize=False)
-    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n'
+    '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n'
 
-    >>> tokenizer.apply_chat_template(messages2, tokenize=False)
-    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\nIt is blue.<|im_end|>\n<|im_start|>user\nAnd at night?<|im_end|>\n'
+    >>> tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+    '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n6\n</tool_response><|im_end|>\n<|im_start|>assistant\n'
 
-    >>> #                                                                       ^ think tags missing
+    >>> #                                                        ^ think tags missing
     >>> chat_template = get_training_chat_template(tokenizer)
     >>> tokenizer.apply_chat_template(messages1, tokenize=False, chat_template=chat_template)
-    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n'
+    '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n'
 
-    >>> tokenizer.apply_chat_template(messages2, tokenize=False, chat_template=chat_template)
-    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n<|im_start|>user\nAnd at night?<|im_end|>\n'
+    >>> tokenizer.apply_chat_template(
+    ...     messages2, tokenize=False, add_generation_prompt=True, chat_template=chat_template
+    ... )
+    '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n6\n</tool_response><|im_end|>\n<|im_start|>assistant\n'
     ```
     """
     # First check if patching is needed
-    if is_chat_template_prefix_preserving(tokenizer):
+    if is_chat_template_prefix_preserving(tokenizer) and "{% generation %}" in tokenizer.chat_template:
         return None  # No patching needed
+
+    if tokenizer.chat_template == deepseekv3_chat_template:
+        return deepseekv3_training_chat_template
+
+    if tokenizer.chat_template == gptoss_chat_template:
+        return gptoss_training_chat_template
+
+    if tokenizer.chat_template == llama3_chat_template:
+        return llama3_training_chat_template
+
+    if tokenizer.chat_template == qwen2_5_chat_template:
+        return qwen2_5_training_chat_template
 
     if tokenizer.chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
-    if tokenizer.chat_template == qwen35_chat_template:
-        return qwen35_training_chat_template
-    else:
-        raise ValueError(
-            "The tokenizer's chat template is not prefix-preserving and patching is not supported for this template. "
-            "Please manually modify the tokenizer's chat template for training."
-        )
+
+    raise ValueError(
+        "The tokenizer's chat template is not training-compatible (missing prefix-preservation or "
+        "`{% generation %}` markers) and patching is not supported for this template. "
+        "Please manually modify the tokenizer's chat template for training."
+    )
 
 
 def _validate_tool_calls(tool_calls: list | None) -> None:
@@ -706,7 +627,7 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
                 tool_call["arguments"] = {}
 
 
-def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
+def parse_response(processing_class: PreTrainedTokenizer | ProcessorMixin, ids: list[int]) -> dict:
     r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
 
@@ -716,9 +637,11 @@ def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
     Also removes incorrectly appended EOS tokens from tool call content when present, and validates tool_calls to
     ensure all required fields exist.
 
+    For VLM processors, automatically uses the inner tokenizer for parsing.
+
     Args:
-        tokenizer (`PreTrainedTokenizer`):
-            Tokenizer with a `parse_response()` method.
+        processing_class (`PreTrainedTokenizer` or VLM processor):
+            Tokenizer or processor with a `parse_response()` method (directly or via inner tokenizer).
         ids (`list[int]`):
             List of token sequences.
 
@@ -739,11 +662,17 @@ def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
     {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
     ```
     """
+    # VLM processors don't have parse_response directly; use the inner tokenizer
+    tokenizer = getattr(processing_class, "tokenizer", processing_class)
     try:
         parsed = tokenizer.parse_response(ids)
         # Hotfix: remove incorrectly appended EOS token from tool calls
         # See https://github.com/huggingface/transformers/issues/42249
-        parsed["content"] = parsed["content"].removesuffix(tokenizer.eos_token)
+        if isinstance(parsed.get("content"), str):
+            parsed["content"] = parsed["content"].removesuffix(tokenizer.eos_token)
+        # Normalize: ensure content is always a string (some models omit it or set it to None)
+        if not parsed.get("content"):
+            parsed["content"] = ""
         # Validate tool_calls to prevent Jinja2 Undefined errors when fields are missing
         if "tool_calls" in parsed:
             _validate_tool_calls(parsed["tool_calls"])

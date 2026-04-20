@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl[vllm]",
-#     "peft",
+#     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
 #     "openenv-openspiel-env @ git+https://huggingface.co/spaces/openenv/openspiel_env",
@@ -73,7 +72,6 @@ python examples/scripts/openenv/catch.py --env-mode docker-local --vllm-mode col
 # ruff: noqa: T201
 import argparse
 import os
-import re
 import subprocess
 import sys
 import time
@@ -84,8 +82,7 @@ from datasets import Dataset
 from openspiel_env import OpenSpielEnv
 from openspiel_env.models import OpenSpielAction
 
-from trl import GRPOConfig, GRPOTrainer, RichProgressCallback, apply_chat_template
-from trl.experimental.openenv import generate_rollout_completions
+from trl import GRPOConfig, GRPOTrainer, RichProgressCallback
 
 
 def parse_args():
@@ -186,26 +183,29 @@ Each observation is a flattened 10x5 grid (list of 50 floats).
 - 1.0 → occupied (ball or paddle)
 - 0.0 → empty cell
 
-### Actions:
-- `0` → Move left
-- `1` → Stay
-- `2` → Move right
+You have the following tools available:
+- `move(direction)`: Move the paddle left or right. Direction must be "left" or "right".
+- `stay`: Do nothing and let the ball fall one step.
 
-Respond **only** with one integer: `0`, `1`, or `2`.
-
-### Current Observation
+Observe the grid, determine where the ball is relative to the paddle, then move accordingly.
 """
 
 
-def reward_from_env(completions, **kwargs):
-    rewards = kwargs.get("env_reward", [])
-    return [float(r) for r in rewards] if rewards else [0.0] * len(completions)
+def reward_from_env(environments, **kwargs):
+    rewards = []
+    for env in environments:
+        if env.done:
+            # Catch gives +1 for catching, -1 for missing. Clamp to [0, 1] for GRPO advantage estimation.
+            rewards.append(max(env.reward, 0.0))
+        else:
+            rewards.append(0.0)  # Incomplete episode
+    return rewards
 
 
 def main():
     args = parse_args()
 
-    # Select environment mode
+    # Select environment mode — all modes resolve to env_url
     if args.env_mode == "local":
         env_url = f"http://{args.env_host}:{args.env_port}"
         server_process = start_env_server(args.env_host, args.env_port)
@@ -214,11 +214,13 @@ def main():
         server_process = None
         print(f"🌍 Using existing OpenSpiel Environment (Docker) at: {env_url}")
     elif args.env_mode == "docker-image":
-        client = OpenSpielEnv.from_docker_image(args.env_image)
+        _bootstrap = OpenSpielEnv.from_docker_image(args.env_image)
+        env_url = _bootstrap.base_url
         server_process = None
         print("🌍 Using OpenSpiel Environment (Docker) from local Image")
     elif args.env_mode == "docker-hub":
-        client = OpenSpielEnv.from_hub(args.env_image)
+        _bootstrap = OpenSpielEnv.from_hub(args.env_image)
+        env_url = _bootstrap.base_url
         server_process = None
         print("🌍 Using existing OpenSpiel Environment (Docker) from Hub Image")
     elif args.env_mode == "space":
@@ -228,86 +230,117 @@ def main():
     else:
         raise ValueError(f"Unknown environment mode: {args.env_mode}")
 
-    if args.env_mode != "docker-hub" and args.env_mode != "docker-image":
-        client = OpenSpielEnv(base_url=env_url)
-    dataset = Dataset.from_dict({"prompt": [BASE_PROMPT] * args.dataset_size})
+    dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": BASE_PROMPT}]] * args.dataset_size})
+
+    class CatchEnv:
+        ROWS = 10
+        COLS = 5
+
+        def __init__(self):
+            self.client = OpenSpielEnv(base_url=env_url)
+            self.reward = 0.0
+            self.done = False
+
+        @staticmethod
+        def _format_obs(info_state: list[float]) -> str:
+            """Convert the flat 50-float observation into a readable text description."""
+            rows, cols = CatchEnv.ROWS, CatchEnv.COLS
+            ball_row = ball_col = paddle_col = None
+            for idx, val in enumerate(info_state):
+                if val == 1.0:
+                    r, c = divmod(idx, cols)
+                    if r < rows - 1:
+                        ball_row, ball_col = r + 1, c + 1
+                    else:
+                        paddle_col = c + 1
+            parts = []
+            if ball_row is not None and ball_col is not None:
+                parts.append(f"Ball: row {ball_row}/{rows}, column {ball_col}/{cols}")
+            if paddle_col is not None:
+                parts.append(f"Paddle: column {paddle_col}/{cols}")
+            if ball_col is not None and paddle_col is not None:
+                diff = ball_col - paddle_col
+                if diff < 0:
+                    parts.append(f"The ball is {abs(diff)} column(s) to the LEFT of the paddle.")
+                elif diff > 0:
+                    parts.append(f"The ball is {diff} column(s) to the RIGHT of the paddle.")
+                else:
+                    parts.append("The ball is directly above the paddle.")
+            return "\n".join(parts)
+
+        def reset(self, **kwargs) -> str:
+            env_result = self.client.reset()
+            self.reward = 0.0
+            self.done = env_result.observation.done
+            return self._format_obs(env_result.observation.info_state)
+
+        def _do_action(self, action_id: int) -> str:
+            if self.done:
+                raise ValueError("Episode is done.")
+            env_result = self.client.step(OpenSpielAction(action_id=action_id, game_name="catch"))
+            self.reward = env_result.reward or 0.0
+            self.done = env_result.observation.done
+            return self._format_obs(env_result.observation.info_state)
+
+        def move(self, direction: str) -> str:
+            """Move the paddle left or right.
+
+            Args:
+                direction: Direction to move, either "left" or "right".
+
+            Returns:
+                The observation after moving.
+            """
+            if direction == "left":
+                action_id = 0
+            elif direction == "right":
+                action_id = 2
+            else:
+                raise ValueError(f"Invalid direction {direction!r}: must be 'left' or 'right'.")
+            return self._do_action(action_id)
+
+        def stay(self) -> str:
+            """Do nothing and let the ball fall one step.
+
+            Returns:
+                The observation after staying.
+            """
+            return self._do_action(1)
 
     training_args = GRPOConfig(
         output_dir=f"{args.model.split('/')[-1]}-GRPO-Catch",
         use_vllm=True,
         vllm_mode=args.vllm_mode,
         vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
+        vllm_gpu_memory_utilization=0.2,
         logging_steps=1,
+        log_completions=True,
         report_to="trackio",
         trackio_space_id=f"{args.model.split('/')[-1]}-GRPO-Catch",
         num_train_epochs=1,
-        max_completion_length=4,
-        gradient_accumulation_steps=4,
+        per_device_train_batch_size=2,
+        num_generations=8,
+        max_completion_length=4096,
+        gradient_accumulation_steps=16,
+        chat_template_kwargs={"enable_thinking": False},
     )
-
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
-        """Generate completions via vLLM (colocated or server) and compute environment rewards."""
-        env_rewards: list[float] = []
-        all_prompt_ids: list[list[int]] = []
-        all_completion_ids: list[list[int]] = []
-        all_logprobs: list[list[float]] = []
-        tokenizer = trainer.processing_class
-
-        for base_prompt in prompts:
-            env_result = client.reset()
-            obs = env_result.observation
-            total_reward = 0.0
-
-            episode_prompt_ids: list[int] = []
-            episode_completion_ids: list[int] = []
-            episode_logprobs: list[float] = []
-
-            while not obs.done:
-                episode_msg = {"prompt": [{"role": "user", "content": f"{base_prompt}\n\n{obs.info_state}\n"}]}
-                episode_prompt = apply_chat_template(episode_msg, tokenizer)
-                rollout_output = generate_rollout_completions(trainer, [episode_prompt["prompt"]])[0]
-
-                episode_prompt_ids.extend(rollout_output["prompt_ids"])
-                episode_completion_ids.extend(rollout_output["completion_ids"])
-                episode_logprobs.extend(rollout_output["logprobs"])
-
-                completion_text = tokenizer.batch_decode([rollout_output["completion_ids"]], skip_special_tokens=True)[
-                    0
-                ]
-                numbers = re.findall(r"\b([0-2])\b", completion_text)
-                action_id = int(numbers[0]) if numbers else obs.legal_actions[0]
-
-                env_result = client.step(OpenSpielAction(action_id=action_id, game_name="catch"))
-                total_reward += env_result.reward or 0.0
-                obs = env_result.observation
-
-            env_rewards.append(total_reward)
-            all_prompt_ids.append(episode_prompt_ids)
-            all_completion_ids.append(episode_completion_ids)
-            all_logprobs.append(episode_logprobs)
-
-        return {
-            "prompt_ids": all_prompt_ids,
-            "completion_ids": all_completion_ids,
-            "logprobs": all_logprobs,
-            "env_reward": env_rewards,
-        }
 
     trainer = GRPOTrainer(
         model=args.model,
         reward_funcs=reward_from_env,
         args=training_args,
         train_dataset=dataset,
-        rollout_func=rollout_func,
+        environment_factory=CatchEnv,
         callbacks=[RichProgressCallback()],
     )
 
-    trainer.train()
-    time.sleep(5)
-
-    if server_process:
-        print("🛑 Terminating environment server...")
-        server_process.terminate()
+    try:
+        trainer.train()
+    finally:
+        if server_process:
+            print("🛑 Terminating environment server...")
+            server_process.terminate()
+            server_process.wait()
 
 
 if __name__ == "__main__":

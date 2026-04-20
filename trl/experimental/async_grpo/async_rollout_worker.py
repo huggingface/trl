@@ -28,7 +28,12 @@ from accelerate.logging import get_logger
 from datasets import Dataset
 from transformers import AutoTokenizer
 
-from trl.chat_template_utils import add_response_schema, get_training_chat_template, parse_response
+from trl.chat_template_utils import (
+    add_response_schema,
+    get_training_chat_template,
+    is_chat_template_prefix_preserving,
+    parse_response,
+)
 from trl.import_utils import is_vllm_available
 from trl.trainer.utils import print_prompt_completions_sample
 
@@ -162,7 +167,12 @@ class AsyncRolloutWorker:
         self.num_completions_to_print = num_completions_to_print
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.tokenizer = add_response_schema(self.tokenizer)
-        self.chat_template = get_training_chat_template(self.tokenizer)
+        # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
+        # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
+        if self.tools and not is_chat_template_prefix_preserving(self.tokenizer):
+            self.chat_template = get_training_chat_template(self.tokenizer)
+        else:
+            self.chat_template = None
 
         self._groups_to_score: asyncio.Queue[RolloutGroup | None] = asyncio.Queue(maxsize=16)
         self._total_completion_tokens = 0
@@ -266,6 +276,15 @@ class AsyncRolloutWorker:
             raise
         finally:
             loop.close()
+            self._destroy_model_update_group()
+
+    def _destroy_model_update_group(self) -> None:
+        # It's important because otherwise we get errors on exit.
+        if self.model_update_group is None:
+            return  # happens if weight transfer was never initialized
+        self.model_update_group.group.store = None
+        self.model_update_group.group.socket = None
+        self.model_update_group = None
 
     def pause(self) -> None:
         t0 = time.time()
@@ -318,7 +337,7 @@ class AsyncRolloutWorker:
                             prompt,
                             return_dict=False,
                             add_generation_prompt=True,
-                            tools=self.tools,
+                            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
                             chat_template=self.chat_template,
                             **self.chat_template_kwargs,
                         )
@@ -518,7 +537,7 @@ class AsyncRolloutWorker:
             prompt,
             return_dict=False,
             add_generation_prompt=True,
-            tools=self.tools,
+            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
             chat_template=self.chat_template,
             **self.chat_template_kwargs,
         )
@@ -537,37 +556,57 @@ class AsyncRolloutWorker:
             tool_call_count += n_calls
             tool_failure_count += n_failures
             completion.extend(tool_messages)
-            tool_suffix_ids = self._build_messages_suffix_ids(tool_messages)
-            completion_ids.extend(tool_suffix_ids)
-            completion_logprobs.extend([0.0] * len(tool_suffix_ids))
-            tool_mask.extend([0] * len(tool_suffix_ids))
-            prompt_ids = prompt_ids + turn_ids + tool_suffix_ids
+            suffix_ids = self._get_tool_suffix_ids(tool_messages)
+            completion_ids.extend(suffix_ids)
+            completion_logprobs.extend([0.0] * len(suffix_ids))
+            tool_mask.extend([0] * len(suffix_ids))
+            prompt_ids = prompt_ids + turn_ids + suffix_ids
             iteration_num += 1
 
-    def _build_messages_suffix_ids(self, messages: list[dict[str, Any]]) -> list[int]:
-        template_messages = [
-            {"role": "user", "content": ""},
-            {"role": "assistant", "content": ""},
+    def _get_tool_suffix_ids(self, tool_messages: list[dict[str, Any]]) -> list[int]:
+        """Get token IDs for tool result formatting by using a minimal dummy conversation."""
+        # Use the real tool name instead of a dummy: some templates (e.g. GPT-OSS) derive the tool response
+        # header from the assistant's tool call name.
+        dummy_tool_calls = [{"type": "function", "function": {"name": tool_messages[0]["name"], "arguments": {}}}]
+        dummy_messages = [
+            {"role": "user", "content": "dummy"},
+            {
+                "role": "assistant",
+                # "content" is required here because VLM processors crash on tokenize=True without it
+                # (KeyError in processing_utils.py). See huggingface/transformers#45290.
+                "content": "",
+                "tool_calls": dummy_tool_calls,
+            },
         ]
         prefix_ids = self.tokenizer.apply_chat_template(
-            template_messages,
-            return_dict=False,
-            tools=self.tools,
+            dummy_messages,
+            add_generation_prompt=False,
+            tokenize=True,
             chat_template=self.chat_template,
+            return_dict=False,
             **self.chat_template_kwargs,
         )
-        prefix_and_messages_ids = self.tokenizer.apply_chat_template(
-            template_messages + messages,
-            return_dict=False,
-            chat_template=self.chat_template,
+        full_ids = self.tokenizer.apply_chat_template(
+            dummy_messages + tool_messages,
             add_generation_prompt=True,
-            tools=self.tools,
+            tokenize=True,
+            chat_template=self.chat_template,
+            return_dict=False,
             **self.chat_template_kwargs,
         )
-        prefix_len = len(prefix_ids)
-        if prefix_and_messages_ids[:prefix_len] != prefix_ids:
-            raise ValueError("Failed to construct message suffix in token space.")
-        return prefix_and_messages_ids[prefix_len:]
+
+        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
+        # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
+        # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
+        # <turn|>) skip this trimming.
+        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self.tokenizer.eos_token_id]
+        if eos_positions:
+            prefix_ids = prefix_ids[: eos_positions[-1] + 1]
+
+        if full_ids[: len(prefix_ids)] != prefix_ids:
+            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
+
+        return full_ids[len(prefix_ids) :]
 
     def _execute_tool_calls(
         self, tool_calls: list[dict[str, Any]], tool_dict: dict[str, Callable]

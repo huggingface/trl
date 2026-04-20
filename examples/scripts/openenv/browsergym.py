@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl[vllm]",
-#     "peft",
+#     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
 #     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
@@ -23,58 +22,28 @@
 # ///
 
 """
-Simple script to run GRPO training with OpenEnv's BrowserGym environment and vLLM.
+GRPO training with OpenEnv's BrowserGym environment for VLMs (Vision Language Models).
 
-This example automatically detects and uses vision capabilities when VLM models are used.
-Screenshots from BrowserGym are collected and passed to the model during training. The GRPO
-trainer auto-detects multimodal support by checking for images in the rollout data.
+This script uses `environment_factory` with multimodal tool responses: each tool action
+returns a screenshot (PIL Image) alongside the accessibility tree text, allowing the VLM
+to see the page visually after each action.
 
-Setup (Option A - Install from HF Space, recommended):
-
+Setup:
 ```sh
-uv pip install git+https://huggingface.co/spaces/openenv/browsergym_env
+pip install "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env"
 ```
 
-Setup (Option B - Clone OpenEnv repo, for development):
-
+Usage:
 ```sh
-git clone https://github.com/meta-pytorch/OpenEnv.git
-cd OpenEnv/envs/browsergym_env
-uv pip install -e .
-```
+# Without vLLM (default, 1 GPU)
+python examples/scripts/openenv/browsergym.py
 
-# Option 1: HF Spaces + Colocated vLLM (1 GPU required)
-```sh
-python examples/scripts/openenv/browsergym.py --vllm-mode colocate
-```
+# With vLLM colocate (1 GPU, requires vLLM support for the model)
+python examples/scripts/openenv/browsergym.py --use-vllm
 
-# Option 2: HF Spaces + Separate vLLM server (2 GPUs required)
-
-# Spin up vLLM server (Terminal 1)
-```sh
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-VL-2B-Instruct --host 0.0.0.0 --port 8001
-```
-
-# Run training (Terminal 2)
-```sh
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/browsergym.py --vllm-mode server --vllm-server-url http://localhost:8001
-```
-
-# Option 3: Local + Colocated vLLM (1 GPU required)
-
-# Build and start the environment only if using --env-mode docker-local
-```sh
-cd OpenEnv
-docker build -t openenv-base:latest -f src/core/containers/images/Dockerfile .
-docker build -t browsergym-env:latest -f src/envs/browsergym_env/server/Dockerfile .
-docker run -d -p 8001:8001 \
-  -e BROWSERGYM_BENCHMARK="miniwob" \
-  -e BROWSERGYM_TASK_NAME="click-test" \
-  browsergym-env:latest
-```
-
-```sh
-python examples/scripts/openenv/browsergym.py --env-mode docker-local --vllm-mode colocate
+# With vLLM server (2 GPUs)
+CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3.5-2B --host 0.0.0.0 --port 8000
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/browsergym.py --use-vllm --vllm-mode server
 ```
 """
 
@@ -88,190 +57,28 @@ import numpy as np
 from browsergym_env import BrowserGymAction, BrowserGymEnv
 from datasets import Dataset
 from PIL import Image
-from transformers import AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.experimental.openenv import generate_rollout_completions
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run GRPO training for BrowserGym MiniWoB using OpenEnv environment.")
-    parser.add_argument(
-        "--tokenizer-id",
-        default="Qwen/Qwen3-VL-2B-Instruct",
-        help="Model identifier used to load the tokenizer.",
-    )
-    parser.add_argument(
-        "--model-id",
-        default="Qwen/Qwen3-VL-2B-Instruct",
-        help="Model identifier passed to GRPOTrainer for fine-tuning.",
-    )
-    parser.add_argument(
-        "--env-host",
-        type=str,
-        default="https://openenv-browsergym-env.hf.space",
-        help="Host for the BrowserGym environment.",
-    )
-    parser.add_argument("--env-port", type=int, default=8001, help="Port for the BrowserGym environment.")
-    parser.add_argument(
-        "--env-mode",
-        choices=["docker-local", "docker-image", "docker-hub", "space"],
-        default="space",
-        help="Where to run the environment: 'local' to launch it, 'docker-local' if already running locally, 'docker-image' to run from a Docker image, 'docker-hub' to run from Docker Hub, or 'space' to use a remote Space URL.",
-    )
-    parser.add_argument(
-        "--env-image", type=str, default="browsergym-env:latest", help="Docker image for the BrowserGym environment."
-    )
-    parser.add_argument(
-        "--benchmark",
-        default="miniwob",
-        help="BrowserGym benchmark to use (miniwob, webarena, etc.).",
-    )
-    parser.add_argument(
-        "--task-name",
-        default="click-test",
-        help="Specific task within the benchmark (e.g., click-test, click-button).",
-    )
-    parser.add_argument(
-        "--dataset-prompt",
-        default="Complete the web task successfully.",
-        help="Prompt text used to seed the training dataset.",
-    )
-    parser.add_argument(
-        "--dataset-size",
-        type=int,
-        default=1000,
-        help="Number of entries to include in the synthetic training dataset.",
-    )
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=10,
-        help="Maximum number of steps per episode.",
-    )
-    parser.add_argument(
-        "--max-new-tokens",
-        type=int,
-        default=32,
-        help="Maximum number of new tokens to request from vLLM for each action.",
-    )
-    parser.add_argument(
-        "--temperature",
-        type=float,
-        default=0.7,
-        help="Sampling temperature used during rollout generation.",
-    )
-    parser.add_argument(
-        "--top-k",
-        type=int,
-        default=50,
-        help="Top-k sampling parameter forwarded to vLLM.",
-    )
-    parser.add_argument(
-        "--top-p",
-        type=float,
-        default=None,
-        help="Optional top-p sampling parameter forwarded to vLLM.",
-    )
-    parser.add_argument(
-        "--image-size",
-        type=int,
-        default=512,
-        help="Resize screenshots to this size (preserving aspect ratio) to reduce memory usage. Set to 0 to disable resizing.",
-    )
-    parser.add_argument(
-        "--learning-rate",
-        type=float,
-        default=5e-6,
-        help="Learning rate for GRPO training.",
-    )
-    parser.add_argument(
-        "--weight-decay",
-        type=float,
-        default=0.0,
-        help="Weight decay applied during optimization.",
-    )
-    parser.add_argument(
-        "--gradient-accumulation-steps",
-        type=int,
-        default=32,
-        help="Gradient accumulation steps for GRPO training.",
-    )
-    parser.add_argument(
-        "--warmup-steps",
-        type=int,
-        default=10,
-        help="Warmup steps for the scheduler.",
-    )
-    parser.add_argument(
-        "--per-device-batch-size",
-        type=int,
-        default=1,
-        help="Per-device train batch size.",
-    )
-    parser.add_argument(
-        "--num-generations",
-        type=int,
-        default=4,
-        help="Number of rollout generations per dataset prompt.",
-    )
-    parser.add_argument(
-        "--num-epochs",
-        type=int,
-        default=1,
-        help="Number of training epochs.",
-    )
-    parser.add_argument(
-        "--save-interval",
-        type=int,
-        default=50,
-        help="Interval (in steps) between checkpoint saves.",
-    )
-    parser.add_argument(
-        "--save-total-limit",
-        type=int,
-        default=None,
-        help="Maximum number of checkpoints to keep.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default=None,
-        help="Directory where training outputs and checkpoints are stored.",
-    )
-    parser.add_argument(
-        "--run-name",
-        default=None,
-        help="Optional run name for logging systems.",
-    )
-    parser.add_argument(
-        "--project",
-        default=None,
-        help="Optional project identifier for logging systems.",
-    )
-    parser.add_argument(
-        "--vllm-mode",
-        choices=("colocate", "server"),
-        default="colocate",
-        help="vLLM execution mode: 'colocate' or 'server'.",
-    )
-    parser.add_argument(
-        "--vllm-server-url",
-        type=str,
-        default="http://localhost:8001",
-        help="URL for the vLLM server (only used when --vllm-mode=server).",
-    )
-    parser.add_argument(
-        "--logging-steps",
-        type=int,
-        default=1,
-        help="Frequency of logging steps for GRPO training.",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        default=False,
-        help="Enable verbose debugging output during rollouts.",
-    )
+    parser = argparse.ArgumentParser(description="GRPO training with BrowserGym VLM environment.")
+    parser.add_argument("--model-id", default="Qwen/Qwen3.5-2B")
+    parser.add_argument("--space-url", default="https://openenv-browsergym-env.hf.space")
+    parser.add_argument("--dataset-prompt", default="Complete the web task successfully.")
+    parser.add_argument("--dataset-size", type=int, default=1000)
+    parser.add_argument("--max-steps", type=int, default=10)
+    parser.add_argument("--max-completion-length", type=int, default=1024)
+    parser.add_argument("--image-size", type=int, default=512, help="Resize screenshots to this size. 0 to disable.")
+    parser.add_argument("--num-generations", type=int, default=4)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=32)
+    parser.add_argument("--learning-rate", type=float, default=5e-6)
+    parser.add_argument("--num-epochs", type=int, default=1)
+    parser.add_argument("--logging-steps", type=int, default=1)
+    parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--use-vllm", action="store_true", default=False, help="Enable vLLM for generation.")
+    parser.add_argument("--vllm-mode", choices=("colocate", "server"), default="colocate")
+    parser.add_argument("--vllm-server-url", default="http://localhost:8000")
     return parser.parse_args()
 
 
@@ -279,323 +86,204 @@ def sanitize_name(name: str) -> str:
     return name.replace("/", "-")
 
 
-# ---------------------------------------------------------------------------
-# System Prompt
-# ---------------------------------------------------------------------------
+SYSTEM_PROMPT = """You control a web browser to complete tasks.
 
-SYSTEM_PROMPT = """You control a web browser through BrowserGym actions.
-You must complete the given web task by interacting with the page.
+The page structure shows elements as: [bid] element_type 'element_text'
+For example: [13] button 'Click Me!' means the element has bid='13'.
 
-Available actions:
-- noop() - Do nothing
-- click(bid) - Click element with BrowserGym ID
-- fill(bid, text) - Fill input field
-- send_keys(text) - Send keyboard input
-- scroll(direction) - Scroll up/down
+You will see a screenshot of the page after each action. Use the visual information
+along with the page structure to decide your next action.
 
-Reply with exactly ONE action on a single line, e.g.:
-click('123')
-fill('456', 'text')
-noop()
+Use the available tools to interact with the page:
+- click: Click an element by its bid
+- fill: Fill an input field with text
+- send_keys: Send keyboard input
+- scroll: Scroll the page
+- noop: Do nothing
 
-Do not include explanations or multiple actions."""
+Complete the given task as efficiently as possible."""
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def make_user_prompt(goal: str, step_num: int, axtree: str, error: str = "") -> str:
-    """Create user prompt from observation."""
-    prompt_parts = [f"Step {step_num + 1}"]
-
-    if goal:
-        prompt_parts.append(f"Goal: {goal}")
-
-    if error:
-        prompt_parts.append(f"Previous action error: {error}")
-
-    # Include accessibility tree (truncated for context)
-    if axtree:
-        max_len = 2000
-        axtree_truncated = axtree[:max_len] + "..." if len(axtree) > max_len else axtree
-        prompt_parts.append(f"Page structure:\n{axtree_truncated}")
-
-    prompt_parts.append("What action do you take?")
-
-    return "\n\n".join(prompt_parts)
-
-
-def parse_action(response_text: str) -> str:
-    """Parse BrowserGym action from model response."""
-    # Extract first line that looks like an action
-    for line in response_text.strip().split("\n"):
-        line = line.strip()
-        if "(" in line and ")" in line:
-            return line
-
-    # Fallback to noop if no valid action found
-    return "noop()"
-
-
-def rollout_once(
-    trainer: GRPOTrainer,
-    env: BrowserGymEnv,
-    tokenizer: AutoTokenizer,
-    dataset_prompt: str,
-    max_steps: int,
-    image_size: int = 0,
-    debug: bool = False,
-) -> dict[str, list]:
-    """Run one episode and collect training data."""
-    result = env.reset()
-    observation = result.observation
-
-    prompt_ids: list[int] = []
-    completion_ids: list[int] = []
-    logprobs: list[float] = []
-    step_rewards: list[float] = []
-    completion_rewards: list[float] = []
-    images: list[Image.Image] = []  # Collect screenshots for VLM
-
-    for step_num in range(max_steps):
-        if result.done:
-            break
-
-        # Create prompt from observation
-        goal = observation.goal or dataset_prompt
-        axtree = observation.axtree_txt or ""
-        error = observation.error if observation.last_action_error else ""
-
-        # Collect screenshot if available (for VLM support)
-        if observation.screenshot is not None:
-            screenshot_array = np.array(observation.screenshot, dtype=np.uint8)
-            screenshot_image = Image.fromarray(screenshot_array)
-
-            # Resize to reduce memory if image_size > 0
-            if image_size > 0:
-                # Preserve aspect ratio while resizing
-                screenshot_image.thumbnail((image_size, image_size), Image.LANCZOS)
-                print(
-                    f"[DEBUG] Step {step_num + 1}: Collected and resized screenshot from {screenshot_array.shape} to {screenshot_image.size}"
-                )
-            else:
-                print(f"[DEBUG] Step {step_num + 1}: Collected screenshot, shape={screenshot_array.shape}")
-
-            images.append(screenshot_image)
-        else:
-            print(f"[DEBUG] Step {step_num + 1}: No screenshot available")
-
-        user_prompt = make_user_prompt(goal, step_num, axtree, error)
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
-        prompt_text = tokenizer.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=False,
-        )
-
-        # Generate action with vLLM
-        rollout_outputs = generate_rollout_completions(trainer, [prompt_text])[0]
-        prompt_ids.extend(rollout_outputs["prompt_ids"])
-        completion_ids.extend(rollout_outputs["completion_ids"])
-        logprobs.extend(rollout_outputs["logprobs"])
-
-        completion_text = rollout_outputs.get("text") or tokenizer.decode(
-            rollout_outputs["completion_ids"], skip_special_tokens=True
-        )
-
-        # Parse and execute action
-        action_str = parse_action(completion_text)
-
-        if debug:
-            print(f"Step {step_num + 1}: {action_str}")
-
-        # Take action in environment
-        result = env.step(BrowserGymAction(action_str=action_str))
-        observation = result.observation
-
-        # Track rewards
-        step_reward = float(result.reward or 0.0)
-        step_rewards.append(step_reward)
-
-        # Reward shaping: success is most important
-        if result.done and step_reward > 0:
-            completion_rewards.append(1.0)  # Task completed successfully
-        elif result.done and step_reward == 0:
-            completion_rewards.append(0.0)  # Task failed
-        else:
-            completion_rewards.append(step_reward)  # Intermediate reward
-
-    # Final reward is based on task completion
-    final_reward = completion_rewards[-1] if completion_rewards else 0.0
-
-    result_dict = {
-        "prompt_ids": prompt_ids,
-        "completion_ids": completion_ids,
-        "logprobs": logprobs,
-        "step_rewards": step_rewards,
-        "completion_reward": final_reward,
-    }
-
-    # Include images if available (GRPO trainer will auto-detect VLM support)
-    if images:
-        result_dict["images"] = images
-
-    return result_dict
-
-
-# ---------------------------------------------------------------------------
-# Rewards
-# ---------------------------------------------------------------------------
-
-
-def reward_completion(completions: list[str], **kwargs) -> list[float]:
-    """Reward for task completion."""
-    rewards = kwargs.get("completion_reward") if kwargs else None
-    if rewards is None:
-        return [0.0 for _ in completions]
-    return [float(r) for r in rewards]
-
-
-# ---------------------------------------------------------------------------
-# Main entrypoint
-# ---------------------------------------------------------------------------
+def reward_completion(completions, environments, **kwargs) -> list[float]:
+    return [env.reward for env in environments]
 
 
 def main() -> None:
     args = parse_args()
 
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_id)
-    tokenizer.pad_token = tokenizer.eos_token
+    space_url = args.space_url
+    max_steps = args.max_steps
+    image_size = args.image_size
 
-    # Select environment mode
-    if args.env_mode == "docker-local":
-        env_url = f"http://{args.env_host}:{args.env_port}"
-        client = BrowserGymEnv(base_url=env_url)
-        print(f"🌍 Using existing BrowserGym Environment (Docker) at: {env_url}")
-    elif args.env_mode == "docker-image":
-        client = BrowserGymEnv.from_docker_image(args.env_image)
-        print("🌍 Using BrowserGym Environment (Docker) from local Image")
-    elif args.env_mode == "docker-hub":
-        client = BrowserGymEnv.from_hub(args.env_image)
-        print("🌍 Using existing BrowserGym Environment (Docker) from Hub Image")
-    elif args.env_mode == "space":
-        env_url = args.env_host
-        client = BrowserGymEnv(base_url=env_url)
-        print(f"🌍 Using Hugging Face Space environment at: {env_url}")
-    else:
-        raise ValueError(f"Unknown environment mode: {args.env_mode}")
-
-    dataset = Dataset.from_dict({"prompt": [args.dataset_prompt] * args.dataset_size})
-
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    default_output_dir = Path("outputs") / f"browsergym-grpo-{sanitize_name(args.model_id)}-{timestamp}"
-    output_dir = Path(args.output_dir or default_output_dir)
-
-    grpo_config = GRPOConfig(
-        use_vllm=True,
-        vllm_mode=args.vllm_mode,
-        vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
-        vllm_gpu_memory_utilization=0.4,
-        output_dir=str(output_dir),
-        num_train_epochs=args.num_epochs,
-        learning_rate=args.learning_rate,
-        weight_decay=args.weight_decay,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        per_device_train_batch_size=args.per_device_batch_size,
-        warmup_steps=args.warmup_steps,
-        num_generations=args.num_generations,
-        generation_batch_size=args.num_generations,  # Must be divisible by num_generations
-        max_completion_length=args.max_new_tokens,
-        logging_steps=args.logging_steps,
-        report_to="trackio",
-        trackio_space_id=f"browsergym-grpo-{sanitize_name(args.model_id)}-{timestamp}",
-        save_strategy="steps",
-        save_steps=args.save_interval,
-        save_total_limit=args.save_total_limit,
-        temperature=args.temperature,
-        top_k=args.top_k,
-        top_p=args.top_p,
+    dataset = Dataset.from_dict(
+        {
+            "prompt": [
+                [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": args.dataset_prompt},
+                ]
+            ]
+            * args.dataset_size
+        }
     )
 
-    grpo_config.run_name = args.run_name or f"run-{timestamp}"
-    grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
+    class BrowserGymVLMEnv:
+        def __init__(self):
+            self.client = BrowserGymEnv(base_url=space_url)
+            self.reward = 0.0
+            self.done = False
+            self._step_count = 0
 
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
-        episode_prompt_ids: list[list[int]] = []
-        episode_completion_ids: list[list[int]] = []
-        episode_logprobs: list[list[float]] = []
-        completion_rewards: list[float] = []
-        episode_images: list[list[Image.Image]] = []
+        def reset(self, **kwargs) -> str | None:
+            self.reward = 0.0
+            self.done = False
+            self._step_count = 0
+            result = self.client.reset()
+            self.done = result.done
+            return self._format_observation(result.observation)
 
-        print(f"\n[DEBUG] rollout_func called with {len(prompts)} prompts")
+        def click(self, bid: str) -> list:
+            """Click an element on the page.
 
-        for i, prompt_text in enumerate(prompts):
-            print(f"[DEBUG] Processing prompt {i + 1}/{len(prompts)}")
-            episode = rollout_once(
-                trainer=trainer,
-                env=client,
-                tokenizer=tokenizer,
-                dataset_prompt=prompt_text,
-                max_steps=args.max_steps,
-                image_size=args.image_size,
-                debug=args.debug,
-            )
-            episode_prompt_ids.append(episode["prompt_ids"])
-            episode_completion_ids.append(episode["completion_ids"])
-            episode_logprobs.append(episode["logprobs"])
-            completion_rewards.append(episode["completion_reward"])
+            Args:
+                bid: The BrowserGym ID of the element to click.
 
-            # Collect images if available (for VLM support)
-            if "images" in episode:
-                print(f"[DEBUG] Episode {i + 1} has {len(episode['images'])} images")
-                episode_images.append(episode["images"])
+            Returns:
+                The updated page observation with screenshot.
+            """
+            return self._do_action(f"click('{bid}')")
+
+        def fill(self, bid: str, text: str) -> list:
+            """Fill an input field with text.
+
+            Args:
+                bid: The BrowserGym ID of the input field.
+                text: The text to type into the field.
+
+            Returns:
+                The updated page observation with screenshot.
+            """
+            return self._do_action(f"fill('{bid}', '{text}')")
+
+        def send_keys(self, text: str) -> list:
+            """Send keyboard input to the page.
+
+            Args:
+                text: The keyboard input to send.
+
+            Returns:
+                The updated page observation with screenshot.
+            """
+            return self._do_action(f"send_keys('{text}')")
+
+        def scroll(self, direction: str) -> list:
+            """Scroll the page.
+
+            Args:
+                direction: Direction to scroll, either 'up' or 'down'.
+
+            Returns:
+                The updated page observation with screenshot.
+            """
+            return self._do_action(f"scroll('{direction}')")
+
+        def noop(self) -> list:
+            """Do nothing and observe the current page state.
+
+            Returns:
+                The current page observation with screenshot.
+            """
+            return self._do_action("noop()")
+
+        def _do_action(self, action_str: str) -> list:
+            if self.done:
+                raise ValueError("Episode is done.")
+
+            self._step_count += 1
+            result = self.client.step(BrowserGymAction(action_str=action_str))
+            observation = result.observation
+            step_reward = float(result.reward or 0.0)
+            self.done = result.done
+
+            if self.done and step_reward > 0:
+                self.reward = 1.0
+            elif self.done:
+                self.reward = 0.0
             else:
-                print(f"[DEBUG] Episode {i + 1} has NO images")
+                self.reward = step_reward
 
-        result = {
-            "prompt_ids": episode_prompt_ids,
-            "completion_ids": episode_completion_ids,
-            "logprobs": episode_logprobs,
-            "completion_reward": completion_rewards,
-        }
+            if self._step_count >= max_steps:
+                self.done = True
 
-        # Include images if any episode had screenshots (GRPO trainer auto-detects VLM)
-        if episode_images:
-            result["images"] = episode_images
-            print(f"[DEBUG] rollout_func returning with images: {len(episode_images)} episodes")
-        else:
-            print("[DEBUG] rollout_func returning WITHOUT images")
+            return self._format_observation_multimodal(observation)
 
-        return result
+        def _format_observation(self, observation) -> str:
+            """Format initial observation as text (for reset, appended to prompt)."""
+            parts = []
+            if observation.goal:
+                parts.append(f"Goal: {observation.goal}")
+            if observation.axtree_txt:
+                axtree = observation.axtree_txt
+                if len(axtree) > 2000:
+                    axtree = axtree[:2000] + "..."
+                parts.append(f"Page structure:\n{axtree}")
+            return "\n\n".join(parts) if parts else "No observation available."
+
+        def _format_observation_multimodal(self, observation) -> list:
+            """Format observation as multimodal content blocks (screenshot + text)."""
+            content = []
+
+            # Add screenshot if available
+            if observation.screenshot is not None:
+                screenshot_array = np.array(observation.screenshot, dtype=np.uint8)
+                screenshot_image = Image.fromarray(screenshot_array)
+                if image_size > 0:
+                    screenshot_image.thumbnail((image_size, image_size), Image.LANCZOS)
+                content.append({"type": "image", "image": screenshot_image})
+
+            # Add text observation
+            parts = []
+            if observation.goal:
+                parts.append(f"Goal: {observation.goal}")
+            if observation.last_action_error and observation.error:
+                parts.append(f"Error: {observation.error}")
+            if observation.axtree_txt:
+                axtree = observation.axtree_txt
+                if len(axtree) > 2000:
+                    axtree = axtree[:2000] + "..."
+                parts.append(f"Page structure:\n{axtree}")
+            text = "\n\n".join(parts) if parts else "No observation available."
+            content.append({"type": "text", "text": text})
+
+            return content
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    default_output_dir = Path("outputs") / f"browsergym-vlm-grpo-{sanitize_name(args.model_id)}-{timestamp}"
+    output_dir = Path(args.output_dir or default_output_dir)
 
     trainer = GRPOTrainer(
         model=args.model_id,
-        processing_class=tokenizer,
-        reward_funcs=[reward_completion],
+        reward_funcs=reward_completion,
         train_dataset=dataset,
-        args=grpo_config,
-        rollout_func=rollout_func,
+        args=GRPOConfig(
+            use_vllm=args.use_vllm,
+            vllm_mode=args.vllm_mode if args.use_vllm else "colocate",
+            vllm_server_base_url=args.vllm_server_url if args.use_vllm and args.vllm_mode == "server" else None,
+            output_dir=str(output_dir),
+            num_train_epochs=args.num_epochs,
+            learning_rate=args.learning_rate,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            num_generations=args.num_generations,
+            max_completion_length=args.max_completion_length,
+            logging_steps=args.logging_steps,
+            log_completions=True,
+            report_to="trackio",
+            trackio_space_id=f"browsergym-vlm-grpo-{sanitize_name(args.model_id)}",
+            chat_template_kwargs={"enable_thinking": False},
+        ),
+        environment_factory=BrowserGymVLMEnv,
     )
-
-    print("=" * 80)
-    print("Starting GRPO training with BrowserGym environment")
-    print(f"Benchmark: {args.benchmark}")
-    print(f"Task: {args.task_name}")
-    print(f"Model: {args.model_id}")
-    print(f"Using {args.num_generations} rollouts per dataset prompt")
-    print(f"Output directory: {output_dir}")
-    print("=" * 80)
-
-    try:
-        trainer.train()
-        print("\nTraining completed successfully!")
-    finally:
-        client.close()
+    trainer.train()
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ import os
 import random
 import socket
 import threading
+import types
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -32,7 +33,6 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
-from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
 from torch.utils.data import Sampler
 from transformers import (
@@ -235,64 +235,6 @@ def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
     return peft_config
 
 
-def prepare_deepspeed(
-    model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
-) -> torch.nn.Module:
-    """
-    Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based
-    on the model and batch size.
-
-    Args:
-        model (`torch.nn.Module`):
-            The model to be prepared for DeepSpeed training.
-        per_device_train_batch_size (`int`):
-            The training batch size per device.
-        fp16 (`bool`, defaults to `False`):
-            Whether to use FP16 precision.
-        bf16 (`bool`, defaults to `False`):
-            Whether to use BF16 precision.
-
-    Returns:
-        `torch.nn.Module`:
-            The model initialized and configured with DeepSpeed for training.
-    """
-    import deepspeed
-
-    deepspeed_plugin = AcceleratorState().deepspeed_plugin
-    config_kwargs = deepspeed_plugin.deepspeed_config
-    if config_kwargs["zero_optimization"]["stage"] != 3:
-        config_kwargs["train_micro_batch_size_per_gpu"] = per_device_train_batch_size
-        config_kwargs = {
-            "train_micro_batch_size_per_gpu": config_kwargs["train_micro_batch_size_per_gpu"],
-            "prescale_gradients": False,
-            "wall_clock_breakdown": False,
-        }
-        if bf16:
-            config_kwargs["bf16"] = {"enabled": True}
-        elif fp16:
-            config_kwargs["fp16"] = {"enabled": True}
-    else:
-        if hasattr(model, "config"):
-            hidden_size = (
-                max(model.config.hidden_sizes)
-                if getattr(model.config, "hidden_sizes", None)
-                else getattr(model.config, "hidden_size", None)
-            )
-            if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
-                # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
-                # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
-                config_kwargs.update(
-                    {
-                        "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
-                        "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
-                        "zero_optimization.stage3_prefetch_bucket_size": 0,
-                    }
-                )
-    model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
-    model.eval()
-    return model
-
-
 def generate_model_card(
     base_model: str | None,
     model_name: str,
@@ -492,36 +434,6 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     return flushed_mask, *flushed_tensors
 
 
-def flush_right(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, ...]:
-    """
-    Shift non-zero elements in the mask and corresponding tensors to the right. See `flush_left` for details.
-    """
-    _, M = mask.shape
-
-    # Create copy of mask and tensors
-    mask_copy = mask.clone()
-    tensors = [t.clone() for t in tensors]
-
-    # Shift non-zero values to the right
-    flipped_mask = torch.fliplr(mask_copy)
-    first_non_zero = flipped_mask.argmax(dim=1)
-    pos = torch.arange(M, device=mask_copy.device).unsqueeze(0)
-    idx_roll = (pos - first_non_zero.unsqueeze(1)) % M
-    mask_roll = mask_copy.gather(1, idx_roll)
-    rolled_tensors = [t.gather(1, idx_roll) for t in tensors]
-
-    # Truncate leading columns that are all zeros in mask_roll
-    col_sums = mask_roll.sum(dim=0)
-    non_empty_cols = col_sums != 0
-    first_non_empty_col = int(non_empty_cols.to(torch.int8).argmax()) if non_empty_cols.any() else M
-    flushed_mask = mask_roll[:, first_non_empty_col:]
-    flushed_tensors = [t[:, first_non_empty_col:] for t in rolled_tensors]
-
-    if not flushed_tensors:
-        return flushed_mask
-    return flushed_mask, *flushed_tensors
-
-
 def selective_log_softmax(logits, index) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
@@ -613,6 +525,7 @@ def print_prompt_completions_sample(
     advantages: list[float],
     step: int,
     num_samples: int = None,
+    extra: dict[str, list] | None = None,
 ) -> None:
     """
     Print out a sample of model completions to the console with multiple reward metrics.
@@ -633,6 +546,10 @@ def print_prompt_completions_sample(
             Current training step number, used in the output title.
         num_samples (`int`, *optional*):
             Number of random samples to display. If `None` (default), all items will be displayed.
+        extra (`dict[str, list]`, *optional*):
+            Additional columns to display after the advantage column. Keys are column names and values are lists of
+            per-completion data (strings or any value convertible to string). Typically populated via `log_extra` in
+            reward functions. If `None` (default), no extra columns are shown.
 
     Example:
     ```python
@@ -642,16 +559,17 @@ def print_prompt_completions_sample(
     >>> completions = [" blue.", " in the sky."]
     >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
     >>> advantages = [0.987, 0.654]
-    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42)
-    ╭──────────────────────────── Step 42 ─────────────────────────────╮
-    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
-    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
-    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
-    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
-    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
-    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
-    │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
-    ╰──────────────────────────────────────────────────────────────────╯
+    >>> extra = {"source": ["dataset_A", "dataset_B"]}
+    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42, extra=extra)
+    ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ source    ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ dataset_A │ │
+    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┼───────────┤ │
+    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ dataset_B │ │
+    │ └────────────┴──────────────┴─────────────┴────────┴───────────┴───────────┘ │
+    ╰──────────────────────────────────────────────────────────────────────────────╯
     ```
     """
     if not is_rich_available():
@@ -662,22 +580,31 @@ def print_prompt_completions_sample(
     console = Console()
     table = Table(show_header=True, header_style="bold white", expand=True)
 
+    extra = extra or {}
+
     # Add columns
     table.add_column("Prompt", style="bright_yellow")
     table.add_column("Completion", style="bright_green")
     for reward_name in rewards.keys():
         table.add_column(reward_name, style="bold cyan", justify="right")
     table.add_column("Advantage", style="bold magenta", justify="right")
+    for extra_name in extra.keys():
+        table.add_column(extra_name, style="bright_white")
 
     def format_entry(entry) -> Text:
         t = Text()
         if isinstance(entry, list) and all(isinstance(m, dict) for m in entry):
             for j, msg in enumerate(entry):
                 role = msg.get("role", "")
-                if "content" in msg:
+                if "content" in msg or "reasoning_content" in msg or "thinking" in msg:
                     # Chat message
                     t.append(f"{role.upper()}\n", style="bold red")
-                    t.append(msg["content"])
+                    reasoning = msg.get("reasoning_content") or msg.get("thinking")
+                    if reasoning:
+                        t.append(reasoning, style="italic dim white")
+                        t.append("\n")
+                    if "content" in msg:
+                        t.append(msg["content"])
                 elif "name" in msg and "args" in msg:
                     # Tool call
                     t.append(f"{role.upper()}\n", style="bold red")
@@ -705,14 +632,17 @@ def print_prompt_completions_sample(
         completions = [completions[i] for i in indices]
         rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
         advantages = [advantages[i] for i in indices]
+        extra = {key: [val[i] for i in indices] for key, val in extra.items()}
 
     for i in range(len(prompts)):
         reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
+        extra_values = [format_entry(extra[key][i]) for key in extra.keys()]
         table.add_row(
             format_entry(prompts[i]),
             format_entry(completions[i]),
             *reward_values,
             f"{advantages[i]:.2f}",
+            *extra_values,
         )
         table.add_section()  # Adds a separator between rows
 
@@ -957,23 +887,39 @@ def identity(x):
 
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | list[torch.Tensor]]:
     """
-    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in `batch["image_grid_thw"]`
-    and batch["num_images"] while keeping other entries unchanged.
+    Splits `batch["pixel_values"]` into a list of tensors, one per sample, based on `batch["num_images"]`.
+
+    For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values` belong
+    to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
+    image count.
     """
-    if "image_grid_thw" not in batch or "pixel_values" not in batch or "num_images" not in batch:
+    if "pixel_values" not in batch or "num_images" not in batch:
         return batch
 
-    lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
+    num_images = batch["num_images"]
     pixel_values = batch["pixel_values"]  # [total, feature_dim]
 
-    if sum(lengths) != pixel_values.size(0):
-        raise ValueError(f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}")
+    if "image_grid_thw" in batch:
+        lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
+        if sum(lengths) != pixel_values.size(0):
+            raise ValueError(
+                f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}"
+            )
 
-    boundaries = [0, *accumulate(batch["num_images"])]  # [3, 4, 5] -> [0, 3, 7, 12]
-    sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(batch["num_images"]))]
-    split_values = list(torch.split(batch["pixel_values"], sections, dim=0))
-    image_grid_thw = list(torch.split(batch["image_grid_thw"], batch["num_images"], dim=0))
-    return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
+        boundaries = [0, *accumulate(num_images)]
+        image_grid_thw = batch["image_grid_thw"]  # [total, 3]
+        sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(num_images))]
+        split_pixel_values = list(torch.split(pixel_values, sections, dim=0))
+        split_image_grid_thw = list(torch.split(image_grid_thw, num_images, dim=0))
+        return {**batch, "pixel_values": split_pixel_values, "image_grid_thw": split_image_grid_thw}
+
+    if "image_position_ids" in batch:
+        image_position_ids = batch["image_position_ids"]  # [total]
+        split_pixel_values = list(torch.split(pixel_values, num_images, dim=0))
+        split_image_position_ids = list(torch.split(image_position_ids, num_images, dim=0))
+        return {**batch, "pixel_values": split_pixel_values, "image_position_ids": split_image_position_ids}
+
+    return batch
 
 
 def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tensor]]) -> dict[str, torch.Tensor]:
@@ -991,12 +937,23 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
         merged = torch.cat(image_grid_thw, dim=0)
         batch = {**batch, "image_grid_thw": merged}
 
+    image_position_ids = batch.get("image_position_ids")
+    if isinstance(image_position_ids, list):
+        merged = torch.cat(image_position_ids, dim=0)
+        batch = {**batch, "image_position_ids": merged}
+
     return batch
 
 
 TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
 
+# This function is intentionally not used internally. It is provided as a utility for users whose datasets contain
+# `None` values inserted by tabular backends (e.g., Arrow/Parquet) for missing keys in nested structures. This
+# situation arises when loading datasets created before `datasets` v4.7.0 (which introduced the Json dtype), or when
+# datasets created after that version were saved without using the Json feature. In both cases, users can apply this
+# function via `dataset = dataset.with_transform(remove_none_values)` before training to strip the spurious `None`
+# values. See the migration guide for more details.
 def remove_none_values(example: TListOrMapping) -> TListOrMapping:
     """
     Recursively removes entries with `None` values from a nested structure (list or dictionary).
@@ -1005,7 +962,10 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
         example (`list` or `Mapping`):
             Input nested structure (list or dictionary) from which to remove `None`.
 
-    Example:
+    Examples:
+    ```python
+    >>> dataset = dataset.with_transform(remove_none_values)
+    ```
     ```python
     >>> [
     ...     {
@@ -1244,3 +1204,180 @@ def shutdown_event_loop_in_daemon(
         return
     loop.call_soon_threadsafe(loop.stop)
     thread.join(timeout=5)
+
+
+class _ChunkedLogProbFunction(torch.autograd.Function):
+    """Compute per-token log-probs and entropy without materializing [N, V] logits.
+
+    Processes the lm_head in chunks and uses online logsumexp
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        last_hidden: torch.Tensor,  # [N, H]
+        weight: torch.Tensor,  # [V, H]
+        targets: torch.Tensor,  # [N]
+        temperature: float,
+        chunk_size: int,
+        logit_scale: float = 1.0,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        device = last_hidden.device
+        N, _ = last_hidden.shape
+        vocab, _ = weight.shape
+        inv_t = logit_scale / temperature
+
+        # NOTE(@aminediro): always acc in fp32 for stability
+        max_old = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
+        sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
+        x_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
+        target_logit = torch.zeros((N,), device=device, dtype=torch.float32)
+
+        # Pre-allocate reusable buffers to avoid per-chunk allocation
+        mm_buf = torch.empty((N, chunk_size), device=device, dtype=last_hidden.dtype)
+        logits_buf = torch.empty((N, chunk_size), device=device, dtype=torch.float32)
+
+        for start in range(0, vocab, chunk_size):
+            end = min(start + chunk_size, vocab)
+            C = end - start
+            # using fp16=True, the model's hidden states get cast to float16 by autocast, but the mm_buf is allocated
+            # with last_hidden.dtype (float16) while w_chunk (the lm_head weights) is not auto casted
+            w_chunk = weight[start:end].to(last_hidden.dtype)  # [C, H]
+            torch.mm(last_hidden, w_chunk.t(), out=mm_buf[:, :C])
+            logits_chunk = logits_buf[:, :C]
+            logits_chunk.copy_(mm_buf[:, :C])
+            logits_chunk.mul_(inv_t)  # [N, C]
+
+            # Online logsumexp update
+            chunk_max = logits_chunk.amax(dim=-1)  # [N]
+            max_new = torch.maximum(max_old, chunk_max)
+            rescale = torch.exp(max_old - max_new)
+            chunk_exp = torch.exp(logits_chunk - max_new.unsqueeze(-1))  # [N, C]
+
+            sum_exp = sum_exp * rescale + chunk_exp.sum(dim=-1)
+            x_sum_exp = x_sum_exp * rescale + (chunk_exp * logits_chunk).sum(dim=-1)
+            max_old = max_new
+
+            # Gather target logits for labels in this chunk
+            in_chunk_cond = (targets >= start) & (targets < end)
+            local_idx = torch.clamp(targets - start, 0, end - start - 1)
+            # take the new logit if target_idx is in this chunk bounds else 0
+            target_logit += logits_chunk[torch.arange(N, device=device), local_idx] * in_chunk_cond
+
+        log_z = max_old + torch.log(sum_exp)
+        logprobs = target_logit - log_z
+        entropy = log_z - x_sum_exp / sum_exp
+
+        ctx.save_for_backward(last_hidden, weight, targets, log_z)
+        ctx.temperature = temperature
+        ctx.chunk_size = chunk_size
+        ctx.logit_scale = logit_scale
+
+        return logprobs, entropy
+
+    @staticmethod
+    def backward(ctx, grad_logprobs: torch.Tensor, grad_entropy: torch.Tensor):  # type: ignore
+        hidden, weight, labels, log_z = ctx.saved_tensors
+        temperature: float = ctx.temperature
+        chunk_size: int = ctx.chunk_size
+        logit_scale: float = ctx.logit_scale
+        inv_t = logit_scale / temperature
+
+        N, _ = hidden.shape
+        vocab = weight.shape[0]
+
+        # NOTE(@aminediro): always acc in fp32 even if input is not
+        grad_hidden = torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32)
+        grad_weight = torch.zeros(weight.shape, device=weight.device, dtype=torch.float32)
+
+        # Pre-allocate reusable buffers to avoid per-chunk allocation
+        mm_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=hidden.dtype)
+        logits_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=torch.float32)
+
+        g = grad_logprobs.to(torch.float32)  # [N]
+        row_idx = torch.arange(N, device=hidden.device)
+
+        for start in range(0, vocab, chunk_size):
+            end = min(start + chunk_size, vocab)
+            C = end - start
+            w_chunk = weight[start:end]  # [C, H]
+
+            torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
+            logits_chunk = logits_buf[:, :C]
+            logits_chunk.copy_(mm_buf[:, :C])
+            logits_chunk.mul_(inv_t)  # [N, C]
+            probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
+
+            # dL/d(logits) = g * (1_[label] - p)
+            grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
+
+            in_chunk_cond = (labels >= start) & (labels < end)
+            local_idx = torch.clamp(labels - start, 0, end - start - 1)
+            # If label in chunk add g to grad else it stays the same
+            grad_logits[row_idx, local_idx] += g * in_chunk_cond
+            grad_logits = grad_logits * inv_t
+
+            grad_hidden.add_(grad_logits @ w_chunk.float())
+            grad_weight[start:end].add_(grad_logits.t() @ hidden.float())
+
+        return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None
+
+
+def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: float) -> None:
+    if getattr(model.config, "final_logit_softcapping", None) is not None:
+        raise NotImplementedError(
+            "The model uses `final_logit_softcapping` which is not yet supported. Please open an issue if you "
+            "want your model to be supported."
+        )
+
+    def _chunked_forward(
+        self: torch.nn.Module,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        completion_mask: torch.Tensor | None = None,
+        use_cache: bool = False,
+        **kwargs,
+    ) -> dict[str, torch.Tensor]:
+        assert labels is not None, "requires labels to not be None for logprob computation"
+
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **kwargs)
+        # NOTE(@aminediro): supporting Cohere2 models
+        logit_scale = getattr(self.config, "logit_scale", 1.0)
+        hidden_states = outputs.last_hidden_state  # [B, S+1, H]
+
+        # Shift: predict next token
+        hidden_states = hidden_states[:, :-1, :]  # [B, S-1, H]
+        labels = labels[:, 1:]  # [B, S-1]
+
+        b, s, h = hidden_states.shape
+        hidden_flat = hidden_states.reshape(b * s, h).contiguous()
+        targets_flat = labels.reshape(b * s).contiguous()
+
+        # Filter to completion tokens only to avoid expensive matmuls on prompt tokens and tool results
+        valid_mask = None
+        if completion_mask is not None:
+            completion_mask = completion_mask[:, 1:]  # same shift as labels
+            valid_mask = completion_mask.bool().reshape(b * s)
+            hidden_flat = hidden_flat[valid_mask]  # [N_valid, H]
+            targets_flat = targets_flat[valid_mask]  # [N_valid]
+
+        logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
+            hidden_flat, self.lm_head.weight, targets_flat, temperature, chunk_size, logit_scale
+        )
+
+        if valid_mask is not None:
+            logprobs = torch.zeros(b * s, device=logprobs_valid.device, dtype=logprobs_valid.dtype)
+            entropy = torch.zeros(b * s, device=entropy_valid.device, dtype=entropy_valid.dtype)
+            logprobs[valid_mask] = logprobs_valid
+            entropy[valid_mask] = entropy_valid
+        else:
+            logprobs = logprobs_valid
+            entropy = entropy_valid
+
+        return {
+            "log_probs": logprobs.reshape(b, s),
+            "entropy": entropy.reshape(b, s),
+        }
+
+    model.forward = types.MethodType(_chunked_forward, model)

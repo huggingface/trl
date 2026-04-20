@@ -30,7 +30,8 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "accelerate>=1.4.0",
-    "datasets>=3.0.0",
+    "datasets>=4.7.0",  # Support Json type and on_mixed_types="use_json"
+    "jinja2",
     "packaging>20.0",
     "transformers>=4.56.2",
 ]
@@ -50,11 +51,6 @@ bco = [
 deepspeed = [
     "deepspeed>=0.14.4",
     "transformers!=5.1.0",  # see transformers#43780
-]
-judges = [
-    "openai>=1.23.2",
-    "llm-blender>=0.0.2",
-    "transformers<5.0.0",  # see #4918
 ]
 kernels = [
     "kernels"
@@ -83,7 +79,7 @@ test = [
     "pytest"
 ]
 vllm = [
-    "vllm>=0.10.2,<=0.17.1",
+    "vllm>=0.11.0,<=0.18.0",
     "fastapi",
     "pydantic",
     "aiohttp>=3.13.3",
@@ -104,9 +100,6 @@ dev = [
     "joblib",
     # deepspeed
     "deepspeed>=0.14.4",
-    # judges
-    "openai>=1.23.2",
-    "llm-blender>=0.0.2",
     # kernels
     "kernels",
     # liger

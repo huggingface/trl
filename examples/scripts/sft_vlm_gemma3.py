@@ -14,9 +14,8 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[peft]",
 #     "Pillow>=9.4.0",
-#     "peft",
 #     "trackio",
 #     "kernels",
 # ]
@@ -73,10 +72,6 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 # For multi-image example

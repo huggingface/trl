@@ -13,10 +13,10 @@
 # limitations under the License.
 
 
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 
-from trl.experimental.utils import DataCollatorForChatML
+from trl.experimental.utils import DataCollatorForChatML, truncate_dataset
 
 from ..testing_utils import TrlTestCase
 
@@ -105,3 +105,56 @@ class TestDataCollatorForChatML(TrlTestCase):
         )
 
         assert response_labels == last_assistant_response_tokens, "Labels should match assistant response tokens"
+
+
+class TestTruncateExamples(TrlTestCase):
+    def test_with_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        dataset = dataset.with_format("numpy", dtype="float32")
+        format = dataset.format
+        max_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [4, 5], [8]],
+            "attention_mask": [[0, 1], [0, 0], [1]],
+        }
+        dataset = truncate_dataset(dataset, max_length)
+        assert dataset.to_dict() == expected_output
+        assert format == dataset.format
+
+    def test_with_iterable_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        dataset = dataset.with_format("numpy")
+        formatting = dataset._formatting
+        max_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [4, 5], [8]],
+            "attention_mask": [[0, 1], [0, 0], [1]],
+        }
+        dataset = truncate_dataset(dataset, max_length)
+        num_examples = len(examples[next(iter(examples))])
+        assert next(iter(dataset.with_format(None).batch(batch_size=num_examples))) == expected_output
+        assert formatting == dataset._formatting
+
+    def test_with_extra_column(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+            "my_column": ["a", "b", "c"],
+        }
+        dataset = Dataset.from_dict(examples)
+        max_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [4, 5], [8]],
+            "attention_mask": [[0, 1], [0, 0], [1]],
+            "my_column": ["a", "b", "c"],
+        }
+        dataset = truncate_dataset(dataset, max_length)
+        assert dataset.to_dict() == expected_output

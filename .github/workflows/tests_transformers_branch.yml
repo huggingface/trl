@@ -11,6 +11,7 @@ on:
 env:
   TQDM_DISABLE: 1
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
 
@@ -50,8 +51,9 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install ".[dev]"
-          uv pip install -U git+https://github.com/huggingface/transformers.git@${{ inputs.transformers_ref }}
+          uv pip install -U \
+            ".[dev]" \
+            "transformers @ git+https://github.com/huggingface/transformers.git@${{ inputs.transformers_ref }}"
 
       - name: Test with pytest
         run: |
@@ -104,8 +106,9 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install ".[dev]"
-          uv pip install -U git+https://github.com/huggingface/transformers.git@${{ inputs.transformers_ref }}
+          uv pip install -U \
+            ".[dev]" \
+            "transformers @ git+https://github.com/huggingface/transformers.git@${{ inputs.transformers_ref }}"
 
       - name: Run distributed smoke tests
         run: |

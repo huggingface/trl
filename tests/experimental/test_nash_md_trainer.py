@@ -22,8 +22,7 @@ from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 from trl.experimental.nash_md.nash_md_trainer import GeometricMixtureWrapper
 from trl.experimental.utils import create_reference_model
 
-from ..testing_utils import TrlTestCase, require_llm_blender, require_peft
-from .testing_utils import RandomPairwiseJudge
+from ..testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
@@ -96,7 +95,6 @@ class TestNashMDTrainer(TrlTestCase):
             remove_unused_columns=False,
             gradient_accumulation_steps=1,
             learning_rate=9e-1,
-            eval_strategy="steps",
             report_to="none",
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
@@ -108,7 +106,6 @@ class TestNashMDTrainer(TrlTestCase):
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
         )
 
         trainer.train()
@@ -124,7 +121,6 @@ class TestNashMDTrainer(TrlTestCase):
             per_device_train_batch_size=2,
             max_steps=3,
             learning_rate=5.0e-7,
-            eval_strategy="steps",
             report_to="none",
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
@@ -135,7 +131,6 @@ class TestNashMDTrainer(TrlTestCase):
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
             peft_config=lora_config,
         )
 
@@ -152,7 +147,6 @@ class TestNashMDTrainer(TrlTestCase):
             per_device_train_batch_size=2,
             max_steps=3,
             learning_rate=5.0e-7,
-            eval_strategy="steps",
             report_to="none",
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
@@ -164,7 +158,6 @@ class TestNashMDTrainer(TrlTestCase):
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
             peft_config=lora_config,
         )
 
@@ -202,35 +195,4 @@ class TestNashMDTrainer(TrlTestCase):
 
         trainer.train()
 
-        assert "train_loss" in trainer.state.log_history[-1]
-
-    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
-    @require_llm_blender
-    def test_nash_md_trainer_judge_training(self, config_name):
-        training_args = NashMDConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=1,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            report_to="none",
-        )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
-        judge = RandomPairwiseJudge()
-
-        trainer = NashMDTrainer(
-            model=self.model,
-            ref_model=self.ref_model,
-            judge=judge,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-        )
-
-        trainer.train()
-
-        # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
