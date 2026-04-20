@@ -27,7 +27,7 @@ import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
 from accelerate.utils import is_peft_model, tqdm
-from datasets import Dataset, concatenate_datasets
+from datasets import Dataset, IterableDataset, concatenate_datasets
 from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader, SequentialSampler
@@ -263,9 +263,9 @@ class KTOTrainer(_BaseTrainer):
               state before KTO training starts.
         args ([`experimental.kto.KTOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`]):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             The dataset to use for training.
-        eval_dataset ([`~datasets.Dataset`]):
+        eval_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             The dataset to use for evaluation.
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
@@ -313,8 +313,8 @@ class KTOTrainer(_BaseTrainer):
         model: "str | PreTrainedModel | PeftModel",
         ref_model: PreTrainedModel | None = None,
         args: KTOConfig | None = None,
-        train_dataset: Dataset | None = None,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         data_collator: DataCollator | None = None,
         model_init: Callable[[], PreTrainedModel] | None = None,
@@ -616,7 +616,9 @@ class KTOTrainer(_BaseTrainer):
         dataset_name: str,
     ) -> Dataset:
         # Build the kwargs for the `map` function
-        map_kwargs = {"num_proc": args.dataset_num_proc}
+        map_kwargs = {}
+        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
+            map_kwargs["num_proc"] = args.dataset_num_proc
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
@@ -624,33 +626,32 @@ class KTOTrainer(_BaseTrainer):
             # Extract the prompt if needed
             first_example = next(iter(dataset))
             if "prompt" not in first_example:
-                map_kwargs["desc"] = f"Extracting prompt from {dataset_name} dataset"
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Extracting prompt from {dataset_name} dataset"
                 dataset = dataset.map(extract_prompt, **map_kwargs)
 
             # Unpair the dataset if needed
             first_example = next(iter(dataset))
             if "chosen" in first_example and "rejected" in first_example:
-                map_kwargs["desc"] = f"Unpairing {dataset_name} dataset"
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Unpairing {dataset_name} dataset"
                 dataset = unpair_preference_dataset(dataset, **map_kwargs)
 
             # Apply the chat template if needed
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
             dataset = dataset.map(
-                maybe_apply_chat_template,
-                fn_kwargs={"processing_class": processing_class},
-                num_proc=args.dataset_num_proc,
-                desc=f"Applying chat template to {dataset_name} dataset",
+                maybe_apply_chat_template, fn_kwargs={"processing_class": processing_class}, **map_kwargs
             )
 
             tokenizer = getattr(processing_class, "tokenizer", processing_class)
             # Tokenize dataset
-            dataset = dataset.map(
-                _tokenize,
-                batched=True,
-                fn_kwargs={"tokenizer": tokenizer},
-                num_proc=args.dataset_num_proc,
-                desc=f"Tokenizing {dataset_name} dataset",
-            )
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
+            dataset = dataset.map(_tokenize, batched=True, fn_kwargs={"tokenizer": tokenizer}, **map_kwargs)
             # Process dataset
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Processing tokenized {dataset_name} dataset"
             dataset = dataset.map(
                 _process_tokens,
                 fn_kwargs={
@@ -658,22 +659,21 @@ class KTOTrainer(_BaseTrainer):
                     "tokenizer": tokenizer,
                     "max_length": self.max_length,
                 },
-                num_proc=args.dataset_num_proc,
-                desc=f"Processing tokenized {dataset_name} dataset",
+                **map_kwargs,
             )
 
             # Get KL datasets if needed
             if self.calculate_KL:
                 # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
                 # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Extracting KL {dataset_name} dataset"
                 kl_dataset = dataset.map(
-                    _get_kl_dataset,
-                    batched=True,
-                    batch_size=args.per_device_train_batch_size,
-                    num_proc=args.dataset_num_proc,
-                    desc=f"Extracting KL {dataset_name} dataset",
+                    _get_kl_dataset, batched=True, batch_size=args.per_device_train_batch_size, **map_kwargs
                 )
 
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Processing tokenized {dataset_name} KL dataset"
                 kl_dataset = kl_dataset.map(
                     _process_tokens,
                     fn_kwargs={
@@ -681,9 +681,8 @@ class KTOTrainer(_BaseTrainer):
                         "tokenizer": tokenizer,
                         "max_length": self.max_length,
                     },
-                    num_proc=args.dataset_num_proc,
                     remove_columns=[c for c in kl_dataset.column_names if c in dataset.column_names],
-                    desc=f"Processing tokenized {dataset_name} KL dataset",
+                    **map_kwargs,
                 )
 
                 # merge the datasets
