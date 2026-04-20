@@ -25,6 +25,10 @@ class TargetPOConfig(GRPOConfig):
     This class extends [`GRPOConfig`] with defaults for Target Policy Optimization. For a full list of training
     arguments, please refer to [`~transformers.TrainingArguments`] and [`GRPOConfig`].
 
+    Unless the user passes `generation_batch_size` or `steps_per_generation`, `TargetPOConfig` defaults
+    `steps_per_generation` to `1` as a safe starting point. Values greater than `1` are supported as long as each
+    optimization step still contains whole prompt groups (see [`GRPOConfig`] for the divisibility check).
+
     Parameters:
         loss_type (`str`, *optional*, defaults to `"tpo"`):
             Loss formulation. `TargetPOConfig` requires this to stay set to `"tpo"`.

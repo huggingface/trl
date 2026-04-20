@@ -31,7 +31,7 @@ trainer.train()
 
 ## Configuration
 
-[`TargetPOConfig`] inherits the online rollout, reward, vLLM, tool-calling, and logging arguments from [`GRPOConfig`]. Because TargetPO uses a sequence-level softmax over every completion in a prompt group, [`TargetPOConfig`] sets `steps_per_generation=1` by default.
+[`TargetPOConfig`] inherits the online rollout, reward, vLLM, tool-calling, and logging arguments from [`GRPOConfig`]. Because TargetPO uses a sequence-level softmax over every completion in a prompt group, [`TargetPOConfig`] defaults `steps_per_generation` to `1` when the user does not specify a generation schedule. Larger values are supported as long as each optimization step still contains whole prompt groups, i.e. `(generation_batch_size // steps_per_generation) % num_generations == 0`.
 
 ## TargetPOConfig
 

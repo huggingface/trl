@@ -31,9 +31,26 @@ class TestTargetPOConfig(TrlTestCase):
         assert config.loss_type == "tpo"
         assert config.steps_per_generation == 1
 
-    def test_requires_one_step_per_generation(self):
-        with pytest.raises(ValueError, match="steps_per_generation=1"):
-            TargetPOConfig(output_dir=self.tmp_dir, steps_per_generation=2)
+    def test_allows_multi_step_generation_when_groups_are_whole(self):
+        config = TargetPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,
+            num_generations=2,
+            steps_per_generation=2,
+        )
+
+        assert config.steps_per_generation == 2
+        per_step_batch = config.generation_batch_size // config.steps_per_generation
+        assert per_step_batch % config.num_generations == 0
+
+    def test_rejects_multi_step_generation_when_groups_are_cleaved(self):
+        with pytest.raises(ValueError, match="whole prompt groups"):
+            TargetPOConfig(
+                output_dir=self.tmp_dir,
+                per_device_train_batch_size=2,
+                num_generations=4,
+                steps_per_generation=2,
+            )
 
     def test_trainer_metadata(self):
         assert TargetPOTrainer._name == "TargetPO"

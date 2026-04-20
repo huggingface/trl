@@ -968,9 +968,14 @@ class GRPOConfig(_BaseConfig):
         if self.loss_type == "tpo":
             if self.use_liger_kernel:
                 raise ValueError("Liger kernel does not support the TPO loss yet.")
-            if self.steps_per_generation != 1:
+            # TPO's target distribution is normalized per prompt group, so each optimization step must contain a whole
+            # number of groups. That holds whenever the per-step batch (generation_batch_size // steps_per_generation)
+            # is divisible by num_generations.
+            per_step_batch = self.generation_batch_size // self.steps_per_generation
+            if per_step_batch % self.num_generations != 0:
                 raise ValueError(
-                    "TPO requires `steps_per_generation=1` so every prompt group is available in a single loss "
-                    "step. Use `TargetPOConfig`, which sets this default automatically, or set "
-                    "`steps_per_generation=1`."
+                    f"TPO requires each optimization step to contain whole prompt groups. With "
+                    f"steps_per_generation={self.steps_per_generation} and num_generations={self.num_generations}, "
+                    f"the per-step batch of {per_step_batch} is not divisible by num_generations. Increase "
+                    f"per_device_train_batch_size or reduce steps_per_generation."
                 )

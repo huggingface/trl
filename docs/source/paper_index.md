@@ -683,7 +683,6 @@ from trl import GRPOConfig, GRPOTrainer
 
 training_args = GRPOConfig(
     loss_type="tpo",
-    steps_per_generation=1,
     tpo_target_temperature=1.0,
 )
 
