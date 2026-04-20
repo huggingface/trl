@@ -42,7 +42,11 @@ from transformers import (
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
-from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
+from ...data_utils import (
+    extract_prompt,
+    maybe_apply_chat_template,
+    unpair_preference_dataset,
+)
 from ...import_utils import is_liger_kernel_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp
 from ...trainer.base_trainer import _BaseTrainer
@@ -611,20 +615,24 @@ class KTOTrainer(_BaseTrainer):
         args: KTOConfig | None,
         dataset_name: str,
     ) -> Dataset:
-        tokenizer = getattr(processing_class, "tokenizer", processing_class)
+        # Build the kwargs for the `map` function
+        map_kwargs = {"num_proc": args.dataset_num_proc}
+
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().main_process_first():
             # Extract the prompt if needed
-            dataset = dataset.map(
-                maybe_extract_prompt,
-                num_proc=args.dataset_num_proc,
-                desc=f"Extracting prompt from {dataset_name} dataset",
-            )
+            first_example = next(iter(dataset))
+            if "prompt" not in first_example:
+                map_kwargs["desc"] = f"Extracting prompt from {dataset_name} dataset"
+                dataset = dataset.map(extract_prompt, **map_kwargs)
+
             # Unpair the dataset if needed
-            dataset = maybe_unpair_preference_dataset(
-                dataset, args.dataset_num_proc, desc=f"Unpairing {dataset_name} dataset"
-            )
+            first_example = next(iter(dataset))
+            if "chosen" in first_example and "rejected" in first_example:
+                map_kwargs["desc"] = f"Unpairing {dataset_name} dataset"
+                dataset = unpair_preference_dataset(dataset, **map_kwargs)
+
             # Apply the chat template if needed
             dataset = dataset.map(
                 maybe_apply_chat_template,
@@ -633,7 +641,8 @@ class KTOTrainer(_BaseTrainer):
                 desc=f"Applying chat template to {dataset_name} dataset",
             )
 
-            # Tokenize and prepare the training datasets
+            tokenizer = getattr(processing_class, "tokenizer", processing_class)
+            # Tokenize dataset
             dataset = dataset.map(
                 _tokenize,
                 batched=True,
@@ -641,7 +650,7 @@ class KTOTrainer(_BaseTrainer):
                 num_proc=args.dataset_num_proc,
                 desc=f"Tokenizing {dataset_name} dataset",
             )
-
+            # Process dataset
             dataset = dataset.map(
                 _process_tokens,
                 fn_kwargs={
