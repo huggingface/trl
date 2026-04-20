@@ -330,7 +330,7 @@ class ScriptArguments:
 def llm_worker(
     script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection
 ) -> None:
-    import json as _json
+    import json
 
     from vllm import LLM
 
@@ -339,11 +339,6 @@ def llm_worker(
     os.environ["VLLM_DP_RANK_LOCAL"] = str(data_parallel_rank)
     os.environ["VLLM_DP_SIZE"] = str(script_args.data_parallel_size)
     os.environ["VLLM_DP_MASTER_PORT"] = str(master_port)
-
-    # Parse optional speculative decoding config
-    _spec_kwargs = {}
-    if script_args.speculative_config:
-        _spec_kwargs["speculative_config"] = _json.loads(script_args.speculative_config)
 
     llm = LLM(
         model=script_args.model,
@@ -364,7 +359,7 @@ def llm_worker(
         distributed_executor_backend=script_args.distributed_executor_backend,
         # Important so temperature scaling/logit tweaking affects the TIS log probs
         logprobs_mode="processed_logprobs",
-        **_spec_kwargs,
+        speculative_config=json.loads(script_args.speculative_config) if script_args.speculative_config else None,
     )
 
     # Send ready signal to parent process
