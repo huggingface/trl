@@ -479,7 +479,8 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | P
     ]
     # VLM processors expect structured list-of-blocks content, and image-token expansion only kicks in when an image
     # is actually present, so include a dummy image to exercise the real code path.
-    if isinstance(processing_class, ProcessorMixin):
+    is_vlm = isinstance(processing_class, ProcessorMixin)
+    if is_vlm:
         from PIL import Image
 
         dummy_image = Image.new("RGB", (8, 8))
@@ -487,18 +488,27 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | P
         messages2 = prepare_multimodal_messages(messages2, images=[dummy_image])
 
     try:
-        text1 = processing_class.apply_chat_template(messages1, tokenize=False)
-        text2 = processing_class.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+        ids1 = processing_class.apply_chat_template(messages1, tokenize=True, return_dict=False)
+        ids2 = processing_class.apply_chat_template(
+            messages2, tokenize=True, return_dict=False, add_generation_prompt=True
+        )
     except TypeError:
         # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
         # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
         dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
         messages1[1]["tool_calls"] = dummy_tool_calls
         messages2[1]["tool_calls"] = dummy_tool_calls
-        text1 = processing_class.apply_chat_template(messages1, tokenize=False)
-        text2 = processing_class.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
+        ids1 = processing_class.apply_chat_template(messages1, tokenize=True, return_dict=False)
+        ids2 = processing_class.apply_chat_template(
+            messages2, tokenize=True, return_dict=False, add_generation_prompt=True
+        )
 
-    return text2.startswith(text1)
+    # VLM processors return batched output (list of lists), unbatch for single conversation
+    if is_vlm:
+        ids1 = ids1[0]
+        ids2 = ids2[0]
+
+    return ids2[: len(ids1)] == ids1
 
 
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text()
