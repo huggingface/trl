@@ -27,7 +27,7 @@ import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
 from accelerate.utils import is_peft_model, tqdm
-from datasets import Dataset, IterableDataset, concatenate_datasets
+from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
 from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader, SequentialSampler
@@ -602,6 +602,13 @@ class KTOTrainer(_BaseTrainer):
             self.kto_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
         if self.precompute_ref_log_probs:
+            if isinstance(self.train_dataset, IterableDataset) or isinstance(
+                self.eval_dataset, (IterableDataset, IterableDatasetDict)
+            ):
+                raise ValueError(
+                    "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
+                    "Dataset or set `precompute_ref_log_probs=False`."
+                )
             self.train_dataset = self._precompute_ref_logps(
                 self.train_dataset,
                 "train",
