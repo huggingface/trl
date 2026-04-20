@@ -44,6 +44,7 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import (
     extract_prompt,
+    is_conversational,
     unpair_preference_dataset,
 )
 from ...import_utils import is_liger_kernel_available
@@ -633,6 +634,20 @@ class KTOTrainer(_BaseTrainer):
                 dataset = unpair_preference_dataset(dataset, **map_kwargs)
 
             tokenizer = getattr(processing_class, "tokenizer", processing_class)
+
+            # Add EOS token if needed: non-conversational only
+            first_example = next(iter(dataset))
+            if not is_conversational(first_example):
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
+
+                def add_eos(example, eos_token):
+                    if not example["completion"].endswith(eos_token):
+                        example["completion"] = example["completion"] + eos_token
+                    return example
+
+                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": tokenizer.eos_token}, **map_kwargs)
+
             # Tokenize dataset
             dataset = dataset.map(
                 _tokenize,
