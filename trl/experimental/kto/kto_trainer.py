@@ -20,7 +20,6 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -70,7 +69,7 @@ if is_peft_available():
 
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedModel, PreTrainedTokenizer
+    from transformers import PreTrainedModel
 
 
 logger = logging.get_logger(__name__)
@@ -87,66 +86,6 @@ def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     batch["answer_input_ids"] = [batch["answer_input_ids"][-1]] + batch["answer_input_ids"][:-1]
     batch["answer_attention_mask"] = [batch["answer_attention_mask"][-1]] + batch["answer_attention_mask"][:-1]
     return batch
-
-
-def _tokenize(
-    batch: dict[str, list[Any]],
-    tokenizer: "PreTrainedTokenizer",
-) -> dict[str, list[Any]]:
-    """Tokenize a batch from a KTO specific dataset."""
-    prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
-    prompt_input_ids = prompt_tokenized["input_ids"]
-    prompt_attention_mask = prompt_tokenized["attention_mask"]
-    prompt_and_completion = [
-        prompt + completion for prompt, completion in zip(batch["prompt"], batch["completion"], strict=True)
-    ]
-    full_tokenized = tokenizer(prompt_and_completion, add_special_tokens=False)
-    full_input_ids = full_tokenized["input_ids"]
-    full_attention_mask = full_tokenized["attention_mask"]
-
-    answer_input_ids = [f[len(p) :] for f, p in zip(full_input_ids, prompt_input_ids, strict=True)]
-    answer_attention_mask = [f[len(p) :] for f, p in zip(full_attention_mask, prompt_attention_mask, strict=True)]
-
-    # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
-    full_concat_input_ids = [np.concatenate([p, a]) for p, a in zip(prompt_input_ids, answer_input_ids, strict=True)]
-    # Prepare input tokens for token by token comparison
-    full_input_ids = [np.array(f) for f in full_input_ids]
-    for full, concat in zip(full_input_ids, full_concat_input_ids, strict=True):
-        if len(full) != len(concat):
-            raise ValueError(
-                "The elements in 'full_input_ids' and 'full_concat_input_ids' must have the same pairwise length."
-            )
-
-    # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
-    # can be merged together when tokenizing prompt+answer. This could result
-    # on the last token from the prompt being different when tokenized on its own
-    # vs when done as prompt+answer.
-    response_token_ids_start_idx = [len(p) for p in prompt_input_ids]
-
-    # If tokenized prompt is different than both prompt+answer, then it means the
-    # last token has changed due to merging.
-    for idx, (p, f, r) in enumerate(zip(prompt_input_ids, full_input_ids, response_token_ids_start_idx, strict=True)):
-        if not np.array_equal(p, f[:r]):
-            response_token_ids_start_idx[idx] -= 1
-
-    prompt_input_ids = [f[:r] for f, r in zip(full_input_ids, response_token_ids_start_idx, strict=True)]
-    prompt_attention_mask = [f[:r] for f, r in zip(full_attention_mask, response_token_ids_start_idx, strict=True)]
-
-    for p, m in zip(prompt_input_ids, prompt_attention_mask, strict=True):
-        if len(p) != len(m):
-            raise ValueError("Prompt input ids and attention mask should have the same length.")
-
-    answer_input_ids = [f[r:] for f, r in zip(full_input_ids, response_token_ids_start_idx, strict=True)]
-    answer_attention_mask = [f[r:] for f, r in zip(full_attention_mask, response_token_ids_start_idx, strict=True)]
-
-    output = dict(
-        prompt_input_ids=prompt_input_ids,
-        prompt_attention_mask=prompt_attention_mask,
-        answer_input_ids=answer_input_ids,
-        answer_attention_mask=answer_attention_mask,
-    )
-
-    return output
 
 
 def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **kwargs) -> dict:
