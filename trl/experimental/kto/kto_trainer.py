@@ -688,8 +688,8 @@ class KTOTrainer(_BaseTrainer):
                 # merge the datasets
                 dataset = concatenate_datasets([dataset, kl_dataset], axis=1)
 
-            # calculate dataset desirability balance
-            if dataset_name == "train":
+            # Calculate dataset desirability balance
+            if dataset_name == "train" and isinstance(dataset, Dataset):  # IterableDataset does not support len
                 num_desirable = max(sum(dataset["label"]), 1)
                 num_undesirable = max(len(dataset["label"]) - num_desirable, 1)  # "label" is binary
 
