@@ -175,6 +175,21 @@ training_args = SFTConfig(assistant_only_loss=True)
 
 To train on completion only, use a [prompt-completion](dataset_formats#prompt-completion) dataset. By default, the trainer computes the loss on the completion tokens only, ignoring the prompt tokens. If you want to train on the full sequence, set `completion_only_loss=False` in the [`SFTConfig`].
 
+```python
+from trl import SFTConfig, SFTTrainer
+from datasets import load_dataset
+
+# Load a prompt-completion dataset; loss is computed on the completion only by default
+dataset = load_dataset("trl-lib/kto-mix-14k", split="train")
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    args=SFTConfig(completion_only_loss=True),  # True by default for prompt-completion datasets
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
 ![train_on_completion](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_completion.png)
 
 > [!TIP]

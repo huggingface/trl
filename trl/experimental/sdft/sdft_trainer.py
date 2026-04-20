@@ -218,7 +218,6 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        self.pad_token = tokenizer.pad_token
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = tokenizer.eos_token_id
         self.max_prompt_length = args.max_prompt_length
@@ -272,8 +271,7 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
+        self.model.add_model_tags(self._tag_names)
 
         # In self-distillation the teacher is always derived from the student:
         # - PEFT: base model with adapter disabled (or EMA teacher adapter when sync_ref_model=True)

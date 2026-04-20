@@ -148,10 +148,6 @@ class SelfDistillationConfig(_BaseConfig):
         default=1.0,
         metadata={"help": "Repetition penalty used during generation."},
     )
-    use_transformers_paged: bool = field(
-        default=False,
-        metadata={"help": "Reserved for paged generation support."},
-    )
     cache_implementation: str | None = field(
         default=None,
         metadata={"help": "Cache implementation used by transformers generation."},

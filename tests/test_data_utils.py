@@ -244,6 +244,29 @@ class TestPrepareMultimodalMessages:
 
         assert messages == expected
 
+    def test_prepared_image_blocks_without_new_images(self):
+        """Test that existing image payloads are preserved when no new images are provided."""
+        image = Image.new("RGB", (10, 10), color="blue")
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {"role": "assistant", "content": "It is blue."},
+        ]
+
+        messages = prepare_multimodal_messages(messages)
+
+        expected = [
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
+        ]
+
+        assert messages == expected
+
 
 @require_vision
 class TestPrepareMultimodalMessagesVLLM:
@@ -695,7 +718,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -725,7 +748,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -758,7 +781,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -796,7 +819,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -836,7 +859,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -885,7 +908,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )

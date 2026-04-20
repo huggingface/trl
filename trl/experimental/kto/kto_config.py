@@ -52,6 +52,10 @@ class KTOConfig(_BaseConfig):
             Whether to precompute the reference model log probabilities for the entire training dataset before
             training. This allows to save memory during training, as the reference model does not need to be kept in
             memory.
+        precompute_ref_batch_size (`int`, *optional*):
+            Batch size to use when precomputing reference model log probabilities. This can be set higher than the
+            training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
+            training and `per_device_eval_batch_size` for evaluation.
 
         > Parameters that control the training
 
@@ -69,10 +73,6 @@ class KTOConfig(_BaseConfig):
             Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
         undesirable_weight (`float`, *optional*, defaults to `1.0`):
             Undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
-        generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
-            during evaluation.
-
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
     > - `logging_steps`: Defaults to `10` instead of `500`.
@@ -122,6 +122,14 @@ class KTOConfig(_BaseConfig):
             "kept in memory."
         },
     )
+    precompute_ref_batch_size: int | None = field(
+        default=None,
+        metadata={
+            "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
+            "than the training batch size to speed up preprocessing. If `None`, defaults to "
+            "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
+        },
+    )
 
     # Parameters that control the training
     loss_type: str = field(
@@ -150,12 +158,5 @@ class KTOConfig(_BaseConfig):
         metadata={
             "help": "Undesirable losses are weighed by this factor to counter unequal number of desirable and "
             "undesirable pairs.",
-        },
-    )
-    generate_during_eval: bool = field(
-        default=False,
-        metadata={
-            "help": "If `True`, generates and logs completions from both the model and the reference model to W&B "
-            "during evaluation."
         },
     )

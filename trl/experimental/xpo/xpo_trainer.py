@@ -16,7 +16,6 @@ import textwrap
 from collections.abc import Callable
 from typing import Any
 
-import jinja2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -33,12 +32,11 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available
 
-from ...data_utils import is_conversational, maybe_apply_chat_template
+from ...data_utils import maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.utils import selective_log_softmax
-from ..judges import BasePairwiseJudge
 from ..online_dpo import OnlineDPOTrainer
-from ..utils import SIMPLE_CHAT_TEMPLATE, empty_cache, get_reward, truncate_right
+from ..utils import empty_cache, get_reward, truncate_right
 from .xpo_config import XPOConfig
 
 
@@ -62,8 +60,6 @@ class XPOTrainer(OnlineDPOTrainer):
         reward_funcs ([`~transformers.PreTrainedModel`]):
             The reward model to score completions with, preferably an
             [`~transformers.AutoModelForSequenceClassification`].
-        judge ([`experimental.judges.BasePairwiseJudge`]):
-            The judge to use for pairwise comparison of model completions.
         args ([`experimental.xpo.XPOConfig`]):
             The XPO config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
@@ -111,7 +107,6 @@ class XPOTrainer(OnlineDPOTrainer):
         model: PreTrainedModel | nn.Module = None,
         ref_model: PreTrainedModel | nn.Module = None,
         reward_funcs: nn.Module | None = None,
-        judge: BasePairwiseJudge | None = None,
         args: XPOConfig | None = None,
         data_collator: Callable | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
@@ -131,7 +126,6 @@ class XPOTrainer(OnlineDPOTrainer):
         super().__init__(
             model=model,
             ref_model=ref_model,
-            judge=judge,
             reward_funcs=reward_funcs,
             args=args,
             data_collator=data_collator,
@@ -165,16 +159,15 @@ class XPOTrainer(OnlineDPOTrainer):
             # Replace "contain_eos_token" by "model_contain_eos_token" and "ref_contain_eos_token"
             "val/model_contain_eos_token": [],
             "val/ref_contain_eos_token": [],
+            "objective/model_scores": [],
+            "objective/ref_scores": [],
+            "objective/scores_margin": [],
             "alpha": [],
             "beta": [],
         }
-        if self.reward_funcs is not None:
-            if len(self.reward_funcs) != 1:
-                raise ValueError("XPOTrainer only supports one reward function/model.")
-            self.reward_funcs = self.reward_funcs[0]
-            self.stats["objective/model_scores"] = []
-            self.stats["objective/ref_scores"] = []
-            self.stats["objective/scores_margin"] = []
+        if len(self.reward_funcs) != 1:
+            raise ValueError("XPOTrainer only supports one reward function/model.")
+        self.reward_funcs = self.reward_funcs[0]
 
     @property
     def alpha(self):
@@ -269,41 +262,6 @@ class XPOTrainer(OnlineDPOTrainer):
 
         return model_scores, ref_scores
 
-    def _compute_judge(self, model_data, ref_data, context_length):
-        prompts = model_data["raw"]
-        model_data_completions = self.processing_class.batch_decode(
-            model_data["input_ids"][:, context_length:], skip_special_tokens=True
-        )
-        model_data_completions = [completion.strip() for completion in model_data_completions]
-
-        ref_data_completions = self.processing_class.batch_decode(
-            ref_data["input_ids"][:, context_length:], skip_special_tokens=True
-        )
-        ref_data_completions = [completion.strip() for completion in ref_data_completions]
-
-        if is_conversational({"prompt": prompts[0]}):
-            model_data_completions = [
-                [{"role": "assistant", "content": completion}] for completion in model_data_completions
-            ]
-            environment = jinja2.Environment()
-            template = environment.from_string(SIMPLE_CHAT_TEMPLATE)
-            prompts = [template.render(messages=message) for message in prompts]
-            model_data_completions = [template.render(messages=completion) for completion in model_data_completions]
-
-            ref_data_completions = [
-                [{"role": "assistant", "content": completion}] for completion in ref_data_completions
-            ]
-            ref_data_completions = [template.render(messages=completion) for completion in ref_data_completions]
-
-        ranks_of_first_completion = self.judge.judge(
-            prompts,
-            list(zip(model_data_completions, ref_data_completions, strict=True)),
-        )
-        # convert ranks to a True/False mask:
-        # when rank == 0, it means the first completion is the best
-        # when rank == 1, it means the second completion is the best
-        return torch.tensor([rank == 0 for rank in ranks_of_first_completion], device=model_data["input_ids"].device)
-
     def _compute_logprobs(self, model, model_data, ref_data, context_length):
         def compute_logprobs_for_data(m, data):
             output = m(data["input_ids"], attention_mask=data["attention_mask"])
@@ -388,8 +346,8 @@ class XPOTrainer(OnlineDPOTrainer):
         dpo_losses,
         xpo_losses,
         context_length,
-        model_scores=None,
-        ref_scores=None,
+        model_scores,
+        ref_scores,
     ):
         # Helper function to gather and compute mean
         def gather_mean(tensor):
@@ -400,10 +358,9 @@ class XPOTrainer(OnlineDPOTrainer):
         self.stats["loss/xpo"].append(gather_mean(xpo_losses))
 
         # Log scores
-        if self.reward_funcs is not None:
-            self.stats["objective/model_scores"].append(gather_mean(model_scores))
-            self.stats["objective/ref_scores"].append(gather_mean(ref_scores))
-            self.stats["objective/scores_margin"].append(gather_mean(model_scores - ref_scores))
+        self.stats["objective/model_scores"].append(gather_mean(model_scores))
+        self.stats["objective/ref_scores"].append(gather_mean(ref_scores))
+        self.stats["objective/scores_margin"].append(gather_mean(model_scores - ref_scores))
 
         # Log logprobs
         model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
@@ -489,12 +446,8 @@ class XPOTrainer(OnlineDPOTrainer):
         model_data, ref_data = self._process_completions(model_output, ref_output, prompts)
 
         # Compute rewards
-        if self.reward_funcs is not None:
-            model_scores, ref_scores = self._compute_rewards(model_data, ref_data, context_length)
-            chosen_mask = model_scores >= ref_scores
-        else:
-            model_scores, ref_scores = None, None
-            chosen_mask = self._compute_judge(model_data, ref_data, context_length)
+        model_scores, ref_scores = self._compute_rewards(model_data, ref_data, context_length)
+        chosen_mask = model_scores >= ref_scores
 
         # Compute logprobs
         model_logprobs_model_data, model_logprobs_ref_data, ref_logprobs_ref_data, ref_logprobs_model_data = (
