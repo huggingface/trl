@@ -77,6 +77,10 @@ logger = logging.get_logger(__name__)
 RUNNING_NAME = "running.pt"
 
 
+def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
+    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
+
+
 def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     """
     Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of
@@ -684,6 +688,7 @@ class KTOTrainer(_BaseTrainer):
 
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Processing tokenized {dataset_name} KL dataset"
+                column_names = get_dataset_column_names(dataset)
                 kl_dataset = kl_dataset.map(
                     _process_tokens,
                     fn_kwargs={
@@ -691,7 +696,7 @@ class KTOTrainer(_BaseTrainer):
                         "tokenizer": tokenizer,
                         "max_length": self.max_length,
                     },
-                    remove_columns=[c for c in kl_dataset.column_names if c in dataset.column_names],
+                    remove_columns=[c for c in get_dataset_column_names(kl_dataset) if c in column_names],
                     **map_kwargs,
                 )
 
