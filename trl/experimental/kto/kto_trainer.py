@@ -624,11 +624,11 @@ class KTOTrainer(_BaseTrainer):
 
     def _prepare_dataset(
         self,
-        dataset: Dataset,
+        dataset: Dataset | IterableDataset,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         args: KTOConfig | None,
         dataset_name: str,
-    ) -> Dataset:
+    ) -> Dataset | IterableDataset:
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
