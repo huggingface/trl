@@ -2,7 +2,7 @@
 
 TRL ships a small collection of Jinja2 chat templates under [`trl/chat_templates/`](https://github.com/huggingface/trl/tree/main/trl/chat_templates). They serve two purposes:
 
-1. **Identity comparison**: detecting which model is being used (by comparing `processing_class.chat_template` against known templates) to add the appropriate response schema ([`add_response_schema`]) or swap in a training template ([`get_training_chat_template`]).
+1. **Identity comparison**: detecting which model is being used (by comparing `processing_class.chat_template` against known templates) to add the appropriate response schema (`add_response_schema`) or swap in a training template (`get_training_chat_template`).
 2. **Training patches**: modified templates that fix training-specific issues (prefix-preservation for GRPO, `&#123;% generation %&#125;` markers for SFT assistant-only loss).
 
 **Why prefix-preserving?** The GRPO tool call loop extracts tool response formatting tokens by comparing tokenizations with and without tool messages appended (`_get_tool_suffix_ids`). This requires the chat template to be *prefix-preserving*: appending messages must not change how earlier messages are rendered.
