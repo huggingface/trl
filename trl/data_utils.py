@@ -26,7 +26,8 @@ from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from transformers import PreTrainedTokenizerBase, ProcessorMixin
 
 
-DatasetType = TypeVar("DatasetType", Dataset, DatasetDict, IterableDataset, IterableDatasetDict)
+DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
+IterableDatasetType = TypeVar("IterableDatasetType", IterableDataset, IterableDatasetDict)
 
 
 def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | None = None) -> list[dict[str, Any]]:
@@ -406,7 +407,9 @@ def _unpair_row(examples: list[dict[str, list[dict[str, str]]]]) -> list[dict[st
     return new_rows
 
 
-def unpair_preference_dataset(dataset: DatasetType, **map_kwargs) -> DatasetType:
+def unpair_preference_dataset(
+    dataset: DatasetType | IterableDatasetType, **map_kwargs
+) -> DatasetType | IterableDatasetType:
     # docstyle-ignore
     """
     Unpair a preference dataset.
