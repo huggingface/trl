@@ -81,4 +81,4 @@ Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endge
 
 ## Related utilities
 
-See [Chat Template Utilities](chat_template_utils) for the helper functions (`clone_chat_template`, `is_chat_template_prefix_preserving`, `get_training_chat_template`) that operate on these templates.
+See [Chat Template Utilities](chat_template_utils) for the helper functions ([`clone_chat_template`], [`is_chat_template_prefix_preserving`], [`get_training_chat_template`]) that operate on these templates.
