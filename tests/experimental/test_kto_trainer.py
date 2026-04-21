@@ -19,7 +19,7 @@ from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.kto import KTOConfig, KTOTrainer
-from trl.experimental.kto.kto_trainer import _get_kl_dataset, _process_tokens
+from trl.experimental.kto.kto_trainer import _get_kl_dataset
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft
 
@@ -145,39 +145,26 @@ class TestKTOTrainer(TrlTestCase):
 
         # Test corruption of (prompt, completion) pairs for KL dataset.
         # _get_kl_dataset shifts answer_input_ids by one within each batch; prompt_input_ids are unchanged.
+        # Use a synthetic dataset since answer_input_ids is dropped from trainer.train_dataset after assembly.
+        synthetic = Dataset.from_dict(
+            {
+                "prompt_input_ids": [[1, 2], [3, 4], [5, 6]],
+                "prompt_attention_mask": [[1, 1], [1, 1], [1, 1]],
+                "answer_input_ids": [[10, 11], [20, 21], [30, 31]],
+                "answer_attention_mask": [[1, 1], [1, 1], [1, 1]],
+            }
+        )
         for batch_size in [2, 3]:
-            kl_dataset = trainer.train_dataset.map(_get_kl_dataset, batched=True, batch_size=batch_size)
+            rotated = synthetic.map(_get_kl_dataset, batched=True, batch_size=batch_size)
 
             # Verify that the "answer_input_ids" have been modified, meaning the new "answer_input_ids" differ
             # from the original ones. However, when the length of the dataset modulo batch_size equals 1,
             # the last batch remains unaltered. This is a rare scenario that does not impact the training
             # process, so we exclude it from testing by iterating only up to len - 1.
-            for i in range(len(kl_dataset["answer_input_ids"]) - 1):
-                assert trainer.train_dataset["prompt_input_ids"][i] == kl_dataset["prompt_input_ids"][i]
-                assert trainer.train_dataset["prompt_attention_mask"][i] == kl_dataset["prompt_attention_mask"][i]
-                assert trainer.train_dataset["answer_input_ids"][i] != kl_dataset["answer_input_ids"][i]
-
-        # Test _process_tokens directly with a synthetic tokenized dataset (exercises num_proc and prefix).
-        raw = {
-            "prompt_input_ids": [[100, 200, 300], [400, 500]],
-            "prompt_attention_mask": [[1, 1, 1], [1, 1]],
-            "answer_input_ids": [[600, 700], [800, 900, 1000]],
-            "answer_attention_mask": [[1, 1], [1, 1, 1]],
-            "label": [True, False],
-        }
-        fn_kwargs = {"prefix": "", "tokenizer": self.tokenizer, "max_length": trainer.max_length}
-        processed_dataset = Dataset.from_dict(raw).map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
-        for i in range(len(processed_dataset)):
-            assert processed_dataset[i]["label"] == raw["label"][i]
-            # completion_input_ids ends with EOS
-            assert processed_dataset[i]["completion_input_ids"][-1] == self.tokenizer.eos_token_id
-            # completion_labels: -100 for prompt, answer+EOS token IDs for the rest
-            n_prompt = len(processed_dataset[i]["prompt_input_ids"])
-            assert processed_dataset[i]["completion_labels"][:n_prompt] == [-100] * n_prompt
-            assert (
-                processed_dataset[i]["completion_labels"][n_prompt:]
-                == processed_dataset[i]["completion_input_ids"][n_prompt:]
-            )
+            for i in range(len(rotated) - 1):
+                assert synthetic["prompt_input_ids"][i] == rotated["prompt_input_ids"][i]
+                assert synthetic["prompt_attention_mask"][i] == rotated["prompt_attention_mask"][i]
+                assert synthetic["answer_input_ids"][i] != rotated["answer_input_ids"][i]
 
     def test_kto_trainer_without_providing_ref_model(self):
         training_args = KTOConfig(
