@@ -67,7 +67,7 @@ python trl/experimental/tpo/tpo.py \
     --beta 0.01 \
     --tpo_alpha 1.0 \
     --loss_type tpo-l \
-    --tpo_l_gamma 5.4 \
+    --tpo_l_gamma 0.5 \
     --output_dir Qwen3-0.6B-TPO-L \
     --no_remove_unused_columns
 ```
