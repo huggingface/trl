@@ -133,8 +133,8 @@
     title: SDPO
   - local: ssd_trainer
     title: SSD
-  - local: xpo_trainer
-    title: XPO
   - local: tpo_trainer
     title: TPO
+  - local: xpo_trainer
+    title: XPO
   title: Experimental

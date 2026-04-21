@@ -90,10 +90,11 @@ python trl/experimental/tpo/tpo.py \
 ```
 """
 
+import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import ModelConfig, ScriptArguments, get_peft_config
+from trl import ModelConfig, ScriptArguments, get_kbit_device_map, get_peft_config, get_quantization_config
 from trl.experimental.tpo import TPOConfig, TPOTrainer
 
 
@@ -144,8 +145,19 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
+    model_kwargs = dict(
+        revision=model_args.model_revision,
+        attn_implementation=model_args.attn_implementation,
+        dtype=dtype,
+    )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+
     model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
