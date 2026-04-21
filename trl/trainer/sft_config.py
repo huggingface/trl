@@ -267,7 +267,7 @@ class SFTConfig(_BaseConfig):
             "help": "Type of loss to use. Possible values are `'nll'` (negative log-likelihood, default), `'dft'` "
             "(Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), and `'chunked_nll'` (same math as "
             "`'nll'` but skips the `'lm_head'` matmul on ignored tokens and chunks the CE to reduce peak memory; not "
-            "compatible with Liger, PEFT, VLM, or `'final_logit_softcapping'`)."
+            "compatible with Liger, PEFT, or VLM)."
         },
     )
     activation_offloading: bool = field(
