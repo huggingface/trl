@@ -1419,8 +1419,8 @@ from trl.experimental.tpo import TPOConfig
 training_args = TPOConfig(
     loss_type="sigmoid",  # contrastive loss between chosen and rejected (Section 3 of the paper)
     tpo_alpha=1.0,  # weight of the NLL term on the gold response (Section 3 of the paper)
-    beta=0.01,  # β temperature (Table 2 of the paper)
-    learning_rate=5e-7,  # Table 2 of the paper
+    beta=0.01,  # β temperature (Table 6 of the paper)
+    learning_rate=5e-7,  # Table 6 of the paper
     num_train_epochs=1,
     max_length=1024,
 )
