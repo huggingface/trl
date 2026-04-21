@@ -713,6 +713,35 @@ class KTOTrainer(_BaseTrainer):
 
             # Get KL datasets if needed
             if self.calculate_KL:
+
+                def assemble_kl_fn(example):
+                    prompt_ids = example["prompt_input_ids"]  # already has BOS from tokenize_fn
+                    answer_ids = example["answer_input_ids"]  # rotated, untruncated
+
+                    # Reserve budget: BOS already in prompt_ids; EOS: always reserve a slot
+                    max_len = self.max_length
+                    if eos_token_id is not None:
+                        max_len -= 1
+
+                    # If combined sequence is too long, truncate the answer from the end
+                    if len(prompt_ids) + len(answer_ids) > max_len:
+                        answer_ids = answer_ids[: max_len - len(prompt_ids)]
+
+                    # Assemble completion = prompt + truncated answer
+                    completion_ids = prompt_ids + answer_ids
+
+                    # Add EOS, which affects only the full completion
+                    if not answer_ids or eos_token_id != answer_ids[-1]:
+                        completion_ids = completion_ids + [eos_token_id]
+
+                    completion_labels = [-100] * len(prompt_ids) + completion_ids[len(prompt_ids) :]
+
+                    return {
+                        "KL_completion_input_ids": completion_ids,
+                        "KL_completion_attention_mask": [1] * len(completion_ids),
+                        "KL_completion_labels": completion_labels,
+                    }
+
                 # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
                 # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -722,15 +751,10 @@ class KTOTrainer(_BaseTrainer):
                 )
 
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Processing tokenized {dataset_name} KL dataset"
+                    map_kwargs["desc"] = f"Assembling KL {dataset_name} dataset"
                 column_names = get_dataset_column_names(dataset)
                 kl_dataset = kl_dataset.map(
-                    _process_tokens,
-                    fn_kwargs={
-                        "prefix": "KL_",
-                        "tokenizer": tokenizer,
-                        "max_length": self.max_length,
-                    },
+                    assemble_kl_fn,
                     remove_columns=[c for c in get_dataset_column_names(kl_dataset) if c in column_names],
                     **map_kwargs,
                 )
