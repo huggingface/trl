@@ -183,6 +183,14 @@ class TestSupportsToolCalling:
         "model_id",
         [
             pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                id="gemma4",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-Glm4MoeForCausalLM",
                 id="glm4moe",
                 marks=pytest.mark.skipif(
@@ -196,6 +204,14 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
             pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", id="qwen3"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3moe"),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                id="qwen3_vl",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="Qwen3-VL was introduced in transformers-4.57.0",
+                ),
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
                 id="qwen35",
@@ -214,20 +230,34 @@ class TestSupportsToolCalling:
         "model_id",
         [
             # No chat template
+            pytest.param("trl-internal-testing/tiny-BartModel", id="bart"),
             pytest.param("trl-internal-testing/tiny-BloomForCausalLM", id="bloom"),
             pytest.param("trl-internal-testing/tiny-GPT2LMHeadModel", id="gpt2"),
             pytest.param("trl-internal-testing/tiny-GPTNeoXForCausalLM", id="gptneox"),
+            pytest.param("trl-internal-testing/tiny-GptNeoXForSequenceClassification", id="gptneox-seq"),
             pytest.param("trl-internal-testing/tiny-OPTForCausalLM", id="opt"),
+            pytest.param("trl-internal-testing/tiny-T5ForConditionalGeneration", id="t5"),
             # TemplateError: rejects tool role sequence
             pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
             pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", id="falconmamba"),
             pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
             pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
-            # Silently ignores tool messages
+            pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3"),
+            pytest.param("trl-internal-testing/tiny-Idefics2ForConditionalGeneration", id="idefics2"),
+            pytest.param("trl-internal-testing/tiny-Idefics3ForConditionalGeneration", id="idefics3"),
+            pytest.param("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava_next"),
+            pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.1", id="mistral0.1"),
+            pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", id="mistral0.2"),
+            pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm"),
+            # Silently drops both tool_calls and tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
-            pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM", id="phi3"),
-            # Silently drops assistant tool_calls (basic Llama 3 template only reads message['content'])
+            pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
+            pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
+            pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
+            # Renders tool message content as plain text but drops assistant tool_calls
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+            pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl"),
+            pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5_vl"),
         ],
     )
     def test_does_not_support_tool_calling(self, model_id):

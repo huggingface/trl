@@ -7,6 +7,8 @@
     title: Quickstart
   title: Getting started
 - sections:
+  - local: chat_templates
+    title: Chat Templates
   - local: dataset_formats
     title: Dataset Formats
   - local: paper_index
