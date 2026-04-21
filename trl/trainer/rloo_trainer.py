@@ -330,10 +330,10 @@ class RLOOTrainer(_BaseTrainer):
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
 
-        self._has_async_reward_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
-        if self._has_async_reward_funcs:
-            self.async_loop_thread, self.async_loop, self.async_loop_ready_event = (
-                start_event_loop_in_daemon(name="RLOOTrainer-AsyncRewardLoop")
+        self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
+        if self._has_async_funcs:
+            self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
+                name="RLOOTrainer-AsyncRewardLoop"
             )
             # wait until the event loop is running in the daemon thread
             self.async_loop_ready_event.wait()
