@@ -2484,6 +2484,21 @@ class TestChunkedCrossEntropyLoss:
         with pytest.raises(ValueError, match="Exactly one"):
             _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels, shift_labels=labels)
 
+    def test_lm_head_bias(self):
+        """When `lm_head_bias` is provided, chunked loss matches `F.linear(h, w, b)` followed by CE."""
+        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
+        torch.manual_seed(1)
+        bias = torch.randn(self.V, dtype=torch.float32)
+
+        loss_c, *_ = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels, lm_head_bias=bias)
+
+        # Reference: full F.linear with bias, then CE over non-ignored shifted positions.
+        logits_ref = F.linear(hidden[..., :-1, :], weight, bias).reshape(-1, self.V)
+        labels_ref = labels[..., 1:].reshape(-1)
+        valid = labels_ref != -100
+        loss_r = F.cross_entropy(logits_ref[valid], labels_ref[valid], reduction="mean")
+        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
+
 
 @require_torch_accelerator
 class TestPatchChunkedCELMHead:

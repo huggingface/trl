@@ -94,6 +94,7 @@ def _chunked_cross_entropy_loss(
     num_items_in_batch: torch.Tensor | int | None = None,
     logit_scale: float = 1.0,
     final_logit_softcapping: float | None = None,
+    lm_head_bias: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Memory-efficient next-token cross-entropy over hidden states and an `lm_head` weight.
@@ -131,6 +132,8 @@ def _chunked_cross_entropy_loss(
         final_logit_softcapping (`float`, *optional*):
             If set, applies `softcap * tanh(logits / softcap)` to each chunk's logits before the cross-entropy,
             matching the `final_logit_softcapping` behavior of Gemma-style models. Applied after `logit_scale`.
+        lm_head_bias (`torch.Tensor`, *optional*):
+            Bias of the `lm_head` linear layer, shape `(V,)`. Added to each chunk's logits when provided.
 
     Returns:
         `tuple[torch.Tensor, torch.Tensor, torch.Tensor]`: scalar loss, scalar token accuracy, and scalar mean Shannon
@@ -162,8 +165,10 @@ def _chunked_cross_entropy_loss(
 
     loss = hidden.new_zeros((), dtype=torch.float32)
 
-    def _chunk(h, w, lbl):
+    def _chunk(h, w, b, lbl):
         logits = h.float() @ w.float().t()
+        if b is not None:
+            logits = logits + b.float()
         if logit_scale != 1.0:
             logits = logits * logit_scale
         if final_logit_softcapping is not None:
@@ -178,7 +183,7 @@ def _chunked_cross_entropy_loss(
         h_chunk = hidden[start : start + chunk_size]
         lbl_chunk = labels[start : start + chunk_size]
         chunk_loss, chunk_correct, chunk_entropy = torch.utils.checkpoint.checkpoint(
-            _chunk, h_chunk, lm_head_weight, lbl_chunk, use_reentrant=False
+            _chunk, h_chunk, lm_head_weight, lm_head_bias, lbl_chunk, use_reentrant=False
         )
         loss = loss + chunk_loss
         correct = correct + chunk_correct
@@ -207,9 +212,9 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
     generation and labels-free evaluation preserve any per-model logits post-processing (e.g. `logit_scale`,
     `final_logit_softcapping`).
 
-    For MoE models with `output_router_logits=True`, the load-balancing auxiliary loss is added to the main loss
-    with the same coefficient (`router_aux_loss_coef`) and formula (`load_balancing_loss_func`) used by the model's
-    own forward, so the chunked path remains numerically equivalent to the reference.
+    For MoE models with `output_router_logits=True`, the load-balancing auxiliary loss is added to the main loss with
+    the same coefficient (`router_aux_loss_coef`) and formula (`load_balancing_loss_func`) used by the model's own
+    forward, so the chunked path remains numerically equivalent to the reference.
 
     Not supported yet: VLM / multimodal models whose forward injects visual tokens outside the base decoder, and
     PEFT-wrapped models.
@@ -255,6 +260,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
             num_items_in_batch=num_items_in_batch,
             logit_scale=logit_scale,
             final_logit_softcapping=final_logit_softcapping,
+            lm_head_bias=self.lm_head.bias,
         )
 
         aux_loss = None
