@@ -1772,7 +1772,7 @@ Expected dataset columns:
 - `control_prompt`
 - `y_revised`
 
-Phase 2 — **On-Policy Self-Distillation** — distills the reviser back into the generator. At each training step, the student generates a response `y_init` on-policy. The teacher context is the on-policy generation `y_init`, the problem `x`, and the verifier-selected `P_r`. Supervision follows standard KL-based self-distillation. Defaults implement the paper's "iterative self-evolution" (teacher hard-resynced with the student every `teacher_sync_steps`). Implemented as [`experimental.sdzero.SDZeroTrainer`].
+Phase 2 — **On-Policy Self-Distillation** — distills the reviser back into the generator. At each training step, the student generates a response `y_init` on-policy. The teacher context is the on-policy generation `y_init`, the problem `x`, and the verifier-selected `P_r`. By default, [`experimental.sdzero.SDZeroTrainer`] matches the paper's frozen SRT teacher and full-vocabulary `D_KL(student || teacher)` objective.
 
 ```python
 from datasets import Dataset
