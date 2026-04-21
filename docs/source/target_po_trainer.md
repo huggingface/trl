@@ -4,13 +4,18 @@
 
 [`TargetPOTrainer`] implements Target Policy Optimization (TPO), an online post-training algorithm from [Target Policy Optimization](https://huggingface.co/papers/2604.06159).
 
-TargetPO reuses the [`GRPOTrainer`] rollout and reward stack, but trains with a sequence-level cross-entropy target:
+[`TargetPOTrainer`] keeps an aligned copy of the online rollout and reward flow used by [`GRPOTrainer`], but trains
+with a sequence-level cross-entropy target:
 
 $$
 q_i = \frac{p_i^{\text{old}} \exp(u_i / \eta)}{\sum_j p_j^{\text{old}} \exp(u_j / \eta)}
 $$
 
-Here \\(p_i^{\text{old}}\\) is the rollout policy probability of completion \\(i\\) in the prompt group, \\(u_i\\) is the normalized reward, and \\(\eta\\) is `tpo_target_temperature`.
+Here \\(p_i^{\text{old}}\\) is a *length-normalized* proxy for the rollout policy probability of completion \\(i\\) in
+the prompt group (per-token mean log-probability by default, controlled by `tpo_length_normalize_logps`), \\(u_i\\) is
+the population-whitened group reward, and \\(\eta\\) is `tpo_target_temperature`. Length-normalization prevents the
+old-policy term from dominating the target when completions in a group have different lengths; set
+`tpo_length_normalize_logps=False` to recover the paper's literal sequence-probability formulation.
 
 ## Quick Start
 

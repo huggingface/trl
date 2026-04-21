@@ -118,7 +118,8 @@ class TestTPOLoss:
         expected = torch.cat([expected_first_group, expected_second_group])
         torch.testing.assert_close(targets, expected)
 
-    def test_tpo_loss_gradient_matches_policy_minus_target(self):
+    @pytest.mark.parametrize("length_normalize", [True, False])
+    def test_tpo_loss_gradient_matches_policy_minus_target(self, length_normalize):
         trainer = object.__new__(GRPOTrainer)
         trainer.loss_type = "tpo"
         trainer.off_policy_mask_threshold = None
@@ -127,6 +128,7 @@ class TestTPOLoss:
         trainer.num_generations = 2
         trainer.num_generations_eval = 2
         trainer.current_gradient_accumulation_steps = 1
+        trainer.tpo_length_normalize_logps = length_normalize
         trainer.model = SimpleNamespace(training=True)
         trainer.accelerator = SimpleNamespace(
             gather=lambda tensor: tensor,
@@ -157,7 +159,11 @@ class TestTPOLoss:
         loss = GRPOTrainer._compute_loss(trainer, model=None, inputs=inputs)
         loss.backward()
 
-        sequence_logps = per_token_logps.detach().sum(dim=-1)
+        completion_mask = inputs["completion_mask"].to(per_token_logps.dtype)
+        lengths = completion_mask.sum(dim=-1).clamp(min=1)
+        summed = (per_token_logps.detach() * completion_mask).sum(dim=-1)
+        sequence_logps = summed / lengths if length_normalize else summed
         expected_sequence_grad = torch.softmax(sequence_logps, dim=0) - tpo_targets
-        expected_grad = expected_sequence_grad.unsqueeze(1).expand_as(per_token_logps)
+        per_token_scale = (1.0 / lengths) if length_normalize else torch.ones_like(lengths)
+        expected_grad = (expected_sequence_grad * per_token_scale).unsqueeze(1) * completion_mask
         torch.testing.assert_close(per_token_logps.grad, expected_grad)

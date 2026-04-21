@@ -262,6 +262,11 @@ class GRPOConfig(_BaseConfig):
         tpo_target_temperature (`float`, *optional*, defaults to `1.0`):
             Temperature used to build the Target Policy Optimization target distribution when `loss_type="tpo"`.
             Lower values make the target more concentrated on high-scoring completions.
+        tpo_length_normalize_logps (`bool`, *optional*, defaults to `True`):
+            Whether to length-normalize sequence log-probabilities (per-token mean instead of sum) when building
+            the TPO target and computing the TPO loss. Recommended for real-length generations, because raw sum
+            sequence-logps vary over orders of magnitude across a group and make the old-policy term dominate the
+            target. Set to `False` to reproduce the paper's literal `p_i^old` formulation.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -755,6 +760,17 @@ class GRPOConfig(_BaseConfig):
         metadata={
             "help": "Temperature used to build the Target Policy Optimization target distribution when "
             "`loss_type='tpo'`. Lower values make the target more concentrated on high-scoring completions."
+        },
+    )
+    tpo_length_normalize_logps: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to length-normalize sequence log-probabilities (use per-token mean instead of sum) "
+            "when building the TPO target distribution and computing the TPO loss. Without this, sequences of "
+            "different lengths have log-probabilities spanning orders of magnitude, causing the old-policy term "
+            "in `q_i ∝ p_i^old * exp(u_i / eta)` to dominate and collapse the target to ~one-hot on the "
+            "highest-old-logp completion. Set to `False` to reproduce the paper's literal sequence-probability "
+            "formulation."
         },
     )
     mask_truncated_completions: bool = field(

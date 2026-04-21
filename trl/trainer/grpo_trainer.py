@@ -559,6 +559,7 @@ class GRPOTrainer(_BaseTrainer):
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.tpo_target_temperature = args.tpo_target_temperature
+        self.tpo_length_normalize_logps = args.tpo_length_normalize_logps
         self.multi_objective_aggregation = args.multi_objective_aggregation
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
@@ -2182,7 +2183,12 @@ class GRPOTrainer(_BaseTrainer):
             if old_per_token_logps is None:
                 raise RuntimeError("TPO requires rollout-time log probabilities to build the target distribution.")
             loss_mask = completion_mask if tool_mask is None else completion_mask * tool_mask
+            # Length-normalize sequence logps so the target distribution isn't dominated by length variance
+            # (without this, log_softmax(old_sequence_logps) collapses to ~one-hot on the longest/most-likely
+            # completion, and rewards can't compete).
             old_sequence_logps = (old_per_token_logps * loss_mask).sum(dim=-1)
+            if self.tpo_length_normalize_logps:
+                old_sequence_logps = old_sequence_logps / loss_mask.sum(dim=-1).clamp(min=1)
             all_process_old_sequence_logps = gather(old_sequence_logps)
             tpo_scores = self.get_tpo_scores(rewards, num_generations)
             all_process_tpo_targets = self.get_tpo_targets(
@@ -2533,7 +2539,10 @@ class GRPOTrainer(_BaseTrainer):
 
             mode = "train" if self.model.training else "eval"
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+            # Length-normalized sequence logp (see _generate_and_score_completions for why).
             sequence_logps = (per_token_logps * mask).sum(dim=-1)
+            if self.tpo_length_normalize_logps:
+                sequence_logps = sequence_logps / mask.sum(dim=-1).clamp(min=1)
             all_sequence_logps = self._gather_tensor_with_grad(sequence_logps)
             all_logps = torch.log_softmax(all_sequence_logps.view(-1, num_generations), dim=1).view(-1)
             process_slice = slice(
