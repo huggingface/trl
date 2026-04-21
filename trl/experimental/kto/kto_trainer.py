@@ -58,7 +58,7 @@ from ...trainer.utils import (
     selective_log_softmax,
     use_adapter,
 )
-from ..utils import DPODataCollatorWithPadding, peft_module_casting_to_bf16
+from ..utils import peft_module_casting_to_bf16
 from .kto_config import KTOConfig
 
 
@@ -162,8 +162,8 @@ class KTOTrainer(_BaseTrainer):
             `tokenizer.eos_token` will be used as the default.
         data_collator ([`~transformers.DataCollator`], *optional*):
             The data collator to use for training. If None is specified, the default data collator
-            ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
-            maximum length of the sequences in the batch, given a dataset of paired sequences.
+            ([`~experimental.kto.kto_trainer.DataCollatorForKTO`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be
             used.
@@ -342,7 +342,7 @@ class KTOTrainer(_BaseTrainer):
 
         if args.max_length is None:
             logger.warning(
-                "When using DPODataCollatorWithPadding, you should set `max_length` in the KTOTrainer's init"
+                "When using DataCollatorForKTO, you should set `max_length` in the KTOTrainer's init"
                 " it will be set to `512` by default, but you should do it yourself in the future.",
             )
             max_length = 512
@@ -350,7 +350,7 @@ class KTOTrainer(_BaseTrainer):
             max_length = args.max_length
 
         if data_collator is None:
-            data_collator = DPODataCollatorWithPadding(
+            data_collator = DataCollatorForKTO(
                 pad_token_id=tokenizer.pad_token_id,
             )
 
@@ -358,7 +358,7 @@ class KTOTrainer(_BaseTrainer):
                 args.remove_unused_columns = False
                 # warn users
                 logger.warning(
-                    "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your KTOConfig"
+                    "When using DataCollatorForKTO, you should set `remove_unused_columns=False` in your KTOConfig"
                     " we have set it for you, but you should do it yourself in the future.",
                 )
 
