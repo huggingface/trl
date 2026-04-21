@@ -201,14 +201,16 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
     matmul on positions with `labels == -100`, and computes the cross-entropy in chunks of `chunk_size` valid tokens.
     It returns a [`_ChunkedCELMHeadOutput`] with `loss` set, `logits` set to `None`, and `token_accuracy` / `entropy`
     fields set to the mean values over non-ignored tokens. Also accepts pre-shifted `shift_labels` in place of
-    `labels`, for the context / sequence parallelism path. When both are `None`, the original `lm_head` path is used so
-    generation / evaluation without labels keeps working.
+    `labels`, for the context / sequence parallelism path. When both are `None`, the original forward is invoked so
+    generation and labels-free evaluation preserve any per-model logits post-processing (e.g. `logit_scale`,
+    `final_logit_softcapping`).
 
     Not supported yet: VLM / multimodal models whose forward injects visual tokens outside the base decoder, and
     PEFT-wrapped models.
     """
     final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
     logit_scale = getattr(model.config, "logit_scale", 1.0)
+    original_forward = model.forward
 
     def _chunked_ce_forward(
         self: torch.nn.Module,
@@ -219,20 +221,17 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
         shift_labels: torch.Tensor | None = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
+        # Without labels, fall back to the original forward so generation and labels-free evaluation
+        # preserve any per-model logits post-processing (e.g. Cohere `logit_scale`, Gemma
+        # `final_logit_softcapping`, `logits_to_keep` slicing).
+        if labels is None and shift_labels is None:
+            return original_forward(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+
         kwargs.pop("use_cache", None)
         outputs: BaseModelOutputWithPast = self.model(
             input_ids=input_ids, attention_mask=attention_mask, use_cache=False, **kwargs
         )
         hidden_states = outputs.last_hidden_state
-
-        if labels is None and shift_labels is None:
-            return CausalLMOutputWithPast(
-                loss=None,
-                logits=self.lm_head(hidden_states),
-                past_key_values=outputs.past_key_values,
-                hidden_states=outputs.hidden_states,
-                attentions=outputs.attentions,
-            )
 
         loss, token_accuracy, entropy = _chunked_cross_entropy_loss(
             hidden_states,

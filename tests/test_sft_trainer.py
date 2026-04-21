@@ -2549,3 +2549,13 @@ class TestPatchChunkedCELMHead:
             out = chunked_model(input_ids=input_ids)
         assert out.logits is not None
         assert out.logits.shape[-1] == chunked_model.config.vocab_size
+
+    def test_forward_without_labels_matches_reference(self):
+        """labels=None logits must match the unpatched model, including per-model post-processing
+        (`final_logit_softcapping`, `logit_scale`, ...). This is what makes `.generate()` safe to call on a patched
+        model."""
+        ref_model, chunked_model, input_ids, *_ = self._setup("trl-internal-testing/tiny-CohereForCausalLM")
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids)
+            out = chunked_model(input_ids=input_ids)
+        torch.testing.assert_close(out.logits, ref_out.logits, atol=1e-5, rtol=1e-5)
