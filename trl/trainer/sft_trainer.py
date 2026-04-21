@@ -86,8 +86,9 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
 def _chunked_cross_entropy_loss(
     hidden_states: torch.Tensor,
     lm_head_weight: torch.Tensor,
-    labels: torch.Tensor,
     chunk_size: int,
+    labels: torch.Tensor | None = None,
+    shift_labels: torch.Tensor | None = None,
     num_items_in_batch: torch.Tensor | int | None = None,
     logit_scale: float = 1.0,
     final_logit_softcapping: float | None = None,
@@ -95,21 +96,29 @@ def _chunked_cross_entropy_loss(
     """
     Memory-efficient next-token cross-entropy over hidden states and an `lm_head` weight.
 
-    The full `lm_head` projection is never materialized. Positions where `labels == -100` are dropped before the
+    The full `lm_head` projection is never materialized. Positions where labels equal `-100` are dropped before the
     matmul, and the remaining tokens are processed in chunks of `chunk_size`. Each chunk's `[chunk_size, vocab_size]`
     logits tensor is kept alive only during its own forward/backward pass via gradient checkpointing, so peak
-    activation memory is `chunk_size * vocab_size` instead of `N_valid * vocab_size`.
+    logits-activation memory is `chunk_size * vocab_size` instead of `batch_size * seq_len * vocab_size`.
+
+    Exactly one of `labels` or `shift_labels` must be provided. Passing `labels` is the standard path and triggers the
+    internal `labels[..., 1:]` / `hidden_states[..., :-1, :]` shift. Passing `shift_labels` skips the shift and assumes
+    the caller has already aligned labels with hidden states — this is the contract used under context / sequence
+    parallelism, where labels are shifted before being sharded.
 
     Args:
         hidden_states (`torch.Tensor`):
             Base decoder output of shape `(B, S, H)`, i.e. before the `lm_head` projection.
         lm_head_weight (`torch.Tensor`):
             Weight of the `lm_head` linear layer, shape `(V, H)`.
-        labels (`torch.Tensor`):
-            Labels of shape `(B, S)`. Positions equal to `-100` are excluded from both the `lm_head` matmul and the
-            loss.
         chunk_size (`int`):
             Number of valid tokens processed per chunk. Peak memory scales linearly with this.
+        labels (`torch.Tensor`, *optional*):
+            Labels of shape `(B, S)`. Positions equal to `-100` are excluded from both the `lm_head` matmul and the
+            loss. Mutually exclusive with `shift_labels`.
+        shift_labels (`torch.Tensor`, *optional*):
+            Pre-shifted labels of shape `(B, S)`, aligned with `hidden_states` (position `i` predicts
+            `shift_labels[i]`). Mutually exclusive with `labels`.
         num_items_in_batch (`torch.Tensor`, `int` or `None`, *optional*):
             Total number of valid tokens across the global batch, as plumbed by [`~transformers.Trainer`]. When
             provided, the loss is reduced as `sum / num_items_in_batch`, matching the gradient-accumulation-correct
@@ -126,8 +135,15 @@ def _chunked_cross_entropy_loss(
         entropy (in nats) — all taken over non-ignored tokens in the local batch. When there are no valid tokens, all
         three are `0.0`.
     """
-    hidden = hidden_states[..., :-1, :].reshape(-1, hidden_states.size(-1))
-    labels = labels[..., 1:].reshape(-1)
+    if (labels is None) == (shift_labels is None):
+        raise ValueError("Exactly one of `labels` or `shift_labels` must be provided.")
+
+    if shift_labels is not None:
+        hidden = hidden_states.reshape(-1, hidden_states.size(-1))
+        labels = shift_labels.reshape(-1)
+    else:
+        hidden = hidden_states[..., :-1, :].reshape(-1, hidden_states.size(-1))
+        labels = labels[..., 1:].reshape(-1)
 
     valid = labels != -100
     hidden = hidden[valid]
@@ -184,8 +200,9 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
     The patched forward calls the base decoder directly (`model.model`) to obtain hidden states, skips the `lm_head`
     matmul on positions with `labels == -100`, and computes the cross-entropy in chunks of `chunk_size` valid tokens.
     It returns a [`_ChunkedCELMHeadOutput`] with `loss` set, `logits` set to `None`, and `token_accuracy` / `entropy`
-    fields set to the mean values over non-ignored tokens. When `labels` is `None`, the original `lm_head` path is used
-    so generation / evaluation without labels keeps working.
+    fields set to the mean values over non-ignored tokens. Also accepts pre-shifted `shift_labels` in place of
+    `labels`, for the context / sequence parallelism path. When both are `None`, the original `lm_head` path is used so
+    generation / evaluation without labels keeps working.
 
     Not supported yet: VLM / multimodal models whose forward injects visual tokens outside the base decoder, and
     PEFT-wrapped models.
@@ -199,6 +216,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
         attention_mask: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
         num_items_in_batch: torch.Tensor | int | None = None,
+        shift_labels: torch.Tensor | None = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         kwargs.pop("use_cache", None)
@@ -207,7 +225,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
         )
         hidden_states = outputs.last_hidden_state
 
-        if labels is None:
+        if labels is None and shift_labels is None:
             return CausalLMOutputWithPast(
                 loss=None,
                 logits=self.lm_head(hidden_states),
@@ -217,10 +235,11 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
             )
 
         loss, token_accuracy, entropy = _chunked_cross_entropy_loss(
-            hidden_states=hidden_states,
-            lm_head_weight=self.lm_head.weight,
+            hidden_states,
+            self.lm_head.weight,
+            chunk_size,
             labels=labels,
-            chunk_size=chunk_size,
+            shift_labels=shift_labels,
             num_items_in_batch=num_items_in_batch,
             logit_scale=logit_scale,
             final_logit_softcapping=final_logit_softcapping,

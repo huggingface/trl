@@ -2400,7 +2400,7 @@ class TestChunkedCrossEntropyLoss:
     def test_forward_matches_cross_entropy(self):
         """With no ignored tokens, chunked loss equals standard mean cross-entropy."""
         hidden, weight, labels = self._inputs()
-        loss_c, acc_c, ent_c = _chunked_cross_entropy_loss(hidden, weight, labels, chunk_size=self.CHUNK_SIZE)
+        loss_c, acc_c, ent_c = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels)
         loss_r, acc_r, ent_r = self._reference(hidden, weight, labels)
         torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(acc_c, acc_r, atol=1e-5, rtol=1e-5)
@@ -2409,7 +2409,7 @@ class TestChunkedCrossEntropyLoss:
     def test_forward_ignore_index(self):
         """Ignored labels are excluded from loss, accuracy and entropy (matches F.cross_entropy)."""
         hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
-        loss_c, acc_c, ent_c = _chunked_cross_entropy_loss(hidden, weight, labels, chunk_size=self.CHUNK_SIZE)
+        loss_c, acc_c, ent_c = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels)
         loss_r, acc_r, ent_r = self._reference(hidden, weight, labels)
         torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(acc_c, acc_r, atol=1e-5, rtol=1e-5)
@@ -2419,9 +2419,7 @@ class TestChunkedCrossEntropyLoss:
         """When num_items_in_batch is provided, loss is sum / num_items_in_batch."""
         hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
         num_items = 5  # arbitrary global denominator, != local valid count
-        loss_c, *_ = _chunked_cross_entropy_loss(
-            hidden, weight, labels, chunk_size=self.CHUNK_SIZE, num_items_in_batch=num_items
-        )
+        loss_c, *_ = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels, num_items_in_batch=num_items)
         loss_r, *_ = self._reference(hidden, weight, labels, num_items_in_batch=num_items)
         torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
 
@@ -2430,11 +2428,9 @@ class TestChunkedCrossEntropyLoss:
         hidden, weight, labels = self._inputs()
         num_items_tensor = torch.tensor(7, dtype=torch.float32)
         loss_t, *_ = _chunked_cross_entropy_loss(
-            hidden, weight, labels, chunk_size=self.CHUNK_SIZE, num_items_in_batch=num_items_tensor
+            hidden, weight, self.CHUNK_SIZE, labels, num_items_in_batch=num_items_tensor
         )
-        loss_i, *_ = _chunked_cross_entropy_loss(
-            hidden, weight, labels, chunk_size=self.CHUNK_SIZE, num_items_in_batch=7
-        )
+        loss_i, *_ = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels, num_items_in_batch=7)
         torch.testing.assert_close(loss_t, loss_i, atol=1e-6, rtol=1e-6)
 
     def test_backward_matches_reference(self):
@@ -2443,7 +2439,7 @@ class TestChunkedCrossEntropyLoss:
         hidden_r = hidden_c.detach().clone().requires_grad_(True)
         weight_r = weight_c.detach().clone().requires_grad_(True)
 
-        loss_c, *_ = _chunked_cross_entropy_loss(hidden_c, weight_c, labels, chunk_size=self.CHUNK_SIZE)
+        loss_c, *_ = _chunked_cross_entropy_loss(hidden_c, weight_c, self.CHUNK_SIZE, labels)
         loss_c.backward()
 
         loss_r, *_ = self._reference(hidden_r, weight_r, labels)
@@ -2456,7 +2452,7 @@ class TestChunkedCrossEntropyLoss:
         """If every label is ignored, loss/acc/entropy are zero and backward still works."""
         hidden, weight, labels = self._inputs(requires_grad=True)
         labels[:] = -100
-        loss, acc, ent = _chunked_cross_entropy_loss(hidden, weight, labels, chunk_size=self.CHUNK_SIZE)
+        loss, acc, ent = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels)
         assert loss.item() == 0.0
         assert acc.item() == 0.0
         assert ent.item() == 0.0
@@ -2468,6 +2464,25 @@ class TestChunkedCrossEntropyLoss:
         loss.backward()
         assert hidden.grad is not None and hidden.grad.abs().sum().item() == 0.0
         assert weight.grad is not None and weight.grad.abs().sum().item() == 0.0
+
+    def test_shift_labels_matches_labels(self):
+        """`shift_labels` path (CP/SP) must match the default `labels` path after external shifting."""
+        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
+        loss_l, acc_l, ent_l = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels)
+        # Mimic what transformers does under CP/SP: pad labels with -100, then shift.
+        shift_labels = F.pad(labels, (0, 1), value=-100)[..., 1:].contiguous()
+        loss_s, acc_s, ent_s = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, shift_labels=shift_labels)
+        torch.testing.assert_close(loss_s, loss_l, atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(acc_s, acc_l, atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(ent_s, ent_l, atol=1e-6, rtol=1e-6)
+
+    def test_requires_labels_or_shift_labels(self):
+        """Must provide exactly one of `labels` or `shift_labels`."""
+        hidden, weight, labels = self._inputs()
+        with pytest.raises(ValueError, match="Exactly one"):
+            _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE)
+        with pytest.raises(ValueError, match="Exactly one"):
+            _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels, shift_labels=labels)
 
 
 @require_torch_accelerator
