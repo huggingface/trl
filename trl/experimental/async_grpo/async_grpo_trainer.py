@@ -14,6 +14,7 @@
 
 
 import math
+import os
 import queue
 import textwrap
 import time
@@ -60,6 +61,7 @@ class RolloutWorkerProtocol(Protocol):
     def pause(self) -> None: ...
     def resume(self) -> None: ...
     def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None: ...
+    def reload_lora(self, adapter_path: str, lora_name: str) -> None: ...
     def update_model_version(self, version: int) -> None: ...
 
 
@@ -291,6 +293,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model_name = model
         model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.float32)
 
+        if self.args.use_lora:
+            lora_count = 0
+            for name, param in model.named_parameters():
+                param.requires_grad = "lora_" in name
+                if param.requires_grad:
+                    lora_count += 1
+            if lora_count == 0:
+                raise ValueError(
+                    "use_lora=True but no LoRA parameters found in model. "
+                    "Ensure the model path contains adapter_config.json and adapter weights."
+                )
+            logger.info(f"Enabled gradients on {lora_count} LoRA parameter tensors")
+
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
@@ -354,15 +369,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
                 self.rollout_worker = rollout_worker
             else:
-                # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
-                # DTensor.shape returns the global shape without triggering any all-gather.
+                # NCCL weight transfer needs full metadata; LoRA mode skips this entirely.
                 weight_names, weight_dtype_names, weight_shapes = [], [], []
-                for name, param in model.named_parameters():
-                    # DDP/FSDP1 wrapping, avoids vllm module not exist error
-                    name = name.removeprefix("module.")
-                    weight_names.append(name)
-                    weight_dtype_names.append(str(param.dtype).split(".")[-1])
-                    weight_shapes.append(list(param.shape))
+                if not self.args.use_lora:
+                    for name, param in model.named_parameters():
+                        name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+                        weight_names.append(name)
+                        weight_dtype_names.append(str(param.dtype).split(".")[-1])
+                        weight_shapes.append(list(param.shape))
+
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=model_name,
                     dataset=train_dataset,
@@ -384,6 +399,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     weight_names=weight_names,
                     weight_dtype_names=weight_dtype_names,
                     weight_shapes=weight_shapes,
+                    use_lora=self.args.use_lora,
+                    lora_name=self.args.lora_name,
                 )
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
@@ -579,6 +596,48 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
     def _sync_weight(self):
         t0 = time.time()
+
+        if self.args.use_lora:
+            self._sync_weight_lora(t0)
+        else:
+            self._sync_weight_nccl(t0)
+
+        weight_sync_time_s = time.time() - t0
+        self._metrics["train"]["weight_sync_time_s"].append(weight_sync_time_s)
+        logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
+
+    def _sync_weight_lora(self, t0: float):
+        """LoRA sync: save adapter to disk, then tell vLLM to hot-reload it."""
+        adapter_path = self.args.lora_adapter_path
+        lora_name = self.args.lora_name
+
+        # Pause vLLM FIRST so no requests trigger lazy LoRA loading mid-write
+        if self.accelerator.is_main_process and self.rollout_worker:
+            self.rollout_worker.pause()
+
+        self.accelerator.wait_for_everyone()
+
+        # All ranks must call save_pretrained so that FSDP2 DTensor full_tensor() collectives
+        # (which are all-gathers) don't deadlock. Only rank 0 actually writes files to disk.
+        unwrapped = self.accelerator.unwrap_model(self.model)
+        if self.accelerator.is_main_process:
+            logger.info(f"Weight sync (LoRA): saving adapter to {adapter_path}...")
+        unwrapped.save_pretrained(adapter_path, is_main_process=self.accelerator.is_main_process)
+        if self.accelerator.is_main_process:
+            os.sync()
+            t_save = time.time()
+            logger.info(f"Weight sync (LoRA): save took {t_save - t0:.1f}s")
+
+        self.accelerator.wait_for_everyone()
+
+        if self.accelerator.is_main_process and self.rollout_worker:
+            self.rollout_worker.reload_lora(adapter_path, lora_name)
+            self.rollout_worker.resume()
+            self.model_version += 1
+            self.rollout_worker.update_model_version(self.model_version)
+
+    def _sync_weight_nccl(self, t0: float):
+        """Original NCCL path: stream all weights to vLLM."""
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process and self.rollout_worker:
             self.rollout_worker.pause()
@@ -604,9 +663,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.rollout_worker.resume()
             self.model_version += 1
             self.rollout_worker.update_model_version(self.model_version)
-        weight_sync_time_s = time.time() - t0
-        self._metrics["train"]["weight_sync_time_s"].append(weight_sync_time_s)
-        logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
 
     def _inner_training_loop(self, *args, **kwargs):
         # Start the rollout worker here (not in __init__) so that checkpoint loading in Trainer.train()

@@ -305,6 +305,40 @@ qwen3_5_schema = {
     },
 }
 
+gemma4_schema = {
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "thinking": {"type": "string"},
+        "content": {"type": "string"},
+        "tool_calls": {
+            "x-regex-iterator": r"<\|tool_call>(.*?)<tool_call\|>",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "x-regex": r"call\:(?P<name>\w+)(?P<arguments>\{.*\})",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                            },
+                            "arguments": {
+                                "type": "object",
+                                "x-parser": "gemma4-tool-call",
+                                "additionalProperties": {},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+    "x-regex": r"(\<\|channel\>thought\n(?P<thinking>.*?)\<channel\|\>)?(?P<content>(?:(?!\<\|tool_call\>).)+)?(?P<tool_calls>\<\|tool_call\>.*\<tool_call\|\>)?",
+}
+
 
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
 
@@ -327,6 +361,8 @@ qwen3_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl.jinja").read_text()
 qwen3_5_chat_template_2b_and_below = (_CHAT_TEMPLATES_DIR / "qwen3_5_2b_and_below.jinja").read_text()
 
 qwen3_5_chat_template_4b_and_above = (_CHAT_TEMPLATES_DIR / "qwen3_5_4b_and_above.jinja").read_text()
+
+gemma4_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4.jinja").read_text()
 
 
 ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizer, ProcessorMixin)
@@ -382,6 +418,8 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer.response_schema = qwen3_schema
     elif chat_template in [qwen3_5_chat_template_2b_and_below, qwen3_5_chat_template_4b_and_above]:
         tokenizer.response_schema = qwen3_5_schema
+    elif chat_template in [gemma4_chat_template]:
+        tokenizer.response_schema = gemma4_schema
     else:
         raise ValueError(
             "Unrecognized chat template, failed to add response schema. Please manually set the response schema on "

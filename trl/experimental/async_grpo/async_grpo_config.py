@@ -185,6 +185,30 @@ class AsyncGRPOConfig(_BaseConfig):
         metadata={"help": "Number of training steps between weight synchronizations to the vLLM server."},
     )
 
+    # Parameters that control LoRA training and weight sync
+    use_lora: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable LoRA mode. When True, the model is loaded as a PEFT adapter (base model auto-resolved "
+            "from adapter_config.json), only LoRA weights are trained, and weight sync saves the adapter to disk "
+            "then tells vLLM to hot-reload via /v1/load_lora_adapter instead of streaming all weights over NCCL."
+        },
+    )
+    lora_adapter_path: str | None = field(
+        default=None,
+        metadata={
+            "help": "Path to the PEFT LoRA adapter directory. Required when use_lora=True. This is where the "
+            "adapter is saved during weight sync and where vLLM reads it from."
+        },
+    )
+    lora_name: str = field(
+        default="sft",
+        metadata={
+            "help": "The LoRA adapter name registered in vLLM (via --lora-modules name=path). Used both as the "
+            "'model' field in generation requests and as the adapter name in /v1/load_lora_adapter calls."
+        },
+    )
+
     # Parameters that control the logging
     log_completions: bool = field(
         default=False,
@@ -200,6 +224,9 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.use_lora and not self.lora_adapter_path:
+            raise ValueError("lora_adapter_path is required when use_lora=True")
 
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader

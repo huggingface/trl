@@ -107,12 +107,14 @@ class AsyncRolloutWorker:
         weight_names: list[str] | None = None,
         weight_dtype_names: list[str] | None = None,
         weight_shapes: list[list[int]] | None = None,
+        use_lora: bool = False,
+        lora_name: str | None = None,
     ):
         if not is_vllm_available(min_version="0.17.1"):
             raise ImportError(
                 "vLLM >= 0.17.1 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.17.1'"
             )
-        self.model_name = model_name
+        self.lora_sync = use_lora
         self.max_tool_calling_iterations = max_tool_calling_iterations
         self.dataset = dataset
         self._dataset_iter = iter(dataset)
@@ -126,6 +128,10 @@ class AsyncRolloutWorker:
             "packed": True,
             "is_checkpoint_format": True,
         }
+
+        # When LoRA sync is active, generation requests use the LoRA adapter name
+        # (e.g. "sft") while the tokenizer still loads from model_name (adapter dir).
+        self.model_name = lora_name if self.lora_sync else model_name
 
         self.reward_funcs = reward_funcs
         self.reward_func_names = [f.__name__ for f in reward_funcs]
@@ -165,7 +171,7 @@ class AsyncRolloutWorker:
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.log_completions = log_completions
         self.num_completions_to_print = num_completions_to_print
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)  # Always use original path for tokenizer
         self.tokenizer = add_response_schema(self.tokenizer)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
@@ -181,9 +187,12 @@ class AsyncRolloutWorker:
         self.model_version = 0
         self.session = None
 
-        # Wait for the vLLM server and initialize NCCL weight transfer.
         self._wait_for_server_ready_sync(timeout_s=self.server_timeout)
-        self._init_weight_transfer()
+        if self.lora_sync:
+            logger.info("LoRA sync mode: skipping NCCL weight transfer init (will use save-to-disk + HTTP reload)")
+            self.model_update_group = None
+        else:
+            self._init_weight_transfer()
 
     def _wait_for_server_ready_sync(self, timeout_s: float = 240.0, poll_interval_s: float = 2.0) -> None:
         """Block until the vLLM server is healthy."""
@@ -295,6 +304,18 @@ class AsyncRolloutWorker:
         t0 = time.time()
         requests.post(f"{self.vllm_server_url}/resume")
         logger.debug(f"[weight_sync] resume HTTP took {time.time() - t0:.1f}s")
+
+    def reload_lora(self, adapter_path: str, lora_name: str) -> None:
+        """Tell vLLM to hot-reload a LoRA adapter from disk."""
+        t0 = time.time()
+        payload = {
+            "lora_name": lora_name,
+            "lora_path": adapter_path,
+            "load_inplace": True,
+        }
+        resp = requests.post(f"{self.vllm_server_url}/v1/load_lora_adapter", json=payload, timeout=120)
+        resp.raise_for_status()
+        logger.info(f"[weight_sync] LoRA reload ({lora_name} from {adapter_path}) took {time.time() - t0:.1f}s")
 
     def send_weights(self, iterator) -> None:
         if self.model_update_group is None:
