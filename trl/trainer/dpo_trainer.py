@@ -435,7 +435,7 @@ class DPOTrainer(_BaseTrainer):
               config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-        ref_model (`PreTrainedModel`, *optional*):
+        ref_model ([`~transformers.PreTrainedModel`], *optional*):
             Reference model used to compute the reference log probabilities.
 
             - If provided, this model is used directly as the reference policy.
@@ -457,7 +457,7 @@ class DPOTrainer(_BaseTrainer):
               and content).
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
@@ -557,20 +557,16 @@ class DPOTrainer(_BaseTrainer):
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
-            tokenizer = processing_class.tokenizer
+            self._tokenizer = processing_class.tokenizer
             self._is_vlm = True
         elif isinstance(processing_class, PreTrainedTokenizerBase):
-            tokenizer = processing_class
+            self._tokenizer = processing_class
             self._is_vlm = False
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        self.pad_token = tokenizer.pad_token
-        self.pad_token_id = tokenizer.pad_token_id
-        self.eos_token_id = tokenizer.eos_token_id
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
         if is_peft_available() and is_peft_model(model) and peft_config is not None:
             raise ValueError(
@@ -633,16 +629,16 @@ class DPOTrainer(_BaseTrainer):
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
-            pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
-            pad_token_id = tokenizer.convert_tokens_to_ids(pad_token)
-            if pad_token_id is None:
+            pad_token = args.pad_token or self._tokenizer.pad_token or self._tokenizer.eos_token
+            if pad_token not in self._tokenizer.get_vocab():
                 raise ValueError(
                     f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
+            self._tokenizer.pad_token = pad_token
             data_collator = DataCollatorForPreference(
-                pad_token_id=pad_token_id,
+                pad_token_id=self._tokenizer.pad_token_id,
                 max_length=args.max_length,
                 truncation_mode=args.truncation_mode,
                 pad_to_multiple_of=args.pad_to_multiple_of,
@@ -746,9 +742,10 @@ class DPOTrainer(_BaseTrainer):
 
         # Reference model
         if ref_model is None:
-            if is_peft_model(self.model):
+            if is_peft_model(self.model) or args.precompute_ref_log_probs:
                 # If PEFT is used, the reference model is not needed since the adapter can be disabled to revert to the
-                # initial model.
+                # initial model. If precompute_ref_log_probs is True, the reference model does not need to be kept in
+                # memory during training.
                 self.ref_model = None
             else:
                 ref_model_init_kwargs = args.model_init_kwargs or {}
@@ -782,7 +779,7 @@ class DPOTrainer(_BaseTrainer):
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
-            if self.ref_model is None:
+            if is_peft_model(self.model):
                 raise NotImplementedError(
                     "You passed `sync_ref_model=True` while using a PEFT model, which is currently not supported. "
                     "With PEFT, DPOTrainer does not keep a separate reference model in memory; instead, it recovers "
@@ -809,17 +806,25 @@ class DPOTrainer(_BaseTrainer):
                     "Dataset or set `precompute_ref_log_probs=False`."
                 )
 
-            batch_size = self.args.precompute_ref_batch_size or self.args.per_device_train_batch_size
-            self.train_dataset = self._precompute_ref_logps(self.train_dataset, "train", batch_size)
+            self.train_dataset = self._precompute_ref_logps(
+                self.train_dataset,
+                "train",
+                self.args.precompute_ref_batch_size or self.args.per_device_train_batch_size,
+            )
             if self.eval_dataset is not None:
-                batch_size = self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
                 if isinstance(self.eval_dataset, dict):
                     self.eval_dataset = {
-                        name: self._precompute_ref_logps(dataset, name, batch_size)
+                        name: self._precompute_ref_logps(
+                            dataset, name, self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
+                        )
                         for name, dataset in self.eval_dataset.items()
                     }
                 else:
-                    self.eval_dataset = self._precompute_ref_logps(self.eval_dataset, "eval", batch_size)
+                    self.eval_dataset = self._precompute_ref_logps(
+                        self.eval_dataset,
+                        "eval",
+                        self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
+                    )
 
     def _tokenize(
         self,
@@ -875,7 +880,7 @@ class DPOTrainer(_BaseTrainer):
                     map_kwargs["desc"] = f"Extracting prompt from {dataset_name} dataset"
                 dataset = dataset.map(extract_prompt, **map_kwargs)
 
-            # Apply the chat template if needed
+            # Add EOS token if needed: non-conversational only
             first_example = next(iter(dataset))
             if not is_conversational(first_example):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -888,8 +893,7 @@ class DPOTrainer(_BaseTrainer):
                         example["rejected"] = example["rejected"] + eos_token
                     return example
 
-                eos_token = processing_class.tokenizer.eos_token if self._is_vlm else processing_class.eos_token
-                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": eos_token}, **map_kwargs)
+                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": self._tokenizer.eos_token}, **map_kwargs)
 
             # Tokenize the dataset
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -1026,9 +1030,12 @@ class DPOTrainer(_BaseTrainer):
         model_kwargs["use_cache"] = False
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if is_peft_model(self.model) and self.ref_model is None:
-                model = self.accelerator.unwrap_model(self.model)
-                with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+            if self.ref_model is None:
+                if is_peft_model(self.model):
+                    model = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                        ref_outputs = self.model(**model_kwargs)
+                else:
                     ref_outputs = self.model(**model_kwargs)
             else:
                 ref_outputs = self.ref_model(**model_kwargs)

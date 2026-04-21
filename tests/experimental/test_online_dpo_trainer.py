@@ -19,15 +19,7 @@ from transformers.utils import is_peft_available, is_vision_available
 
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
-from ..testing_utils import (
-    TrlTestCase,
-    require_llm_blender,
-    require_peft,
-    require_torch_accelerator,
-    require_vision,
-    require_vllm,
-)
-from .testing_utils import RandomPairwiseJudge
+from ..testing_utils import TrlTestCase, require_peft, require_torch_accelerator, require_vision, require_vllm
 
 
 if is_peft_available():
@@ -200,30 +192,6 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert "train_loss" in trainer.state.log_history[-1]
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
-    @require_llm_blender
-    def test_training_with_judge(self, config_name):
-        training_args = OnlineDPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            learning_rate=5.0e-7,
-            report_to="none",
-        )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
-
-        trainer = OnlineDPOTrainer(
-            model=self.model,
-            judge=RandomPairwiseJudge(),
-            args=training_args,
-            train_dataset=dummy_dataset["train"],
-            processing_class=self.tokenizer,
-        )
-        trainer.train()
-
-        # Check if training loss is available
-        assert "train_loss" in trainer.state.log_history[-1]
-
-    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_torch_accelerator
     @require_vllm
     @pytest.mark.slow
@@ -350,7 +318,6 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert config.top_k == 0
         assert config.min_p is None
         assert config.repetition_penalty == 1.0
-        assert not config.use_transformers_paged
         assert config.cache_implementation is None
         assert config.generation_kwargs is None
 
@@ -390,32 +357,6 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.generation_config.repetition_penalty == 1.2
         assert trainer.generation_config.max_new_tokens == 64
         assert not trainer.generation_config.do_sample  # From generation_kwargs
-
-    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
-    @require_torch_accelerator
-    def test_training_with_transformers_paged(self, config_name):
-        training_args = OnlineDPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            learning_rate=5.0e-7,
-            report_to="none",
-            use_transformers_paged=True,
-        )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
-
-        trainer = OnlineDPOTrainer(
-            model=self.model,
-            reward_funcs=self.reward_model,
-            args=training_args,
-            train_dataset=dummy_dataset["train"],
-            processing_class=self.tokenizer,
-            reward_processing_classes=self.reward_tokenizer,
-        )
-        trainer.train()
-
-        # Check if training loss is available
-        assert "train_loss" in trainer.state.log_history[-1]
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_training_with_reward_funcs(self, config_name):

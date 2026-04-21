@@ -12,25 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .judges import (
-    AllTrueJudge,
-    BaseBinaryJudge,
-    BaseJudge,
-    BasePairwiseJudge,
-    BaseRankJudge,
-    HfPairwiseJudge,
-    OpenAIPairwiseJudge,
-    PairRMJudge,
-)
+from .ssd_config import SSDConfig
+from .ssd_trainer import SSDTrainer
 
 
-__all__ = [
-    "AllTrueJudge",
-    "BaseBinaryJudge",
-    "BaseJudge",
-    "BasePairwiseJudge",
-    "BaseRankJudge",
-    "HfPairwiseJudge",
-    "OpenAIPairwiseJudge",
-    "PairRMJudge",
-]
+__all__ = ["SSDConfig", "SSDTrainer"]

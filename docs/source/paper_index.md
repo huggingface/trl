@@ -1414,17 +1414,16 @@ Papers relating to the [`experimental.nash_md.NashMDTrainer`]
 Introduces Nash-MD, an alternative to standard RLHF that learns a preference model conditioned on two inputs and finds a policy at the Nash equilibrium. Instead of optimizing against a reward model, Nash-MD produces policies that consistently generate responses preferred over those of any competing policy. The algorithm is based on mirror descent principles. Used in TRL via [`experimental.nash_md.NashMDTrainer`].
 
 ```python
-from trl.experimental.judges import PairRMJudge
 from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained(model_id)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
-judge = PairRMJudge()
+reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id, num_labels=1)
 
 trainer = NashMDTrainer(
     model=model,
-    judge=judge,
+    reward_funcs=reward_model,
     args=NashMDConfig(),
     processing_class=tokenizer,
     train_dataset=...,
@@ -1511,35 +1510,6 @@ Online DPO improves direct alignment from preferences methods by providing real-
 
 To use Online DPO, you can use the [`experimental.odpo.OnlineDPOTrainer`].
 
-### The Perfect Blend: Redefining RLHF with Mixture of Judges
-
-**📜 Paper**: https://huggingface.co/papers/2409.20370
-
-This paper introduces Constrained Generative Policy Optimization (CGPO), a post-training RLHF paradigm for multi-task learning. Its core contribution is the Mixture of Judges (MoJ) framework, which aggregates multiple reward signals to mitigate reward hacking and achieve Pareto-optimal trade-offs across many objectives. CGPO outperforms common RLHF algorithms like PPO and DPO across general chat, STEM reasoning, instruction following, math, coding, and knowledge benchmarks.
-
-⚠️ Experimental: CGPO is not yet implemented as a TRL trainer. Users can experiment with multiple reward/judge aggregation using [`trl.experimental.judges.AllTrueJudge`].
-
-```python
-from trl.experimental.judges import AllTrueJudge, BaseBinaryJudge
-
-# Example placeholder judges
-class RewardJudge(BaseBinaryJudge):
-    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
-        return [1 for _ in completions]
-
-class SafetyJudge(BaseBinaryJudge):
-    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
-        return [1 for _ in completions]
-
-moj = AllTrueJudge(judges=[RewardJudge(), SafetyJudge()])
-
-results = moj.judge(
-    prompts=["Explain gravity."],
-    completions=["Gravity is a fundamental force of nature."]
-)
-print(results)  
-```
-
 ### Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF
 
 **📜 Paper**: https://huggingface.co/papers/2405.21046
@@ -1563,13 +1533,13 @@ Papers relating to training a student model with the help of a teacher model.
 
 **📜 Paper**: https://huggingface.co/papers/2306.13649
 
-Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`]. To reproduce the paper's setting, use this configuration:
+Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.distillation.DistillationTrainer`] and [`experimental.gkd.GKDTrainer`]. To reproduce the paper's setting, use this configuration:
 
 ```python
-from trl.experimental.gkd import GKDConfig
+from trl.experimental.distillation import DistillationConfig
 
 # XSum summarization task (Table A.1 of the paper)
-training_args = GKDConfig(
+training_args = DistillationConfig(
     lmbda=0.5,  # λ student data fraction (Section 3 of the paper)
     beta=0.5,  # β Generalized JSD interpolation, 0=KL, 1=reverse KL (Section 3 of the paper)
     temperature=1.0,  # student training temperature (Appendix A of the paper)
@@ -1577,7 +1547,7 @@ training_args = GKDConfig(
     learning_rate=3e-4,  # learning rate (Table A.1 of the paper)
     per_device_train_batch_size=32,  # batch size (Table A.1 of the paper)
     warmup_steps=2000,  # warm-up steps (Table A.1 of the paper)
-    max_new_tokens=64,  # max output tokens (Table A.1 of the paper)
+    max_completion_length=64,  # max output tokens (Table A.1 of the paper)
 )
 ```
 
@@ -1597,20 +1567,31 @@ On-Policy Distillation has been shown to outperform SFT, GRPO and can be used to
 
 Additionally on-policy distillation is more compute efficient and is less prone to overfitting when trained with limited data.
 
-To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`experimental.gkd.GKDTrainer`] and [`experimental.gkd.GKDConfig`]:
+To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`experimental.distillation.DistillationTrainer`] and [`experimental.distillation.DistillationConfig`]:
+
+```python
+from trl.experimental.distillation import DistillationConfig
+
+training_args = DistillationConfig(
+    lmbda=1.0,  # student produces rollouts for all batches
+    beta=1.0,  # to ensure reverse-kl as the loss function
+    teacher_model_name_or_path="teacher-model",  # specify the teacher model
+)
+```
+
+Alternatively, you can use the [`experimental.gkd.GKDTrainer`] and [`experimental.gkd.GKDConfig`]:
 
 ```python
 from trl.experimental.gkd import GKDConfig
 
 training_args = GKDConfig(
-    lmbda=1.0, # student produces rollouts for all batches
-    beta=1.0, # to ensure reverse-kl as the loss function
-    teacher_model_name_or_path="teacher-model", # specify the teacher model
-
+    lmbda=1.0,  # student produces rollouts for all batches
+    beta=1.0,  # to ensure reverse-kl as the loss function
+    teacher_model_name_or_path="teacher-model",  # specify the teacher model
 )
 ```
 
-Alternatively, you can use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
+You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
 
 ```python
 from trl.experimental import GOLDConfig
@@ -1726,6 +1707,37 @@ Expected dataset columns:
 - `privileged_context` containing only the extra teacher-only information
 
 For more details, see the [SDFT Trainer documentation](sdft_trainer).
+
+### Embarrassingly Simple Self-Distillation Improves Code Generation
+
+**📜 Paper**: https://huggingface.co/papers/2604.01193
+
+Simple Self-Distillation (SSD) improves code generation by sampling completions from the model at a training-time temperature and truncation configuration, then fine-tuning on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or reinforcement learning is needed. SSD reshapes token distributions in a context-dependent way: suppressing distractor tails at "lock" positions (where syntax leaves little ambiguity) while preserving diversity at "fork" positions (where multiple valid continuations exist).
+
+```python
+from trl.experimental.ssd import SSDConfig, SSDTrainer
+
+training_args = SSDConfig(
+    temperature=0.6,                       # Training-time sampling temperature (T_train)
+    top_k=20,                              # Training-time top-k truncation
+    top_p=0.95,                            # Training-time top-p truncation
+    max_completion_length=65536,
+    learning_rate=5e-6,
+)
+
+trainer = SSDTrainer(
+    model="Qwen/Qwen3-4B-Instruct",
+    args=training_args,
+    train_dataset=...,
+)
+trainer.train()
+```
+
+Expected dataset columns:
+
+- `prompt`
+
+For more details, see the [SSD Trainer documentation](ssd_trainer).
 
 ## Distributed Training
 

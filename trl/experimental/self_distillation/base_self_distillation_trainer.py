@@ -122,7 +122,6 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        self.pad_token = tokenizer.pad_token
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = tokenizer.eos_token_id
         self.temperature = args.temperature
@@ -273,8 +272,7 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
                 else:
                     self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
+        self.model.add_model_tags(self._tag_names)
         self.model_accepts_loss_kwargs = False
         self.ref_model = None
         self.teacher_model = None

@@ -22,11 +22,12 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.types
-from datasets import Dataset, DatasetDict, IterableDatasetDict
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from transformers import PreTrainedTokenizerBase, ProcessorMixin
 
 
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
+IterableDatasetType = TypeVar("IterableDatasetType", IterableDataset, IterableDatasetDict)
 
 
 def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | None = None) -> list[dict[str, Any]]:
@@ -53,6 +54,8 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
           the function transforms them into the structured format by wrapping text in `{"type": "text", "text": ...}`
           and inserting `{"type": "image"}` placeholders for the images *before* the first user message.
           If the number of placeholders does not match the number of provided images, an error is raised.
+        - Existing image blocks that already include an `"image"` payload are preserved as-is. Only unfilled image
+          placeholders are counted and populated from `images`.
 
     Example:
     ```python
@@ -76,21 +79,15 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
     new_messages = []
     images_included = False
     for message in messages:
-        if message["role"] == "system":
-            if isinstance(message["content"], str):  # if already prepared, the content will be a list
-                message = {**message, "content": [{"type": "text", "text": message["content"]}]}
-        elif message["role"] == "user":
+        if message["role"] == "user":
             if isinstance(message["content"], str) and not images_included:
                 image_entries = [{"type": "image"} for _ in range(len(images))]
                 message = {**message, "content": [*image_entries, {"type": "text", "text": message["content"]}]}
                 images_included = True
             elif isinstance(message["content"], str):
                 message = {**message, "content": [{"type": "text", "text": message["content"]}]}
-        elif message["role"] == "assistant":
-            if message.get("content") and isinstance(message["content"], str):
-                message = {**message, "content": [{"type": "text", "text": message["content"]}]}
-        elif message["role"] == "tool":
-            if message.get("content") and isinstance(message["content"], str):
+        elif message["role"] in {"assistant", "system", "tool"}:
+            if isinstance(message.get("content"), str):
                 message = {**message, "content": [{"type": "text", "text": message["content"]}]}
         else:
             raise ValueError(
@@ -100,7 +97,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
 
     # Then, check that the number of image placeholders matches the number of images provided
     num_placeholders = sum(
-        sum(1 for part in message["content"] if part["type"] == "image")
+        sum(1 for part in message["content"] if part["type"] == "image" and "image" not in part)
         for message in new_messages
         if message.get("content") and message["role"] != "tool"
     )
@@ -110,18 +107,19 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
         )
 
     # Then, fill in the actual images in the placeholders
-    img_idx = 0
-    for i, message in enumerate(new_messages):
-        if not message.get("content") or message["role"] == "tool":
-            continue
-        new_content = []
-        for part in message["content"]:
-            if part["type"] == "image":
-                new_content.append({**part, "image": images[img_idx]})
-                img_idx += 1
-            else:
-                new_content.append(part)
-        new_messages[i] = {**message, "content": new_content}
+    if images:
+        img_idx = 0
+        for i, message in enumerate(new_messages):
+            if not message.get("content") or message["role"] == "tool":
+                continue
+            new_content = []
+            for part in message["content"]:
+                if part["type"] == "image" and "image" not in part:
+                    new_content.append({**part, "image": images[img_idx]})
+                    img_idx += 1
+                else:
+                    new_content.append(part)
+            new_messages[i] = {**message, "content": new_content}
 
     return new_messages
 
@@ -202,7 +200,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
 
 def apply_chat_template(
     example: dict[str, list[dict[str, str]]],
-    tokenizer: PreTrainedTokenizerBase | ProcessorMixin,
+    processing_class: PreTrainedTokenizerBase | ProcessorMixin,
     tools: list[dict | Callable] | None = None,
     **template_kwargs,
 ) -> dict[str, str]:
@@ -227,7 +225,7 @@ def apply_chat_template(
 
     # Apply the chat template to the whole conversation
     if "messages" in example:
-        messages = tokenizer.apply_chat_template(
+        messages = processing_class.apply_chat_template(
             example["messages"],
             tools=tools,
             tokenize=False,
@@ -246,7 +244,7 @@ def apply_chat_template(
             continue_final_message = True
         else:
             raise ValueError(f"Invalid role in the last message: {last_role}")
-        prompt = tokenizer.apply_chat_template(
+        prompt = processing_class.apply_chat_template(
             example["prompt"],
             tools=tools,
             continue_final_message=continue_final_message,
@@ -259,7 +257,7 @@ def apply_chat_template(
     # Apply the chat template to the entire prompt + completion
     if "prompt" in example:  # explicit prompt and prompt-completion case
         if "chosen" in example:
-            prompt_chosen = tokenizer.apply_chat_template(
+            prompt_chosen = processing_class.apply_chat_template(
                 example["prompt"] + example["chosen"],
                 tools=tools,
                 tokenize=False,
@@ -273,7 +271,7 @@ def apply_chat_template(
 
             chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
-            prompt_rejected = tokenizer.apply_chat_template(
+            prompt_rejected = processing_class.apply_chat_template(
                 example["prompt"] + example["rejected"],
                 tools=tools,
                 tokenize=False,
@@ -286,7 +284,7 @@ def apply_chat_template(
             )
             rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
-            prompt_completion = tokenizer.apply_chat_template(
+            prompt_completion = processing_class.apply_chat_template(
                 example["prompt"] + example["completion"],
                 tools=tools,
                 tokenize=False,
@@ -300,7 +298,7 @@ def apply_chat_template(
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
-            chosen = tokenizer.apply_chat_template(
+            chosen = processing_class.apply_chat_template(
                 example["chosen"],
                 tools=tools,
                 tokenize=False,
@@ -308,7 +306,7 @@ def apply_chat_template(
                 **template_kwargs,
             )
         if "rejected" in example:
-            rejected = tokenizer.apply_chat_template(
+            rejected = processing_class.apply_chat_template(
                 example["rejected"],
                 tools=tools,
                 tokenize=False,
@@ -336,7 +334,7 @@ def apply_chat_template(
 
 def maybe_apply_chat_template(
     example: dict[str, list[dict[str, str]]],
-    tokenizer: PreTrainedTokenizerBase,
+    processing_class: PreTrainedTokenizerBase | ProcessorMixin,
     tools: list[dict | Callable] | None = None,
     **template_kwargs: Any,
 ) -> dict[str, str]:
@@ -359,7 +357,7 @@ def maybe_apply_chat_template(
             messages, where each message is a dictionary with keys `"role"` and `"content"`. Additionally, the example
             may contain a `"chat_template_kwargs"` key, which is a dictionary of additional keyword arguments to pass
             to the chat template renderer.
-        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
             Tokenizer to apply the chat template with.
         tools (`list[dict | Callable]`, *optional*):
             A list of tools (callable functions) that will be accessible to the model. If the template does not support
@@ -393,7 +391,7 @@ def maybe_apply_chat_template(
     ```
     """
     if is_conversational(example):
-        return apply_chat_template(example, tokenizer, tools, **template_kwargs)
+        return apply_chat_template(example, processing_class, tools, **template_kwargs)
     else:
         return example
 
@@ -410,22 +408,22 @@ def _unpair_row(examples: list[dict[str, list[dict[str, str]]]]) -> list[dict[st
 
 
 def unpair_preference_dataset(
-    dataset: DatasetType, num_proc: int | None = None, desc: str | None = None
-) -> DatasetType:
-    r"""
+    dataset: DatasetType | IterableDatasetType, **map_kwargs
+) -> DatasetType | IterableDatasetType:
+    # docstyle-ignore
+    """
     Unpair a preference dataset.
 
     Args:
-        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
-        num_proc (`int`, *optional*):
-            Number of processes to use for processing the dataset.
-        desc (`str`, *optional*):
-            Meaningful description to be displayed alongside with the progress bar while mapping examples.
+        **map_kwargs (`dict`, *optional*):
+            Additional keyword arguments to pass to the dataset's map method when unpairing preferences.
 
     Returns:
-        [`~datasets.Dataset`]: The unpaired preference dataset.
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]:
+            The unpaired preference dataset.
 
     Example:
 
@@ -449,7 +447,7 @@ def unpair_preference_dataset(
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
     """
-    return dataset.map(_unpair_row, batched=True, remove_columns=["chosen", "rejected"], num_proc=num_proc, desc=desc)
+    return dataset.map(_unpair_row, batched=True, remove_columns=["chosen", "rejected"], **map_kwargs)
 
 
 def maybe_unpair_preference_dataset(

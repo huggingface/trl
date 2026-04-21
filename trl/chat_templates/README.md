@@ -13,13 +13,37 @@ Jinja2 chat templates stored here serve two purposes:
 
 Used for identity comparison only.
 
+### `deepseekv3.jinja`
+
+Original DeepSeek-V3 chat template.
+
+### `glm4moe.jinja`
+
+Original GLM-4-MoE chat template.
+
 ### `gptoss.jinja`
 
 Original GPT-OSS chat template.
 
+### `llama3.jinja`
+
+Original Llama 3 chat template.
+
+### `llama3_1.jinja` / `llama3_2.jinja`
+
+Original Llama 3.1 / 3.2 chat templates. Both render tool calls as a single bare JSON object using the key `parameters` (instead of `arguments`) and support at most one tool call per assistant turn.
+
+### `qwen2_5.jinja`
+
+Original Qwen2.5 chat template.
+
 ### `qwen3.jinja`
 
 Original Qwen3 chat template.
+
+### `qwen3_vl.jinja`
+
+Original Qwen3-VL chat template. Unlike text-only Qwen3, this template is already prefix-preserving (no conditional thinking blocks), so no training patch is needed.
 
 ### `qwen3_5_2b_and_below.jinja` / `qwen3_5_4b_and_above.jinja`
 
@@ -28,6 +52,13 @@ Original Qwen3.5 chat templates.
 ## Training templates
 
 Patched templates that fix training-specific issues. Swapped in at init when tools are enabled (GRPO) or when `assistant_only_loss=True` (SFT).
+
+### `deepseekv3_training.jinja`
+
+Patched DeepSeek-V3 template. Diff vs `deepseekv3.jinja`:
+
+- Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict` (the documented format per [transformers docs](https://huggingface.co/docs/transformers/en/chat_extras#tool-calling-example)). The original template uses raw string concatenation, which crashes on dict inputs.
+- Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss.
 
 ### `qwen3_training.jinja`
 
@@ -54,5 +85,23 @@ Always include the thinking block regardless of message position. The original c
 - {%- endif %}
 + {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
 ```
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `gptoss_training.jinja`
+
+Patched GPT-OSS template. Diff vs `gptoss.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `llama3_training.jinja`
+
+Patched Llama 3 template. Diff vs `llama3.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `qwen2_5_training.jinja`
+
+Patched Qwen2.5 template. Diff vs `qwen2_5.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.

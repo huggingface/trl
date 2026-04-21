@@ -7,6 +7,8 @@
     title: Quickstart
   title: Getting started
 - sections:
+  - local: chat_templates
+    title: Chat Templates
   - local: dataset_formats
     title: Dataset Formats
   - local: paper_index
@@ -95,6 +97,8 @@
     title: BCO
   - local: cpo_trainer
     title: CPO
+  - local: distillation_trainer
+    title: Distillation
   - local: gfpo
     title: GFPO
   - local: gkd_trainer
@@ -105,8 +109,6 @@
     title: GRPO With Replay Buffer
   - local: gspo_token
     title: GSPO-token
-  - local: judges
-    title: Judges
   - local: kto_trainer
     title: KTO 
   - local: merge_model_callback
@@ -131,8 +133,8 @@
     title: SDFT
   - local: sdpo_trainer
     title: SDPO
-  - local: winrate_callback
-    title: WinRateCallback
+  - local: ssd_trainer
+    title: SSD
   - local: xpo_trainer
     title: XPO
   title: Experimental
