@@ -170,7 +170,7 @@ def compute_sampled_token_self_distillation_loss(
     if distillation_alpha != 1.0:
         raise ValueError(
             "Only reverse KL (alpha=1.0) is supported for token-level distillation when "
-            f"`full_logit_distillation=False`, got alpha={distillation_alpha}"
+            f"`distillation_mode='sampled_token'`, got alpha={distillation_alpha}"
         )
 
     student_per_token_logps = select_token_log_probs(student_logits, completion_ids)

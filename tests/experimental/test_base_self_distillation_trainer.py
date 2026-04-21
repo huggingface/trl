@@ -74,8 +74,8 @@ class TestBaseSelfDistillationTrainer(TrlTestCase):
     def _make_loss_test_trainer(**args_overrides):
         trainer = object.__new__(MinimalSelfDistillationTrainer)
         args = {
+            "distillation_mode": "sampled_token",
             "distillation_topk": None,
-            "full_logit_distillation": False,
             "distillation_alpha": 1.0,
             "distillation_add_tail": False,
             "distillation_is_clip": None,
@@ -169,7 +169,7 @@ class TestBaseSelfDistillationTrainer(TrlTestCase):
 
     def test_compute_self_distillation_loss_ignores_masked_completion_tokens(self):
         trainer = self._make_loss_test_trainer(
-            full_logit_distillation=True,
+            distillation_mode="full_logits",
             distillation_alpha=0.0,
         )
         model = SimpleNamespace(training=True)

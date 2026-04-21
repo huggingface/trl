@@ -32,6 +32,7 @@ dataset = Dataset.from_dict(
 training_args = SDFTConfig(
     output_dir="sdft-model",
     distillation_alpha=0.5,
+    distillation_mode="topk_logits",
     distillation_topk=5,
     max_completion_length=64,
 )

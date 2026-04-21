@@ -616,12 +616,12 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
     ) -> torch.Tensor:
         """Compute the per-token distillation loss and aggregate it according to `loss_type`.
 
-        Dispatches between three objectives based on config:
+        Dispatches between three objectives based on `distillation_mode`:
 
-            - `distillation_topk` is not `None`: top-k approximation of the divergence, optionally with a tail
-              bucket for the remaining probability mass (`distillation_add_tail`).
-            - `full_logit_distillation` is `True`: full-vocab divergence.
-            - otherwise: token-level (reverse-KL) distillation on sampled `completion_ids`.
+            - `"topk_logits"`: top-k approximation of the divergence, optionally with a tail bucket for the
+              remaining probability mass (`distillation_add_tail`).
+            - `"full_logits"`: full-vocab divergence.
+            - `"sampled_token"`: token-level (reverse-KL) distillation on sampled `completion_ids`.
 
         When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a
         clipped importance-sampling ratio between the current student and the student at rollout time.
@@ -632,7 +632,9 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
             # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
             return distillation_logits.student_logits.sum() * 0.0
 
-        if self.args.distillation_topk is not None:
+        if self.args.distillation_mode == "topk_logits":
+            if self.args.distillation_topk is None:
+                raise ValueError("`distillation_mode='topk_logits'` requires `distillation_topk` to be set.")
             per_token_loss = compute_topk_self_distillation_loss(
                 distillation_logits.student_logits,
                 distillation_logits.teacher_logits,
@@ -640,18 +642,23 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
                 distillation_alpha=self.args.distillation_alpha,
                 distillation_add_tail=self.args.distillation_add_tail,
             )
-        elif self.args.full_logit_distillation:
+        elif self.args.distillation_mode == "full_logits":
             per_token_loss = compute_full_logit_self_distillation_loss(
                 distillation_logits.student_logits,
                 distillation_logits.teacher_logits,
                 distillation_alpha=self.args.distillation_alpha,
             )
-        else:
+        elif self.args.distillation_mode == "sampled_token":
             per_token_loss = compute_sampled_token_self_distillation_loss(
                 distillation_logits.student_logits,
                 distillation_logits.teacher_logits,
                 distillation_logits.completion_ids,
                 distillation_alpha=self.args.distillation_alpha,
+            )
+        else:
+            raise ValueError(
+                "distillation_mode must be one of: 'sampled_token', 'full_logits', 'topk_logits', "
+                f"got {self.args.distillation_mode!r}"
             )
 
         old_per_token_logps = inputs.get("old_per_token_logps")

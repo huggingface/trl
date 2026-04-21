@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from ..self_distillation import SelfDistillationConfig
 
@@ -47,10 +48,14 @@ class SDPOConfig(SelfDistillationConfig):
             How SDPO combines the online policy loss and self-distillation loss. Supported: `distillation_only`,
             `policy_only`, `hybrid`.
         distillation_alpha (`float`, *optional*, defaults to `1.0`):
-            Divergence interpolation coefficient. Token-level SDPO requires the official reverse-KL setting
+            Divergence interpolation coefficient. Sampled-token SDPO requires the official reverse-KL setting
+            `distillation_alpha=1.0`.
+        distillation_mode (`Literal["sampled_token", "full_logits", "topk_logits"]`, *optional*, defaults to `"sampled_token"`):
+            Distillation objective mode. `"sampled_token"` is the default SDPO mode and requires
             `distillation_alpha=1.0`.
         distillation_topk (`int` or `None`, *optional*):
-            Top-k approximation for logit-level SDPO. Requires `full_logit_distillation=True`.
+            Top-k approximation for logit-level SDPO. Must be set when `distillation_mode="topk_logits"` and left
+            unset otherwise.
 
         > Parameters that control the teacher
 
@@ -103,12 +108,23 @@ class SDPOConfig(SelfDistillationConfig):
     distillation_alpha: float = field(
         default=1.0,
         metadata={
-            "help": "KL divergence direction for SDPO. Token-level SDPO requires reverse KL (`distillation_alpha=1.0`)."
+            "help": "Divergence interpolation coefficient. Sampled-token SDPO requires the official reverse-KL setting "
+            "`distillation_alpha=1.0`."
+        },
+    )
+    distillation_mode: Literal["sampled_token", "full_logits", "topk_logits"] = field(
+        default="sampled_token",
+        metadata={
+            "help": "Distillation objective mode. `sampled_token` is the default SDPO mode and requires "
+            "`distillation_alpha=1.0`."
         },
     )
     distillation_topk: int | None = field(
         default=None,
-        metadata={"help": "Top-K approximation for logit-level SDPO. Requires `full_logit_distillation=True`."},
+        metadata={
+            "help": "Top-k approximation for logit-level SDPO. Must be set when `distillation_mode=topk_logits` and left "
+            "unset otherwise."
+        },
     )
     sdpo_policy_loss_mode: str = field(
         default="distillation_only",
@@ -187,10 +203,8 @@ class SDPOConfig(SelfDistillationConfig):
             raise ValueError("hybrid mode requires `distillation_weight > 0`.")
         if self.max_reprompt_len <= 0:
             raise ValueError("max_reprompt_len must be positive")
-        if not self.full_logit_distillation and self.distillation_alpha != 1.0:
+        if self.distillation_mode == "sampled_token" and self.distillation_alpha != 1.0:
             raise ValueError(
-                "SDPO token-level distillation requires `distillation_alpha=1.0`. "
-                "Set `full_logit_distillation=True` to use other divergence settings."
+                "SDPO sampled-token distillation requires `distillation_alpha=1.0`. "
+                "Set `distillation_mode='full_logits'` or `distillation_mode='topk_logits'` to use other divergence settings."
             )
-        if self.distillation_topk is not None and not self.full_logit_distillation:
-            raise ValueError("SDPO `distillation_topk` requires `full_logit_distillation=True`.")

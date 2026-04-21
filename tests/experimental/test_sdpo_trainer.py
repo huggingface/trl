@@ -171,8 +171,8 @@ class TestSDPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
+            distillation_mode="topk_logits",
             distillation_topk=5,
-            full_logit_distillation=True,
             distillation_is_clip=None,
         )
         trainer = SDPOTrainer(

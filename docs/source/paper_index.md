@@ -1641,8 +1641,8 @@ from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
 training_args = SDPOConfig(
     distillation_alpha=0.5,                # Jensen-Shannon divergence (recommended)
-    distillation_topk=100,                 # Top-K logit distillation approximation
-    full_logit_distillation=True,          # Required for top-K logit-level SDPO
+    distillation_mode="topk_logits",       # Explicitly select top-K logit distillation
+    distillation_topk=100,                 # Required for top-K logit distillation
     distillation_is_clip=2.0,              # Importance sampling clipping
     distillation_weight=1.0,               # Weight for self-distillation loss
     sdpo_policy_loss_mode="distillation_only",
@@ -1689,6 +1689,7 @@ dataset = Dataset.from_dict(
 
 training_args = SDFTConfig(
     distillation_alpha=0.5,
+    distillation_mode="topk_logits",
     distillation_topk=5,
     max_completion_length=64,
 )

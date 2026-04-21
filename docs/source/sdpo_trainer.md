@@ -11,8 +11,9 @@ In the current TRL implementation:
 - the default SDPO policy loss mode is `distillation_only`
 - `hybrid` mode is also available to combine the base policy loss with the self-distillation loss
 - supported teacher regularization modes are `ema` and `none`
-- `distillation_topk` is only valid when `full_logit_distillation=True`
-- when `full_logit_distillation=False`, SDPO uses token-level reverse KL and requires `distillation_alpha=1.0`
+- `distillation_mode` selects between `sampled_token`, `full_logits`, and `topk_logits`
+- `distillation_topk` is only valid when `distillation_mode="topk_logits"`
+- when `distillation_mode="sampled_token"`, SDPO uses token-level reverse KL and requires `distillation_alpha=1.0`
 - environment feedback can be injected into teacher reprompts when the dataset exposes a `privileged_context` column
 
 ## Expected dataset columns
@@ -38,8 +39,8 @@ dataset = Dataset.from_dict(
 
 training_args = SDPOConfig(
     output_dir="sdpo-model",
-    distillation_topk=100,                 # Top-K logit distillation approximation
-    full_logit_distillation=True,          # Required for top-K; enables non-reverse divergences
+    distillation_mode="topk_logits",       # Explicitly select top-K logit distillation
+    distillation_topk=100,                 # Required when using top-K logit distillation
     include_environment_feedback=True,     # Use dataset privileged_context for teacher reprompts
 )
 
@@ -88,7 +89,7 @@ python trl/experimental/sdpo/sdpo.py \
     --num_generations 8 \
     --generation_batch_size 32 \
     --distillation_alpha 1.0 \
-    --full_logit_distillation false \
+    --distillation_mode sampled_token \
     --sdpo_policy_loss_mode hybrid \
     --report_to none \
     --eval_strategy steps \
