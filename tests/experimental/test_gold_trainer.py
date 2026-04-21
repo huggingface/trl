@@ -1743,3 +1743,101 @@ def test_same_architecture_vlm_no_teacher_processor(monkeypatch):
     # Identity collator and VLM collator should still be set
     assert trainer.data_collator is identity
     assert trainer._vlm_collator is not None
+
+
+def test_on_policy_vlm_vllm_duplicates_prompts_for_num_generations(monkeypatch):
+    """Regression: in the vLLM path, `_generate_on_policy_vlm_raw` must pre-duplicate prompts
+    `num_generations` times to satisfy `vllm_generation.generate`'s contract (which returns one completion per input
+    prompt entry; colocate mode hardcodes `n=1`). Without duplication, the redistribution loop raised `IndexError` for
+    `num_generations > 1`.
+    """
+    num_generations = 3
+    num_prompts_per_slice = 2
+    num_slices = 2
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer.use_vllm = True
+    trainer.num_generations = num_generations
+    trainer.state = SimpleNamespace(global_step=0)
+    trainer._last_vllm_sync_step = -1
+    trainer.vllm_sync_frequency = 1
+    trainer.generation_config = SimpleNamespace(max_new_tokens=16)
+    trainer._buffered_inputs = {}
+    trainer._buffered_text_logs = {}
+    trainer._teacher_processor = None
+
+    class StubProcessor:
+        @staticmethod
+        def apply_chat_template(conversation, add_generation_prompt, tokenize, return_dict, padding):
+            return {
+                "input_ids": [[1, 2, 3] for _ in conversation],
+                "attention_mask": [[1, 1, 1] for _ in conversation],
+            }
+
+        @staticmethod
+        def batch_decode(ids, skip_special_tokens):
+            return [f"prompt_{i}" for i in range(len(ids))]
+
+        @staticmethod
+        def decode(ids, skip_special_tokens, clean_up_tokenization_spaces):
+            return f"comp_{ids[0]}"
+
+    trainer.processing_class = StubProcessor
+
+    received = {}
+
+    class StubVLLMGeneration:
+        def sync_weights(self):
+            pass
+
+        def generate(self, prompts, images, num_generations):
+            received["n_prompts"] = len(prompts)
+            received["n_images"] = len(images) if images is not None else None
+            completion_ids = [[100 + i] for i in range(len(prompts))]
+            return None, completion_ids, None, None
+
+    trainer.vllm_generation = StubVLLMGeneration()
+
+    collated_per_call = []
+
+    def stub_collator(synthetic_examples):
+        collated_per_call.append(list(synthetic_examples))
+        return {"input_ids": torch.zeros(len(synthetic_examples), 1, dtype=torch.long)}
+
+    trainer._vlm_collator = stub_collator
+
+    class FakeImage:
+        def __init__(self, tag):
+            self.tag = tag
+
+    raw_slices = [
+        [
+            {"prompt": [{"role": "user", "content": f"q{slice_idx}_{i}"}], "image": FakeImage(f"{slice_idx}_{i}")}
+            for i in range(num_prompts_per_slice)
+        ]
+        for slice_idx in range(num_slices)
+    ]
+    on_policy_indices = list(range(num_slices))
+
+    # Bypass multimodal-message helper; its exact shape is irrelevant to this regression.
+    monkeypatch.setattr(gold_trainer_module, "prepare_multimodal_messages", lambda prompt, images: prompt)
+
+    trainer._generate_on_policy_vlm_raw(raw_slices, on_policy_indices)
+
+    total_unique_prompts = num_slices * num_prompts_per_slice
+    # The fix: prompts (and images) are pre-duplicated `num_generations` times before
+    # being handed to vllm_generation.generate.
+    assert received["n_prompts"] == total_unique_prompts * num_generations
+    assert received["n_images"] == total_unique_prompts * num_generations
+
+    # Each slice ends up with `num_prompts_per_slice * num_generations` synthetic examples.
+    assert len(collated_per_call) == num_slices
+    for synthetic in collated_per_call:
+        assert len(synthetic) == num_prompts_per_slice * num_generations
+
+    # Buffers populated for every on-policy slice without IndexError.
+    for slice_idx in on_policy_indices:
+        assert slice_idx in trainer._buffered_inputs
+        _, completion_texts = trainer._buffered_text_logs[slice_idx]
+        assert len(completion_texts) == num_prompts_per_slice * num_generations

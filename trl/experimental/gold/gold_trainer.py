@@ -1516,10 +1516,17 @@ class GOLDTrainer(SFTTrainer):
             self.vllm_generation.sync_weights()
             self._last_vllm_sync_step = self.state.global_step
 
-        # Pass None for images if all entries are None
-        generate_images = all_images if any(img is not None for img in all_images) else None
+        # `vllm_generation.generate` returns one completion per input prompt entry and expects the
+        # caller to pre-duplicate prompts `num_generations` times (same contract as GRPOTrainer).
+        # Without this duplication, colocate mode (which hardcodes n=1) yields only `len(prompts)`
+        # completions while the redistribution below expects `len(prompts) * num_generations`.
+        dup_prompt_ids = [ids for ids in all_prompt_ids for _ in range(self.num_generations)]
+        if any(img is not None for img in all_images):
+            generate_images = [img for img in all_images for _ in range(self.num_generations)]
+        else:
+            generate_images = None
         _, completion_ids, _, _ = self.vllm_generation.generate(
-            prompts=all_prompt_ids,
+            prompts=dup_prompt_ids,
             images=generate_images,
             num_generations=self.num_generations,
         )
@@ -1534,8 +1541,9 @@ class GOLDTrainer(SFTTrainer):
                 self.processing_class.decode(comp_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
             )
 
-        # Redistribute completions to slices. With num_generations > 1, each prompt produces
-        # multiple completions, so we repeat each raw example/prompt/image to match.
+        # Redistribute completions to slices. Completions now align 1:1 with the duplicated inputs,
+        # so `comp_idx` is a single running counter; raw example/prompt/image entries still reference
+        # the original unique example `i` since those are shared across the `num_generations` copies.
         slice_completions = {idx: [] for idx in on_policy_indices}
         slice_raw = {idx: [] for idx in on_policy_indices}
         slice_images = {idx: [] for idx in on_policy_indices}
@@ -1543,15 +1551,16 @@ class GOLDTrainer(SFTTrainer):
         slice_prompts_text = {idx: [] for idx in on_policy_indices}
         slice_prompts_text_special = {idx: [] for idx in on_policy_indices}
 
+        comp_idx = 0
         for i, slice_idx in enumerate(local_slice_indices):
-            for g in range(self.num_generations):
-                comp_idx = i * self.num_generations + g
+            for _ in range(self.num_generations):
                 slice_completions[slice_idx].append(all_completion_texts[comp_idx])
                 slice_raw[slice_idx].append(all_raw_examples[i])
                 slice_images[slice_idx].append(all_images[i])
                 slice_prompts[slice_idx].append(all_prompts[i])
                 slice_prompts_text[slice_idx].append(all_prompts_text[i])
                 slice_prompts_text_special[slice_idx].append(all_prompts_text_with_special[i])
+                comp_idx += 1
 
         for slice_idx in on_policy_indices:
             completion_texts = slice_completions[slice_idx]
