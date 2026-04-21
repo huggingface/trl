@@ -995,3 +995,14 @@ class GRPOConfig(_BaseConfig):
                     f"the per-step batch of {per_step_batch} is not divisible by num_generations. Increase "
                     f"per_device_train_batch_size or reduce steps_per_generation."
                 )
+            if (
+                num_processes > 1
+                and self.steps_per_generation > 1
+                and self.per_device_train_batch_size % self.num_generations != 0
+            ):
+                raise ValueError(
+                    f"TPO with distributed multi-step generation requires each rank's per-step batch to contain "
+                    f"whole prompt groups. With per_device_train_batch_size={self.per_device_train_batch_size} and "
+                    f"num_generations={self.num_generations}, the per-rank batch is not divisible by "
+                    f"num_generations. Increase per_device_train_batch_size or reduce steps_per_generation."
+                )

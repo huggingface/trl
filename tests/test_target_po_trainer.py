@@ -14,10 +14,12 @@
 
 from collections import defaultdict
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import torch
 from datasets import load_dataset
+from transformers import TrainingArguments
 
 from trl import TargetPOConfig, TargetPOTrainer
 from trl.trainer.grpo_trainer import GRPOTrainer
@@ -52,6 +54,28 @@ class TestTargetPOConfig(TrlTestCase):
                 num_generations=4,
                 steps_per_generation=2,
             )
+
+    def test_rejects_distributed_multi_step_generation_when_local_step_splits_groups(self):
+        with patch.object(TrainingArguments, "world_size", new=property(lambda self: 2)):
+            with pytest.raises(ValueError, match="per_device_train_batch_size"):
+                TargetPOConfig(
+                    output_dir=self.tmp_dir,
+                    per_device_train_batch_size=3,
+                    num_generations=2,
+                    steps_per_generation=2,
+                )
+
+    def test_allows_distributed_single_step_generation_with_groups_spanning_ranks(self):
+        with patch.object(TrainingArguments, "world_size", new=property(lambda self: 2)):
+            config = TargetPOConfig(
+                output_dir=self.tmp_dir,
+                per_device_train_batch_size=3,
+                num_generations=2,
+                steps_per_generation=1,
+            )
+
+        assert config.generation_batch_size == 6
+        assert config.steps_per_generation == 1
 
     def test_trainer_metadata(self):
         assert TargetPOTrainer._name == "TargetPO"
