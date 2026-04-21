@@ -153,6 +153,14 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
             else inspect.signature(model.get_base_model().forward).parameters.keys()
         )
 
+        if peft_config is None and getattr(model, "peft_config", None) is not None:
+            logger.warning(
+                "The provided self-distillation student model already contains a PEFT adapter. "
+                "This setup is accepted but not directly supported. In particular, `teacher_model_kind='base'` "
+                "may refer to the underlying base weights rather than the exact initially loaded student state "
+                "including its adapter. For unambiguous teacher behavior, start from a merged/non-adapter model "
+                "or manage separate adapters explicitly."
+            )
         if is_peft_model(model) and peft_config is not None:
             raise ValueError(
                 "You passed a `PeftModel` instance together with a `peft_config`. Pass either a base "

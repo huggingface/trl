@@ -12,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 from collections import defaultdict
 from types import SimpleNamespace
 
 import pytest
 import torch
 from datasets import Dataset
+from transformers import AutoModelForCausalLM
+from transformers.utils import is_peft_available
 
 from trl.experimental.self_distillation.base_self_distillation_trainer import (
     BaseSelfDistillationTrainer,
@@ -26,6 +29,10 @@ from trl.experimental.self_distillation.base_self_distillation_trainer import (
 from trl.experimental.self_distillation.self_distillation_config import SelfDistillationConfig
 
 from ..testing_utils import TrlTestCase
+
+
+if is_peft_available():
+    from peft import LoraConfig, get_peft_model
 
 
 class MinimalSelfDistillationTrainer(BaseSelfDistillationTrainer):
@@ -111,6 +118,42 @@ class TestBaseSelfDistillationTrainer(TrlTestCase):
         )
 
         assert trainer.teacher_model is trainer.model
+
+    @pytest.mark.skipif(not is_peft_available(), reason="PEFT is required for this test")
+    def test_warns_when_initial_student_already_has_a_peft_adapter(self, caplog):
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
+        training_args = SelfDistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            max_completion_length=8,
+            max_steps=1,
+            num_generations=1,
+            teacher_model_kind="base",
+            report_to="none",
+        )
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model = get_peft_model(
+            model,
+            LoraConfig(
+                r=4,
+                lora_alpha=8,
+                target_modules=["q_proj", "v_proj"],
+                bias="none",
+                task_type="CAUSAL_LM",
+            ),
+        )
+
+        with caplog.at_level(
+            logging.WARNING, logger="trl.experimental.self_distillation.base_self_distillation_trainer"
+        ):
+            MinimalSelfDistillationTrainer(
+                model=model,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+        assert "already contains a PEFT adapter" in caplog.text
+        assert "`teacher_model_kind='base'` may refer to the underlying base weights" in caplog.text
 
     @pytest.mark.parametrize("teacher_model_kind", ["base", "ema"])
     def test_teacher_model_kind_base_and_ema_use_frozen_teacher_copy(self, teacher_model_kind):
