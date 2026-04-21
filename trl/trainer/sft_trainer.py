@@ -204,8 +204,9 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
     Patch a causal LM so its `forward` computes the language modeling loss via [`_chunked_cross_entropy_loss`] when
     `labels` are provided.
 
-    The patched forward calls the base decoder directly (`model.model`) to obtain hidden states, skips the `lm_head`
-    matmul on positions with `labels == -100`, and computes the cross-entropy in chunks of `chunk_size` valid tokens.
+    The patched forward calls the base decoder directly (`model.get_decoder()`) to obtain hidden states, skips the
+    `lm_head` matmul on positions with `labels == -100`, and computes the cross-entropy in chunks of `chunk_size`
+    valid tokens.
     It returns a [`_ChunkedCELMHeadOutput`] with `loss` set, `logits` set to `None`, and `token_accuracy` / `entropy`
     fields set to the mean values over non-ignored tokens. Also accepts pre-shifted `shift_labels` in place of
     `labels`, for the context / sequence parallelism path. When both are `None`, the original forward is invoked so
@@ -246,7 +247,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
         decoder_kwargs = {}
         if output_router_logits:
             decoder_kwargs["output_router_logits"] = True
-        outputs: BaseModelOutputWithPast = self.model(
+        outputs: BaseModelOutputWithPast = self.get_decoder()(
             input_ids=input_ids, attention_mask=attention_mask, use_cache=False, **decoder_kwargs, **kwargs
         )
         hidden_states = outputs.last_hidden_state
