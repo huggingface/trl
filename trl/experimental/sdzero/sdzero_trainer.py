@@ -178,7 +178,7 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
         # Compute binary rewards and select control prompts
         answers = [inp["answer"] for inp in inputs]
         chat_completions = [[{"role": "assistant", "content": c}] for c in completions]
-        rewards = [r or 0.0 for r in self.reward_fn(chat_completions, solution=answers)]
+        rewards = [r if r is not None else 0.0 for r in self.reward_fn(chat_completions, solution=answers)]
         control_prompts = [REPHRASE_PROMPT if r == 1.0 else RESTART_PROMPT for r in rewards]
 
         mode = "train" if self.model.training else "eval"

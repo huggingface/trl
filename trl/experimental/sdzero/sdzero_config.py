@@ -23,10 +23,16 @@ class SDZeroConfig(SelfDistillationConfig):
     r"""
     Configuration class for [`SDZeroTrainer`].
 
+    This class extends [`experimental.self_distillation.SelfDistillationConfig`] and overrides with parameters and defaults
+    relevant for SD-Zero.
+
     Parameters:
         separator (`str`, *optional*, defaults to `"\n\n"`):
             Text inserted between the student's initial response and the control prompt when composing the
-            teacher context. Should match the separator used during Phase 1 data collection.
+            teacher context. Should match the separator used during SRT training.
+
+         > Parameters that control the teacher
+
         teacher_model_kind (`str`, *optional*, defaults to `"base"`):
             Semantic teacher choice. Defaults to `"base"` so the teacher stays fixed throughout training.
         teacher_update_rate (`float`, *optional*, defaults to `1.0`):
@@ -34,12 +40,18 @@ class SDZeroConfig(SelfDistillationConfig):
             periodic hard teacher resync.
         teacher_sync_steps (`int`, *optional*, defaults to `512`):
             Number of optimizer steps between EMA teacher updates.
+
+         > Parameters that control the loss
+
         distillation_mode (`str`, *optional*, defaults to `"full_logits"`):
             Distillation objective mode. Defaults to `"full_logits".
         distillation_alpha (`float`, *optional*, defaults to `1.0`):
             KL direction. Defaults to `1.0`.
         distillation_is_clip (`float` or `None`, *optional*):
             Importance-sampling clip. Defaults to `None`, which disables clipping.
+
+         > Parameters that control the student generation
+
         num_generations (`int`, *optional*, defaults to `1`):
             Number of rollouts sampled per prompt per training step.
     """

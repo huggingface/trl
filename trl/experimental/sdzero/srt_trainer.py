@@ -222,10 +222,14 @@ class SRTTrainer(SFTTrainer):
                 completion_masks.append(generation_mask)
             return {"input_ids": input_ids_list, "completion_mask": completion_masks}
 
-        flat_input_ids: list[list[int]] = []
-        flat_masks: list[list[int]] = []
-        for row in dataset:
-            built = _row_to_records(row)
-            flat_input_ids.extend(built["input_ids"])
-            flat_masks.extend(built["completion_mask"])
-        return Dataset.from_dict({"input_ids": flat_input_ids, "completion_mask": flat_masks})
+        expanded = dataset.map(
+            _row_to_records,
+            batched=False,
+            remove_columns=dataset.column_names,
+        )
+        return Dataset.from_dict(
+            {
+                "input_ids": [input_ids for row in expanded["input_ids"] for input_ids in row],
+                "completion_mask": [mask for row in expanded["completion_mask"] for mask in row],
+            }
+        )
