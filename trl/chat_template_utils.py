@@ -331,6 +331,19 @@ qwen3_5_chat_template_4b_and_above = (_CHAT_TEMPLATES_DIR / "qwen3_5_4b_and_abov
 
 ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizer, ProcessorMixin)
 
+_qwen_xml_tool_template_markers = (
+    "You may call one or more functions to assist with the user query.",
+    "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:",
+    '<tool_call>\n{"name": "',
+    '"arguments": ',
+    "<tool_response>",
+)
+
+def _has_qwen_xml_tool_markers(chat_template: str | None) -> bool:
+    """Return whether the template contains the Qwen XML tool-calling markers."""
+    if chat_template is None:
+        return False
+    return all(marker in chat_template for marker in _qwen_xml_tool_template_markers)
 
 def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     r"""
@@ -378,7 +391,9 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer.response_schema = gptoss_schema
     elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
         tokenizer.response_schema = llama3_schema
-    elif chat_template in [qwen3_chat_template, qwen3_vl_chat_template]:
+    elif chat_template in [qwen2_5_chat_template, qwen3_chat_template, qwen3_vl_chat_template]:
+        tokenizer.response_schema = qwen3_schema
+    elif _has_qwen_xml_tool_markers(chat_template):
         tokenizer.response_schema = qwen3_schema
     elif chat_template in [qwen3_5_chat_template_2b_and_below, qwen3_5_chat_template_4b_and_above]:
         tokenizer.response_schema = qwen3_5_schema
