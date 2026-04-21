@@ -824,6 +824,38 @@ def test_generalized_jsd_loss_accepts_probability_inputs():
     torch.testing.assert_close(loss, expected)
 
 
+def test_generalized_jsd_loss_returns_zero_when_all_labels_are_ignored():
+    student_logits = torch.tensor([[[0.5, 1.5], [1.0, 0.0]]])
+    teacher_logits = torch.tensor([[[1.0, 0.0], [0.5, 1.5]]])
+    labels = torch.full((1, 2), -100)
+
+    loss = GOLDTrainer.generalized_jsd_loss(student_logits, teacher_logits, labels=labels)
+
+    torch.testing.assert_close(loss, torch.tensor(0.0))
+
+
+def test_vlm_prompt_length_ignores_rows_without_completion_labels():
+    labels = torch.tensor(
+        [
+            [-100, -100, -100, -100, -100],
+            [-100, -100, 10, 11, -100],
+            [-100, -100, -100, 12, 13],
+        ]
+    )
+
+    prompt_length = GOLDTrainer._get_min_completion_start_from_labels(labels)
+
+    assert prompt_length == 2
+
+
+def test_vlm_prompt_length_uses_sequence_length_when_all_labels_are_ignored():
+    labels = torch.full((2, 4), -100)
+
+    prompt_length = GOLDTrainer._get_min_completion_start_from_labels(labels)
+
+    assert prompt_length == labels.shape[1]
+
+
 def test_uldloss_handles_llama_student_qwen_teacher_sequence(llama_tokenizer, qwen_tokenizer):
     config = build_config(
         uld_use_hybrid_loss=True,

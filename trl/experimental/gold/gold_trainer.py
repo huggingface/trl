@@ -1229,6 +1229,15 @@ class GOLDTrainer(SFTTrainer):
 
         return new_attention_mask, new_labels
 
+    @staticmethod
+    def _get_min_completion_start_from_labels(labels: torch.Tensor) -> int:
+        """Return the earliest completion start, ignoring rows with no completion labels."""
+        completion_mask = labels != -100
+        rows_with_completion = completion_mask.any(dim=1)
+        if not rows_with_completion.any():
+            return labels.shape[1]
+        return completion_mask[rows_with_completion].long().argmax(dim=1).min().item()
+
     @profiling_decorator
     def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any] | list[dict], buffer_steps: int):
         if self._vlm_collator is not None:
@@ -2040,6 +2049,8 @@ class GOLDTrainer(SFTTrainer):
         # Masking
         if labels is not None:
             mask = labels != -100
+            if not mask.any():
+                return jsd.sum() * 0.0
             jsd = jsd[mask]
 
         # Apply reduction
@@ -2165,7 +2176,7 @@ class GOLDTrainer(SFTTrainer):
             # For VLMs, prompts are left-padded but input_ids are flushed left, so prompts.shape[1]
             # would overcount. Derive prompt length from the flushed labels instead.
             if self._is_vlm:
-                student_prompt_length = (inputs["labels"] != -100).long().argmax(dim=1).min().item()
+                student_prompt_length = self._get_min_completion_start_from_labels(inputs["labels"])
             else:
                 student_prompt_length = inputs["prompts"].shape[1]
             shifted_student_logits = outputs_student.logits[:, student_prompt_length - 1 : -1, :]
@@ -2250,7 +2261,7 @@ class GOLDTrainer(SFTTrainer):
                 # Using the same prompt_lengths for teacher and student, since JSD can only be
                 # used with same-family VLMs (shared tokenizer).
                 if self._is_vlm:
-                    prompt_lengths = (inputs["labels"] != -100).long().argmax(dim=1).min().item()
+                    prompt_lengths = self._get_min_completion_start_from_labels(inputs["labels"])
                 else:
                     prompt_lengths = inputs["prompts"].shape[1]
                 shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
