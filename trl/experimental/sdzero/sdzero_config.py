@@ -46,10 +46,10 @@ class SDZeroConfig(SelfDistillationConfig):
         },
     )
     teacher_model_kind: str = field(
-        default="ema",
+        default="base",
         metadata={
-            "help": "Semantic teacher choice. Defaults to 'ema' with teacher_update_rate=1.0 to implement the "
-            "paper's 'iterative self-evolution'. Set to 'base' to freeze the teacher throughout Phase 2."
+            "help": "Semantic teacher choice. Defaults to 'base' to freeze the teacher throughout Phase 2. Set "
+            "to 'ema' with teacher_update_rate=1.0 to implement the paper's 'iterative self-evolution'. "
         },
     )
     teacher_update_rate: float = field(
