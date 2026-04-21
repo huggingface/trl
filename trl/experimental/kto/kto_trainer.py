@@ -762,6 +762,9 @@ class KTOTrainer(_BaseTrainer):
                 # merge the datasets
                 dataset = concatenate_datasets([dataset, kl_dataset], axis=1)
 
+            # Drop intermediate columns retained only for KL rotation
+            dataset = dataset.remove_columns(["answer_input_ids", "answer_attention_mask"])
+
             # Calculate dataset desirability balance
             if dataset_name == "train" and isinstance(dataset, Dataset):  # IterableDataset does not support len
                 num_desirable = max(sum(dataset["label"]), 1)
