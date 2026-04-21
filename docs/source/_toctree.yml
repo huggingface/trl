@@ -7,6 +7,8 @@
     title: Quickstart
   title: Getting started
 - sections:
+  - local: chat_templates
+    title: Chat Templates
   - local: dataset_formats
     title: Dataset Formats
   - local: paper_index
@@ -133,6 +135,8 @@
     title: SDPO
   - local: ssd_trainer
     title: SSD
+  - local: tpo_trainer
+    title: TPO
   - local: xpo_trainer
     title: XPO
   title: Experimental
