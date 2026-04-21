@@ -1407,7 +1407,7 @@ class GOLDTrainer(SFTTrainer):
                 **map_kwargs,
             )
 
-            # Apply the chat template if needed and preserve original text
+            # Add EOS token if needed: non-conversational only
             first_example = next(iter(dataset))
             if not is_conversational(first_example):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
