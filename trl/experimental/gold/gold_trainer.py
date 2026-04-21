@@ -1572,7 +1572,11 @@ class GOLDTrainer(SFTTrainer):
             synthetic_examples = []
             for i, example in enumerate(raw_for_slice):
                 synthetic = dict(example)
-                synthetic["completion"] = [{"role": "assistant", "content": completion_texts[i]}]
+                # Wrap as content blocks so VLM chat templates (e.g. SmolVLM) that index
+                # `message.content[0]` can render the synthetic assistant turn.
+                synthetic["completion"] = [
+                    {"role": "assistant", "content": [{"type": "text", "text": completion_texts[i]}]}
+                ]
                 synthetic_examples.append(synthetic)
 
             # Collate synthetic examples to get pixel_values + properly tokenized input_ids/labels
