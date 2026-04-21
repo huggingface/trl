@@ -125,6 +125,10 @@ class SRTTrainer(SFTTrainer):
     ):
         if isinstance(train_dataset, IterableDataset) or isinstance(eval_dataset, IterableDataset):
             raise NotImplementedError("Iterable datasets are not supported by `SRTTrainer`.")
+        if args is None:
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args = SRTConfig(f"{model_name}-SRT")
 
         if processing_class is None:
             model_id = model if isinstance(model, str) else get_config_model_id(model.config)

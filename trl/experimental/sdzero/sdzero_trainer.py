@@ -31,7 +31,7 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import is_conversational
 from ...rewards import accuracy_reward
-from ...trainer.utils import pad
+from ...trainer.utils import get_config_model_id, pad
 from ..self_distillation.base_self_distillation_trainer import (
     BaseSelfDistillationTrainer,
     RolloutBatch,
@@ -136,6 +136,10 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
             isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
         ):
             raise NotImplementedError("Iterable eval datasets are not yet supported in SDZeroTrainer.")
+        if args is None:
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args = SDZeroConfig(f"{model_name}-SDZero")
 
         self.reward_fn = reward_fn if reward_fn is not None else accuracy_reward
 
