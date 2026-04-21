@@ -140,7 +140,7 @@ class TPOConfig(_BaseConfig):
         },
     )
     beta: float = field(
-        default=0.1,
+        default=0.01,
         metadata={
             "help": "Parameter controlling the temperature of the TPO loss. For the IPO loss (`loss_type='ipo'`), this "
             "value is the regularization parameter denoted by τ in the IPO paper."
