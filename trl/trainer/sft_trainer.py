@@ -134,11 +134,15 @@ def _chunked_cross_entropy_loss(
     labels = labels[valid]
     n_valid = hidden.size(0)
 
-    loss = hidden.new_zeros((), dtype=torch.float32)
     correct = hidden.new_zeros((), dtype=torch.float32)
     entropy_sum = hidden.new_zeros((), dtype=torch.float32)
     if n_valid == 0:
+        # Keep the loss connected to the autograd graph so `.backward()` works when an entire
+        # micro-batch is masked (can happen with completion-only loss + truncation).
+        loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
         return loss, correct, entropy_sum
+
+    loss = hidden.new_zeros((), dtype=torch.float32)
 
     def _chunk(h, w, lbl):
         logits = h.float() @ w.float().t()
@@ -1188,6 +1192,21 @@ class SFTTrainer(_BaseTrainer):
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+
+        # Under FSDP2 with `reshard_after_forward=True` (accelerate's default), the chunked CE path triggers a
+        # redundant `lm_head.weight` all-gather per chunk during backward, adding significant wall-time. Setting
+        # `reshard_after_forward=False` keeps the un-wrapped `lm_head` resident and closes the gap without meaningfully
+        # affecting peak memory.
+        if (
+            args.loss_type == "chunked_nll"
+            and self.accelerator.state.is_fsdp2
+            and self.accelerator.state.fsdp_plugin.reshard_after_forward
+        ):
+            logger.warning(
+                "`loss_type='chunked_nll'` under FSDP2 with `reshard_after_forward=True` is significantly slower than "
+                "necessary due to per-chunk all-gathers of `lm_head.weight`. Consider passing "
+                "`--fsdp_reshard_after_forward false` to `accelerate launch` (or equivalent in your FSDP config)."
+            )
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}

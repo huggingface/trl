@@ -107,7 +107,8 @@ class SFTConfig(_BaseConfig):
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
               in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`, PEFT, or
-              VLM models.
+              VLM models. Under FSDP2, set `fsdp_reshard_after_forward false` in the accelerate config — the chunked
+              path otherwise re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
 

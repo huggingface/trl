@@ -2439,8 +2439,8 @@ class TestChunkedCrossEntropyLoss:
         torch.testing.assert_close(weight_c.grad, weight_r.grad, atol=1e-5, rtol=1e-5)
 
     def test_all_ignored_returns_zero(self):
-        """If every label is ignored, loss, accuracy and entropy are zero - no NaN."""
-        hidden, weight, labels = self._inputs()
+        """If every label is ignored, loss/acc/entropy are zero and backward still works."""
+        hidden, weight, labels = self._inputs(requires_grad=True)
         labels[:] = -100
         loss, acc, ent = _chunked_cross_entropy_loss(hidden, weight, labels, chunk_size=self.CHUNK_SIZE)
         assert loss.item() == 0.0
@@ -2449,6 +2449,11 @@ class TestChunkedCrossEntropyLoss:
         assert not torch.isnan(loss)
         assert not torch.isnan(acc)
         assert not torch.isnan(ent)
+        # Backward must succeed even when n_valid == 0 (can happen with completion-only loss
+        # + truncation where a whole micro-batch is masked).
+        loss.backward()
+        assert hidden.grad is not None and hidden.grad.abs().sum().item() == 0.0
+        assert weight.grad is not None and weight.grad.abs().sum().item() == 0.0
 
 
 @require_torch_accelerator
