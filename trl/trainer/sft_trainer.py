@@ -77,10 +77,12 @@ if is_peft_available():
 
 @dataclass
 class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
-    """`CausalLMOutputWithPast` with `token_accuracy` and `entropy` fields for chunked-CE training."""
+    """`CausalLMOutputWithPast` with `token_accuracy`, `entropy` and optional `aux_loss` fields for chunked-CE
+    training. `aux_loss` is populated when the underlying model is MoE with `output_router_logits=True`."""
 
     token_accuracy: torch.Tensor | None = None
     entropy: torch.Tensor | None = None
+    aux_loss: torch.Tensor | None = None
 
 
 def _chunked_cross_entropy_loss(
@@ -205,6 +207,10 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
     generation and labels-free evaluation preserve any per-model logits post-processing (e.g. `logit_scale`,
     `final_logit_softcapping`).
 
+    For MoE models with `output_router_logits=True`, the load-balancing auxiliary loss is added to the main loss
+    with the same coefficient (`router_aux_loss_coef`) and formula (`load_balancing_loss_func`) used by the model's
+    own forward, so the chunked path remains numerically equivalent to the reference.
+
     Not supported yet: VLM / multimodal models whose forward injects visual tokens outside the base decoder, and
     PEFT-wrapped models.
     """
@@ -219,6 +225,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
         labels: torch.Tensor | None = None,
         num_items_in_batch: torch.Tensor | int | None = None,
         shift_labels: torch.Tensor | None = None,
+        output_router_logits: bool | None = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         # Without labels, fall back to the original forward so generation and labels-free evaluation
@@ -227,9 +234,15 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
         if labels is None and shift_labels is None:
             return original_forward(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 
+        if output_router_logits is None:
+            output_router_logits = getattr(self.config, "output_router_logits", False)
+
         kwargs.pop("use_cache", None)
+        decoder_kwargs = {}
+        if output_router_logits:
+            decoder_kwargs["output_router_logits"] = True
         outputs: BaseModelOutputWithPast = self.model(
-            input_ids=input_ids, attention_mask=attention_mask, use_cache=False, **kwargs
+            input_ids=input_ids, attention_mask=attention_mask, use_cache=False, **decoder_kwargs, **kwargs
         )
         hidden_states = outputs.last_hidden_state
 
@@ -243,6 +256,23 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
             logit_scale=logit_scale,
             final_logit_softcapping=final_logit_softcapping,
         )
+
+        aux_loss = None
+        if output_router_logits:
+            # Mirror the per-family MoE forward: add `router_aux_loss_coef * load_balancing_loss_func(...)` to
+            # the main loss. Mixtral is the source of truth — every MoE family (Qwen3Moe, GptOss, OLMoE,
+            # Qwen2Moe, DBRX, JetMoE, PhiMoE, …) pulls this function from mixtral via the modular system, so a
+            # single import keeps us in lockstep with upstream for every family we test.
+            from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
+
+            aux_loss = load_balancing_loss_func(
+                outputs.router_logits,
+                self.num_experts,
+                self.num_experts_per_tok,
+                attention_mask,
+            )
+            loss = loss + self.router_aux_loss_coef * aux_loss.to(loss.device)
+
         return _ChunkedCELMHeadOutput(
             loss=loss,
             logits=None,
@@ -251,6 +281,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
             attentions=outputs.attentions,
             token_accuracy=token_accuracy,
             entropy=entropy,
+            aux_loss=aux_loss,
         )
 
     model.forward = types.MethodType(_chunked_ce_forward, model)

@@ -2519,6 +2519,36 @@ class TestPatchChunkedCELMHead:
         assert out.entropy is not None
         assert out.entropy.item() >= 0.0
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+        ],
+    )
+    def test_forward_matches_reference_with_aux_loss(self, model_id):
+        """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
+        to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            model_id, torch_dtype=torch.float32, output_router_logits=True
+        ).to(torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
+
+        B, S = 2, 16
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
+
     @pytest.mark.parametrize("model_id", _CHUNKED_CE_MODEL_IDS)
     def test_backward_matches_reference(self, model_id):
         ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
