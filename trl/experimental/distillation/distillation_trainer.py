@@ -1358,21 +1358,12 @@ class DistillationTrainer(_BaseTrainer):
                     f"{missing_count}/{total_required}."
                 )
 
-        # Padding positions (labels == -100) within the batch's completion_length carry the
-        # -inf sentinel assigned by _get_teacher_token_logprobs_from_server for shorter samples
-        # in variable-length batches. The label mask in _reduce_divergence_loss already
-        # excludes these positions from the final loss, but their -inf values still propagate
-        # through _add_tail_bucket (producing teacher distributions [-inf, 0]) and
-        # _jsd_divergence (producing +inf in forward, clamped by nan_to_num, but NaN in
-        # backward because autograd's chain rule does not respect nan_to_num). Neutralise the
-        # sentinel at known padding positions before the shared divergence helper runs,
-        # mirroring the masking applied by _compute_server_forward_kl_loss for the forward-KL
-        # path.
+        # Replace -inf teacher logprobs at intra-batch padding (labels == -100) with 0 so
+        # reverse-KL's student_probs·(log_s - log_t) does not leak +inf into the backward pass.
         pad_mask_2d = ~required
         pad_mask_3d = pad_mask_2d.unsqueeze(-1)
-        zero = torch.zeros((), dtype=topk_teacher_lps.dtype, device=topk_teacher_lps.device)
-        topk_teacher_lps = torch.where(pad_mask_3d, zero, topk_teacher_lps)
-        actual_teacher_lps = torch.where(pad_mask_2d, zero, actual_teacher_lps)
+        topk_teacher_lps = torch.where(pad_mask_3d, 0.0, topk_teacher_lps)
+        actual_teacher_lps = torch.where(pad_mask_2d, 0.0, actual_teacher_lps)
 
         # Server path only supports "sampled" mode — config validation enforces this, but we guard
         # explicitly so future relaxations of the config check don't silently change behaviour.

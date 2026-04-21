@@ -173,6 +173,7 @@ class TestDistillationTrainerServerPath(TrlTestCase):
         trainer.train()
         return [rec for rec in trainer.state.log_history if "grad_norm" in rec]
 
+    @pytest.mark.slow
     @pytest.mark.parametrize(("bs", "ga"), [(1, 2), (2, 1)])
     def test_reverse_kl_finite_grad_with_ragged_batch(self, bs, ga, monkeypatch):
         records = self._run_one_step(bs=bs, ga=ga, monkeypatch=monkeypatch)
