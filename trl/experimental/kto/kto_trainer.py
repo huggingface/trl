@@ -110,13 +110,17 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         "answer_attention_mask": example["answer_attention_mask"],
     }
 
-    # calculate max length by checking if BOS/EOS is already there
+    # Reserve budget for BOS/EOS tokens that will be added.
+    # BOS: only if not already present (truncation never removes the first token)
+    # EOS: always reserve a slot
+    # - truncation removes from the end, so EOS may be cut even when it was present before truncation
+    # - the post-truncation guard will then re-append it
     max_length = kwargs["max_length"]
     bos_token_id = kwargs["tokenizer"].bos_token_id
     eos_token_id = kwargs["tokenizer"].eos_token_id
     if len(all_tokens["prompt_input_ids"]) > 0 and bos_token_id != all_tokens["prompt_input_ids"][0]:
         max_length -= 1
-    if len(all_tokens["answer_input_ids"]) > 0 and eos_token_id != all_tokens["answer_input_ids"][-1]:
+    if eos_token_id is not None:
         max_length -= 1
 
     # if combined sequence is too long, truncate the completion (answer) from the end
