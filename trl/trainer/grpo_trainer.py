@@ -2597,7 +2597,9 @@ class GRPOTrainer(_BaseTrainer):
                 )
                 if self.args.use_bias_correction_kl:
                     per_token_kl = per_token_kl * torch.exp(per_token_logps - old_per_token_logps)
-                kl_normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+                kl_normalizer = (
+                    self.accelerator.gather(mask.sum()).sum().clamp(min=1.0) / self.accelerator.num_processes
+                )
                 kl_loss = (per_token_kl * mask).sum() / kl_normalizer
                 loss = loss + self.beta * kl_loss / normalizer
                 self._metrics[mode]["kl"].append(self.accelerator.gather(kl_loss).nanmean().item())

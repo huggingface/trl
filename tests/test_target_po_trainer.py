@@ -21,7 +21,7 @@ import torch
 from datasets import load_dataset
 from transformers import TrainingArguments
 
-from trl import TargetPOConfig, TargetPOTrainer
+from trl import GRPOTrainer, TargetPOConfig, TargetPOTrainer
 
 from .testing_utils import TrlTestCase
 
@@ -159,6 +159,57 @@ class TestTPOLoss:
 
         expected = torch.tensor([1.0, 0.0, 0.2, 0.8])
         torch.testing.assert_close(targets, expected)
+
+    @pytest.mark.parametrize("trainer_cls", [GRPOTrainer, TargetPOTrainer])
+    def test_tpo_kl_uses_per_step_token_normalizer(self, trainer_cls):
+        trainer = object.__new__(trainer_cls)
+        trainer.loss_type = "tpo"
+        trainer.off_policy_mask_threshold = None
+        trainer.top_entropy_quantile = 1.0
+        trainer.beta = 0.25
+        trainer.num_generations = 2
+        trainer.num_generations_eval = 2
+        trainer.current_gradient_accumulation_steps = 2
+        trainer.tpo_length_normalize_logps = False
+        trainer.args = SimpleNamespace(use_bias_correction_kl=False)
+        trainer.model = SimpleNamespace(training=True)
+        trainer.accelerator = SimpleNamespace(
+            gather=lambda tensor: tensor,
+            num_processes=1,
+            process_index=0,
+        )
+        trainer._metrics = {"train": defaultdict(list)}
+
+        per_token_logps = torch.zeros((2, 3))
+
+        def fake_get_per_token_logps_and_entropies(*args, **kwargs):
+            return per_token_logps, torch.zeros_like(per_token_logps)
+
+        trainer._get_per_token_logps_and_entropies = fake_get_per_token_logps_and_entropies
+
+        completion_mask = torch.tensor([[1, 1, 0], [1, 0, 0]])
+        ref_log_ratio = torch.log(torch.tensor(2.0))
+        ref_per_token_logps = per_token_logps + ref_log_ratio
+        inputs = {
+            "prompt_ids": torch.zeros((2, 1), dtype=torch.long),
+            "prompt_mask": torch.ones((2, 1), dtype=torch.long),
+            "completion_ids": torch.ones((2, 3), dtype=torch.long),
+            "completion_mask": completion_mask,
+            "advantages": torch.zeros(2),
+            "old_per_token_logps": per_token_logps,
+            "ref_per_token_logps": ref_per_token_logps,
+            "tpo_targets": torch.tensor([0.5, 0.5]),
+            "num_items_in_batch": torch.tensor(6),
+        }
+
+        loss = trainer_cls._compute_loss(trainer, model=None, inputs=inputs)
+
+        normalizer = torch.tensor(float(trainer.current_gradient_accumulation_steps))
+        tpo_loss = ref_log_ratio / normalizer
+        expected_kl_loss = torch.exp(ref_log_ratio) - ref_log_ratio - 1
+        expected_loss = tpo_loss + trainer.beta * expected_kl_loss / normalizer
+        torch.testing.assert_close(loss, expected_loss)
+        torch.testing.assert_close(torch.tensor(trainer._metrics["train"]["kl"][0]), expected_kl_loss)
 
     @pytest.mark.parametrize("length_normalize", [True, False])
     def test_tpo_loss_gradient_matches_policy_minus_target(self, length_normalize):
