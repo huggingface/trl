@@ -46,7 +46,10 @@ class TargetPOConfig(GRPOConfig):
         if self.generation_batch_size is None and self.steps_per_generation is None:
             self.steps_per_generation = 1
 
+        use_liger_kernel = self.use_liger_kernel
+        self.use_liger_kernel = False
         super().__post_init__()
+        self.use_liger_kernel = use_liger_kernel
 
         if self.loss_type != "tpo":
             raise ValueError(f"TargetPOConfig requires loss_type='tpo'. You provided {self.loss_type!r}.")

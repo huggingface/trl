@@ -18,12 +18,13 @@ from unittest.mock import patch
 
 import pytest
 import torch
-from datasets import load_dataset
+from accelerate.utils.memory import release_memory
+from datasets import Dataset, load_dataset
 from transformers import TrainingArguments
 
 from trl import GRPOTrainer, TargetPOConfig, TargetPOTrainer
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_liger_kernel
 
 
 class TestTargetPOConfig(TrlTestCase):
@@ -80,6 +81,11 @@ class TestTargetPOConfig(TrlTestCase):
         assert TargetPOTrainer._name == "TargetPO"
         assert TargetPOTrainer._tag_names == ["trl", "tpo"]
 
+    def test_allows_liger_kernel(self):
+        config = TargetPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True)
+
+        assert config.use_liger_kernel
+
 
 class TestTargetPOTrainer(TrlTestCase):
     def test_training(self):
@@ -109,6 +115,51 @@ class TestTargetPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    def test_training_with_liger_kernel(self):
+        from trl.trainer.target_po_trainer import LigerFusedLinearTargetPOLoss
+
+        def reward_func(completions, **kwargs):
+            return [float((len(completion) % 3) - 1) for completion in completions]
+
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [
+                    "Say hello.",
+                    "Name a color.",
+                    "What is 1+1?",
+                    "Write ok.",
+                    "Pick a letter.",
+                    "Say bye.",
+                ]
+            }
+        )
+        training_args = TargetPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            max_steps=1,
+            use_liger_kernel=True,
+            report_to="none",
+            logging_strategy="no",
+            save_strategy="no",
+        )
+        trainer = TargetPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert isinstance(trainer.liger_tpo_loss, LigerFusedLinearTargetPOLoss)
+
+        train_result = trainer.train()
+
+        assert torch.isfinite(torch.tensor(train_result.training_loss))
+
+        release_memory(trainer.model, trainer)
 
 
 class TestTPOLoss:
@@ -312,3 +363,75 @@ class TestTPOLoss:
         expected_grad[0] = (expected_valid_grad[0] / lengths[0]) * completion_mask[0]
         expected_grad[2] = (expected_valid_grad[1] / lengths[2]) * completion_mask[2]
         torch.testing.assert_close(per_token_logps.grad, expected_grad)
+
+    @pytest.mark.parametrize("chunk_size", [1, 2])
+    @pytest.mark.parametrize("length_normalize", [True, False])
+    @pytest.mark.parametrize("use_bias", [True, False])
+    @require_liger_kernel
+    def test_liger_tpo_loss_matches_dense_loss(self, chunk_size, length_normalize, use_bias):
+        from trl.trainer.target_po_trainer import LigerFusedLinearTargetPOLoss
+
+        torch.manual_seed(0)
+        hidden_states = torch.randn(3, 2, 4, requires_grad=True)
+        weight = torch.randn(5, 4, requires_grad=True)
+        bias = torch.randn(5, requires_grad=True) if use_bias else None
+        completion_ids = torch.tensor([[0, 1], [2, 3], [4, 0]])
+        completion_mask = torch.tensor([[1, 1], [0, 0], [1, 1]], dtype=torch.float32)
+        tpo_targets = torch.tensor([0.6, 0.0, 0.4])
+        tpo_valid_mask = torch.tensor([True, False, True])
+        ref_per_token_logps = torch.tensor([[-0.2, -0.4], [-0.1, -0.3], [-0.5, -0.7]])
+        old_per_token_logps = torch.tensor([[-0.3, -0.5], [-0.2, -0.4], [-0.6, -0.8]])
+        beta = 0.25
+        normalizer = 2.0
+
+        dense_hidden_states = hidden_states.detach().clone().requires_grad_(True)
+        dense_weight = weight.detach().clone().requires_grad_(True)
+        dense_bias = bias.detach().clone().requires_grad_(True) if use_bias else None
+
+        liger_loss = LigerFusedLinearTargetPOLoss(
+            beta=beta,
+            num_generations=3,
+            tpo_length_normalize_logps=length_normalize,
+            temperature=1.0,
+            chunk_size=chunk_size,
+        )
+        loss, mean_kl, mean_entropy = liger_loss(
+            hidden_states,
+            weight,
+            completion_ids,
+            completion_mask,
+            tpo_targets,
+            tpo_valid_mask,
+            bias=bias,
+            ref_per_token_logps=ref_per_token_logps,
+            old_per_token_logps=old_per_token_logps,
+            normalizer=normalizer,
+        )
+        loss.backward()
+
+        logits = dense_hidden_states @ dense_weight.t()
+        if dense_bias is not None:
+            logits = logits + dense_bias
+        log_probs = torch.log_softmax(logits.float(), dim=-1)
+        per_token_logps = log_probs.gather(dim=-1, index=completion_ids.unsqueeze(-1)).squeeze(-1)
+        sequence_logps = (per_token_logps * completion_mask).sum(dim=-1)
+        if length_normalize:
+            sequence_logps = sequence_logps / completion_mask.sum(dim=-1).clamp(min=1.0)
+        sequence_logps = sequence_logps.masked_fill(~tpo_valid_mask, torch.finfo(sequence_logps.dtype).min)
+        logps = torch.log_softmax(sequence_logps.view(-1, 3), dim=1).view(-1)
+        dense_loss = -(tpo_targets * logps).sum()
+        per_token_kl = (
+            torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+        )
+        dense_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        dense_loss = dense_loss / normalizer + beta * dense_kl / normalizer
+        dense_entropy = (-(log_probs.exp() * log_probs).sum(dim=-1) * completion_mask).sum() / completion_mask.sum()
+        dense_loss.backward()
+
+        torch.testing.assert_close(loss, dense_loss.detach())
+        torch.testing.assert_close(mean_kl, dense_kl.detach())
+        torch.testing.assert_close(mean_entropy, dense_entropy.detach())
+        torch.testing.assert_close(hidden_states.grad, dense_hidden_states.grad)
+        torch.testing.assert_close(weight.grad, dense_weight.grad)
+        if use_bias:
+            torch.testing.assert_close(bias.grad, dense_bias.grad)
