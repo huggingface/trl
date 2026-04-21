@@ -1435,7 +1435,7 @@ training_args = TPOConfig(
     loss_type="tpo-l",  # length-normalized variant (Section 3 of the paper)
     tpo_alpha=1.0,
     beta=0.01,
-    tpo_l_gamma=5.4,  # γ target reward margin (Table 2 of the paper, Llama-3-Base 5K)
+    tpo_l_gamma=0.5,  # γ target reward margin (Table 6 of the paper, Llama-3-Base 5K)
     learning_rate=5e-7,
     num_train_epochs=1,
 )
