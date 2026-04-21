@@ -67,7 +67,7 @@ class TPOConfig(_BaseConfig):
                   [TPO](https://huggingface.co/papers/2405.16681) paper, which adds a target reward margin
                   `tpo_l_gamma` to the Bradley-Terry objective.
 
-        beta (`float`, *optional*, defaults to `0.1`):
+        beta (`float`, *optional*, defaults to `0.01`):
             Parameter controlling the temperature of the TPO loss. For the IPO loss (`loss_type="ipo"`), β is the
             regularization parameter denoted by τ in the [paper](https://huggingface.co/papers/2310.12036).
         label_smoothing (`float`, *optional*, defaults to `0.0`):
