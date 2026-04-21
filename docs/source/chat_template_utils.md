@@ -8,11 +8,15 @@ For an overview of the chat templates bundled with TRL and the rationale behind 
 
 ## add_response_schema
 
-[[autodoc]] add_response_schema
+[[autodoc]] chat_template_utils.add_response_schema
 
 ## supports_tool_calling
 
-[[autodoc]] supports_tool_calling
+[[autodoc]] chat_template_utils.supports_tool_calling
+
+## parse_response
+
+[[autodoc]] chat_template_utils.parse_response
 
 ## is_chat_template_prefix_preserving
 
