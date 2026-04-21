@@ -17,6 +17,7 @@ import textwrap
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -53,6 +54,7 @@ from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
     get_config_model_id,
+    pad,
     selective_log_softmax,
     use_adapter,
 )
@@ -89,6 +91,41 @@ def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     batch["answer_input_ids"] = [batch["answer_input_ids"][-1]] + batch["answer_input_ids"][:-1]
     batch["answer_attention_mask"] = [batch["answer_attention_mask"][-1]] + batch["answer_attention_mask"][:-1]
     return batch
+
+
+@dataclass
+class DataCollatorForKTO:
+    """
+    Data collator for KTO. Pads sequences to the maximum length of the batch.
+
+    Args:
+        pad_token_id (`int`, defaults to `0`):
+            Token ID to use for padding `input_ids` sequences.
+    """
+
+    pad_token_id: int = 0
+
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
+        batch = {}
+        for k in features[0]:
+            if k.endswith(("_input_ids", "_attention_mask", "_labels")):
+                padding_side = "left" if k in ("prompt_input_ids", "prompt_attention_mask") else "right"
+                if k.endswith("_input_ids"):
+                    padding_value = self.pad_token_id
+                elif k.endswith("_labels"):
+                    padding_value = -100
+                else:
+                    padding_value = 0
+                batch[k] = pad(
+                    [torch.tensor(ex[k], dtype=torch.int64) for ex in features],
+                    padding_value=padding_value,
+                    padding_side=padding_side,
+                )
+            elif k.endswith("_logps"):
+                batch[k] = torch.tensor([ex[k] for ex in features])
+            else:
+                batch[k] = [ex[k] for ex in features]
+        return batch
 
 
 class KTOTrainer(_BaseTrainer):
