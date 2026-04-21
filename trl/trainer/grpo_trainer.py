@@ -2179,10 +2179,12 @@ class GRPOTrainer(_BaseTrainer):
         )
         all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
         tpo_targets = None
+        tpo_valid_mask = None
         if self.loss_type == "tpo":
             if old_per_token_logps is None:
                 raise RuntimeError("TPO requires rollout-time log probabilities to build the target distribution.")
             loss_mask = completion_mask if tool_mask is None else completion_mask * tool_mask
+            tpo_valid_mask = loss_mask.any(dim=-1)
             # Length-normalize sequence logps so the target distribution isn't dominated by length variance
             # (without this, log_softmax(old_sequence_logps) collapses to ~one-hot on the longest/most-likely
             # completion, and rewards can't compete).
@@ -2190,12 +2192,14 @@ class GRPOTrainer(_BaseTrainer):
             if self.tpo_length_normalize_logps:
                 old_sequence_logps = old_sequence_logps / loss_mask.sum(dim=-1).clamp(min=1)
             all_process_old_sequence_logps = gather(old_sequence_logps)
-            tpo_scores = self.get_tpo_scores(rewards, num_generations)
+            all_process_tpo_valid_mask = gather(tpo_valid_mask)
+            tpo_scores = self.get_tpo_scores(rewards, num_generations, valid_mask=all_process_tpo_valid_mask)
             all_process_tpo_targets = self.get_tpo_targets(
                 all_process_old_sequence_logps,
                 tpo_scores,
                 num_generations=num_generations,
                 temperature=self.tpo_target_temperature,
+                valid_mask=all_process_tpo_valid_mask,
             )
             tpo_targets = all_process_tpo_targets[process_slice]
             target_groups = all_process_tpo_targets.view(-1, num_generations)
@@ -2290,6 +2294,7 @@ class GRPOTrainer(_BaseTrainer):
             output["old_per_token_logps"] = old_per_token_logps
         if tpo_targets is not None:
             output["tpo_targets"] = tpo_targets
+            output["tpo_valid_mask"] = tpo_valid_mask
         if self.use_vllm and self.vllm_importance_sampling_correction:
             output["importance_sampling_ratio"] = vllm_importance_sampling_ratio
         if sampling_per_token_logps is not None:
@@ -2403,27 +2408,47 @@ class GRPOTrainer(_BaseTrainer):
         scores: torch.Tensor,
         num_generations: int,
         temperature: float = 1.0,
+        valid_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Build the Target Policy Optimization target distribution for each prompt group.
 
         The target is q_i ∝ p_i_old * exp(score_i / temperature), where p_i_old is the rollout policy distribution
-        over the sampled completions in a prompt group.
+        over the sampled completions in a prompt group. Completions with `valid_mask=False` (e.g. all tokens
+        masked out) get zero target probability and don't contribute to the group softmax.
         """
         if temperature <= 0.0:
             raise ValueError(f"temperature must be greater than 0.0. You provided {temperature}.")
 
         old_sequence_logps = old_sequence_logps.view(-1, num_generations)
         scores = scores.view(-1, num_generations)
+        if valid_mask is not None:
+            valid_mask = valid_mask.view(-1, num_generations).bool()
+            old_sequence_logps = old_sequence_logps.masked_fill(~valid_mask, torch.finfo(old_sequence_logps.dtype).min)
         target_logits = torch.log_softmax(old_sequence_logps, dim=1) + scores / temperature
-        return torch.softmax(target_logits, dim=1).view(-1).detach()
+        if valid_mask is not None:
+            target_logits = target_logits.masked_fill(~valid_mask, torch.finfo(target_logits.dtype).min)
+        targets = torch.softmax(target_logits, dim=1)
+        if valid_mask is not None:
+            targets = torch.where(valid_mask, targets, torch.zeros_like(targets))
+        return targets.view(-1).detach()
 
     @staticmethod
-    def get_tpo_scores(scores: torch.Tensor, num_generations: int) -> torch.Tensor:
+    def get_tpo_scores(
+        scores: torch.Tensor, num_generations: int, valid_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         scores = scores.view(-1, num_generations)
-        mean_scores = scores.mean(dim=1, keepdim=True)
-        std_scores = scores.std(dim=1, unbiased=False, keepdim=True)
-        scores = torch.where(std_scores > 1e-6, (scores - mean_scores) / std_scores, scores - mean_scores)
+        if valid_mask is not None:
+            valid_mask = valid_mask.view(-1, num_generations).bool()
+            valid_count = valid_mask.sum(dim=1, keepdim=True).clamp(min=1)
+            mean_scores = scores.masked_fill(~valid_mask, 0.0).sum(dim=1, keepdim=True) / valid_count
+            centered_scores = torch.where(valid_mask, scores - mean_scores, torch.zeros_like(scores))
+            std_scores = (centered_scores.square().sum(dim=1, keepdim=True) / valid_count).sqrt()
+        else:
+            mean_scores = scores.mean(dim=1, keepdim=True)
+            std_scores = scores.std(dim=1, unbiased=False, keepdim=True)
+            centered_scores = scores - mean_scores
+        scores = torch.where(std_scores > 1e-6, centered_scores / std_scores, centered_scores)
         return scores.view(-1)
 
     @staticmethod
@@ -2544,6 +2569,13 @@ class GRPOTrainer(_BaseTrainer):
             if self.tpo_length_normalize_logps:
                 sequence_logps = sequence_logps / mask.sum(dim=-1).clamp(min=1)
             all_sequence_logps = self._gather_tensor_with_grad(sequence_logps)
+            tpo_valid_mask = inputs.get("tpo_valid_mask")
+            if tpo_valid_mask is not None:
+                tpo_valid_mask = tpo_valid_mask.to(device=sequence_logps.device, dtype=torch.bool)
+                all_tpo_valid_mask = gather(tpo_valid_mask)
+                all_sequence_logps = all_sequence_logps.masked_fill(
+                    ~all_tpo_valid_mask, torch.finfo(all_sequence_logps.dtype).min
+                )
             all_logps = torch.log_softmax(all_sequence_logps.view(-1, num_generations), dim=1).view(-1)
             process_slice = slice(
                 self.accelerator.process_index * sequence_logps.size(0),
@@ -2551,6 +2583,8 @@ class GRPOTrainer(_BaseTrainer):
             )
             logps = all_logps[process_slice]
             tpo_targets = inputs["tpo_targets"].to(logps.dtype)
+            if tpo_valid_mask is not None:
+                tpo_targets = torch.where(tpo_valid_mask, tpo_targets, torch.zeros_like(tpo_targets))
             loss = -(tpo_targets * logps).sum() * num_generations / tpo_targets.numel()
 
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0

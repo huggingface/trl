@@ -97,6 +97,15 @@ class TestTPOLoss:
         expected = torch.tensor([-1.0, 1.0, 0.0, 0.0])
         torch.testing.assert_close(tpo_scores, expected)
 
+    def test_tpo_scores_exclude_invalid_completions(self):
+        scores = torch.tensor([0.0, 100.0, 1.0])
+        valid_mask = torch.tensor([True, False, True])
+
+        tpo_scores = GRPOTrainer.get_tpo_scores(scores, num_generations=3, valid_mask=valid_mask)
+
+        expected = torch.tensor([-1.0, 0.0, 1.0])
+        torch.testing.assert_close(tpo_scores, expected)
+
     def test_tpo_targets_use_population_whitened_scores(self):
         old_sequence_logps = torch.zeros(2)
         scores = torch.tensor([0.0, 1.0])
@@ -116,6 +125,16 @@ class TestTPOLoss:
         expected_first_group = torch.softmax(torch.log(torch.tensor([0.7, 0.3])) + torch.tensor([1.0, -1.0]), dim=0)
         expected_second_group = torch.tensor([0.2, 0.8])
         expected = torch.cat([expected_first_group, expected_second_group])
+        torch.testing.assert_close(targets, expected)
+
+    def test_tpo_targets_exclude_invalid_completions(self):
+        old_sequence_logps = torch.log(torch.tensor([0.7, 0.3, 0.2, 0.8]))
+        scores = torch.tensor([1.0, -1.0, 0.0, 0.0])
+        valid_mask = torch.tensor([True, False, True, True])
+
+        targets = GRPOTrainer.get_tpo_targets(old_sequence_logps, scores, num_generations=2, valid_mask=valid_mask)
+
+        expected = torch.tensor([1.0, 0.0, 0.2, 0.8])
         torch.testing.assert_close(targets, expected)
 
     @pytest.mark.parametrize("length_normalize", [True, False])
@@ -166,4 +185,56 @@ class TestTPOLoss:
         expected_sequence_grad = torch.softmax(sequence_logps, dim=0) - tpo_targets
         per_token_scale = (1.0 / lengths) if length_normalize else torch.ones_like(lengths)
         expected_grad = (expected_sequence_grad * per_token_scale).unsqueeze(1) * completion_mask
+        torch.testing.assert_close(per_token_logps.grad, expected_grad)
+
+    def test_tpo_loss_excludes_invalid_completions_from_group_softmax(self):
+        trainer = object.__new__(GRPOTrainer)
+        trainer.loss_type = "tpo"
+        trainer.off_policy_mask_threshold = None
+        trainer.top_entropy_quantile = 1.0
+        trainer.beta = 0.0
+        trainer.num_generations = 3
+        trainer.num_generations_eval = 3
+        trainer.current_gradient_accumulation_steps = 1
+        trainer.tpo_length_normalize_logps = True
+        trainer.model = SimpleNamespace(training=True)
+        trainer.accelerator = SimpleNamespace(
+            gather=lambda tensor: tensor,
+            num_processes=1,
+            process_index=0,
+        )
+        trainer._metrics = {"train": defaultdict(list)}
+
+        per_token_logps = torch.tensor([[-0.1, -0.2], [5.0, 5.0], [-0.4, -0.6]], requires_grad=True)
+
+        def fake_get_per_token_logps_and_entropies(*args, **kwargs):
+            return per_token_logps, torch.zeros_like(per_token_logps)
+
+        trainer._get_per_token_logps_and_entropies = fake_get_per_token_logps_and_entropies
+
+        tpo_targets = torch.tensor([0.6, 0.0, 0.4])
+        tpo_valid_mask = torch.tensor([True, False, True])
+        inputs = {
+            "prompt_ids": torch.zeros((3, 1), dtype=torch.long),
+            "prompt_mask": torch.ones((3, 1), dtype=torch.long),
+            "completion_ids": torch.ones((3, 2), dtype=torch.long),
+            "completion_mask": torch.tensor([[1, 1], [0, 0], [1, 1]]),
+            "advantages": torch.zeros(3),
+            "old_per_token_logps": per_token_logps.detach(),
+            "tpo_targets": tpo_targets,
+            "tpo_valid_mask": tpo_valid_mask,
+            "num_items_in_batch": torch.tensor(4),
+        }
+
+        loss = GRPOTrainer._compute_loss(trainer, model=None, inputs=inputs)
+        loss.backward()
+
+        completion_mask = inputs["completion_mask"].to(per_token_logps.dtype)
+        lengths = completion_mask.sum(dim=-1).clamp(min=1)
+        sequence_logps = (per_token_logps.detach() * completion_mask).sum(dim=-1) / lengths
+        valid_sequence_logps = sequence_logps[tpo_valid_mask]
+        expected_valid_grad = torch.softmax(valid_sequence_logps, dim=0) - tpo_targets[tpo_valid_mask]
+        expected_grad = torch.zeros_like(per_token_logps)
+        expected_grad[0] = (expected_valid_grad[0] / lengths[0]) * completion_mask[0]
+        expected_grad[2] = (expected_valid_grad[1] / lengths[2]) * completion_mask[2]
         torch.testing.assert_close(per_token_logps.grad, expected_grad)
