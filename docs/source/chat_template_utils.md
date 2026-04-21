@@ -6,6 +6,14 @@ For an overview of the chat templates bundled with TRL and the rationale behind 
 
 [[autodoc]] clone_chat_template
 
+## add_response_schema
+
+[[autodoc]] add_response_schema
+
+## supports_tool_calling
+
+[[autodoc]] supports_tool_calling
+
 ## is_chat_template_prefix_preserving
 
 [[autodoc]] chat_template_utils.is_chat_template_prefix_preserving
