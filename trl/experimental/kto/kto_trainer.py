@@ -644,6 +644,9 @@ class KTOTrainer(_BaseTrainer):
                 completion_ids = prompt_ids + answer_ids
                 completion_mask = [1] * len(completion_ids)
 
+                # Save original prompt length before BOS may be prepended
+                orig_prompt_len = len(prompt_ids)
+
                 # Add BOS, which affects both prompt and the full completion
                 if bos_token_id is not None and (not prompt_ids or prompt_ids[0] != bos_token_id):
                     prompt_ids = [bos_token_id] + prompt_ids
@@ -661,8 +664,8 @@ class KTOTrainer(_BaseTrainer):
                 return {
                     "prompt_input_ids": prompt_ids,
                     "prompt_attention_mask": [1] * len(prompt_ids),
-                    "answer_input_ids": prompt_completion_ids[len(prompt_ids) :],  # untruncated, retained for KL
-                    "answer_attention_mask": [1] * (len(prompt_completion_ids) - len(prompt_ids)),
+                    "answer_input_ids": prompt_completion_ids[orig_prompt_len:],  # untruncated, retained for KL
+                    "answer_attention_mask": [1] * (len(prompt_completion_ids) - orig_prompt_len),
                     "completion_input_ids": completion_ids,
                     "completion_attention_mask": completion_mask,
                     "completion_labels": completion_labels,
