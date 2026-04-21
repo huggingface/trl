@@ -44,7 +44,6 @@ from transformers.utils import is_peft_available
 from ...data_utils import (
     extract_prompt,
     is_conversational,
-    maybe_apply_chat_template,
     unpair_preference_dataset,
 )
 from ...import_utils import is_liger_kernel_available
@@ -111,13 +110,17 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         "answer_attention_mask": example["answer_attention_mask"],
     }
 
-    # calculate max length by checking if BOS/EOS is already there
+    # Reserve budget for BOS/EOS tokens that will be added.
+    # BOS: only if not already present (truncation never removes the first token)
+    # EOS: always reserve a slot
+    # - truncation removes from the end, so EOS may be cut even when it was present before truncation
+    # - the post-truncation guard will then re-append it
     max_length = kwargs["max_length"]
     bos_token_id = kwargs["tokenizer"].bos_token_id
     eos_token_id = kwargs["tokenizer"].eos_token_id
     if len(all_tokens["prompt_input_ids"]) > 0 and bos_token_id != all_tokens["prompt_input_ids"][0]:
         max_length -= 1
-    if len(all_tokens["answer_input_ids"]) > 0 and eos_token_id != all_tokens["answer_input_ids"][-1]:
+    if eos_token_id is not None:
         max_length -= 1
 
     # if combined sequence is too long, truncate the completion (answer) from the end
@@ -614,14 +617,20 @@ class KTOTrainer(_BaseTrainer):
                     map_kwargs["desc"] = f"Unpairing {dataset_name} dataset"
                 dataset = unpair_preference_dataset(dataset, **map_kwargs)
 
-            # Apply the chat template if needed
-            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
-            dataset = dataset.map(
-                maybe_apply_chat_template, fn_kwargs={"processing_class": processing_class}, **map_kwargs
-            )
-
             tokenizer = getattr(processing_class, "tokenizer", processing_class)
+
+            # Add EOS token if needed: non-conversational only
+            first_example = next(iter(dataset))
+            if not is_conversational(first_example):
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
+
+                def add_eos(example, eos_token):
+                    if not example["completion"].endswith(eos_token):
+                        example["completion"] = example["completion"] + eos_token
+                    return example
+
+                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": tokenizer.eos_token}, **map_kwargs)
 
             # Tokenize dataset
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -629,11 +638,17 @@ class KTOTrainer(_BaseTrainer):
 
             def tokenize_fn(example, processing_class):
                 if is_conversational(example):
-                    prompt_ids = self._tokenize(processing_class, example["prompt"], add_generation_prompt=True)[
-                        "input_ids"
-                    ]
+                    chat_template_kwargs = example.get("chat_template_kwargs", {})
+                    prompt_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"],
+                        add_generation_prompt=True,
+                        **chat_template_kwargs,
+                    )["input_ids"]
                     prompt_completion_ids = self._tokenize(
-                        processing_class, example["prompt"] + example["completion"]
+                        processing_class,
+                        example["prompt"] + example["completion"],
+                        **chat_template_kwargs,
                     )["input_ids"]
                 else:
                     prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
