@@ -618,6 +618,8 @@ class KTOTrainer(_BaseTrainer):
                 dataset = unpair_preference_dataset(dataset, **map_kwargs)
 
             tokenizer = getattr(processing_class, "tokenizer", processing_class)
+            bos_token_id = tokenizer.bos_token_id
+            eos_token_id = tokenizer.eos_token_id
 
             # Add EOS token if needed: non-conversational only
             first_example = next(iter(dataset))
@@ -663,27 +665,51 @@ class KTOTrainer(_BaseTrainer):
                         "token handling. Verify that the tokenizer is processing text consistently."
                     )
 
+                answer_ids = prompt_completion_ids[len(prompt_ids) :]
+
+                # Reserve budget for BOS/EOS tokens that will be added.
+                # BOS: only if not already present (truncation never removes the first token)
+                # EOS: always reserve a slot — truncation removes from the end, so EOS may be cut
+                # even when it was present before truncation; the post-truncation guard re-appends it
+                max_len = self.max_length
+                if len(prompt_ids) > 0 and bos_token_id != prompt_ids[0]:
+                    max_len -= 1
+                if eos_token_id is not None:
+                    max_len -= 1
+
+                # If combined sequence is too long, truncate the answer from the end
+                if len(prompt_ids) + len(answer_ids) > max_len:
+                    answer_ids = answer_ids[: max_len - len(prompt_ids)]
+
+                # Assemble completion = prompt + truncated answer
+                completion_ids = prompt_ids + answer_ids
+                completion_mask = [1] * len(completion_ids)
+
+                # Add BOS, which affects both prompt and the full completion
+                if bos_token_id is not None and (not prompt_ids or prompt_ids[0] != bos_token_id):
+                    prompt_ids = [bos_token_id] + prompt_ids
+                    completion_ids = [bos_token_id] + completion_ids
+                    completion_mask = [1] + completion_mask
+
+                # Add EOS, which affects only the full completion
+                if not answer_ids or eos_token_id != answer_ids[-1]:
+                    completion_ids = completion_ids + [eos_token_id]
+                    completion_mask = completion_mask + [1]
+
+                # Create labels: mask prompt tokens with -100
+                completion_labels = [-100] * len(prompt_ids) + completion_ids[len(prompt_ids) :]
+
                 return {
                     "prompt_input_ids": prompt_ids,
                     "prompt_attention_mask": [1] * len(prompt_ids),
-                    "answer_input_ids": prompt_completion_ids[len(prompt_ids) :],
+                    "answer_input_ids": prompt_completion_ids[len(prompt_ids) :],  # untruncated, retained for KL
                     "answer_attention_mask": [1] * (len(prompt_completion_ids) - len(prompt_ids)),
+                    "completion_input_ids": completion_ids,
+                    "completion_attention_mask": completion_mask,
+                    "completion_labels": completion_labels,
                 }
 
             dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
-
-            # Process dataset
-            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                map_kwargs["desc"] = f"Processing tokenized {dataset_name} dataset"
-            dataset = dataset.map(
-                _process_tokens,
-                fn_kwargs={
-                    "prefix": "",
-                    "tokenizer": tokenizer,
-                    "max_length": self.max_length,
-                },
-                **map_kwargs,
-            )
 
             # Get KL datasets if needed
             if self.calculate_KL:
