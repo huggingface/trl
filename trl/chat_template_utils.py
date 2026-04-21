@@ -306,6 +306,8 @@ qwen3_5_schema = {
 }
 
 
+cohere_chat_template = (_CHAT_TEMPLATES_DIR / "cohere.jinja").read_text()
+
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
 
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
@@ -502,6 +504,11 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | P
         ids2 = processing_class.apply_chat_template(
             messages2, tokenize=True, return_dict=False, add_generation_prompt=True
         )
+    except TemplateError:
+        # Template rejects the role sequence (e.g. Cohere, FalconMamba enforce strict user/assistant alternation
+        # and raise on tool messages). Not prefix-preserving by this definition — patching is still supported via
+        # an explicit chat_template match in get_training_chat_template.
+        return False
 
     # VLM processors return batched output (list of lists), unbatch for single conversation
     if is_vlm:
@@ -510,6 +517,8 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | P
 
     return ids2[: len(ids1)] == ids1
 
+
+cohere_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere_training.jinja").read_text()
 
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text()
 
@@ -528,7 +537,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently DeepSeek-V3, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
+    requirements. Currently Cohere, DeepSeek-V3, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -576,6 +585,9 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     # First check if patching is needed
     if is_chat_template_prefix_preserving(tokenizer) and "{% generation %}" in tokenizer.chat_template:
         return None  # No patching needed
+
+    if tokenizer.chat_template == cohere_chat_template:
+        return cohere_training_chat_template
 
     if tokenizer.chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template

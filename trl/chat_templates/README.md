@@ -13,6 +13,10 @@ Jinja2 chat templates stored here serve two purposes:
 
 Used for identity comparison only.
 
+### `cohere.jinja`
+
+Original Cohere Command chat template (as shipped by CohereForAI/c4ai-command-r-v01 and related checkpoints).
+
 ### `deepseekv3.jinja`
 
 Original DeepSeek-V3 chat template.
@@ -52,6 +56,12 @@ Original Qwen3.5 chat templates.
 ## Training templates
 
 Patched templates that fix training-specific issues. Swapped in at init when tools are enabled (GRPO) or when `assistant_only_loss=True` (SFT).
+
+### `cohere_training.jinja`
+
+Patched Cohere template. Diff vs `cohere.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `deepseekv3_training.jinja`
 
