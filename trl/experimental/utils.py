@@ -324,6 +324,26 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         if all(img_list == [] for img_list in images):
             images = None
 
+        # Capture raw prompt/completion text before `apply_chat_template` mutates the examples.
+        def _raw_text_from_messages(messages_or_str: Any) -> str:
+            if isinstance(messages_or_str, str):
+                return messages_or_str
+            parts: list[str] = []
+            for turn in messages_or_str:
+                content = turn.get("content", "")
+                if isinstance(content, str):
+                    parts.append(content)
+                    continue
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        parts.append(block.get("text", ""))
+                    elif isinstance(block, str):
+                        parts.append(block)
+            return "".join(parts)
+
+        raw_prompt_texts = [_raw_text_from_messages(example["prompt"]) for example in examples]
+        raw_completion_texts = [_raw_text_from_messages(example["completion"]) for example in examples]
+
         # Apply chat template for conversational data
         if is_conversational(examples[0]):
             for example in examples:
@@ -431,9 +451,12 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         output["prompts"] = prompt_ids
         output["prompt_attention_mask"] = prompt_mask
 
-        # GOLD-specific: raw text for ULD cross-tokenizer distillation
-        output["original_prompt_text"] = prompts
-        output["original_completion_text"] = completions
+        # GOLD-specific: raw text for ULD cross-tokenizer distillation.
+        # These must be the untemplated text (no student chat-template markers) so the
+        # teacher can re-render the prompt through its own chat template and tokenize the
+        # completion cleanly.
+        output["original_prompt_text"] = raw_prompt_texts
+        output["original_completion_text"] = raw_completion_texts
 
         return output
 

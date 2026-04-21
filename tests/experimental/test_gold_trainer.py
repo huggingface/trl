@@ -1248,6 +1248,47 @@ def test_vlm_collator_label_masking(smolvlm_processor, vlm_examples):
         assert prompt_positions.any(), "Each example must have masked prompt tokens"
 
 
+def test_vlm_collator_original_text_is_untemplated(smolvlm_processor, vlm_examples):
+    """`original_*_text` must be free of the student's chat-template markers.
+
+    Cross-tokenizer ULD distillation re-renders the prompt through the teacher's chat template and concatenates the
+    stored completion. If the stored completion still carries the student's special tokens (e.g. ``<|im_end|>``, role
+    headers), the teacher tokenizer will tokenize them as regular text, producing spurious teacher tokens and incorrect
+    teacher logits.
+    """
+    collator = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=2048)
+    # Take a deep copy because the collator mutates examples in-place.
+    import copy
+
+    batch = collator(copy.deepcopy(vlm_examples))
+
+    student_tokenizer = smolvlm_processor.tokenizer
+    student_specials = [tok for tok in student_tokenizer.all_special_tokens if tok and tok.strip()]
+
+    assert "original_prompt_text" in batch
+    assert "original_completion_text" in batch
+    assert len(batch["original_prompt_text"]) == len(vlm_examples)
+    assert len(batch["original_completion_text"]) == len(vlm_examples)
+
+    expected_assistant_texts = _get_assistant_texts(vlm_examples)
+    for raw_completion, assistant_text in zip(
+        batch["original_completion_text"], expected_assistant_texts, strict=True
+    ):
+        # The raw text must still contain the underlying assistant content...
+        assert assistant_text.strip() in raw_completion
+        # ...but must not include any of the student's chat-template special tokens.
+        for special in student_specials:
+            assert special not in raw_completion, (
+                f"original_completion_text leaked student special token {special!r}: {raw_completion!r}"
+            )
+
+    for raw_prompt in batch["original_prompt_text"]:
+        for special in student_specials:
+            assert special not in raw_prompt, (
+                f"original_prompt_text leaked student special token {special!r}: {raw_prompt!r}"
+            )
+
+
 def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
     """GOLDTrainer should raise ValueError when the student is a VLM but the teacher is not."""
 
