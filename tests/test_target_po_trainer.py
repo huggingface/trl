@@ -22,7 +22,6 @@ from datasets import load_dataset
 from transformers import TrainingArguments
 
 from trl import TargetPOConfig, TargetPOTrainer
-from trl.trainer.grpo_trainer import GRPOTrainer
 
 from .testing_utils import TrlTestCase
 
@@ -116,7 +115,7 @@ class TestTPOLoss:
     def test_tpo_scores_match_population_whitened_skill(self):
         scores = torch.tensor([0.0, 1.0, 0.0, 0.0])
 
-        tpo_scores = GRPOTrainer.get_tpo_scores(scores, num_generations=2)
+        tpo_scores = TargetPOTrainer.get_tpo_scores(scores, num_generations=2)
 
         expected = torch.tensor([-1.0, 1.0, 0.0, 0.0])
         torch.testing.assert_close(tpo_scores, expected)
@@ -125,7 +124,7 @@ class TestTPOLoss:
         scores = torch.tensor([0.0, 100.0, 1.0])
         valid_mask = torch.tensor([True, False, True])
 
-        tpo_scores = GRPOTrainer.get_tpo_scores(scores, num_generations=3, valid_mask=valid_mask)
+        tpo_scores = TargetPOTrainer.get_tpo_scores(scores, num_generations=3, valid_mask=valid_mask)
 
         expected = torch.tensor([-1.0, 0.0, 1.0])
         torch.testing.assert_close(tpo_scores, expected)
@@ -133,9 +132,9 @@ class TestTPOLoss:
     def test_tpo_targets_use_population_whitened_scores(self):
         old_sequence_logps = torch.zeros(2)
         scores = torch.tensor([0.0, 1.0])
-        tpo_scores = GRPOTrainer.get_tpo_scores(scores, num_generations=2)
+        tpo_scores = TargetPOTrainer.get_tpo_scores(scores, num_generations=2)
 
-        targets = GRPOTrainer.get_tpo_targets(old_sequence_logps, tpo_scores, num_generations=2)
+        targets = TargetPOTrainer.get_tpo_targets(old_sequence_logps, tpo_scores, num_generations=2)
 
         expected = torch.softmax(torch.tensor([-1.0, 1.0]), dim=0)
         torch.testing.assert_close(targets, expected)
@@ -144,7 +143,7 @@ class TestTPOLoss:
         old_sequence_logps = torch.log(torch.tensor([0.7, 0.3, 0.2, 0.8]))
         scores = torch.tensor([1.0, -1.0, 0.0, 0.0])
 
-        targets = GRPOTrainer.get_tpo_targets(old_sequence_logps, scores, num_generations=2)
+        targets = TargetPOTrainer.get_tpo_targets(old_sequence_logps, scores, num_generations=2)
 
         expected_first_group = torch.softmax(torch.log(torch.tensor([0.7, 0.3])) + torch.tensor([1.0, -1.0]), dim=0)
         expected_second_group = torch.tensor([0.2, 0.8])
@@ -156,14 +155,14 @@ class TestTPOLoss:
         scores = torch.tensor([1.0, -1.0, 0.0, 0.0])
         valid_mask = torch.tensor([True, False, True, True])
 
-        targets = GRPOTrainer.get_tpo_targets(old_sequence_logps, scores, num_generations=2, valid_mask=valid_mask)
+        targets = TargetPOTrainer.get_tpo_targets(old_sequence_logps, scores, num_generations=2, valid_mask=valid_mask)
 
         expected = torch.tensor([1.0, 0.0, 0.2, 0.8])
         torch.testing.assert_close(targets, expected)
 
     @pytest.mark.parametrize("length_normalize", [True, False])
     def test_tpo_loss_gradient_matches_policy_minus_target(self, length_normalize):
-        trainer = object.__new__(GRPOTrainer)
+        trainer = object.__new__(TargetPOTrainer)
         trainer.loss_type = "tpo"
         trainer.off_policy_mask_threshold = None
         trainer.top_entropy_quantile = 1.0
@@ -199,7 +198,7 @@ class TestTPOLoss:
             "num_items_in_batch": torch.tensor(4),
         }
 
-        loss = GRPOTrainer._compute_loss(trainer, model=None, inputs=inputs)
+        loss = TargetPOTrainer._compute_loss(trainer, model=None, inputs=inputs)
         loss.backward()
 
         completion_mask = inputs["completion_mask"].to(per_token_logps.dtype)
@@ -212,7 +211,7 @@ class TestTPOLoss:
         torch.testing.assert_close(per_token_logps.grad, expected_grad)
 
     def test_tpo_loss_excludes_invalid_completions_from_group_softmax(self):
-        trainer = object.__new__(GRPOTrainer)
+        trainer = object.__new__(TargetPOTrainer)
         trainer.loss_type = "tpo"
         trainer.off_policy_mask_threshold = None
         trainer.top_entropy_quantile = 1.0
@@ -250,7 +249,7 @@ class TestTPOLoss:
             "num_items_in_batch": torch.tensor(4),
         }
 
-        loss = GRPOTrainer._compute_loss(trainer, model=None, inputs=inputs)
+        loss = TargetPOTrainer._compute_loss(trainer, model=None, inputs=inputs)
         loss.backward()
 
         completion_mask = inputs["completion_mask"].to(per_token_logps.dtype)

@@ -20,7 +20,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from trl.trainer.grpo_trainer import GRPOTrainer
+from trl import TargetPOTrainer
 
 
 WORLD_SIZE = 2
@@ -45,7 +45,7 @@ def _tpo_worker(rank: int, world_size: int, init_file: str) -> None:
     try:
         local = LOCAL_SEQ_LOGPS[rank].clone().requires_grad_(True)
 
-        gathered = GRPOTrainer._gather_tensor_with_grad(local)
+        gathered = TargetPOTrainer._gather_tensor_with_grad(local)
         logps = torch.log_softmax(gathered.view(-1, NUM_GENERATIONS), dim=1).view(-1)
 
         process_slice = slice(rank * local.size(0), (rank + 1) * local.size(0))
