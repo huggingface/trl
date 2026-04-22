@@ -305,9 +305,10 @@ qwen3_5_schema = {
     },
 }
 
-gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text()
 
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
+
+gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text()
 
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
 
@@ -445,6 +446,14 @@ def supports_tool_calling(processing_class) -> bool:
         # UndefinedError (subclass): template indexes into content as a list for all roles, including tool
         #   (Idefics2, Idefics3, LlavaNext, SmolVLM)
         return False
+    except TypeError:
+        # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
+        # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
+        tool_calls[0]["function"]["arguments"] = f'{{"{_arg_key_sentinel}": "{_arg_val_sentinel}"}}'
+        try:
+            rendered = processing_class.apply_chat_template(messages, tokenize=False)
+        except TemplateError:
+            return False
     # All four sentinels must survive: the tool name and arguments (assistant tool_calls) AND the tool message
     # content. Templates that silently drop either side (basic Llama 3 drops tool_calls; Cohere2/Phi3 drop tool
     # messages) will fail this check.
@@ -533,7 +542,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently DeepSeek-V3, Gemma (v1 + v2), GLM-4-MoE, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
+    requirements. Currently DeepSeek-V3, Gemma, Gemma2, GLM-4-MoE, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -578,13 +587,15 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n6\n</tool_response><|im_end|>\n<|im_start|>assistant\n'
     ```
     """
-    # First check if patching is needed
-    if "{% generation %}" in tokenizer.chat_template and is_chat_template_prefix_preserving(tokenizer):
+    # First check if patching is needed. Prefix-preservation only matters when the template actually supports tools
+    # (the check itself renders a tool message), so skip it otherwise.
+    prefix_ok = not supports_tool_calling(tokenizer) or is_chat_template_prefix_preserving(tokenizer)
+    if prefix_ok and "{% generation %}" in tokenizer.chat_template:
         return None  # No patching needed
 
     if tokenizer.chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
-      
+
     if tokenizer.chat_template == gemma_chat_template:
         return gemma_training_chat_template
 
