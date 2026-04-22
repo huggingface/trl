@@ -77,11 +77,10 @@ if is_peft_available():
 
 @dataclass
 class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
-    """`CausalLMOutputWithPast` with `token_accuracy`, `entropy` and optional `aux_loss` fields for chunked-CE
-    training. `aux_loss` is populated when the underlying model is MoE with `output_router_logits=True`."""
+    """`CausalLMOutputWithPast` with extra fields populated by the chunked-CE path."""
 
-    token_accuracy: torch.Tensor | None = None
-    entropy: torch.Tensor | None = None
+    num_correct_tokens: torch.Tensor | None = None
+    entropy_sum: torch.Tensor | None = None
     aux_loss: torch.Tensor | None = None
 
 
@@ -137,9 +136,9 @@ def _chunked_cross_entropy_loss(
             Bias of the `lm_head` linear layer, shape `(V,)`. Added to each chunk's logits when provided.
 
     Returns:
-        `tuple[torch.Tensor, torch.Tensor, torch.Tensor]`: scalar loss, scalar token accuracy, and scalar mean Shannon
-        entropy (in nats) — all taken over non-ignored tokens in the local batch. When there are no valid tokens, all
-        three are `0.0`.
+        `tuple[torch.Tensor, torch.Tensor, torch.Tensor]`: scalar loss, number of correctly-predicted tokens (count),
+        and sum of per-token Shannon entropy (in nats) — all over the local batch. Raw sums are returned so callers can
+        reduce correctly across ranks.
     """
     if labels is None and shift_labels is None:
         raise ValueError("At least one of `labels` or `shift_labels` must be provided.")
@@ -190,14 +189,13 @@ def _chunked_cross_entropy_loss(
         correct = correct + chunk_correct
         entropy_sum = entropy_sum + chunk_entropy
 
-    accuracy = correct / n_valid
-    entropy = entropy_sum / n_valid
-
     if num_items_in_batch is None:
-        return loss / n_valid, accuracy, entropy
-    if isinstance(num_items_in_batch, torch.Tensor):
-        num_items_in_batch = num_items_in_batch.to(loss.device)
-    return loss / num_items_in_batch, accuracy, entropy
+        loss = loss / n_valid
+    else:
+        if isinstance(num_items_in_batch, torch.Tensor):
+            num_items_in_batch = num_items_in_batch.to(loss.device)
+        loss = loss / num_items_in_batch
+    return loss, correct, entropy_sum
 
 
 def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
@@ -252,7 +250,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
         )
         hidden_states = outputs.last_hidden_state
 
-        loss, token_accuracy, entropy = _chunked_cross_entropy_loss(
+        loss, num_correct_tokens, entropy_sum = _chunked_cross_entropy_loss(
             hidden_states,
             self.lm_head.weight,
             chunk_size,
@@ -286,8 +284,8 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
-            token_accuracy=token_accuracy,
-            entropy=entropy,
+            num_correct_tokens=num_correct_tokens,
+            entropy_sum=entropy_sum,
             aux_loss=aux_loss,
         )
 
@@ -1540,8 +1538,10 @@ class SFTTrainer(_BaseTrainer):
 
         # Compute entropy
         if self.args.loss_type == "chunked_nll":
-            # Chunked-NLL path returns a scalar entropy directly (computed only on non-ignored tokens).
-            entropy = self.accelerator.gather_for_metrics(outputs.entropy).mean().item()
+            shift_labels = inputs["shift_labels"] if "shift_labels" in inputs else labels[..., 1:]
+            n_valid = self.accelerator.gather_for_metrics((shift_labels != -100).sum()).sum()
+            entropy_sum = self.accelerator.gather_for_metrics(outputs.entropy_sum).sum()
+            entropy = (entropy_sum / n_valid).item() if n_valid > 0 else 0.0
             self._metrics[mode]["entropy"].append(entropy)
         elif not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
@@ -1587,11 +1587,17 @@ class SFTTrainer(_BaseTrainer):
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        if self.args.use_liger_kernel or self.args.loss_type == "chunked_nll":
+        if self.args.loss_type == "chunked_nll":
+            shift_labels = inputs["shift_labels"] if "shift_labels" in inputs else labels[..., 1:]
+            n_valid = self.accelerator.gather_for_metrics((shift_labels != -100).sum()).sum()
+            correct = self.accelerator.gather_for_metrics(outputs.num_correct_tokens).sum()
+            accuracy = (correct / n_valid).item() if n_valid > 0 else 0.0
+            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+        elif self.args.use_liger_kernel:
             if hasattr(outputs, "token_accuracy") and outputs.token_accuracy is not None:
                 token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
                 self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
-            elif self.args.use_liger_kernel:
+            else:
                 warnings.warn(
                     "liger-kernel did not return token_accuracy when requested. The mean_token_accuracy metric will "
                     "not be logged. This is unexpected; please report it to the liger-kernel repository.",
