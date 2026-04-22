@@ -24,7 +24,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from operator import itemgetter
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -44,6 +44,7 @@ from transformers import (
     DataCollator,
     FeatureExtractionMixin,
     PreTrainedModel,
+    PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
     TrainingArguments,
@@ -74,9 +75,6 @@ if is_sklearn_available():
 
 if is_joblib_available():
     import joblib
-
-if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizerBase
 
 logger = logging.get_logger(__name__)
 
@@ -166,8 +164,8 @@ class RunningMoments:
 
 def _tokenize(
     batch: dict[str, list[Any]],
-    tokenizer: "PreTrainedTokenizerBase",
-    embedding_tokenizer: Optional["PreTrainedTokenizerBase"] = None,
+    tokenizer: PreTrainedTokenizerBase,
+    embedding_tokenizer: PreTrainedTokenizerBase | None = None,
 ) -> dict[str, list[Any]]:
     """Tokenize a batch from a BCO specific dataset."""
     prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
