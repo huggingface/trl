@@ -104,10 +104,11 @@ def _chunked_cross_entropy_loss(
     logits tensor is kept alive only during its own forward/backward pass via gradient checkpointing, so peak
     logits-activation memory is `chunk_size * vocab_size` instead of `batch_size * seq_len * vocab_size`.
 
-    Exactly one of `labels` or `shift_labels` must be provided. Passing `labels` is the standard path and triggers the
-    internal `labels[..., 1:]` / `hidden_states[..., :-1, :]` shift. Passing `shift_labels` skips the shift and assumes
-    the caller has already aligned labels with hidden states — this is the contract used under context / sequence
-    parallelism, where labels are shifted before being sharded.
+    At least one of `labels` or `shift_labels` must be provided. Passing `labels` alone is the standard path and
+    triggers the internal `labels[..., 1:]` / `hidden_states[..., :-1, :]` shift. Passing `shift_labels` skips the
+    shift and assumes the caller has already aligned labels with hidden states — this is the contract used under
+    context / sequence parallelism, where labels are shifted before being sharded. If both are provided, `shift_labels`
+    wins (matching [`~transformers.loss.ForCausalLMLoss`]).
 
     Args:
         hidden_states (`torch.Tensor`):
@@ -140,8 +141,8 @@ def _chunked_cross_entropy_loss(
         entropy (in nats) — all taken over non-ignored tokens in the local batch. When there are no valid tokens, all
         three are `0.0`.
     """
-    if (labels is None) == (shift_labels is None):
-        raise ValueError("Exactly one of `labels` or `shift_labels` must be provided.")
+    if labels is None and shift_labels is None:
+        raise ValueError("At least one of `labels` or `shift_labels` must be provided.")
 
     if shift_labels is not None:
         hidden = hidden_states.reshape(-1, hidden_states.size(-1))

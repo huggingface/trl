@@ -2477,12 +2477,21 @@ class TestChunkedCrossEntropyLoss:
         torch.testing.assert_close(ent_s, ent_l, atol=1e-6, rtol=1e-6)
 
     def test_requires_labels_or_shift_labels(self):
-        """Must provide exactly one of `labels` or `shift_labels`."""
-        hidden, weight, labels = self._inputs()
-        with pytest.raises(ValueError, match="Exactly one"):
+        """Must provide at least one of `labels` or `shift_labels`."""
+        hidden, weight, _ = self._inputs()
+        with pytest.raises(ValueError, match="At least one"):
             _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE)
-        with pytest.raises(ValueError, match="Exactly one"):
-            _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels, shift_labels=labels)
+
+    def test_shift_labels_wins_when_both_provided(self):
+        """When both `labels` and `shift_labels` are provided (Ulysses / CP / SP path), `shift_labels` wins."""
+        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
+        shift_labels = F.pad(labels, (0, 1), value=-100)[..., 1:].contiguous()
+        # Chunked result with both passed in must match the shift_labels-only path.
+        loss_both, *_ = _chunked_cross_entropy_loss(
+            hidden, weight, self.CHUNK_SIZE, labels=labels, shift_labels=shift_labels
+        )
+        loss_shift, *_ = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, shift_labels=shift_labels)
+        torch.testing.assert_close(loss_both, loss_shift, atol=1e-6, rtol=1e-6)
 
     def test_lm_head_bias(self):
         """When `lm_head_bias` is provided, chunked loss matches `F.linear(h, w, b)` followed by CE."""
