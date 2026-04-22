@@ -102,9 +102,12 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     Args:
         pad_token_id (`int`, defaults to `0`):
             Token ID to use for padding `input_ids` sequences.
+        return_tensors (`str`, optional, defaults to `"pt"`):
+            The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
     """
 
     pad_token_id: int = 0
+    return_tensors: str = "pt"
 
     def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         batch = {}
