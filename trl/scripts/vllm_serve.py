@@ -217,8 +217,7 @@ class ScriptArguments:
             vLLM defaults to the multiproc backend (single-node only).
         speculative_config (`str`, *optional*):
             JSON string for vLLM speculative decoding config, forwarded to `LLM(speculative_config=...)`. When unset,
-            speculative decoding is disabled. Example:
-            `'{"method": "qwen3_next_mtp", "num_speculative_tokens": 5}'`.
+            speculative decoding is disabled. Example: `'{"method": "qwen3_next_mtp", "num_speculative_tokens": 5}'`.
     """
 
     model: str = field(
