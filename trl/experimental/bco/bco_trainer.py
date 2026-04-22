@@ -44,7 +44,7 @@ from transformers import (
     DataCollator,
     FeatureExtractionMixin,
     PreTrainedModel,
-    PreTrainedTokenizerBaseBase,
+    PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
     TrainingArguments,
@@ -363,7 +363,7 @@ class BCOTrainer(_BaseTrainer):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`]):
             The dataset to use for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBaseBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
@@ -414,7 +414,7 @@ class BCOTrainer(_BaseTrainer):
         args: BCOConfig = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
-        processing_class: PreTrainedTokenizerBaseBase
+        processing_class: PreTrainedTokenizerBase
         | BaseImageProcessor
         | FeatureExtractionMixin
         | ProcessorMixin
@@ -429,7 +429,7 @@ class BCOTrainer(_BaseTrainer):
         model_adapter_name: str | None = None,
         ref_adapter_name: str | None = None,
         embedding_func: Callable | None = None,
-        embedding_tokenizer: PreTrainedTokenizerBaseBase | None = None,
+        embedding_tokenizer: PreTrainedTokenizerBase | None = None,
     ):
         if embedding_func is not None and not (is_sklearn_available() and is_joblib_available()):
             raise ImportError(
