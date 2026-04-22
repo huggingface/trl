@@ -23,9 +23,6 @@ class SDZeroConfig(SelfDistillationConfig):
     r"""
     Configuration class for [`SDZeroTrainer`].
 
-    This class extends [`experimental.self_distillation.SelfDistillationConfig`] and overrides with parameters and defaults
-    relevant for SD-Zero.
-
     Parameters:
         separator (`str`, *optional*, defaults to `"\n\n"`):
             Text inserted between the student's initial response and the control prompt when composing the
