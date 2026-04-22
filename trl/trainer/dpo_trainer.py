@@ -880,7 +880,7 @@ class DPOTrainer(_BaseTrainer):
                     map_kwargs["desc"] = f"Extracting prompt from {dataset_name} dataset"
                 dataset = dataset.map(extract_prompt, **map_kwargs)
 
-            # Apply the chat template if needed
+            # Add EOS token if needed: non-conversational only
             first_example = next(iter(dataset))
             if not is_conversational(first_example):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`

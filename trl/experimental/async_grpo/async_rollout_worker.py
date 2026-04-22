@@ -26,7 +26,7 @@ import numpy as np
 import requests
 from accelerate.logging import get_logger
 from datasets import Dataset
-from transformers import AutoTokenizer
+from transformers import PreTrainedTokenizerBase
 
 from trl.chat_template_utils import (
     add_response_schema,
@@ -90,6 +90,7 @@ class AsyncRolloutWorker:
         model_name: str,
         dataset: Dataset,
         reward_funcs: list[Callable[..., list[float]]],
+        processing_class: PreTrainedTokenizerBase,
         tools: list[Callable] | None = None,
         environment_factory: Callable[[], object] | None = None,
         num_generations: int = 8,
@@ -165,7 +166,7 @@ class AsyncRolloutWorker:
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.log_completions = log_completions
         self.num_completions_to_print = num_completions_to_print
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer = processing_class
         self.tokenizer = add_response_schema(self.tokenizer)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
