@@ -594,7 +594,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_train_moe_with_peft_config(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32", revision="refs/pr/2")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         # Get the dataset
