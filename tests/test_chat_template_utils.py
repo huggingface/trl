@@ -182,6 +182,8 @@ class TestSupportsToolCalling:
     @pytest.mark.parametrize(
         "model_id",
         [
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
                 id="gemma4",
@@ -263,20 +265,6 @@ class TestSupportsToolCalling:
     def test_does_not_support_tool_calling(self, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         assert supports_tool_calling(tokenizer) is False
-
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            # TypeError: template concatenates arguments as string (needs template patch)
-            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
-            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
-        ],
-    )
-    @pytest.mark.xfail(reason="DeepseekV3 template expects arguments as JSON string, needs patch", strict=True)
-    def test_deepseek_tool_calling(self, model_id):
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        assert supports_tool_calling(tokenizer) is True
-
 
 class TestIsChatTemplatePrefixPreserving:
     def test_prefix_preserving_template(self):
