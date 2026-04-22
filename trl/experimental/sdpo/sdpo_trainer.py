@@ -49,7 +49,7 @@ logger = logging.get_logger(__name__)
 
 
 class SuccessfulRolloutTeacherContextBuilder:
-    """Builds SDPO teacher contexts from successful rollouts, following the official online implementation."""
+    """Builds teacher contexts from successful rollouts"""
 
     def __init__(self, trainer):
         self.trainer = trainer

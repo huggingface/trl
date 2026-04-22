@@ -47,7 +47,7 @@ logger = get_logger(__name__)
 
 
 class DemonstrationTeacherContextBuilder:
-    """Builds student and teacher contexts from prompts plus privileged context, as in SDFT."""
+    """Builds student and teacher contexts from prompts plus privileged context"""
 
     def __init__(self, trainer):
         self.trainer = trainer

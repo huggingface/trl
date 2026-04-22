@@ -23,9 +23,6 @@ class SDPOConfig(SelfDistillationConfig):
     r"""
     Configuration class for the [`SDPOTrainer`].
 
-    This class extends [`experimental.self_distillation.SelfDistillationConfig`] with the online teacher-construction
-    parameters used by Self-Distillation Policy Optimization (SDPO).
-
     Parameters:
         > Parameters that control the online policy objective
 

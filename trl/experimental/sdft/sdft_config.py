@@ -20,10 +20,7 @@ from ..self_distillation.self_distillation_config import SelfDistillationConfig
 @dataclass
 class SDFTConfig(SelfDistillationConfig):
     r"""
-    Configuration class for [`SDFTTrainer`].
-
-    This adapts the official SDFT implementation to the TRL trainer API while reusing the common self-distillation
-    configuration shared with SDPO.
+    Configuration class for [`SDFTTrainer`]..
 
     Parameters:
         disable_dropout (`bool`, *optional*, defaults to `True`):
