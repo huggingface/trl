@@ -39,6 +39,7 @@ from transformers import (
     ProcessorMixin,
     TrainerCallback,
 )
+from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
@@ -94,7 +95,7 @@ def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
 
 
 @dataclass
-class DataCollatorForUnpairedPreference:
+class DataCollatorForUnpairedPreference(DataCollatorMixin):
     """
     Data collator for unpaired preference data. Pads sequences to the maximum length of the batch.
 
