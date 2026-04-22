@@ -88,6 +88,20 @@ Always include the thinking block regardless of message position. The original c
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
+### `glm4moe_training.jinja`
+
+Patched GLM-4-MoE template. Diff vs `glm4moe.jinja`:
+
+Require both `<think>` and `</think>` to be present before parsing, to avoid incorrect splitting when the model generates only one tag:
+
+```diff
+- {%- if '</think>' in content %}
++ {%- if '<think>' in content and '</think>' in content %}
+```
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+
 ### `gptoss_training.jinja`
 
 Patched GPT-OSS template. Diff vs `gptoss.jinja`:
