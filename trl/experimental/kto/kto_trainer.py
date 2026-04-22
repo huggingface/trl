@@ -109,9 +109,9 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     pad_token_id: int = 0
     return_tensors: str = "pt"
 
-    def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
+    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         batch = {}
-        for k in features[0]:
+        for k in examples[0]:
             if k.endswith(("_input_ids", "_attention_mask", "_labels")):
                 padding_side = "left" if k in ("prompt_input_ids", "prompt_attention_mask") else "right"
                 if k.endswith("_input_ids"):
@@ -121,14 +121,14 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                 else:
                     padding_value = 0
                 batch[k] = pad(
-                    [torch.tensor(ex[k], dtype=torch.int64) for ex in features],
+                    [torch.tensor(ex[k], dtype=torch.int64) for ex in examples],
                     padding_value=padding_value,
                     padding_side=padding_side,
                 )
             elif k.endswith("_logps"):
-                batch[k] = torch.tensor([ex[k] for ex in features])
+                batch[k] = torch.tensor([ex[k] for ex in examples])
             else:
-                batch[k] = [ex[k] for ex in features]
+                batch[k] = [ex[k] for ex in examples]
         return batch
 
 
