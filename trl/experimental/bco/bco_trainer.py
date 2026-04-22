@@ -44,7 +44,7 @@ from transformers import (
     DataCollator,
     FeatureExtractionMixin,
     PreTrainedModel,
-    PreTrainedTokenizerBase,
+    PreTrainedTokenizerBaseBase,
     ProcessorMixin,
     TrainerCallback,
     TrainingArguments,
@@ -77,7 +77,7 @@ if is_joblib_available():
     import joblib
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizer
+    from transformers import PreTrainedTokenizerBase
 
 logger = logging.get_logger(__name__)
 
@@ -167,8 +167,8 @@ class RunningMoments:
 
 def _tokenize(
     batch: dict[str, list[Any]],
-    tokenizer: "PreTrainedTokenizer",
-    embedding_tokenizer: Optional["PreTrainedTokenizer"] = None,
+    tokenizer: "PreTrainedTokenizerBase",
+    embedding_tokenizer: Optional["PreTrainedTokenizerBase"] = None,
 ) -> dict[str, list[Any]]:
     """Tokenize a batch from a BCO specific dataset."""
     prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
@@ -363,7 +363,7 @@ class BCOTrainer(_BaseTrainer):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`]):
             The dataset to use for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
+        processing_class ([`~transformers.PreTrainedTokenizerBaseBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
@@ -414,7 +414,7 @@ class BCOTrainer(_BaseTrainer):
         args: BCOConfig = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
-        processing_class: PreTrainedTokenizerBase
+        processing_class: PreTrainedTokenizerBaseBase
         | BaseImageProcessor
         | FeatureExtractionMixin
         | ProcessorMixin
@@ -429,7 +429,7 @@ class BCOTrainer(_BaseTrainer):
         model_adapter_name: str | None = None,
         ref_adapter_name: str | None = None,
         embedding_func: Callable | None = None,
-        embedding_tokenizer: PreTrainedTokenizerBase | None = None,
+        embedding_tokenizer: PreTrainedTokenizerBaseBase | None = None,
     ):
         if embedding_func is not None and not (is_sklearn_available() and is_joblib_available()):
             raise ImportError(
