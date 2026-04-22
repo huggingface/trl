@@ -321,6 +321,8 @@ llama3_1_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1.jinja").read_text()
 
 llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text()
 
+phi3_chat_template = (_CHAT_TEMPLATES_DIR / "phi3.jinja").read_text()
+
 qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text()
 
 qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text()
@@ -532,6 +534,8 @@ gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").
 
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text()
 
+phi3_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_training.jinja").read_text()
+
 qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text()
 
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text()
@@ -546,7 +550,7 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    Currently DeepSeek-V3, Gemma, Gemma2, GLM-4-MoE, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
+    Currently DeepSeek-V3, Gemma, Gemma2, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Qwen2.5, and Qwen3 are supported.
 
     Args:
         processing_class (`PreTrainedTokenizer` or `ProcessorMixin`):
@@ -626,6 +630,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == llama3_chat_template:
         return llama3_training_chat_template
+
+    if processing_class.chat_template == phi3_chat_template:
+        return phi3_training_chat_template
 
     if processing_class.chat_template == qwen2_5_chat_template:
         return qwen2_5_training_chat_template
