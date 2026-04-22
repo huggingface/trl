@@ -608,8 +608,8 @@ def get_training_chat_template(
 
     # First check if patching is needed. Prefix-preservation only matters when the template actually supports tools
     # (the check itself renders a tool message), so skip it otherwise.
-    prefix_ok = not supports_tool_calling(tokenizer) or is_chat_template_prefix_preserving(tokenizer)
-    if prefix_ok and "{% generation %}" in tokenizer.chat_template:
+    prefix_ok = not supports_tool_calling(processing_class) or is_chat_template_prefix_preserving(processing_class)
+    if prefix_ok and "{% generation %}" in processing_class.chat_template:
         return None  # No patching needed
 
     if processing_class.chat_template == deepseekv3_chat_template:
