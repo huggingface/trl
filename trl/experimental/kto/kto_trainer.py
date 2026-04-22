@@ -105,7 +105,7 @@ class DataCollatorForUnpairedPreference:
 
     pad_token_id: int = 0
 
-    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
+    def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         batch = {}
         for k in features[0]:
             if k.endswith(("_input_ids", "_attention_mask", "_labels")):
