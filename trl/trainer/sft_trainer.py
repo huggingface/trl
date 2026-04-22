@@ -206,11 +206,10 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
     `labels` are provided.
 
     The patched forward calls the base decoder directly (`model.get_decoder()`) to obtain hidden states, skips the
-    `lm_head` matmul on positions with `labels == -100`, and computes the cross-entropy in chunks of `chunk_size`
-    valid tokens.
-    It returns a [`_ChunkedCELMHeadOutput`] with `loss` set, `logits` set to `None`, and `token_accuracy` / `entropy`
-    fields set to the mean values over non-ignored tokens. Also accepts pre-shifted `shift_labels` in place of
-    `labels`, for the context / sequence parallelism path. When both are `None`, the original forward is invoked so
+    `lm_head` matmul on positions with `labels == -100`, and computes the cross-entropy in chunks of `chunk_size` valid
+    tokens. It returns a [`_ChunkedCELMHeadOutput`] with `loss` set, `logits` set to `None`, and `token_accuracy` /
+    `entropy` fields set to the mean values over non-ignored tokens. Also accepts pre-shifted `shift_labels` in place
+    of `labels`, for the context / sequence parallelism path. When both are `None`, the original forward is invoked so
     generation and labels-free evaluation preserve any per-model logits post-processing (e.g. `logit_scale`,
     `final_logit_softcapping`).
 
