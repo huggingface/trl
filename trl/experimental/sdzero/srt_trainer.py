@@ -188,13 +188,15 @@ class SRTTrainer(SFTTrainer):
 
         - Revision sample: loss is applied only to the `y_revised` suffix.
         - Generation sample: loss is applied to the full assistant trace
-        `y_init + control_prompt + y_revised`.
+          `y_init + control_prompt + y_revised`.
 
-        To support arbitrary chat templates, token boundaries are computed by
-        tokenizing three views of the conversation: the full sample, the conversation
-        with an empty assistant message, and the conversation truncated just before
-        `y_revised`. The resulting lengths define the assistant start and revision
-        start positions used to build the masks.
+        To support arbitrary chat templates, token boundaries are computed from
+        structured chat renders rather than manual token concatenation:
+
+        - The generation boundary comes from the canonical prompt-only render with
+          `add_generation_prompt=True`.
+        - The revision boundary comes from rendering the same chat while continuing
+          the assistant message immediately before the `y_revised` suffix.
         """
 
         tokenizer = processing_class.tokenizer if isinstance(processing_class, ProcessorMixin) else processing_class
@@ -207,14 +209,16 @@ class SRTTrainer(SFTTrainer):
 
         assistant_turn_prefix_template = args.assistant_turn_template.removesuffix("{y_revised}")
 
-        def _tokenize_chat(problem: str, assistant_content: str, *, continue_final_message: bool) -> list[int]:
+        def _tokenize_messages(
+            messages: list[dict[str, str]],
+            *,
+            add_generation_prompt: bool = False,
+            continue_final_message: bool = False,
+        ) -> list[int]:
             return tokenizer.apply_chat_template(
-                conversation=[
-                    {"role": "user", "content": problem},
-                    {"role": "assistant", "content": assistant_content},
-                ],
+                conversation=messages,
                 tokenize=True,
-                add_generation_prompt=False,
+                add_generation_prompt=add_generation_prompt,
                 continue_final_message=continue_final_message,
             )
 
@@ -224,6 +228,7 @@ class SRTTrainer(SFTTrainer):
             control_prompt = example["control_prompt"]
             y_revised = example["y_revised"]
 
+            prompt_messages = [{"role": "user", "content": problem}]
             assistant_full = args.assistant_turn_template.format(
                 y_init=y_init,
                 control_prompt=control_prompt,
@@ -234,20 +239,25 @@ class SRTTrainer(SFTTrainer):
                 control_prompt=control_prompt,
             )
 
-            input_ids = _tokenize_chat(problem, assistant_full, continue_final_message=False)
-            assistant_prefix_ids = _tokenize_chat(problem, "", continue_final_message=True)
-            revision_prefix_ids = _tokenize_chat(problem, assistant_before_revision, continue_final_message=True)
+            input_ids = _tokenize_messages(
+                prompt_messages + [{"role": "assistant", "content": assistant_full}],
+            )
+            generation_prefix_ids = _tokenize_messages(
+                prompt_messages,
+                add_generation_prompt=True,
+            )
+            revision_prefix_ids = _tokenize_messages(
+                prompt_messages + [{"role": "assistant", "content": assistant_before_revision}],
+                continue_final_message=True,
+            )
 
-            assistant_start = len(assistant_prefix_ids)
-            revision_start = len(revision_prefix_ids)
-
-            if input_ids[:assistant_start] != assistant_prefix_ids:
-                raise ValueError("Unexpected tokenization: assistant prefix is not a prefix of the full input")
-            if input_ids[:revision_start] != revision_prefix_ids:
+            if input_ids[: len(generation_prefix_ids)] != generation_prefix_ids:
+                raise ValueError("Unexpected tokenization: generation prefix is not a prefix of the full input")
+            if input_ids[: len(revision_prefix_ids)] != revision_prefix_ids:
                 raise ValueError("Unexpected tokenization: revision prefix is not a prefix of the full input")
 
-            generation_mask = [0] * assistant_start + [1] * (len(input_ids) - assistant_start)
-            revision_mask = [0] * revision_start + [1] * (len(input_ids) - revision_start)
+            generation_mask = [0] * len(generation_prefix_ids) + [1] * (len(input_ids) - len(generation_prefix_ids))
+            revision_mask = [0] * len(revision_prefix_ids) + [1] * (len(input_ids) - len(revision_prefix_ids))
 
             input_ids_list, completion_masks = [], []
             if args.include_revision_loss:

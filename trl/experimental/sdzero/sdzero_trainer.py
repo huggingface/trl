@@ -184,25 +184,26 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
         mode = "train" if self.model.training else "eval"
         self._metrics[mode]["sdzero/reward"].append(sum(rewards) / max(len(rewards), 1))
 
-        # Build teacher prompt: [chat_template(x)] + y_init + sep + P_r + sep
-        # The teacher sees the full student response and control prompt before generating its revised distribution.
+        # Build the teacher prefix from the prompt plus the assistant-turn template before its distillation suffix.
+        # The teacher sees the student response and control prompt, then predicts the sampled response tokens again.
         prompts, _ = self._split_prompt_and_privileged_context(inputs)
-        teacher_prompt_texts = []
-        for prompt, y_init, p_r in zip(prompts, completions, control_prompts, strict=False):
+        teacher_prompt_ids_list = []
+        for prompt, y, control_prompt in zip(prompts, completions, control_prompts, strict=False):
+            assistant_turn_prefix = self.args.assistant_turn_template.format(
+                y=y,
+                control_prompt=control_prompt,
+            )
             if is_conversational({"prompt": prompt}):
-                prompt_text = tokenizer.apply_chat_template(
-                    prompt,
-                    tokenize=False,
-                    add_generation_prompt=True,
+                teacher_prompt_ids = tokenizer.apply_chat_template(
+                    prompt + [{"role": "assistant", "content": assistant_turn_prefix}],
+                    tokenize=True,
+                    add_generation_prompt=False,
+                    continue_final_message=True,
                     **self.chat_template_kwargs,
                 )
             else:
-                prompt_text = prompt
-            teacher_prompt_texts.append(prompt_text + y_init + self.args.separator + p_r + self.args.separator)
-
-        teacher_prompt_ids_list = [
-            tokenizer(text, add_special_tokens=False)["input_ids"] for text in teacher_prompt_texts
-        ]
+                teacher_prompt_ids = tokenizer(prompt + assistant_turn_prefix, add_special_tokens=False)["input_ids"]
+            teacher_prompt_ids_list.append(teacher_prompt_ids)
 
         device = rollout_batch.completion_ids.device
         teacher_prompt_ids = [torch.tensor(ids) for ids in teacher_prompt_ids_list]

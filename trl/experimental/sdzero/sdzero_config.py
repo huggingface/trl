@@ -24,9 +24,9 @@ class SDZeroConfig(SelfDistillationConfig):
     Configuration class for [`SDZeroTrainer`].
 
     Parameters:
-        separator (`str`, *optional*, defaults to `"\n\n"`):
-            Text inserted between the student's initial response and the control prompt when composing the
-            teacher context. Should match the separator encoded in the Phase 1 assistant turn template.
+        assistant_turn_template (`str`, *optional*, defaults to `"{y}\n\n{control_prompt}\n\n{y}"`):
+            Template used to compose the teacher-side assistant turn from the sampled response `y` and the
+            control prompt. Must end with `{y}` so the distillation suffix boundary is well-defined.
 
          > Parameters that control the teacher
 
@@ -53,11 +53,11 @@ class SDZeroConfig(SelfDistillationConfig):
             Number of rollouts sampled per prompt per training step.
     """
 
-    separator: str = field(
-        default="\n\n",
+    assistant_turn_template: str = field(
+        default="{y}\n\n{control_prompt}\n\n",
         metadata={
-            "help": "Text inserted between the student's initial response and the control prompt when composing "
-            "the teacher context. Should match the separator encoded in the Phase 1 assistant turn template."
+            "help": "Template used to compose the teacher-side assistant turn from the sampled response `y` "
+            "and the control prompt."
         },
     )
     teacher_model_kind: str = field(
@@ -93,3 +93,8 @@ class SDZeroConfig(SelfDistillationConfig):
         default=1,
         metadata={"help": "Number of rollouts sampled per prompt per training step."},
     )
+
+    def __post_init__(self):
+        super().__post_init__()
+        if not self.assistant_turn_template.endswith("{y}"):
+            raise ValueError("`assistant_turn_template` must end with `{y}`.")

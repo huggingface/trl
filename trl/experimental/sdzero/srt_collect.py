@@ -82,8 +82,26 @@ def render_initial_prompt(tokenizer, problem: str) -> str:
     )
 
 
-def render_revision_prompt(tokenizer, problem: str, y_init: str, control_prompt: str, separator: str) -> str:
-    return render_initial_prompt(tokenizer, problem) + y_init + separator + control_prompt + separator
+def render_revision_prompt(
+    tokenizer,
+    problem: str,
+    y_init: str,
+    control_prompt: str,
+    assistant_turn_template: str,
+) -> str:
+    assistant_turn_prefix = assistant_turn_template.format(
+        y_init=y_init,
+        control_prompt=control_prompt,
+    )
+    return tokenizer.apply_chat_template(
+        [
+            {"role": "user", "content": problem},
+            {"role": "assistant", "content": assistant_turn_prefix},
+        ],
+        tokenize=False,
+        add_generation_prompt=False,
+        continue_final_message=True,
+    )
 
 
 def verify_batch(completions: list[str], references: list[str]) -> list[bool]:
@@ -236,10 +254,9 @@ def parse_args() -> argparse.Namespace:
         help="Base RNG seed. Initial-response generation uses `seed`, revision generation uses `seed + 1`.",
     )
     parser.add_argument(
-        "--separator",
-        default="\n\n",
-        help="Plain-text separator inserted between `y_init`, the control prompt, and the revision slot when "
-        "composing the revision prompt. Should match the separator encoded in the `assistant_turn_template` used by SRTTrainer.",
+        "--assistant_turn_template",
+        default="{y_init}\n\n{control_prompt}\n\n",
+        help="Template used to compose the assistant turn from `y_init` and `control_prompt`. ",
     )
     parser.add_argument(
         "--output_dir",
@@ -296,7 +313,13 @@ def main():
 
     # Step 3: sample `num_revisions` revised responses per problem.
     revision_prompts = [
-        render_revision_prompt(tokenizer, r["problem"], r["y_init"], r["control_prompt"], args.separator)
+        render_revision_prompt(
+            tokenizer,
+            r["problem"],
+            r["y_init"],
+            r["control_prompt"],
+            args.assistant_turn_template,
+        )
         for r in rows_for_revision
     ]
     revision_completions = generator.generate(
