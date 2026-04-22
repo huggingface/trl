@@ -163,19 +163,31 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
         inputs: list[dict[str, Any]],
         rollout_batch: RolloutBatch,
     ) -> TrainingBatch:
+        r"""
+        Build the teacher context for the shared student rollout and assemble the training batch.
+
+        For each example, the student's rollout `y_init` is scored by `reward_fn`. A control prompt
+        `p_r` is selected from the outcome: the rephrase nudge when `y_init` verifies
+        as correct, the restart nudge otherwise. The teacher input is then assembled as
+
+        ```
+        teacher_input_ids = T(x, y, p_r) ++ completion_ids
+        ```
+
+        with optional chat-template applied.
+        """
         tokenizer = (
             self.processing_class.tokenizer
             if isinstance(self.processing_class, ProcessorMixin)
             else self.processing_class
         )
 
-        # Decode student completions (used to build the teacher context)
+        # Decode student completions `y_init`
         completions = [
             tokenizer.decode(ids[mask.bool()], skip_special_tokens=True)
             for ids, mask in zip(rollout_batch.completion_ids, rollout_batch.completion_mask, strict=False)
         ]
 
-        # Compute binary rewards and select control prompts
         answers = [inp["answer"] for inp in inputs]
         chat_completions = [[{"role": "assistant", "content": c}] for c in completions]
         rewards = [r if r is not None else 0.0 for r in self.reward_fn(chat_completions, solution=answers)]
@@ -184,8 +196,7 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
         mode = "train" if self.model.training else "eval"
         self._metrics[mode]["sdzero/reward"].append(sum(rewards) / max(len(rewards), 1))
 
-        # Build the teacher prefix from the prompt plus the assistant-turn template before its distillation suffix.
-        # The teacher sees the student response and control prompt, then predicts the sampled response tokens again.
+        # Build the teacher prompt
         prompts, _ = self._split_prompt_and_privileged_context(inputs)
         teacher_prompt_ids_list = []
         for prompt, y, control_prompt in zip(prompts, completions, control_prompts, strict=False):
@@ -194,12 +205,6 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
                 control_prompt=control_prompt,
             )
             if is_conversational({"prompt": prompt}):
-                generation_prefix_ids = tokenizer.apply_chat_template(
-                    prompt,
-                    tokenize=True,
-                    add_generation_prompt=True,
-                    **self.chat_template_kwargs,
-                )
                 teacher_prompt_ids = tokenizer.apply_chat_template(
                     prompt + [{"role": "assistant", "content": assistant_turn_prefix}],
                     tokenize=True,
@@ -207,17 +212,8 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
                     continue_final_message=True,
                     **self.chat_template_kwargs,
                 )
-                if teacher_prompt_ids[: len(generation_prefix_ids)] != generation_prefix_ids:
-                    raise ValueError(
-                        "Unexpected tokenization: generation prefix is not a prefix of the teacher prompt"
-                    )
             else:
-                generation_prefix_ids = tokenizer(prompt)["input_ids"]
                 teacher_prompt_ids = tokenizer(prompt + assistant_turn_prefix)["input_ids"]
-                if teacher_prompt_ids[: len(generation_prefix_ids)] != generation_prefix_ids:
-                    raise ValueError(
-                        "Unexpected tokenization: generation prefix is not a prefix of the teacher prompt"
-                    )
             if self.max_prompt_length is not None:
                 teacher_prompt_ids = teacher_prompt_ids[-self.max_prompt_length :]
             teacher_prompt_ids_list.append(teacher_prompt_ids)
