@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import accelerate
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -1251,8 +1252,11 @@ class SFTTrainer(_BaseTrainer):
         # redundant `lm_head.weight` all-gather per chunk during backward, adding significant wall-time. Setting
         # `reshard_after_forward=False` keeps the un-wrapped `lm_head` resident and closes the gap without meaningfully
         # affecting peak memory.
+        # `AcceleratorState.is_fsdp2` was added in accelerate 1.6.0; guard so older (but still-supported) versions
+        # don't `AttributeError` on every SFTTrainer init.
         if (
             args.loss_type == "chunked_nll"
+            and Version(accelerate.__version__) >= Version("1.6.0")
             and self.accelerator.state.is_fsdp2
             and self.accelerator.state.fsdp_plugin.reshard_after_forward
         ):
