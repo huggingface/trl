@@ -573,7 +573,7 @@ class TestGetTrainingChatTemplate:
     def test_behavior_unchanged_with_tools_with_system_message(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if not supports_tool_calling(tokenizer):
-            pytest.skip("Template does not support tool calling (e.g. Gemma).")
+            pytest.skip("Template does not support tool calling; skipping tool_calls test.")
         tools = [
             {
                 "type": "function",
