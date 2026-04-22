@@ -1307,7 +1307,7 @@ class SFTTrainer(_BaseTrainer):
                 entropy_sum = (per_token_entropy * mask).sum()
                 total_tokens = mask.sum()
 
-                # Gather counts across ranks and weight-average — correct when per-rank token counts differ (e.g. SP/CP).
+                # Gather counts across ranks and weight-average
                 entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
                 total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
                 entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
