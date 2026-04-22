@@ -212,8 +212,10 @@ for model_id, config_class, model_class, dtype, suffix in [
     kwargs = {}
     if model_id == "zai-org/GLM-4.5":
         kwargs["n_routed_experts"] = 4
-    elif model_id in ("Qwen/Qwen3-30B-A3B", "openai/gpt-oss-20b"):
+    elif model_id == "Qwen/Qwen3-30B-A3B":
         kwargs["num_experts"] = 4
+    elif model_id == "openai/gpt-oss-20b":
+        kwargs["num_local_experts"] = 4
 
     config = config_class(
         vocab_size=len(tokenizer.vocab),
