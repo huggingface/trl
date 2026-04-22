@@ -94,9 +94,9 @@ def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
 
 
 @dataclass
-class DataCollatorForKTO:
+class DataCollatorForUnpairedPreference:
     """
-    Data collator for KTO. Pads sequences to the maximum length of the batch.
+    Data collator for unpaired preference data. Pads sequences to the maximum length of the batch.
 
     Args:
         pad_token_id (`int`, defaults to `0`):
@@ -350,7 +350,7 @@ class KTOTrainer(_BaseTrainer):
             max_length = args.max_length
 
         if data_collator is None:
-            data_collator = DataCollatorForKTO(
+            data_collator = DataCollatorForUnpairedPreference(
                 pad_token_id=tokenizer.pad_token_id,
             )
 
