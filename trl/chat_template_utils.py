@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from pathlib import Path
 from typing import TypeVar
 
@@ -524,7 +525,10 @@ qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja"
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text()
 
 
-def get_training_chat_template(processing_class: PreTrainedTokenizer | ProcessorMixin) -> str | None:
+def get_training_chat_template(
+    processing_class: PreTrainedTokenizer | ProcessorMixin | None = None,
+    tokenizer: PreTrainedTokenizer | None = None,
+) -> str | None:
     r"""
     Get a training-compatible chat template, if needed.
 
@@ -575,6 +579,21 @@ def get_training_chat_template(processing_class: PreTrainedTokenizer | Processor
     '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n6\n</tool_response><|im_end|>\n<|im_start|>assistant\n'
     ```
     """
+    if tokenizer is not None:
+        if processing_class is not None:
+            raise TypeError(
+                "Pass only `processing_class`; `tokenizer` is a deprecated alias for backward compatibility."
+            )
+        warnings.warn(
+            "The `tokenizer` argument of `get_training_chat_template` is deprecated and will be removed in TRL 2.0. "
+            "Use `processing_class` instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        processing_class = tokenizer
+    if processing_class is None:
+        raise TypeError("get_training_chat_template() missing required argument: 'processing_class'")
+
     # First check if patching is needed
     if is_chat_template_prefix_preserving(processing_class) and "{% generation %}" in processing_class.chat_template:
         return None  # No patching needed
