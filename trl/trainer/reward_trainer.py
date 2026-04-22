@@ -559,7 +559,7 @@ class RewardTrainer(_BaseTrainer):
 
         with PartialState().main_process_first():
             if not is_processed:
-                # Add EOS token to the end of the sequences if needed
+                # Add EOS token if needed: non-conversational only
                 first_example = next(iter(dataset))
                 if not is_conversational(first_example):
                     if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`

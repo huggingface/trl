@@ -15,11 +15,11 @@
 import multiprocess
 import pytest
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.kto import KTOConfig, KTOTrainer
-from trl.experimental.kto.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
+from trl.experimental.kto.kto_trainer import _get_kl_dataset, _process_tokens
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft
 
@@ -117,60 +117,67 @@ class TestKTOTrainer(TrlTestCase):
         )
 
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        train_dataset = dummy_dataset["train"]
 
         trainer = KTOTrainer(
             model=self.model,
             ref_model=self.ref_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=train_dataset,
             eval_dataset=dummy_dataset["test"],
         )
 
-        train_dataset = dummy_dataset["train"]
-        tokenized_dataset = train_dataset.map(
-            _tokenize,
-            fn_kwargs={"tokenizer": trainer.processing_class},
-            batched=True,
-            batch_size=2,
+        # Verify the tokenization step via trainer.train_dataset (aligned with DPO test style).
+        # prompt_input_ids must start with the tokenized prompt text.
+        prompt_ids = self.tokenizer(train_dataset["prompt"][0])["input_ids"]
+        assert trainer.train_dataset[0]["prompt_input_ids"][: len(prompt_ids)] == prompt_ids
+        assert all(m == 1 for m in trainer.train_dataset[0]["prompt_attention_mask"])
+        # completion_input_ids = (BOS +) prompt + answer + EOS
+        assert trainer.train_dataset[0]["completion_input_ids"][-1] == self.tokenizer.eos_token_id
+        # completion_labels: -100 for the prompt part, actual token IDs for the answer+EOS part
+        n_prompt = len(trainer.train_dataset[0]["prompt_input_ids"])
+        assert trainer.train_dataset[0]["completion_labels"][:n_prompt] == [-100] * n_prompt
+        assert (
+            trainer.train_dataset[0]["completion_labels"][n_prompt:]
+            == trainer.train_dataset[0]["completion_input_ids"][n_prompt:]
         )
-        assert tokenized_dataset["prompt"][:] == train_dataset["prompt"][:]
-        assert tokenized_dataset["completion"][:] == train_dataset["completion"][:]
-        assert tokenized_dataset["label"][:] == train_dataset["label"][:]
-        assert tokenized_dataset["prompt_input_ids"][0] == [46518, 374, 2664, 1091]
-        assert tokenized_dataset["prompt_attention_mask"][0] == [1, 1, 1, 1]
-        assert tokenized_dataset["answer_input_ids"][0] == [27261, 13]
-        assert tokenized_dataset["answer_attention_mask"][0] == [1, 1]
 
-        # Test corruption of (prompt, completion) pairs for KL dataset
+        # Test corruption of (prompt, completion) pairs for KL dataset.
+        # _get_kl_dataset shifts answer_input_ids by one within each batch; prompt_input_ids are unchanged.
         for batch_size in [2, 3]:
-            tokenized_kl_dataset = tokenized_dataset.map(_get_kl_dataset, batched=True, batch_size=batch_size)
+            kl_dataset = trainer.train_dataset.map(_get_kl_dataset, batched=True, batch_size=batch_size)
 
             # Verify that the "answer_input_ids" have been modified, meaning the new "answer_input_ids" differ
             # from the original ones. However, when the length of the dataset modulo batch_size equals 1,
             # the last batch remains unaltered. This is a rare scenario that does not impact the training
             # process, so we exclude it from testing by iterating only up to len - 1.
-            for i in range(len(tokenized_kl_dataset["answer_input_ids"]) - 1):
-                assert tokenized_dataset["prompt_input_ids"][i] == tokenized_kl_dataset["prompt_input_ids"][i]
-                assert (
-                    tokenized_dataset["prompt_attention_mask"][i] == tokenized_kl_dataset["prompt_attention_mask"][i]
-                )
-                assert tokenized_dataset["answer_input_ids"][i] != tokenized_kl_dataset["answer_input_ids"][i]
+            for i in range(len(kl_dataset["answer_input_ids"]) - 1):
+                assert trainer.train_dataset["prompt_input_ids"][i] == kl_dataset["prompt_input_ids"][i]
+                assert trainer.train_dataset["prompt_attention_mask"][i] == kl_dataset["prompt_attention_mask"][i]
+                assert trainer.train_dataset["answer_input_ids"][i] != kl_dataset["answer_input_ids"][i]
 
-        fn_kwargs = {
-            "prefix": "",
-            "tokenizer": trainer.processing_class,
-            "max_length": trainer.max_length,
+        # Test _process_tokens directly with a synthetic tokenized dataset (exercises num_proc and prefix).
+        raw = {
+            "prompt_input_ids": [[100, 200, 300], [400, 500]],
+            "prompt_attention_mask": [[1, 1, 1], [1, 1]],
+            "answer_input_ids": [[600, 700], [800, 900, 1000]],
+            "answer_attention_mask": [[1, 1], [1, 1, 1]],
+            "label": [True, False],
         }
-        processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
-        assert processed_dataset["prompt"][:] == train_dataset["prompt"][:]
-        assert processed_dataset["completion"][:] == train_dataset["completion"][:]
-        assert processed_dataset["label"][:] == train_dataset["label"][:]
-        assert processed_dataset["prompt_input_ids"][0] == [46518, 374, 2664, 1091]
-        assert processed_dataset["prompt_attention_mask"][0] == [1, 1, 1, 1]
-        assert processed_dataset["completion_input_ids"][0] == [46518, 374, 2664, 1091, 27261, 13, 151645]
-        assert processed_dataset["completion_attention_mask"][0] == [1, 1, 1, 1, 1, 1, 1]
-        assert processed_dataset["completion_labels"][0] == [-100, -100, -100, -100, 27261, 13, 151645]
+        fn_kwargs = {"prefix": "", "tokenizer": self.tokenizer, "max_length": trainer.max_length}
+        processed_dataset = Dataset.from_dict(raw).map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
+        for i in range(len(processed_dataset)):
+            assert processed_dataset[i]["label"] == raw["label"][i]
+            # completion_input_ids ends with EOS
+            assert processed_dataset[i]["completion_input_ids"][-1] == self.tokenizer.eos_token_id
+            # completion_labels: -100 for prompt, answer+EOS token IDs for the rest
+            n_prompt = len(processed_dataset[i]["prompt_input_ids"])
+            assert processed_dataset[i]["completion_labels"][:n_prompt] == [-100] * n_prompt
+            assert (
+                processed_dataset[i]["completion_labels"][n_prompt:]
+                == processed_dataset[i]["completion_input_ids"][n_prompt:]
+            )
 
     def test_kto_trainer_without_providing_ref_model(self):
         training_args = KTOConfig(

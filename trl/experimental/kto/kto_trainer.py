@@ -20,21 +20,19 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
 from accelerate.utils import is_peft_model, tqdm
-from datasets import Dataset, concatenate_datasets
+from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
 from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
-    BaseImageProcessor,
+    AutoProcessor,
     DataCollator,
-    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
@@ -43,9 +41,13 @@ from transformers import (
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
-from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
+from ...data_utils import (
+    extract_prompt,
+    is_conversational,
+    unpair_preference_dataset,
+)
 from ...import_utils import is_liger_kernel_available
-from ...models.utils import prepare_deepspeed
+from ...models.utils import prepare_deepspeed, prepare_fsdp
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     create_model_from_path,
@@ -66,12 +68,16 @@ if is_peft_available():
 
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedModel, PreTrainedTokenizer
+    from transformers import PreTrainedModel
 
 
 logger = logging.get_logger(__name__)
 
 RUNNING_NAME = "running.pt"
+
+
+def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
+    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
 def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
@@ -85,66 +91,6 @@ def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     return batch
 
 
-def _tokenize(
-    batch: dict[str, list[Any]],
-    tokenizer: "PreTrainedTokenizer",
-) -> dict[str, list[Any]]:
-    """Tokenize a batch from a KTO specific dataset."""
-    prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
-    prompt_input_ids = prompt_tokenized["input_ids"]
-    prompt_attention_mask = prompt_tokenized["attention_mask"]
-    prompt_and_completion = [
-        prompt + completion for prompt, completion in zip(batch["prompt"], batch["completion"], strict=True)
-    ]
-    full_tokenized = tokenizer(prompt_and_completion, add_special_tokens=False)
-    full_input_ids = full_tokenized["input_ids"]
-    full_attention_mask = full_tokenized["attention_mask"]
-
-    answer_input_ids = [f[len(p) :] for f, p in zip(full_input_ids, prompt_input_ids, strict=True)]
-    answer_attention_mask = [f[len(p) :] for f, p in zip(full_attention_mask, prompt_attention_mask, strict=True)]
-
-    # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
-    full_concat_input_ids = [np.concatenate([p, a]) for p, a in zip(prompt_input_ids, answer_input_ids, strict=True)]
-    # Prepare input tokens for token by token comparison
-    full_input_ids = [np.array(f) for f in full_input_ids]
-    for full, concat in zip(full_input_ids, full_concat_input_ids, strict=True):
-        if len(full) != len(concat):
-            raise ValueError(
-                "The elements in 'full_input_ids' and 'full_concat_input_ids' must have the same pairwise length."
-            )
-
-    # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
-    # can be merged together when tokenizing prompt+answer. This could result
-    # on the last token from the prompt being different when tokenized on its own
-    # vs when done as prompt+answer.
-    response_token_ids_start_idx = [len(p) for p in prompt_input_ids]
-
-    # If tokenized prompt is different than both prompt+answer, then it means the
-    # last token has changed due to merging.
-    for idx, (p, f, r) in enumerate(zip(prompt_input_ids, full_input_ids, response_token_ids_start_idx, strict=True)):
-        if not np.array_equal(p, f[:r]):
-            response_token_ids_start_idx[idx] -= 1
-
-    prompt_input_ids = [f[:r] for f, r in zip(full_input_ids, response_token_ids_start_idx, strict=True)]
-    prompt_attention_mask = [f[:r] for f, r in zip(full_attention_mask, response_token_ids_start_idx, strict=True)]
-
-    for p, m in zip(prompt_input_ids, prompt_attention_mask, strict=True):
-        if len(p) != len(m):
-            raise ValueError("Prompt input ids and attention mask should have the same length.")
-
-    answer_input_ids = [f[r:] for f, r in zip(full_input_ids, response_token_ids_start_idx, strict=True)]
-    answer_attention_mask = [f[r:] for f, r in zip(full_attention_mask, response_token_ids_start_idx, strict=True)]
-
-    output = dict(
-        prompt_input_ids=prompt_input_ids,
-        prompt_attention_mask=prompt_attention_mask,
-        answer_input_ids=answer_input_ids,
-        answer_attention_mask=answer_attention_mask,
-    )
-
-    return output
-
-
 def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **kwargs) -> dict:
     """Process tokens of a KTO specific dataset.
 
@@ -154,25 +100,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     We also create the labels for the completion responses, which are of length equal to the sum of the length of the
     prompt and the completion response, with `-100` for the prompt tokens.
     """
-    prompt = example["prompt"]
-    completion = example["completion"]
-
-    batch = {
-        f"{kwargs['prefix']}prompt": prompt,
-        f"{kwargs['prefix']}completion": completion,
-        f"{kwargs['prefix']}label": example["label"],
-    }
-
-    # Check issues below for more details
-    #  1. https://github.com/huggingface/trl/issues/907
-    #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
-    #  3. https://github.com/LianjiaTech/BELLE/issues/337
-
-    if not isinstance(prompt, str):
-        raise ValueError(f"prompt should be an str but got {type(prompt)}")
-
-    if not isinstance(completion, str):
-        raise ValueError(f"completion should be an str but got {type(completion)}")
+    batch = {f"{kwargs['prefix']}label": example["label"]}
 
     # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
     all_tokens = {
@@ -182,13 +110,17 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         "answer_attention_mask": example["answer_attention_mask"],
     }
 
-    # calculate max length by checking if BOS/EOS is already there
+    # Reserve budget for BOS/EOS tokens that will be added.
+    # BOS: only if not already present (truncation never removes the first token)
+    # EOS: always reserve a slot
+    # - truncation removes from the end, so EOS may be cut even when it was present before truncation
+    # - the post-truncation guard will then re-append it
     max_length = kwargs["max_length"]
     bos_token_id = kwargs["tokenizer"].bos_token_id
     eos_token_id = kwargs["tokenizer"].eos_token_id
     if len(all_tokens["prompt_input_ids"]) > 0 and bos_token_id != all_tokens["prompt_input_ids"][0]:
         max_length -= 1
-    if len(all_tokens["answer_input_ids"]) > 0 and eos_token_id != all_tokens["answer_input_ids"][-1]:
+    if eos_token_id is not None:
         max_length -= 1
 
     # if combined sequence is too long, truncate the completion (answer) from the end
@@ -238,7 +170,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
 
 
 class KTOTrainer(_BaseTrainer):
-    r"""
+    """
     Initialize KTOTrainer.
 
     Args:
@@ -260,14 +192,15 @@ class KTOTrainer(_BaseTrainer):
               state before KTO training starts.
         args ([`experimental.kto.KTOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`]):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             The dataset to use for training.
-        eval_dataset ([`~datasets.Dataset`]):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             The dataset to use for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
-            Processing class used to process the data. If provided, will be used to automatically process the inputs
-            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
-            reuse the fine-tuned model.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
+            Processing class used to process the data. The padding side must be set to "left". If `None`, the
+            processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
+            padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
+            `tokenizer.eos_token` will be used as the default.
         data_collator ([`~transformers.DataCollator`], *optional*):
             The data collator to use for training. If None is specified, the default data collator
             ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
@@ -309,13 +242,9 @@ class KTOTrainer(_BaseTrainer):
         model: "str | PreTrainedModel | PeftModel",
         ref_model: PreTrainedModel | None = None,
         args: KTOConfig | None = None,
-        train_dataset: Dataset | None = None,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
-        processing_class: PreTrainedTokenizerBase
-        | BaseImageProcessor
-        | FeatureExtractionMixin
-        | ProcessorMixin
-        | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         data_collator: DataCollator | None = None,
         model_init: Callable[[], PreTrainedModel] | None = None,
         callbacks: list[TrainerCallback] | None = None,
@@ -332,6 +261,16 @@ class KTOTrainer(_BaseTrainer):
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
+        elif isinstance(train_dataset, IterableDataset):
+            # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
+            # batches from multiple processes, leading to mismatch errors.
+            if args.accelerator_config.dispatch_batches is True:
+                logger.warning(
+                    "You are using an `IterableDataset` for training with `dispatch_batches=True`. `dispatch_batches` "
+                    "is forced to `False` when using an `IterableDataset`. To remove this warning, unset "
+                    "`dispatch_batches` in `KTOConfig` or set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
 
         # Model
         if isinstance(model, str):
@@ -351,6 +290,18 @@ class KTOTrainer(_BaseTrainer):
                 "`model` and `ref_model` cannot be the same object. In most cases you should omit `ref_model` and "
                 "we'll initialize it to a copy of `model` for you."
             )
+
+        # Processing class
+        if processing_class is None:
+            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
+        if isinstance(processing_class, ProcessorMixin):
+            tokenizer = processing_class.tokenizer
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            tokenizer = processing_class
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
@@ -430,10 +381,6 @@ class KTOTrainer(_BaseTrainer):
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
-        if processing_class is None:
-            raise ValueError(
-                "max_length or a processing_class must be specified when using the default DPODataCollatorWithPadding"
-            )
         if args.max_length is None:
             logger.warning(
                 "When using DPODataCollatorWithPadding, you should set `max_length` in the KTOTrainer's init"
@@ -445,7 +392,7 @@ class KTOTrainer(_BaseTrainer):
 
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
-                pad_token_id=processing_class.pad_token_id,
+                pad_token_id=tokenizer.pad_token_id,
             )
 
             if args.remove_unused_columns:
@@ -462,13 +409,16 @@ class KTOTrainer(_BaseTrainer):
 
         self.loss_type = args.loss_type
         self.max_length = max_length
-        self.processing_class = processing_class
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
         # Not all losses require a KL calculation
         self.calculate_KL = True
         if self.loss_type in ["apo_zero_unpaired"]:
             self.calculate_KL = False
+        if self.calculate_KL and args.per_device_train_batch_size <= 1:
+            raise ValueError(
+                "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
+            )
 
         # metric
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
@@ -487,150 +437,16 @@ class KTOTrainer(_BaseTrainer):
                 "loss.",
             )
 
-        # Compute that only on the main process for faster data processing.
-        # see: https://github.com/huggingface/trl/pull/1255
-        with PartialState().main_process_first():
-            # Extract the prompt if needed
-            train_dataset = train_dataset.map(
-                maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from train dataset"
-            )
-            # Unpair the dataset if needed
-            train_dataset = maybe_unpair_preference_dataset(
-                train_dataset, args.dataset_num_proc, desc="Unpairing train dataset"
-            )
-            # Apply the chat template if needed
-            train_dataset = train_dataset.map(
-                maybe_apply_chat_template,
-                fn_kwargs={"tokenizer": processing_class},
-                num_proc=args.dataset_num_proc,
-                desc="Applying chat template to train dataset",
-            )
-            if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(
-                    maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from eval dataset"
-                )
-                eval_dataset = maybe_unpair_preference_dataset(
-                    eval_dataset, args.dataset_num_proc, desc="Unpairing eval dataset"
-                )
-                eval_dataset = eval_dataset.map(
-                    maybe_apply_chat_template,
-                    fn_kwargs={"tokenizer": processing_class},
-                    num_proc=args.dataset_num_proc,
-                    desc="Applying chat template to eval dataset",
-                )
-
-            # Tokenize and prepare the training datasets
-            train_dataset = train_dataset.map(
-                _tokenize,
-                batched=True,
-                fn_kwargs={"tokenizer": self.processing_class},
-                num_proc=args.dataset_num_proc,
-                desc="Tokenizing train dataset",
-            )
-
-            fn_kwargs = {
-                "prefix": "",
-                "tokenizer": self.processing_class,
-                "max_length": self.max_length,
-            }
-
-            train_dataset = train_dataset.map(
-                _process_tokens,
-                fn_kwargs=fn_kwargs,
-                num_proc=args.dataset_num_proc,
-                desc="Processing tokenized train dataset",
-            )
-
-            # Tokenize and prepare the eval datasets
-            if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(
-                    _tokenize,
-                    fn_kwargs={"tokenizer": self.processing_class},
-                    batched=True,
-                    num_proc=args.dataset_num_proc,
-                    desc="Tokenizing eval dataset",
-                )
-
-                eval_dataset = eval_dataset.map(
-                    _process_tokens,
-                    fn_kwargs=fn_kwargs,
-                    num_proc=args.dataset_num_proc,
-                    desc="Processing tokenized eval dataset",
-                )
-
-            # Get KL datasets if needed
-            if self.calculate_KL:
-                if args.per_device_train_batch_size <= 1:
-                    raise ValueError(
-                        "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
-                    )
-
-                # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
-                # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
-                train_kl_dataset = train_dataset.map(
-                    _get_kl_dataset,
-                    batched=True,
-                    batch_size=args.per_device_train_batch_size,
-                    num_proc=args.dataset_num_proc,
-                    desc="Extracting KL train dataset",
-                )
-
-                fn_kwargs["prefix"] = "KL_"
-                train_kl_dataset = train_kl_dataset.map(
-                    _process_tokens,
-                    fn_kwargs=fn_kwargs,
-                    num_proc=args.dataset_num_proc,
-                    remove_columns=[c for c in train_kl_dataset.column_names if c in train_dataset.column_names],
-                    desc="Processing tokenized train KL dataset",
-                )
-
-                # merge the datasets
-                train_dataset = concatenate_datasets([train_dataset, train_kl_dataset], axis=1)
-
-                if eval_dataset is not None:
-                    # Get KL dataset
-                    eval_kl_dataset = eval_dataset.map(
-                        _get_kl_dataset,
-                        batched=True,
-                        batch_size=args.per_device_train_batch_size,
-                        num_proc=args.dataset_num_proc,
-                        desc="Extracting eval KL dataset",
-                    )
-
-                    eval_kl_dataset = eval_kl_dataset.map(
-                        _process_tokens,
-                        fn_kwargs=fn_kwargs,
-                        num_proc=args.dataset_num_proc,
-                        remove_columns=[c for c in eval_kl_dataset.column_names if c in eval_dataset.column_names],
-                        desc="Processing tokenized eval KL dataset",
-                    )
-
-                    # merge the datasets
-                    eval_dataset = concatenate_datasets([eval_dataset, eval_kl_dataset], axis=1)
-
-            # calculate dataset desirability balance
-            num_desirable = max(sum(train_dataset["label"]), 1)
-            num_undesirable = max(len(train_dataset["label"]) - num_desirable, 1)  # "label" is binary
-
-            if num_desirable != num_undesirable:
-                # The lower and upper bounds come from Eq. (8) of https://huggingface.co/papers/2402.01306
-                des_weight_lower_bound = round((num_undesirable * self.undesirable_weight / num_desirable) * 1, 2)
-                des_weight_upper_bound = round((num_undesirable * self.undesirable_weight / num_desirable) * 1.33, 2)
-                und_weight_lower_bound = round((num_desirable * self.desirable_weight / num_undesirable) / 1.33, 2)
-                und_weight_upper_bound = round((num_desirable * self.desirable_weight / num_undesirable) / 1, 2)
-
-                des_weight_in_range = des_weight_lower_bound <= self.desirable_weight <= des_weight_upper_bound
-                und_weight_in_range = und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound
-
-                if not (des_weight_in_range or und_weight_in_range):
-                    logger.warning(
-                        "You have different amounts of desirable/positive and undesirable/negative examples but the "
-                        "weights on the desirable and undesirable losses don't seem to be in an ideal range. Based "
-                        f"on your data, we recommend EITHER "
-                        f"desirable_weight in [{des_weight_lower_bound}, {des_weight_upper_bound}] or "
-                        f"undesirable_weight in [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH). "
-                        "See the documentation on how to optimally set these weights.",
-                    )
+        # Dataset
+        train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
+        if eval_dataset is not None:
+            if isinstance(eval_dataset, dict):
+                eval_dataset = {
+                    key: self._prepare_dataset(dataset, processing_class, args, key)
+                    for key, dataset in eval_dataset.items()
+                }
+            else:
+                eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
@@ -682,30 +498,14 @@ class KTOTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
-        # Add tags for models that have been loaded with the correct transformers version
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
 
-        if not hasattr(self, "accelerator"):
-            raise AttributeError(
-                "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
-            )
-
-        # Deepspeed Zero-3 does not support precompute_ref_log_probs
-        if self.is_deepspeed_enabled:
-            if self.accelerator.state.deepspeed_plugin.zero_stage == 3 and self.precompute_ref_log_probs:
-                raise ValueError(
-                    "You cannot use `precompute_ref_log_probs=True` with Deepspeed ZeRO-3. Please set `precompute_ref_log_probs=False`."
-                )
-
-        if self.ref_model is None:
-            if not (self.is_peft_model or self.precompute_ref_log_probs):
-                raise ValueError(
-                    "No reference model and model is not a Peft model. Try setting `precompute_ref_log_probs=True`"
-                )
-        else:
+        if self.ref_model is not None:
             if self.is_deepspeed_enabled:
                 self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+            elif self.is_fsdp_enabled:
+                self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
@@ -733,6 +533,13 @@ class KTOTrainer(_BaseTrainer):
             self.kto_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
         if self.precompute_ref_log_probs:
+            if isinstance(self.train_dataset, IterableDataset) or isinstance(
+                self.eval_dataset, (IterableDataset, IterableDatasetDict)
+            ):
+                raise ValueError(
+                    "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
+                    "Dataset or set `precompute_ref_log_probs=False`."
+                )
             self.train_dataset = self._precompute_ref_logps(
                 self.train_dataset,
                 "train",
@@ -752,6 +559,186 @@ class KTOTrainer(_BaseTrainer):
                         "eval",
                         self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                     )
+
+    def _tokenize(
+        self,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
+        input: str | list,
+        **kwargs,
+    ) -> dict[str, list]:
+        """Tokenize a single example for dataset preprocessing.
+
+        Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
+        non-conversational input (str).
+
+        Args:
+            processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
+                The tokenizer or processor to use.
+            input (`str` or `list`):
+                A string for non-conversational input, or a list of message dicts for conversational input.
+            **kwargs:
+                Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
+
+        Returns:
+            `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
+        """
+        if isinstance(input, list):  # conversational: list of message dicts
+            result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
+        else:  # non-conversational: plain text string
+            result = processing_class(text=input)
+        return result
+
+    def _prepare_dataset(
+        self,
+        dataset: Dataset | IterableDataset,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
+        args: KTOConfig | None,
+        dataset_name: str,
+    ) -> Dataset | IterableDataset:
+        # Build the kwargs for the `map` function
+        map_kwargs = {}
+        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
+            map_kwargs["num_proc"] = args.dataset_num_proc
+
+        # Compute that only on the main process for faster data processing.
+        # see: https://github.com/huggingface/trl/pull/1255
+        with PartialState().main_process_first():
+            # Extract the prompt if needed
+            first_example = next(iter(dataset))
+            if "prompt" not in first_example:
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Extracting prompt from {dataset_name} dataset"
+                dataset = dataset.map(extract_prompt, **map_kwargs)
+
+            # Unpair the dataset if needed
+            first_example = next(iter(dataset))
+            if "chosen" in first_example and "rejected" in first_example:
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Unpairing {dataset_name} dataset"
+                dataset = unpair_preference_dataset(dataset, **map_kwargs)
+
+            tokenizer = getattr(processing_class, "tokenizer", processing_class)
+
+            # Add EOS token if needed: non-conversational only
+            first_example = next(iter(dataset))
+            if not is_conversational(first_example):
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
+
+                def add_eos(example, eos_token):
+                    if not example["completion"].endswith(eos_token):
+                        example["completion"] = example["completion"] + eos_token
+                    return example
+
+                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": tokenizer.eos_token}, **map_kwargs)
+
+            # Tokenize dataset
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
+
+            def tokenize_fn(example, processing_class):
+                if is_conversational(example):
+                    chat_template_kwargs = example.get("chat_template_kwargs", {})
+                    prompt_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"],
+                        add_generation_prompt=True,
+                        **chat_template_kwargs,
+                    )["input_ids"]
+                    prompt_completion_ids = self._tokenize(
+                        processing_class,
+                        example["prompt"] + example["completion"],
+                        **chat_template_kwargs,
+                    )["input_ids"]
+                else:
+                    prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_completion_ids = self._tokenize(
+                        processing_class, example["prompt"] + example["completion"]
+                    )["input_ids"]
+
+                if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
+                    logger.warning(
+                        "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
+                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
+                        "token handling. Verify that the tokenizer is processing text consistently."
+                    )
+
+                return {
+                    "prompt_input_ids": prompt_ids,
+                    "prompt_attention_mask": [1] * len(prompt_ids),
+                    "answer_input_ids": prompt_completion_ids[len(prompt_ids) :],
+                    "answer_attention_mask": [1] * (len(prompt_completion_ids) - len(prompt_ids)),
+                }
+
+            dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
+
+            # Process dataset
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Processing tokenized {dataset_name} dataset"
+            dataset = dataset.map(
+                _process_tokens,
+                fn_kwargs={
+                    "prefix": "",
+                    "tokenizer": tokenizer,
+                    "max_length": self.max_length,
+                },
+                **map_kwargs,
+            )
+
+            # Get KL datasets if needed
+            if self.calculate_KL:
+                # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
+                # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Extracting KL {dataset_name} dataset"
+                kl_dataset = dataset.map(
+                    _get_kl_dataset, batched=True, batch_size=args.per_device_train_batch_size, **map_kwargs
+                )
+
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Processing tokenized {dataset_name} KL dataset"
+                column_names = get_dataset_column_names(dataset)
+                kl_dataset = kl_dataset.map(
+                    _process_tokens,
+                    fn_kwargs={
+                        "prefix": "KL_",
+                        "tokenizer": tokenizer,
+                        "max_length": self.max_length,
+                    },
+                    remove_columns=[c for c in get_dataset_column_names(kl_dataset) if c in column_names],
+                    **map_kwargs,
+                )
+
+                # merge the datasets
+                dataset = concatenate_datasets([dataset, kl_dataset], axis=1)
+
+            # Calculate dataset desirability balance
+            if dataset_name == "train" and isinstance(dataset, Dataset):  # IterableDataset does not support len
+                num_desirable = max(sum(dataset["label"]), 1)
+                num_undesirable = max(len(dataset["label"]) - num_desirable, 1)  # "label" is binary
+
+                if num_desirable != num_undesirable:
+                    # The lower and upper bounds come from Eq. (8) of https://huggingface.co/papers/2402.01306
+                    des_weight_lower_bound = round((num_undesirable * self.undesirable_weight / num_desirable) * 1, 2)
+                    des_weight_upper_bound = round(
+                        (num_undesirable * self.undesirable_weight / num_desirable) * 1.33, 2
+                    )
+                    und_weight_lower_bound = round((num_desirable * self.desirable_weight / num_undesirable) / 1.33, 2)
+                    und_weight_upper_bound = round((num_desirable * self.desirable_weight / num_undesirable) / 1, 2)
+
+                    des_weight_in_range = des_weight_lower_bound <= self.desirable_weight <= des_weight_upper_bound
+                    und_weight_in_range = und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound
+
+                    if not (des_weight_in_range or und_weight_in_range):
+                        logger.warning(
+                            "You have different amounts of desirable/positive and undesirable/negative examples but the "
+                            "weights on the desirable and undesirable losses don't seem to be in an ideal range. Based "
+                            f"on your data, we recommend EITHER "
+                            f"desirable_weight in [{des_weight_lower_bound}, {des_weight_upper_bound}] or "
+                            f"undesirable_weight in [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH). "
+                            "See the documentation on how to optimally set these weights.",
+                        )
+        return dataset
 
     @contextmanager
     def null_ref_context(self):
