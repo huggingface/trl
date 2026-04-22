@@ -534,7 +534,7 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    requirements. Currently DeepSeek-V3, GLM-4-MoE, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
+    Currently DeepSeek-V3, GLM-4-MoE, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
 
     Args:
         processing_class (`PreTrainedTokenizer` or `ProcessorMixin`):
