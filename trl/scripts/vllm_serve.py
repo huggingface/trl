@@ -14,6 +14,7 @@
 
 import argparse
 import base64
+import json
 import logging
 import math
 import os
@@ -214,6 +215,10 @@ class ScriptArguments:
             Distributed executor backend for vLLM. Set to `"ray"` to distribute tensor parallel workers across multiple
             nodes via a Ray cluster. Required when `tensor_parallel_size` exceeds the number of local GPUs. If not set,
             vLLM defaults to the multiproc backend (single-node only).
+        speculative_config (`str`, *optional*):
+            JSON string for vLLM speculative decoding config, forwarded to `LLM(speculative_config=...)`. When unset,
+            speculative decoding is disabled. Example:
+            `'{"method": "qwen3_next_mtp", "num_speculative_tokens": 5}'`.
     """
 
     model: str = field(
@@ -318,6 +323,13 @@ class ScriptArguments:
             "GPUs. If not set, vLLM defaults to the multiproc backend (single-node only)."
         },
     )
+    speculative_config: str | None = field(
+        default=None,
+        metadata={
+            "help": "JSON string for vLLM speculative decoding config. "
+            'Example: \'{"method": "qwen3_next_mtp", "num_speculative_tokens": 5}\''
+        },
+    )
 
 
 def llm_worker(
@@ -350,6 +362,7 @@ def llm_worker(
         distributed_executor_backend=script_args.distributed_executor_backend,
         # Important so temperature scaling/logit tweaking affects the TIS log probs
         logprobs_mode="processed_logprobs",
+        speculative_config=json.loads(script_args.speculative_config) if script_args.speculative_config else None,
     )
 
     # Send ready signal to parent process
@@ -398,7 +411,6 @@ def chunk_list(lst: list, n: int) -> list[list]:
 def main(script_args: ScriptArguments):
     import asyncio
 
-    from packaging.version import Version
     from transformers import is_vision_available
 
     from trl.generation.vllm_generation import extract_logprobs
@@ -428,16 +440,11 @@ def main(script_args: ScriptArguments):
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
     import uvicorn
-    import vllm
     from fastapi import FastAPI
     from pydantic import BaseModel
     from vllm import SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
-
-    if Version(vllm.__version__) <= Version("0.11.0"):
-        from vllm.utils import get_open_port
-    else:
-        from vllm.utils.network_utils import get_open_port
+    from vllm.utils.network_utils import get_open_port
 
     if is_vision_available():
         from PIL import Image

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -96,10 +97,6 @@ class RLOOConfig(_BaseConfig):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
             tokens.
-        use_transformers_paged (`bool`, *optional*, defaults to `False`):
-            Whether to use the `transformers` paged implementation for generation. If set to `True`, the `transformers`
-            paged implementation will be used for generation instead of the default padded implementation. This
-            parameter is only effective when `use_vllm` is set to `False`.
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
 
@@ -205,6 +202,17 @@ class RLOOConfig(_BaseConfig):
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
             logged.
+
+        > Deprecated parameters
+
+        use_transformers_paged:
+
+            <Deprecated version="1.2.0">
+
+            Parameter `use_transformers_paged` is deprecated and will be removed in version v2.0.0. It will be
+            replaced by `transformers` continuous batching support in an upcoming release.
+
+            </Deprecated>
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -343,14 +351,6 @@ class RLOOConfig(_BaseConfig):
             "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated "
             "text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model "
             "to repeat tokens."
-        },
-    )
-    use_transformers_paged: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
-            "`transformers` paged implementation will be used for generation instead of the default padded "
-            "implementation. This parameter is only effective when `use_vllm` is set to `False`."
         },
     )
     cache_implementation: str | None = field(
@@ -544,8 +544,25 @@ class RLOOConfig(_BaseConfig):
         },
     )
 
+    # Deprecated parameters
+    use_transformers_paged: bool = field(
+        default=False,
+        metadata={
+            "help": "Deprecated. It will be replaced by `transformers` continuous batching support in an upcoming "
+            "release."
+        },
+    )
+
     def __post_init__(self):
         super().__post_init__()
+
+        if self.use_transformers_paged:
+            warnings.warn(
+                "`use_transformers_paged` is deprecated and will be removed in v2.0.0. It will be replaced by "
+                "`transformers` continuous batching support in an upcoming release.",
+                FutureWarning,
+                stacklevel=3,
+            )
 
         num_processes = self.world_size
         # The current default effective batch size
