@@ -266,6 +266,7 @@ class TestSupportsToolCalling:
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         assert supports_tool_calling(tokenizer) is False
 
+
 class TestIsChatTemplatePrefixPreserving:
     def test_prefix_preserving_template(self):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
