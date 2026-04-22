@@ -17,4 +17,10 @@
 {%- endfor %}
 {%- if add_generation_prompt %}
     {{- '<|assistant|>\n' }}
+{%- elif messages[-1]['role'] == 'assistant' %}
+    {%- generation %}
+    {{- eos_token }}
+    {%- endgeneration %}
+{%- else %}
+    {{- eos_token }}
 {%- endif %}
