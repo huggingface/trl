@@ -529,6 +529,7 @@ class WeaveCallback(TrainerCallback):
                 "training_step": state.global_step,
                 "model_name": self.model_name,
                 "generation_config": (self.generation_config.to_dict() if self.generation_config else None),
+                "generation_kwargs": self.generation_kwargs,
             }
 
             eval_logger = self._EvaluationLogger(
