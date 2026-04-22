@@ -513,13 +513,15 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | P
 
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text()
 
+glm4moe_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe_training.jinja").read_text()
+
+gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text()
+
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text()
 
 qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text()
 
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text()
-
-gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text()
 
 
 def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
@@ -528,7 +530,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently DeepSeek-V3, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
+    requirements. Currently DeepSeek-V3, GLM-4-MoE, GPT-OSS, LLaMA 3, Qwen2.5, and Qwen3 are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -579,6 +581,9 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     if tokenizer.chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
+
+    if tokenizer.chat_template == glm4moe_chat_template:
+        return glm4moe_training_chat_template
 
     if tokenizer.chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
