@@ -55,6 +55,7 @@ Example:
 """
 
 import argparse
+import json
 import os
 
 import torch
@@ -73,12 +74,13 @@ def build_control_prompt(is_correct: bool) -> str:
     return REPHRASE_PROMPT if is_correct else RESTART_PROMPT
 
 
-def render_initial_prompt(tokenizer, problem: str) -> str:
+def render_initial_prompt(tokenizer, problem: str, chat_template_kwargs: dict | None = None) -> str:
     """Render the initial-response prompt. Matches what `SRTTrainer` tokenizes at train time."""
     return tokenizer.apply_chat_template(
         [{"role": "user", "content": problem}],
         tokenize=False,
         add_generation_prompt=True,
+        **(chat_template_kwargs or {}),
     )
 
 
@@ -87,9 +89,10 @@ def render_revision_prompt(
     problem: str,
     y_init: str,
     control_prompt: str,
-    assistant_turn_template: str,
+    assistant_turn_prefix_template: str,
+    chat_template_kwargs: dict | None = None,
 ) -> str:
-    assistant_turn_prefix = assistant_turn_template.format(
+    assistant_turn_prefix = assistant_turn_prefix_template.format(
         y_init=y_init,
         control_prompt=control_prompt,
     )
@@ -101,6 +104,7 @@ def render_revision_prompt(
         tokenize=False,
         add_generation_prompt=False,
         continue_final_message=True,
+        **(chat_template_kwargs or {}),
     )
 
 
@@ -254,9 +258,15 @@ def parse_args() -> argparse.Namespace:
         help="Base RNG seed. Initial-response generation uses `seed`, revision generation uses `seed + 1`.",
     )
     parser.add_argument(
-        "--assistant_turn_template",
+        "--assistant_turn_prefix_template",
         default="{y_init}\n\n{control_prompt}\n\n",
-        help="Template used to compose the assistant turn from `y_init` and `control_prompt`. ",
+        help="Template used to compose the assistant-side revision prefix from `y_init` and `control_prompt`.",
+    )
+    parser.add_argument(
+        "--chat_template_kwargs",
+        type=json.loads,
+        default=None,
+        help="JSON dictionary of keyword arguments forwarded to `apply_chat_template` during prompt rendering.",
     )
     parser.add_argument(
         "--output_dir",
@@ -287,7 +297,7 @@ def main():
     seed_rows = load_seed(args.dataset_name, args.dataset_split, args.num_problems)
 
     # Step 1: sample one initial response per problem.
-    init_prompts = [render_initial_prompt(tokenizer, row["problem"]) for row in seed_rows]
+    init_prompts = [render_initial_prompt(tokenizer, row["problem"], args.chat_template_kwargs) for row in seed_rows]
     init_completions = generator.generate(
         init_prompts,
         num_return_sequences=1,
@@ -318,7 +328,8 @@ def main():
             r["problem"],
             r["y_init"],
             r["control_prompt"],
-            args.assistant_turn_template,
+            args.assistant_turn_prefix_template,
+            args.chat_template_kwargs,
         )
         for r in rows_for_revision
     ]

@@ -208,6 +208,7 @@ class SRTTrainer(SFTTrainer):
             raise ValueError(f"SRT dataset is missing required columns: {missing}. Present columns: {columns}.")
 
         assistant_turn_prefix_template = args.assistant_turn_template.removesuffix("{y_revised}")
+        chat_template_kwargs = args.chat_template_kwargs or {}
 
         def _tokenize_messages(
             messages: list[dict[str, str]],
@@ -220,6 +221,7 @@ class SRTTrainer(SFTTrainer):
                 tokenize=True,
                 add_generation_prompt=add_generation_prompt,
                 continue_final_message=continue_final_message,
+                **chat_template_kwargs,
             )
 
         def _row_to_records(example: dict[str, Any]) -> dict[str, list]:

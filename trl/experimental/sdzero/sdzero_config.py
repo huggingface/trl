@@ -24,9 +24,9 @@ class SDZeroConfig(SelfDistillationConfig):
     Configuration class for [`SDZeroTrainer`].
 
     Parameters:
-        assistant_turn_template (`str`, *optional*, defaults to `"{y}\n\n{control_prompt}\n\n{y}"`):
-            Template used to compose the teacher-side assistant turn from the sampled response `y` and the
-            control prompt. Must end with `{y}` so the distillation suffix boundary is well-defined.
+        assistant_turn_template (`str`, *optional*, defaults to `"{y}\n\n{control_prompt}\n\n"`):
+            Template used to compose the teacher-side assistant prefix from the sampled response `y` and the
+            control prompt.
 
          > Parameters that control the teacher
 
@@ -41,7 +41,7 @@ class SDZeroConfig(SelfDistillationConfig):
          > Parameters that control the loss
 
         distillation_mode (`str`, *optional*, defaults to `"full_logits"`):
-            Distillation objective mode. Defaults to `"full_logits".
+            Distillation objective mode. Defaults to `"full_logits"`.
         distillation_alpha (`float`, *optional*, defaults to `1.0`):
             KL direction. Defaults to `1.0`.
         distillation_is_clip (`float` or `None`, *optional*):
@@ -56,7 +56,7 @@ class SDZeroConfig(SelfDistillationConfig):
     assistant_turn_template: str = field(
         default="{y}\n\n{control_prompt}\n\n",
         metadata={
-            "help": "Template used to compose the teacher-side assistant turn from the sampled response `y` "
+            "help": "Template used to compose the teacher-side assistant prefix from the sampled response `y` "
             "and the control prompt."
         },
     )
@@ -93,8 +93,3 @@ class SDZeroConfig(SelfDistillationConfig):
         default=1,
         metadata={"help": "Number of rollouts sampled per prompt per training step."},
     )
-
-    def __post_init__(self):
-        super().__post_init__()
-        if not self.assistant_turn_template.endswith("{y}"):
-            raise ValueError("`assistant_turn_template` must end with `{y}`.")

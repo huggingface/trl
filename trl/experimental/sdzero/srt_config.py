@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from ...trainer.sft_config import SFTConfig
 
@@ -26,6 +27,8 @@ class SRTConfig(SFTConfig):
         assistant_turn_template (`str`, *optional*, defaults to `"{y_init}\n\n{control_prompt}\n\n{y_revised}"`):
             Template used to compose the assistant turn from the initial answer, control prompt, and revised answer.
             Must end with `{y_revised}` so the revised-answer supervision boundary is well-defined.
+        chat_template_kwargs (`dict[str, Any]` or `None`, *optional*):
+            Extra keyword arguments forwarded to `apply_chat_template` when rendering SRT prompts and assistant turns.
         include_generation_loss (`bool`, *optional*, defaults to `True`):
             Whether to include the generation loss term, which supervises the model on the full assistant turn
             (initial answer, control prompt, and revised answer) given only the problem.
@@ -34,11 +37,19 @@ class SRTConfig(SFTConfig):
             the full context (problem, initial answer, control prompt).
     """
 
+    _VALID_DICT_FIELDS = SFTConfig._VALID_DICT_FIELDS + ["chat_template_kwargs"]
+
     assistant_turn_template: str = field(
         default="{y_init}\n\n{control_prompt}\n\n{y_revised}",
         metadata={
             "help": "Template used to compose the assistant turn from the initial answer, control prompt, and revised "
             "answer. Must end with `{y_revised}` so the revised-answer supervision boundary is well-defined."
+        },
+    )
+    chat_template_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={
+            "help": "Extra keyword arguments forwarded to `apply_chat_template` when rendering SRT prompts and assistant turns."
         },
     )
     include_generation_loss: bool = field(

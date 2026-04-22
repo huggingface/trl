@@ -194,6 +194,12 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
                 control_prompt=control_prompt,
             )
             if is_conversational({"prompt": prompt}):
+                generation_prefix_ids = tokenizer.apply_chat_template(
+                    prompt,
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    **self.chat_template_kwargs,
+                )
                 teacher_prompt_ids = tokenizer.apply_chat_template(
                     prompt + [{"role": "assistant", "content": assistant_turn_prefix}],
                     tokenize=True,
@@ -201,8 +207,19 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
                     continue_final_message=True,
                     **self.chat_template_kwargs,
                 )
+                if teacher_prompt_ids[: len(generation_prefix_ids)] != generation_prefix_ids:
+                    raise ValueError(
+                        "Unexpected tokenization: generation prefix is not a prefix of the teacher prompt"
+                    )
             else:
-                teacher_prompt_ids = tokenizer(prompt + assistant_turn_prefix, add_special_tokens=False)["input_ids"]
+                generation_prefix_ids = tokenizer(prompt)["input_ids"]
+                teacher_prompt_ids = tokenizer(prompt + assistant_turn_prefix)["input_ids"]
+                if teacher_prompt_ids[: len(generation_prefix_ids)] != generation_prefix_ids:
+                    raise ValueError(
+                        "Unexpected tokenization: generation prefix is not a prefix of the teacher prompt"
+                    )
+            if self.max_prompt_length is not None:
+                teacher_prompt_ids = teacher_prompt_ids[-self.max_prompt_length :]
             teacher_prompt_ids_list.append(teacher_prompt_ids)
 
         device = rollout_batch.completion_ids.device
@@ -216,7 +233,7 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
         teacher_input_ids = torch.cat([teacher_prompt_ids, rollout_batch.completion_ids], dim=1)
         teacher_attention_mask = torch.cat([teacher_prompt_mask, rollout_batch.completion_mask], dim=1)
 
-        batch = super().finalize_batch(inputs, rollout_batch)
+        batch = rollout_batch.as_dict()
         batch["teacher_input_ids"] = teacher_input_ids
         batch["teacher_attention_mask"] = teacher_attention_mask
         return batch

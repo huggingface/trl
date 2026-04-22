@@ -1744,7 +1744,7 @@ For more details, see the [SSD Trainer documentation](ssd_trainer).
 
 **📜 Paper**: https://huggingface.co/papers/2604.12002
 
-SD-ZERO turns binary verifier rewards into dense supervision in two phases. Phase 1 — **Self-Revision Training (SRT)** — collects self-revision traces conditioned on an outcome-aware control phrase (`"Let me rephrase the above solution."` if the initial attempt is correct, `"Wait, this response is not correct, let me start over."` otherwise) and keeps only those whose revision verifies correct. A single model is then fine-tuned with the joint supervised objective learning both to revise given `(x, y_init, P_r)` and to generate the full `[y_init, P_r, y_revised]` sequence from `x`. Phase 1 is implemented as [`experimental.sdzero.SRTTrainer`] and consumes a pre-collected dataset (produced by `trl/experimental/sdzero/srt_collect.py`).
+SD-ZERO turns binary verifier rewards into dense supervision in two phases. Phase 1 — **Self-Revision Training (SRT)** — first has a model answer a problem `x` with an initial attempt `y_init`. A binary verifier then decides whether `y_init` is correct and chooses a control prompt `P_r`: rephrase the solution if the attempt is correct, or restart if it is not. Conditioned on `(x, y_init, P_r)`, the model samples revised answers and keeps only revisions `y_revised` that verify correct. Those accepted self-revision traces are then used for supervised learning with a joint objective: predict `y_revised` given `(x, y_init, P_r)`, and predict the full assistant trace `[y_init, P_r, y_revised]` from `x`. Phase 1 is implemented as [`experimental.sdzero.SRTTrainer`], and the companion collection script [`trl/experimental/sdzero/srt_collect.py`] is the recommended way to build the offline revision dataset.
 
 ```python
 from datasets import load_from_disk
@@ -1752,9 +1752,9 @@ from datasets import load_from_disk
 from trl.experimental.sdzero import SRTConfig, SRTTrainer
 
 training_args = SRTConfig(
-    include_revision_loss=True,     # L_revision term
-    include_generation_loss=True,   # L_generation term
-    separator="\n\n",               # Separator between y_init / P_r / y_revised
+    include_revision_loss=True,      # L_revision term
+    include_generation_loss=True,    # L_generation term
+    assistant_turn_template="{y_init}\n\n{control_prompt}\n\n{y_revised}",
 )
 
 trainer = SRTTrainer(
@@ -1772,7 +1772,7 @@ Expected dataset columns:
 - `control_prompt`
 - `y_revised`
 
-Phase 2 — **On-Policy Self-Distillation** — distills the reviser back into the generator. At each training step, the student generates a response `y_init` on-policy. The teacher context is the on-policy generation `y_init`, the problem `x`, and the verifier-selected `P_r`. By default, [`experimental.sdzero.SDZeroTrainer`] matches the paper's frozen SRT teacher and full-vocabulary `D_KL(student || teacher)` objective.
+Phase 2 — **On-Policy Self-Distillation** — distills the reviser back into the generator. At each training step, the student generates a response `y` on-policy. The teacher context is the on-policy generation `y_init`, the problem `x`, and the verifier-selected `P_r`. By default, [`experimental.sdzero.SDZeroTrainer`] matches the paper's frozen SRT teacher and full-vocabulary `D_KL(student || teacher)` objective.
 
 ```python
 from datasets import Dataset
@@ -1783,9 +1783,14 @@ dataset = Dataset.from_list([
     {"prompt": [{"role": "user", "content": "...problem..."}], "answer": "...gold answer..."},
 ])
 
+training_args = SDZeroConfig(
+    max_completion_length=512,
+    assistant_turn_template="{y}\n\n{control_prompt}\n\n",
+)
+
 trainer = SDZeroTrainer(
     model="path/to/srt-checkpoint",
-    args=SDZeroConfig(max_completion_length=512),
+    args=training_args,
     train_dataset=dataset,
 )
 trainer.train()
