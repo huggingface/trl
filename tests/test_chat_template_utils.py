@@ -182,6 +182,8 @@ class TestSupportsToolCalling:
     @pytest.mark.parametrize(
         "model_id",
         [
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
                 id="gemma4",
@@ -263,19 +265,6 @@ class TestSupportsToolCalling:
     def test_does_not_support_tool_calling(self, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         assert supports_tool_calling(tokenizer) is False
-
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            # TypeError: template concatenates arguments as string (needs template patch)
-            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
-            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
-        ],
-    )
-    @pytest.mark.xfail(reason="DeepseekV3 template expects arguments as JSON string, needs patch", strict=True)
-    def test_deepseek_tool_calling(self, model_id):
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        assert supports_tool_calling(tokenizer) is True
 
 
 class TestIsChatTemplatePrefixPreserving:
@@ -440,6 +429,8 @@ class TestIsChatTemplatePrefixPreserving:
     "tokenizer_name",
     [
         pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
+        pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
+        pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
         pytest.param(
             "trl-internal-testing/tiny-Glm4MoeForCausalLM",
             id="glm4moe",
@@ -458,6 +449,10 @@ class TestGetTrainingChatTemplate:
     def test_new_chat_template_is_prefix_preserving(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         tokenizer.chat_template = get_training_chat_template(tokenizer)
+        # Prefix-preservation is only meaningful for templates that actually support tool messages — the check
+        # itself renders one. Skip the assertion for tool-less templates (e.g. Gemma).
+        if not supports_tool_calling(tokenizer):
+            pytest.skip("Template does not support tool calling; prefix-preservation check is not applicable.")
         assert is_chat_template_prefix_preserving(tokenizer) is True
 
     def test_behavior_unchanged_single_user_no_generation_prompt(self, tokenizer_name):
@@ -566,6 +561,8 @@ class TestGetTrainingChatTemplate:
 
     def test_behavior_unchanged_with_tools_with_system_message(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        if not supports_tool_calling(tokenizer):
+            pytest.skip("Template does not support tool calling; skipping tool_calls test.")
         tools = [
             {
                 "type": "function",
