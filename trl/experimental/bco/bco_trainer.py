@@ -44,7 +44,6 @@ from transformers import (
     DataCollator,
     FeatureExtractionMixin,
     PreTrainedModel,
-    PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
     TrainingArguments,
