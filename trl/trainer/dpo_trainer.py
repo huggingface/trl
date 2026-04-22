@@ -1382,8 +1382,13 @@ class DPOTrainer(_BaseTrainer):
         # Log the metrics
         # Entropy
         per_token_entropy = entropy_from_logits(shift_logits.detach())
-        entropy = per_token_entropy[shift_completion_mask.bool()].mean()
-        entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
+        entropy_sum = (per_token_entropy * shift_completion_mask).sum()
+        total_tokens = shift_completion_mask.sum()
+
+        # Gather counts across ranks and weight-average — correct when per-rank token counts differ (e.g. SP/CP).
+        entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+        total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
+        entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
         self._metrics[mode]["entropy"].append(entropy)
 
         # Number of tokens
