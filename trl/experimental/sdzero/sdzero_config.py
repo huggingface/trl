@@ -26,7 +26,7 @@ class SDZeroConfig(SelfDistillationConfig):
     Parameters:
         separator (`str`, *optional*, defaults to `"\n\n"`):
             Text inserted between the student's initial response and the control prompt when composing the
-            teacher context. Should match the separator used during SRT training.
+            teacher context. Should match the separator encoded in the Phase 1 assistant turn template.
 
          > Parameters that control the teacher
 
@@ -57,7 +57,7 @@ class SDZeroConfig(SelfDistillationConfig):
         default="\n\n",
         metadata={
             "help": "Text inserted between the student's initial response and the control prompt when composing "
-            "the teacher context. Should match the separator used during Phase 1 data collection."
+            "the teacher context. Should match the separator encoded in the Phase 1 assistant turn template."
         },
     )
     teacher_model_kind: str = field(

@@ -170,7 +170,32 @@ class SRTTrainer(SFTTrainer):
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         args: SRTConfig,
     ) -> Dataset:
-        """Expand each dataset row into tokenized revision and generation training records."""
+        """Expand each dataset row into tokenized supervised training records.
+
+        Each input row must contain:
+        - `problem`: the user problem `x`
+        - `y_init`: the model's initial attempt
+        - `control_prompt`: the verifier-derived revision cue `P_r`
+        - `y_revised`: the revised answer
+
+        From each row, this function emits up to two tokenized samples over the same
+        serialized chat:
+
+            user: problem
+            assistant: <assistant_template(y_init, control_prompt, y_revised)>
+
+        with different completion masks:
+
+        - Revision sample: loss is applied only to the `y_revised` suffix.
+        - Generation sample: loss is applied to the full assistant trace
+        `y_init + control_prompt + y_revised`.
+
+        To support arbitrary chat templates, token boundaries are computed by
+        tokenizing three views of the conversation: the full sample, the conversation
+        with an empty assistant message, and the conversation truncated just before
+        `y_revised`. The resulting lengths define the assistant start and revision
+        start positions used to build the masks.
+        """
 
         tokenizer = processing_class.tokenizer if isinstance(processing_class, ProcessorMixin) else processing_class
 
@@ -180,38 +205,49 @@ class SRTTrainer(SFTTrainer):
         if missing:
             raise ValueError(f"SRT dataset is missing required columns: {missing}. Present columns: {columns}.")
 
-        eos_token = tokenizer.eos_token
-        if eos_token is None:
-            raise ValueError("Tokenizer must have an `eos_token` to build the assistant-turn boundary.")
+        assistant_turn_prefix_template = args.assistant_turn_template.removesuffix("{y_revised}")
+
+        def _tokenize_chat(problem: str, assistant_content: str, *, continue_final_message: bool) -> list[int]:
+            return tokenizer.apply_chat_template(
+                conversation=[
+                    {"role": "user", "content": problem},
+                    {"role": "assistant", "content": assistant_content},
+                ],
+                tokenize=True,
+                add_generation_prompt=False,
+                continue_final_message=continue_final_message,
+            )
 
         def _row_to_records(example: dict[str, Any]) -> dict[str, list]:
-            x = example["problem"]
+            problem = example["problem"]
             y_init = example["y_init"]
-            p_r = example["control_prompt"]
+            control_prompt = example["control_prompt"]
             y_revised = example["y_revised"]
 
-            prefix_text = tokenizer.apply_chat_template(
-                [{"role": "user", "content": x}],
-                tokenize=False,
-                add_generation_prompt=True,
+            assistant_full = args.assistant_turn_template.format(
+                y_init=y_init,
+                control_prompt=control_prompt,
+                y_revised=y_revised,
             )
-            pre_revised_text = y_init + args.separator + p_r + args.separator
-            revised_text = y_revised
+            assistant_before_revision = assistant_turn_prefix_template.format(
+                y_init=y_init,
+                control_prompt=control_prompt,
+            )
 
-            prefix_ids = tokenizer(prefix_text, add_special_tokens=False)["input_ids"]
-            pre_revised_ids = tokenizer(pre_revised_text, add_special_tokens=False)["input_ids"]
-            revised_ids = tokenizer(revised_text, add_special_tokens=False)["input_ids"]
-            eos_ids = [tokenizer.eos_token_id]
+            input_ids = _tokenize_chat(problem, assistant_full, continue_final_message=False)
+            assistant_prefix_ids = _tokenize_chat(problem, "", continue_final_message=True)
+            revision_prefix_ids = _tokenize_chat(problem, assistant_before_revision, continue_final_message=True)
 
-            input_ids = prefix_ids + pre_revised_ids + revised_ids + eos_ids
+            assistant_start = len(assistant_prefix_ids)
+            revision_start = len(revision_prefix_ids)
 
-            prefix_len = len(prefix_ids)
-            pre_revised_len = len(pre_revised_ids)
-            revised_len = len(revised_ids) + len(eos_ids)
+            if input_ids[:assistant_start] != assistant_prefix_ids:
+                raise ValueError("Unexpected tokenization: assistant prefix is not a prefix of the full input")
+            if input_ids[:revision_start] != revision_prefix_ids:
+                raise ValueError("Unexpected tokenization: revision prefix is not a prefix of the full input")
 
-            # 1 = token contributes to loss, 0 = ignored
-            revision_mask = [0] * (prefix_len + pre_revised_len) + [1] * revised_len
-            generation_mask = [0] * prefix_len + [1] * (pre_revised_len + revised_len)
+            generation_mask = [0] * assistant_start + [1] * (len(input_ids) - assistant_start)
+            revision_mask = [0] * revision_start + [1] * (len(input_ids) - revision_start)
 
             input_ids_list, completion_masks = [], []
             if args.include_revision_loss:
@@ -220,6 +256,7 @@ class SRTTrainer(SFTTrainer):
             if args.include_generation_loss:
                 input_ids_list.append(input_ids)
                 completion_masks.append(generation_mask)
+
             return {"input_ids": input_ids_list, "completion_mask": completion_masks}
 
         expanded = dataset.map(

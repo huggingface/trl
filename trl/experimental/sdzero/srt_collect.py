@@ -239,7 +239,7 @@ def parse_args() -> argparse.Namespace:
         "--separator",
         default="\n\n",
         help="Plain-text separator inserted between `y_init`, the control prompt, and the revision slot when "
-        "composing the revision prompt. Should match the `separator` used by SRTTrainer at train time.",
+        "composing the revision prompt. Should match the separator encoded in the `assistant_turn_template` used by SRTTrainer.",
     )
     parser.add_argument(
         "--output_dir",
