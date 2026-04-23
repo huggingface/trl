@@ -446,6 +446,11 @@ def supports_tool_calling(processing_class) -> bool:
         # UndefinedError (subclass): template indexes into content as a list for all roles, including tool
         #   (Idefics2, Idefics3, LlavaNext, SmolVLM)
         return False
+    except TypeError:
+        # TypeError: template concatenates dict arguments as string (DeepSeek-V3, DeepSeek-V3-0528).
+        # The training template patch fixes this via `| tojson`; the original template as-is does not
+        # render tool calls.
+        return False
     # All four sentinels must survive: the tool name and arguments (assistant tool_calls) AND the tool message
     # content. Templates that silently drop either side (basic Llama 3 drops tool_calls; Cohere2/Phi3 drop tool
     # messages) will fail this check.
@@ -504,11 +509,6 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | P
         ids2 = processing_class.apply_chat_template(
             messages2, tokenize=True, return_dict=False, add_generation_prompt=True
         )
-    except TemplateError:
-        # Template rejects the role sequence (e.g. Cohere, FalconMamba enforce strict user/assistant alternation
-        # and raise on tool messages). Not prefix-preserving by this definition — patching is still supported via
-        # an explicit chat_template match in get_training_chat_template.
-        return False
 
     # VLM processors return batched output (list of lists), unbatch for single conversation
     if is_vlm:
@@ -584,8 +584,14 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n6\n</tool_response><|im_end|>\n<|im_start|>assistant\n'
     ```
     """
-    # First check if patching is needed
-    if is_chat_template_prefix_preserving(tokenizer) and "{% generation %}" in tokenizer.chat_template:
+    # First check if patching is needed. is_chat_template_prefix_preserving probes with a tool
+    # message, which raises on templates that don't render tool roles (Cohere, FalconMamba) — so
+    # only probe when the template actually supports tool calling.
+    if (
+        supports_tool_calling(tokenizer)
+        and is_chat_template_prefix_preserving(tokenizer)
+        and "{% generation %}" in tokenizer.chat_template
+    ):
         return None  # No patching needed
 
     if tokenizer.chat_template == cohere_chat_template:
