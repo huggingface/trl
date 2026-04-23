@@ -222,8 +222,8 @@ class KTOTrainer(_BaseTrainer):
             `tokenizer.eos_token` will be used as the default.
         data_collator ([`~transformers.DataCollator`], *optional*):
             The data collator to use for training. If None is specified, the default data collator
-            ([`~experimental.kto.kto_trainer.DataCollatorForKTO`]) will be used which will pad the sequences to the
-            maximum length of the sequences in the batch.
+            ([`~experimental.kto.kto_trainer.DataCollatorForUnpairedPreference`]) will be used which will pad the
+            sequences to the maximum length of the sequences in the batch.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be
             used.
