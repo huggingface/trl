@@ -687,51 +687,9 @@ class KTOTrainer(_BaseTrainer):
                         "token handling. Verify that the tokenizer is processing text consistently."
                     )
 
-                answer_ids = prompt_completion_ids[len(prompt_ids) :]
-
-                # Reserve budget for BOS/EOS tokens that will be added.
-                # BOS: only if not already present (truncation never removes the first token)
-                # EOS: always reserve a slot — truncation removes from the end, so EOS may be cut
-                # even when it was present before truncation; the post-truncation guard re-appends it
-                max_len = self.max_length
-                if len(prompt_ids) > 0 and bos_token_id != prompt_ids[0]:
-                    max_len -= 1
-                if eos_token_id is not None:
-                    max_len -= 1
-
-                # If combined sequence is too long, truncate the answer from the end
-                if len(prompt_ids) + len(answer_ids) > max_len:
-                    answer_ids = answer_ids[: max_len - len(prompt_ids)]
-
-                # Assemble completion = prompt + truncated answer
-                completion_ids = prompt_ids + answer_ids
-                completion_mask = [1] * len(completion_ids)
-
-                # Save original prompt length before BOS may be prepended
-                orig_prompt_len = len(prompt_ids)
-
-                # Add BOS, which affects both prompt and the full completion
-                if bos_token_id is not None and (not prompt_ids or prompt_ids[0] != bos_token_id):
-                    prompt_ids = [bos_token_id] + prompt_ids
-                    completion_ids = [bos_token_id] + completion_ids
-                    completion_mask = [1] + completion_mask
-
-                # Add EOS, which affects only the full completion
-                if not answer_ids or eos_token_id != answer_ids[-1]:
-                    completion_ids = completion_ids + [eos_token_id]
-                    completion_mask = completion_mask + [1]
-
-                # Create labels: mask prompt tokens with -100
-                completion_labels = [-100] * len(prompt_ids) + completion_ids[len(prompt_ids) :]
-
                 return {
-                    "prompt_input_ids": prompt_ids,
-                    "prompt_attention_mask": [1] * len(prompt_ids),
-                    "answer_input_ids": prompt_completion_ids[orig_prompt_len:],  # untruncated, retained for KL
-                    "answer_attention_mask": [1] * (len(prompt_completion_ids) - orig_prompt_len),
-                    "completion_input_ids": completion_ids,
-                    "completion_attention_mask": completion_mask,
-                    "completion_labels": completion_labels,
+                    "prompt_ids": prompt_ids,
+                    "completion_ids": prompt_completion_ids[len(prompt_ids) :],
                 }
 
             dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
