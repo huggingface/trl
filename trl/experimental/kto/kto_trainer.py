@@ -412,6 +412,9 @@ class KTOTrainer(_BaseTrainer):
         if data_collator is None:
             data_collator = DataCollatorForUnpairedPreference(
                 pad_token_id=tokenizer.pad_token_id,
+                max_length=max_length,
+                bos_token_id=tokenizer.bos_token_id,
+                eos_token_id=tokenizer.eos_token_id,
             )
 
             if args.remove_unused_columns:
