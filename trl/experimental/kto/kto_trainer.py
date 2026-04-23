@@ -640,8 +640,6 @@ class KTOTrainer(_BaseTrainer):
                 dataset = unpair_preference_dataset(dataset, **map_kwargs)
 
             tokenizer = getattr(processing_class, "tokenizer", processing_class)
-            bos_token_id = tokenizer.bos_token_id
-            eos_token_id = tokenizer.eos_token_id
 
             # Add EOS token if needed: non-conversational only
             first_example = next(iter(dataset))
