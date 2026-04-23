@@ -89,8 +89,7 @@ def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     completions. For best results, the mismatched outputs y' used to estimate the KL term for a batch should be the
     same set as the matched outputs y used to estimate the rewards in that batch, just paired with different x.
     """
-    batch["answer_input_ids"] = [batch["answer_input_ids"][-1]] + batch["answer_input_ids"][:-1]
-    batch["answer_attention_mask"] = [batch["answer_attention_mask"][-1]] + batch["answer_attention_mask"][:-1]
+    batch["completion_ids"] = [batch["completion_ids"][-1]] + batch["completion_ids"][:-1]
     return batch
 
 
