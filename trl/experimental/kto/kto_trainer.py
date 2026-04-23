@@ -402,7 +402,7 @@ class KTOTrainer(_BaseTrainer):
 
         if args.max_length is None:
             logger.warning(
-                "When using DataCollatorForKTO, you should set `max_length` in the KTOTrainer's init"
+                "When using DataCollatorForUnpairedPreference, you should set `max_length` in the KTOTrainer's init"
                 " it will be set to `512` by default, but you should do it yourself in the future.",
             )
             max_length = 512
@@ -418,7 +418,7 @@ class KTOTrainer(_BaseTrainer):
                 args.remove_unused_columns = False
                 # warn users
                 logger.warning(
-                    "When using DataCollatorForKTO, you should set `remove_unused_columns=False` in your KTOConfig"
+                    "When using DataCollatorForUnpairedPreference, you should set `remove_unused_columns=False` in your KTOConfig"
                     " we have set it for you, but you should do it yourself in the future.",
                 )
 
