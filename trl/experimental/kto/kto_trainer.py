@@ -103,14 +103,14 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
         pad_token_id (`int`, defaults to `0`):
             Token ID to use for padding `input_ids` sequences.
         max_length (`int`, *optional*):
-            Maximum sequence length after assembly. Sequences exceeding this limit are truncated from the end of
-            the completion before BOS/EOS tokens are added.
+            Maximum sequence length after assembly. Sequences exceeding this limit are truncated from the end of the
+            completion before BOS/EOS tokens are added.
         bos_token_id (`int`, *optional*):
-            Token ID for the beginning-of-sequence token. If set and not already present at the start of
-            `prompt_ids`, it is prepended to both prompt and completion.
+            Token ID for the beginning-of-sequence token. If set and not already present at the start of `prompt_ids`,
+            it is prepended to both prompt and completion.
         eos_token_id (`int`, *optional*):
-            Token ID for the end-of-sequence token. If set and not already present at the end of `completion_ids`,
-            it is appended to the completion.
+            Token ID for the end-of-sequence token. If set and not already present at the end of `completion_ids`, it
+            is appended to the completion.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
     """
