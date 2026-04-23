@@ -345,10 +345,10 @@ class TPOTrainer(_BaseTrainer):
                 "The `processing_class` must be a `PreTrainedTokenizerBase`. `TPOTrainer` does not currently "
                 "support vision-language models."
             )
-        tokenizer = processing_class
+        self._tokenizer = processing_class
 
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
         if is_peft_available() and is_peft_model(model) and peft_config is not None:
             raise ValueError(
@@ -371,7 +371,7 @@ class TPOTrainer(_BaseTrainer):
         # each step.
         if data_collator is None:
             data_collator = DataCollatorForTriplePreference(
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=self._tokenizer.pad_token_id,
                 max_length=args.max_length,
                 truncation_mode=args.truncation_mode,
                 pad_to_multiple_of=args.pad_to_multiple_of,
