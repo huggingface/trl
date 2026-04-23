@@ -96,38 +96,95 @@ def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
 @dataclass
 class DataCollatorForUnpairedPreference(DataCollatorMixin):
     """
-    Data collator for unpaired preference data. Pads sequences to the maximum length of the batch.
+    Data collator for unpaired preference data. Assembles completions from raw token IDs and pads sequences to the
+    maximum length of the batch.
 
     Args:
         pad_token_id (`int`, defaults to `0`):
             Token ID to use for padding `input_ids` sequences.
-        return_tensors (`str`, optional, defaults to `"pt"`):
+        max_length (`int`, *optional*):
+            Maximum sequence length after assembly. Sequences exceeding this limit are truncated from the end of
+            the completion before BOS/EOS tokens are added.
+        bos_token_id (`int`, *optional*):
+            Token ID for the beginning-of-sequence token. If set and not already present at the start of
+            `prompt_ids`, it is prepended to both prompt and completion.
+        eos_token_id (`int`, *optional*):
+            Token ID for the end-of-sequence token. If set and not already present at the end of `completion_ids`,
+            it is appended to the completion.
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
     """
 
     pad_token_id: int = 0
+    max_length: int | None = None
+    bos_token_id: int | None = None
+    eos_token_id: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         batch = {}
-        for k in examples[0]:
-            if k.endswith(("_input_ids", "_attention_mask", "_labels")):
-                padding_side = "left" if k in ("prompt_input_ids", "prompt_attention_mask") else "right"
-                if k.endswith("_input_ids"):
-                    padding_value = self.pad_token_id
-                elif k.endswith("_labels"):
-                    padding_value = -100
-                else:
-                    padding_value = 0
-                batch[k] = pad(
-                    [torch.tensor(ex[k], dtype=torch.int64) for ex in examples],
-                    padding_value=padding_value,
-                    padding_side=padding_side,
-                )
-            elif k.endswith("_logps"):
-                batch[k] = torch.tensor([ex[k] for ex in examples])
-            else:
-                batch[k] = [ex[k] for ex in examples]
+        for prefix, ids_key in [("completion", "completion_ids"), ("KL_completion", "KL_completion_ids")]:
+            if ids_key not in examples[0]:
+                continue
+
+            full_ids_list = []
+            labels_list = []
+            for ex in examples:
+                prompt_ids = ex["prompt_ids"]
+                answer_ids = ex[ids_key]
+
+                if self.max_length is not None:
+                    # Reserve budget for BOS/EOS tokens that will be added.
+                    # BOS: only if not already present (truncation never removes the first token)
+                    # EOS: always reserve a slot — truncation removes from the end, so EOS may be cut
+                    # even when it was present before truncation; the post-truncation guard re-appends it
+                    max_len = self.max_length
+                    if prompt_ids and self.bos_token_id != prompt_ids[0]:
+                        max_len -= 1
+                    if self.eos_token_id is not None:
+                        max_len -= 1
+                    if len(prompt_ids) + len(answer_ids) > max_len:
+                        answer_ids = answer_ids[: max_len - len(prompt_ids)]
+
+                # Assemble completion = prompt + (truncated) answer
+                completion_ids = prompt_ids + answer_ids
+
+                # Add BOS, which affects both prompt and the full completion
+                if self.bos_token_id is not None and (not prompt_ids or prompt_ids[0] != self.bos_token_id):
+                    prompt_ids = [self.bos_token_id] + prompt_ids
+                    completion_ids = [self.bos_token_id] + completion_ids
+
+                # Add EOS, which affects only the full completion
+                if not answer_ids or self.eos_token_id != answer_ids[-1]:
+                    completion_ids = completion_ids + [self.eos_token_id]
+
+                # Create labels: mask prompt tokens with -100
+                labels = [-100] * len(prompt_ids) + completion_ids[len(prompt_ids) :]
+
+                full_ids_list.append(completion_ids)
+                labels_list.append(labels)
+
+            batch[f"{prefix}_input_ids"] = pad(
+                [torch.tensor(ids, dtype=torch.int64) for ids in full_ids_list],
+                padding_value=self.pad_token_id,
+                padding_side="right",
+            )
+            batch[f"{prefix}_attention_mask"] = pad(
+                [torch.ones(len(ids), dtype=torch.int64) for ids in full_ids_list],
+                padding_value=0,
+                padding_side="right",
+            )
+            batch[f"{prefix}_labels"] = pad(
+                [torch.tensor(lbl, dtype=torch.int64) for lbl in labels_list],
+                padding_value=-100,
+                padding_side="right",
+            )
+
+        if "reference_logps" in examples[0]:
+            batch["reference_logps"] = torch.tensor([ex["reference_logps"] for ex in examples])
+        if "reference_KL_logps" in examples[0]:
+            batch["reference_KL_logps"] = torch.tensor([ex["reference_KL_logps"] for ex in examples])
+        batch["label"] = [ex["label"] for ex in examples]
         return batch
 
 
