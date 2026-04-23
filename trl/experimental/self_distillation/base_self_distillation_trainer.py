@@ -113,17 +113,17 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
             )
 
         if isinstance(processing_class, ProcessorMixin):
-            tokenizer = processing_class.tokenizer
+            self._tokenizer = processing_class.tokenizer
         elif isinstance(processing_class, PreTrainedTokenizerBase):
-            tokenizer = processing_class
+            self._tokenizer = processing_class
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        self.pad_token_id = tokenizer.pad_token_id
-        self.eos_token_id = tokenizer.eos_token_id
+        self.pad_token_id = self._tokenizer.pad_token_id
+        self.eos_token_id = self._tokenizer.eos_token_id
         self.temperature = args.temperature
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
@@ -151,9 +151,9 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
         generation_kwargs = {
             "max_new_tokens": self.max_completion_length,
             "do_sample": True,
-            "pad_token_id": tokenizer.pad_token_id,
-            "bos_token_id": tokenizer.bos_token_id,
-            "eos_token_id": tokenizer.eos_token_id,
+            "pad_token_id": self._tokenizer.pad_token_id,
+            "bos_token_id": self._tokenizer.bos_token_id,
+            "eos_token_id": self._tokenizer.eos_token_id,
             "temperature": args.temperature,
             "top_p": args.top_p,
             "top_k": args.top_k,
