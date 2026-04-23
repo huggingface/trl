@@ -158,8 +158,6 @@ class SSDTrainer(_BaseTrainer):
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        self.pad_token_id = self._tokenizer.pad_token_id
-        self.eos_token_id = self._tokenizer.eos_token_id
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
         # SSD always samples a single completion per prompt (N=1 in the paper).
@@ -362,7 +360,7 @@ class SSDTrainer(_BaseTrainer):
         completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
         completion_mask = [torch.ones(len(ids), dtype=torch.long, device=device) for ids in completion_ids_list]
         return (
-            pad(completion_ids, padding_value=self.pad_token_id, padding_side="right"),
+            pad(completion_ids, padding_value=self._tokenizer.pad_token_id, padding_side="right"),
             pad(completion_mask, padding_value=0, padding_side="right"),
         )
 
@@ -394,7 +392,7 @@ class SSDTrainer(_BaseTrainer):
 
         prompt_length = generate_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
-        is_eos = completion_ids == self.eos_token_id
+        is_eos = completion_ids == self._tokenizer.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=completion_ids.device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         seq_idx = torch.arange(is_eos.size(1), device=completion_ids.device).expand(is_eos.size(0), -1)
@@ -404,7 +402,7 @@ class SSDTrainer(_BaseTrainer):
         completion_ids = [torch.tensor(ids, device=self.accelerator.device) for ids in completion_ids_list]
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         return (
-            pad(completion_ids, padding_value=self.pad_token_id, padding_side="right"),
+            pad(completion_ids, padding_value=self._tokenizer.pad_token_id, padding_side="right"),
             pad(completion_mask, padding_value=0, padding_side="right"),
         )
 
