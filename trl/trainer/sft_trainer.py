@@ -85,6 +85,21 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
     aux_loss: torch.Tensor | None = None
 
 
+def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
+    logits = h.float() @ w.float().t()
+    if b is not None:
+        logits = logits + b.float()
+    if logit_scale != 1.0:
+        logits = logits * logit_scale
+    if final_logit_softcapping is not None:
+        logits = final_logit_softcapping * torch.tanh(logits / final_logit_softcapping)
+    log_p = F.log_softmax(logits, dim=-1)
+    chunk_loss = F.nll_loss(log_p, lbl, reduction="sum")
+    chunk_correct = (logits.argmax(dim=-1) == lbl).sum().float()
+    chunk_entropy = -(log_p.exp() * log_p).sum(dim=-1).sum()
+    return chunk_loss, chunk_correct, chunk_entropy
+
+
 def _chunked_cross_entropy_loss(
     hidden_states: torch.Tensor,
     lm_head_weight: torch.Tensor,
@@ -166,25 +181,18 @@ def _chunked_cross_entropy_loss(
 
     loss = hidden.new_zeros((), dtype=torch.float32)
 
-    def _chunk(h, w, b, lbl):
-        logits = h.float() @ w.float().t()
-        if b is not None:
-            logits = logits + b.float()
-        if logit_scale != 1.0:
-            logits = logits * logit_scale
-        if final_logit_softcapping is not None:
-            logits = final_logit_softcapping * torch.tanh(logits / final_logit_softcapping)
-        log_p = F.log_softmax(logits, dim=-1)
-        chunk_loss = F.nll_loss(log_p, lbl, reduction="sum")
-        chunk_correct = (logits.argmax(dim=-1) == lbl).sum().float()
-        chunk_entropy = -(log_p.exp() * log_p).sum(dim=-1).sum()
-        return chunk_loss, chunk_correct, chunk_entropy
-
     for start in range(0, n_valid, chunk_size):
         h_chunk = hidden[start : start + chunk_size]
         lbl_chunk = labels[start : start + chunk_size]
         chunk_loss, chunk_correct, chunk_entropy = torch.utils.checkpoint.checkpoint(
-            _chunk, h_chunk, lm_head_weight, lm_head_bias, lbl_chunk, use_reentrant=False
+            _chunk,
+            h_chunk,
+            lm_head_weight,
+            lm_head_bias,
+            lbl_chunk,
+            logit_scale,
+            final_logit_softcapping,
+            use_reentrant=False,
         )
         loss = loss + chunk_loss
         correct = correct + chunk_correct
