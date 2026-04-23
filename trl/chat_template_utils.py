@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from jinja2 import TemplateError
-from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, ProcessorMixin
+from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
 
 from .data_utils import prepare_multimodal_messages
 
@@ -26,10 +26,10 @@ _CHAT_TEMPLATES_DIR = Path(__file__).parent / "chat_templates"
 
 def clone_chat_template(
     model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     source_tokenizer_path: str,
     resize_to_multiple_of: int | None = 64,
-) -> tuple[PreTrainedModel, PreTrainedTokenizer, list[int]]:
+) -> tuple[PreTrainedModel, PreTrainedTokenizerBase, list[int]]:
     """
     Clones a chat template from a source tokenizer to the target tokenizer and updates the model accordingly.
 
@@ -44,7 +44,7 @@ def clone_chat_template(
     Args:
         model ([`~transformers.PreTrainedModel`]):
             Model to update.
-        tokenizer ([`~transformers.PreTrainedTokenizer`]):
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
             Tokenizer to update.
         source_tokenizer_path (`str`):
             Path or identifier of the pretrained tokenizer to clone from.
@@ -55,7 +55,7 @@ def clone_chat_template(
     Returns:
         model ([`~transformers.PreTrainedModel`]):
             Updated model with resized token embeddings and EOS token configured.
-        tokenizer ([`~transformers.PreTrainedTokenizer`]):
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
             Updated tokenizer with the chat template and special tokens applied.
         added_tokens (`list[int]`):
             List of tokens that were added to the tokenizer from the source tokenizer.
@@ -333,7 +333,7 @@ qwen3_5_chat_template_2b_and_below = (_CHAT_TEMPLATES_DIR / "qwen3_5_2b_and_belo
 qwen3_5_chat_template_4b_and_above = (_CHAT_TEMPLATES_DIR / "qwen3_5_4b_and_above.jinja").read_text()
 
 
-ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizer, ProcessorMixin)
+ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizerBase, ProcessorMixin)
 
 
 def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
@@ -348,11 +348,11 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     and reads `self.response_schema` from the tokenizer instance.
 
     Args:
-        processing_class (`PreTrainedTokenizer` or `ProcessorMixin`):
+        processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
             Tokenizer or VLM processor to which the response schema will be added.
 
     Returns:
-        `PreTrainedTokenizer` or `ProcessorMixin`:
+        `PreTrainedTokenizerBase` or `ProcessorMixin`:
             The same object that was passed in, with the response schema set on the underlying tokenizer.
 
     Examples:
@@ -410,7 +410,7 @@ def supports_tool_calling(processing_class) -> bool:
     [`~trl.data_utils.prepare_multimodal_messages`] before rendering.
 
     Args:
-        processing_class (`PreTrainedTokenizer` or `ProcessorMixin`):
+        processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
             Tokenizer or processor instance to check.
 
     Returns:
@@ -462,7 +462,7 @@ def supports_tool_calling(processing_class) -> bool:
     return all(s in rendered for s in (_name_sentinel, _arg_key_sentinel, _arg_val_sentinel, _content_sentinel))
 
 
-def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | ProcessorMixin) -> bool:
+def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase | ProcessorMixin) -> bool:
     """
     Check whether the chat template preserves prefixes when applied.
 
@@ -471,7 +471,7 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizer | P
     tokenizations with and without tool messages appended.
 
     Args:
-        processing_class (`PreTrainedTokenizer` or `ProcessorMixin`):
+        processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
             Tokenizer or processor instance to check.
 
     Returns:
@@ -540,7 +540,7 @@ qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja"
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text()
 
 
-def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
+def get_training_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None:
     r"""
     Get a training-compatible chat template, if needed.
 
@@ -550,7 +550,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     supported.
 
     Args:
-        tokenizer (`PreTrainedTokenizer`):
+        tokenizer (`PreTrainedTokenizerBase`):
             Tokenizer instance to check.
 
     Returns:
@@ -667,7 +667,7 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
                 tool_call["arguments"] = {}
 
 
-def parse_response(processing_class: PreTrainedTokenizer | ProcessorMixin, ids: list[int]) -> dict:
+def parse_response(processing_class: PreTrainedTokenizerBase | ProcessorMixin, ids: list[int]) -> dict:
     r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
 
@@ -680,7 +680,7 @@ def parse_response(processing_class: PreTrainedTokenizer | ProcessorMixin, ids: 
     For VLM processors, automatically uses the inner tokenizer for parsing.
 
     Args:
-        processing_class (`PreTrainedTokenizer` or VLM processor):
+        processing_class (`PreTrainedTokenizerBase` or VLM processor):
             Tokenizer or processor with a `parse_response()` method (directly or via inner tokenizer).
         ids (`list[int]`):
             List of token sequences.
