@@ -89,46 +89,102 @@ def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     completions. For best results, the mismatched outputs y' used to estimate the KL term for a batch should be the
     same set as the matched outputs y used to estimate the rewards in that batch, just paired with different x.
     """
-    batch["answer_input_ids"] = [batch["answer_input_ids"][-1]] + batch["answer_input_ids"][:-1]
-    batch["answer_attention_mask"] = [batch["answer_attention_mask"][-1]] + batch["answer_attention_mask"][:-1]
+    batch["completion_ids"] = [batch["completion_ids"][-1]] + batch["completion_ids"][:-1]
     return batch
 
 
 @dataclass
 class DataCollatorForUnpairedPreference(DataCollatorMixin):
     """
-    Data collator for unpaired preference data. Pads sequences to the maximum length of the batch.
+    Data collator for unpaired preference data. Assembles completions from raw token IDs and pads sequences to the
+    maximum length of the batch.
 
     Args:
-        pad_token_id (`int`, defaults to `0`):
+        pad_token_id (`int`):
             Token ID to use for padding `input_ids` sequences.
-        return_tensors (`str`, optional, defaults to `"pt"`):
+        bos_token_id (`int`):
+            Token ID for the beginning-of-sequence token. If set and not already present at the start of `prompt_ids`,
+            it is prepended to both prompt and completion.
+        eos_token_id (`int`):
+            Token ID for the end-of-sequence token. If set and not already present at the end of `completion_ids`, it
+            is appended to the completion.
+        max_length (`int`, *optional*):
+            Maximum sequence length after assembly. Sequences exceeding this limit are truncated from the end of the
+            completion before BOS/EOS tokens are added.
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
     """
 
-    pad_token_id: int = 0
+    pad_token_id: int
+    bos_token_id: int
+    eos_token_id: int
+    max_length: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         batch = {}
-        for k in examples[0]:
-            if k.endswith(("_input_ids", "_attention_mask", "_labels")):
-                padding_side = "left" if k in ("prompt_input_ids", "prompt_attention_mask") else "right"
-                if k.endswith("_input_ids"):
-                    padding_value = self.pad_token_id
-                elif k.endswith("_labels"):
-                    padding_value = -100
-                else:
-                    padding_value = 0
-                batch[k] = pad(
-                    [torch.tensor(ex[k], dtype=torch.int64) for ex in examples],
-                    padding_value=padding_value,
-                    padding_side=padding_side,
-                )
-            elif k.endswith("_logps"):
-                batch[k] = torch.tensor([ex[k] for ex in examples])
-            else:
-                batch[k] = [ex[k] for ex in examples]
+        for prefix, ids_key in [("completion", "completion_ids"), ("KL_completion", "KL_completion_ids")]:
+            if ids_key not in examples[0]:
+                continue
+
+            full_ids_list = []
+            labels_list = []
+            for ex in examples:
+                prompt_ids = ex["prompt_ids"]
+                answer_ids = ex[ids_key]
+
+                if self.max_length is not None:
+                    # Reserve budget for BOS/EOS tokens that will be added.
+                    # BOS: only if not already present (truncation never removes the first token)
+                    # EOS: always reserve a slot — truncation removes from the end, so EOS may be cut
+                    # even when it was present before truncation; the post-truncation guard re-appends it
+                    max_len = self.max_length
+                    if prompt_ids and self.bos_token_id != prompt_ids[0]:
+                        max_len -= 1
+                    if self.eos_token_id is not None:
+                        max_len -= 1
+                    if len(prompt_ids) + len(answer_ids) > max_len:
+                        answer_ids = answer_ids[: max_len - len(prompt_ids)]
+
+                # Assemble completion = prompt + (truncated) answer
+                completion_ids = prompt_ids + answer_ids
+
+                # Add BOS, which affects both prompt and the full completion
+                if self.bos_token_id is not None and (not prompt_ids or prompt_ids[0] != self.bos_token_id):
+                    prompt_ids = [self.bos_token_id] + prompt_ids
+                    completion_ids = [self.bos_token_id] + completion_ids
+
+                # Add EOS, which affects only the full completion
+                if not answer_ids or self.eos_token_id != answer_ids[-1]:
+                    completion_ids = completion_ids + [self.eos_token_id]
+
+                # Create labels: mask prompt tokens with -100
+                labels = [-100] * len(prompt_ids) + completion_ids[len(prompt_ids) :]
+
+                full_ids_list.append(completion_ids)
+                labels_list.append(labels)
+
+            batch[f"{prefix}_input_ids"] = pad(
+                [torch.tensor(ids, dtype=torch.int64) for ids in full_ids_list],
+                padding_value=self.pad_token_id,
+                padding_side="right",
+            )
+            batch[f"{prefix}_attention_mask"] = pad(
+                [torch.ones(len(ids), dtype=torch.int64) for ids in full_ids_list],
+                padding_value=0,
+                padding_side="right",
+            )
+            batch[f"{prefix}_labels"] = pad(
+                [torch.tensor(lbl, dtype=torch.int64) for lbl in labels_list],
+                padding_value=-100,
+                padding_side="right",
+            )
+
+        if "reference_logps" in examples[0]:
+            batch["reference_logps"] = torch.tensor([ex["reference_logps"] for ex in examples])
+        if "reference_KL_logps" in examples[0]:
+            batch["reference_KL_logps"] = torch.tensor([ex["reference_KL_logps"] for ex in examples])
+        batch["label"] = [ex["label"] for ex in examples]
         return batch
 
 
@@ -166,8 +222,8 @@ class KTOTrainer(_BaseTrainer):
             `tokenizer.eos_token` will be used as the default.
         data_collator ([`~transformers.DataCollator`], *optional*):
             The data collator to use for training. If None is specified, the default data collator
-            ([`~experimental.kto.kto_trainer.DataCollatorForKTO`]) will be used which will pad the sequences to the
-            maximum length of the sequences in the batch.
+            ([`~experimental.kto.kto_trainer.DataCollatorForUnpairedPreference`]) will be used which will pad the
+            sequences to the maximum length of the sequences in the batch.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be
             used.
@@ -346,7 +402,7 @@ class KTOTrainer(_BaseTrainer):
 
         if args.max_length is None:
             logger.warning(
-                "When using DataCollatorForKTO, you should set `max_length` in the KTOTrainer's init"
+                "When using DataCollatorForUnpairedPreference, you should set `max_length` in the KTOTrainer's init"
                 " it will be set to `512` by default, but you should do it yourself in the future.",
             )
             max_length = 512
@@ -356,13 +412,16 @@ class KTOTrainer(_BaseTrainer):
         if data_collator is None:
             data_collator = DataCollatorForUnpairedPreference(
                 pad_token_id=tokenizer.pad_token_id,
+                bos_token_id=tokenizer.bos_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+                max_length=max_length,
             )
 
             if args.remove_unused_columns:
                 args.remove_unused_columns = False
                 # warn users
                 logger.warning(
-                    "When using DataCollatorForKTO, you should set `remove_unused_columns=False` in your KTOConfig"
+                    "When using DataCollatorForUnpairedPreference, you should set `remove_unused_columns=False` in your KTOConfig"
                     " we have set it for you, but you should do it yourself in the future.",
                 )
 
@@ -581,8 +640,6 @@ class KTOTrainer(_BaseTrainer):
                 dataset = unpair_preference_dataset(dataset, **map_kwargs)
 
             tokenizer = getattr(processing_class, "tokenizer", processing_class)
-            bos_token_id = tokenizer.bos_token_id
-            eos_token_id = tokenizer.eos_token_id
 
             # Add EOS token if needed: non-conversational only
             first_example = next(iter(dataset))
@@ -628,51 +685,9 @@ class KTOTrainer(_BaseTrainer):
                         "token handling. Verify that the tokenizer is processing text consistently."
                     )
 
-                answer_ids = prompt_completion_ids[len(prompt_ids) :]
-
-                # Reserve budget for BOS/EOS tokens that will be added.
-                # BOS: only if not already present (truncation never removes the first token)
-                # EOS: always reserve a slot — truncation removes from the end, so EOS may be cut
-                # even when it was present before truncation; the post-truncation guard re-appends it
-                max_len = self.max_length
-                if len(prompt_ids) > 0 and bos_token_id != prompt_ids[0]:
-                    max_len -= 1
-                if eos_token_id is not None:
-                    max_len -= 1
-
-                # If combined sequence is too long, truncate the answer from the end
-                if len(prompt_ids) + len(answer_ids) > max_len:
-                    answer_ids = answer_ids[: max_len - len(prompt_ids)]
-
-                # Assemble completion = prompt + truncated answer
-                completion_ids = prompt_ids + answer_ids
-                completion_mask = [1] * len(completion_ids)
-
-                # Save original prompt length before BOS may be prepended
-                orig_prompt_len = len(prompt_ids)
-
-                # Add BOS, which affects both prompt and the full completion
-                if bos_token_id is not None and (not prompt_ids or prompt_ids[0] != bos_token_id):
-                    prompt_ids = [bos_token_id] + prompt_ids
-                    completion_ids = [bos_token_id] + completion_ids
-                    completion_mask = [1] + completion_mask
-
-                # Add EOS, which affects only the full completion
-                if not answer_ids or eos_token_id != answer_ids[-1]:
-                    completion_ids = completion_ids + [eos_token_id]
-                    completion_mask = completion_mask + [1]
-
-                # Create labels: mask prompt tokens with -100
-                completion_labels = [-100] * len(prompt_ids) + completion_ids[len(prompt_ids) :]
-
                 return {
-                    "prompt_input_ids": prompt_ids,
-                    "prompt_attention_mask": [1] * len(prompt_ids),
-                    "answer_input_ids": prompt_completion_ids[orig_prompt_len:],  # untruncated, retained for KL
-                    "answer_attention_mask": [1] * (len(prompt_completion_ids) - orig_prompt_len),
-                    "completion_input_ids": completion_ids,
-                    "completion_attention_mask": completion_mask,
-                    "completion_labels": completion_labels,
+                    "prompt_ids": prompt_ids,
+                    "completion_ids": prompt_completion_ids[len(prompt_ids) :],
                 }
 
             dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
@@ -680,33 +695,8 @@ class KTOTrainer(_BaseTrainer):
             # Get KL datasets if needed
             if self.calculate_KL:
 
-                def assemble_kl_fn(example):
-                    prompt_ids = example["prompt_input_ids"]  # already has BOS from tokenize_fn
-                    answer_ids = example["answer_input_ids"]  # rotated, untruncated
-
-                    # Reserve budget: BOS already in prompt_ids; EOS: always reserve a slot
-                    max_len = self.max_length
-                    if eos_token_id is not None:
-                        max_len -= 1
-
-                    # If combined sequence is too long, truncate the answer from the end
-                    if len(prompt_ids) + len(answer_ids) > max_len:
-                        answer_ids = answer_ids[: max_len - len(prompt_ids)]
-
-                    # Assemble completion = prompt + truncated answer
-                    completion_ids = prompt_ids + answer_ids
-
-                    # Add EOS, which affects only the full completion
-                    if not answer_ids or eos_token_id != answer_ids[-1]:
-                        completion_ids = completion_ids + [eos_token_id]
-
-                    completion_labels = [-100] * len(prompt_ids) + completion_ids[len(prompt_ids) :]
-
-                    return {
-                        "KL_completion_input_ids": completion_ids,
-                        "KL_completion_attention_mask": [1] * len(completion_ids),
-                        "KL_completion_labels": completion_labels,
-                    }
+                def rename_kl_fn(example):
+                    return {"KL_completion_ids": example["completion_ids"]}
 
                 # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
                 # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
@@ -720,16 +710,13 @@ class KTOTrainer(_BaseTrainer):
                     map_kwargs["desc"] = f"Assembling KL {dataset_name} dataset"
                 column_names = get_dataset_column_names(dataset)
                 kl_dataset = kl_dataset.map(
-                    assemble_kl_fn,
+                    rename_kl_fn,
                     remove_columns=[c for c in get_dataset_column_names(kl_dataset) if c in column_names],
                     **map_kwargs,
                 )
 
                 # merge the datasets
                 dataset = concatenate_datasets([dataset, kl_dataset], axis=1)
-
-            # Drop intermediate columns retained only for KL rotation
-            dataset = dataset.remove_columns(["answer_input_ids", "answer_attention_mask"])
 
             # Calculate dataset desirability balance
             if dataset_name == "train" and isinstance(dataset, Dataset):  # IterableDataset does not support len

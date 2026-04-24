@@ -128,43 +128,42 @@ class TestKTOTrainer(TrlTestCase):
             eval_dataset=dummy_dataset["test"],
         )
 
-        # Verify the tokenization step via trainer.train_dataset (aligned with DPO test style).
-        # prompt_input_ids must start with the tokenized prompt text.
+        # Verify the tokenization step: dataset stores raw token IDs (aligned with DPO style).
+        # prompt_ids must start with the tokenized prompt text.
         prompt_ids = self.tokenizer(train_dataset["prompt"][0])["input_ids"]
-        assert trainer.train_dataset[0]["prompt_input_ids"][: len(prompt_ids)] == prompt_ids
-        assert all(m == 1 for m in trainer.train_dataset[0]["prompt_attention_mask"])
-        # completion_input_ids = (BOS +) prompt + answer + EOS
-        assert trainer.train_dataset[0]["completion_input_ids"][-1] == self.tokenizer.eos_token_id
-        # completion_labels: -100 for the prompt part, actual token IDs for the answer+EOS part
-        n_prompt = len(trainer.train_dataset[0]["prompt_input_ids"])
-        assert trainer.train_dataset[0]["completion_labels"][:n_prompt] == [-100] * n_prompt
-        assert (
-            trainer.train_dataset[0]["completion_labels"][n_prompt:]
-            == trainer.train_dataset[0]["completion_input_ids"][n_prompt:]
-        )
+        assert trainer.train_dataset[0]["prompt_ids"][: len(prompt_ids)] == prompt_ids
+        # completion_ids are the raw answer tokens (no prompt prefix, no BOS/EOS added yet).
+        assert len(trainer.train_dataset[0]["completion_ids"]) > 0
+
+        # Verify the collator output (assembly, BOS/EOS insertion, labels).
+        example = trainer.train_dataset[0]
+        batch = trainer.data_collator([example])
+        # completion_input_ids ends with EOS
+        assert batch["completion_input_ids"][0, -1].item() == self.tokenizer.eos_token_id
+        # completion_labels: prompt prefix masked with -100, answer+EOS unmasked and matching input_ids
+        completion_input_ids = batch["completion_input_ids"][0].tolist()
+        completion_labels = batch["completion_labels"][0].tolist()
+        first_unmasked = next(i for i, lbl in enumerate(completion_labels) if lbl != -100)
+        assert first_unmasked > 0  # at least the prompt is masked
+        assert completion_labels[first_unmasked:] == completion_input_ids[first_unmasked:]
 
         # Test corruption of (prompt, completion) pairs for KL dataset.
-        # _get_kl_dataset shifts answer_input_ids by one within each batch; prompt_input_ids are unchanged.
-        # Use a synthetic dataset since answer_input_ids is dropped from trainer.train_dataset after assembly.
+        # _get_kl_dataset shifts completion_ids by one within each batch; prompt_ids are unchanged.
         synthetic = Dataset.from_dict(
             {
-                "prompt_input_ids": [[1, 2], [3, 4], [5, 6]],
-                "prompt_attention_mask": [[1, 1], [1, 1], [1, 1]],
-                "answer_input_ids": [[10, 11], [20, 21], [30, 31]],
-                "answer_attention_mask": [[1, 1], [1, 1], [1, 1]],
+                "prompt_ids": [[1, 2], [3, 4], [5, 6]],
+                "completion_ids": [[10, 11], [20, 21], [30, 31]],
+                "label": [True, False, True],
             }
         )
         for batch_size in [2, 3]:
             rotated = synthetic.map(_get_kl_dataset, batched=True, batch_size=batch_size)
 
-            # Verify that the "answer_input_ids" have been modified, meaning the new "answer_input_ids" differ
-            # from the original ones. However, when the length of the dataset modulo batch_size equals 1,
-            # the last batch remains unaltered. This is a rare scenario that does not impact the training
-            # process, so we exclude it from testing by iterating only up to len - 1.
+            # Verify that completion_ids have been rotated (differ from original). When the dataset length
+            # modulo batch_size equals 1, the last batch is unaltered: exclude it from the check.
             for i in range(len(rotated) - 1):
-                assert synthetic["prompt_input_ids"][i] == rotated["prompt_input_ids"][i]
-                assert synthetic["prompt_attention_mask"][i] == rotated["prompt_attention_mask"][i]
-                assert synthetic["answer_input_ids"][i] != rotated["answer_input_ids"][i]
+                assert synthetic["prompt_ids"][i] == rotated["prompt_ids"][i]
+                assert synthetic["completion_ids"][i] != rotated["completion_ids"][i]
 
     def test_kto_trainer_without_providing_ref_model(self):
         training_args = KTOConfig(
