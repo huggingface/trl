@@ -24,7 +24,7 @@ import torch
 from huggingface_hub import CommitOperationAdd, HfApi, ModelCard
 from packaging.version import Version
 from torch import nn
-from transformers import AutoConfig
+from transformers import AutoConfig, ProcessorMixin
 
 
 ORGANIZATION = "trl-internal-testing"
@@ -59,7 +59,7 @@ def smoke_test(model, tokenizer_or_processor=None):
     model.eval()
     device = next(model.parameters()).device
 
-    if tokenizer_or_processor is not None and hasattr(tokenizer_or_processor, "image_processor"):
+    if isinstance(tokenizer_or_processor, ProcessorMixin):
         # VLM path: build a dummy (image, text) input via the processor.
         from PIL import Image
 
@@ -89,14 +89,15 @@ def smoke_test(model, tokenizer_or_processor=None):
     with torch.no_grad():
         out = model(**inputs)
 
-    logits = getattr(out, "logits", None)
-    if logits is None:
-        logits = getattr(out, "last_hidden_state", None)
-    if logits is None:
+    if "logits" in out:
+        output_tensor = out["logits"]
+    elif "last_hidden_state" in out:
+        output_tensor = out["last_hidden_state"]
+    else:
         raise RuntimeError(f"[smoke_test] {model.__class__.__name__}: no logits or last_hidden_state on output")
-    if torch.isnan(logits).any():
+    if torch.isnan(output_tensor).any():
         raise RuntimeError(f"[smoke_test] {model.__class__.__name__}: NaN in forward output")
-    print(f"[smoke_test] {model.__class__.__name__}: OK (output shape {tuple(logits.shape)})")
+    print(f"[smoke_test] {model.__class__.__name__}: OK (output shape {tuple(output_tensor.shape)})")
 
 
 def _flatten(d, prefix=""):

@@ -52,10 +52,11 @@ config = AutoConfig.from_pretrained(MODEL_ID, text_config=text_config, vision_co
 model = Qwen3_5ForConditionalGeneration(config).to(dtype=torch.bfloat16)
 
 # Restore float32 for linear-attn weights that the upstream model keeps in fp32.
-for layer in model.model.language_model.layers:
-    if hasattr(layer, "linear_attn"):
-        layer.linear_attn.A_log.data = layer.linear_attn.A_log.data.float()
-        layer.linear_attn.norm.weight.data = layer.linear_attn.norm.weight.data.float()
+for i, layer_type in enumerate(config.text_config.layer_types):
+    if layer_type == "linear_attention":
+        linear_attn = model.model.language_model.layers[i].linear_attn
+        linear_attn.A_log.data = linear_attn.A_log.data.float()
+        linear_attn.norm.weight.data = linear_attn.norm.weight.data.float()
 
 smoke_test(model, processor)
 check_dtype_pattern(MODEL_ID, model)
