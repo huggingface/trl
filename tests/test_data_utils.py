@@ -549,7 +549,8 @@ class TestApplyChatTemplate(TrlTestCase):
                 reason="NemotronH models were introduced in transformers-5.3.0",
             ),
         ),
-        "trl-internal-testing/tiny-Phi3ForCausalLM",
+        "trl-internal-testing/tiny-Phi3ForCausalLM-3",
+        "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
         "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
         "trl-internal-testing/tiny-Qwen3ForCausalLM",
         pytest.param(
