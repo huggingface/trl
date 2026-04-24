@@ -97,7 +97,7 @@ def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
 @dataclass
 class DataCollatorForUnpairedPreference(DataCollatorMixin):
     """
-    Data collator for unpaired preference data. Pads sequences to the maximum length of the batch.
+    Data collator for unpaired preference data. Pads sequences to the maximum length of the batch. Test.
 
     Args:
         pad_token_id (`int`, defaults to `0`):
