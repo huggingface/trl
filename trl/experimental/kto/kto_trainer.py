@@ -102,22 +102,13 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     Args:
         pad_token_id (`int`):
             Token ID to use for padding `input_ids` sequences.
-        bos_token_id (`int`):
-            Token ID for the beginning-of-sequence token. If set and not already present at the start of `prompt_ids`,
-            it is prepended to both prompt and completion.
-        eos_token_id (`int`):
-            Token ID for the end-of-sequence token. If set and not already present at the end of `completion_ids`, it
-            is appended to the completion.
         max_length (`int`, *optional*):
-            Maximum sequence length after assembly. Sequences exceeding this limit are truncated from the end of the
-            completion before BOS/EOS tokens are added.
+            Maximum sequence length after assembly. Sequences longer than `max_length` are truncated from the end.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
     """
 
     pad_token_id: int
-    bos_token_id: int
-    eos_token_id: int
     max_length: int | None = None
     return_tensors: str = "pt"
 
@@ -132,36 +123,12 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
             for ex in examples:
                 prompt_ids = ex["prompt_ids"]
                 answer_ids = ex[ids_key]
-
+                full_ids = prompt_ids + answer_ids
+                labels = [-100] * len(prompt_ids) + answer_ids
                 if self.max_length is not None:
-                    # Reserve budget for BOS/EOS tokens that will be added.
-                    # BOS: only if not already present (truncation never removes the first token)
-                    # EOS: always reserve a slot — truncation removes from the end, so EOS may be cut
-                    # even when it was present before truncation; the post-truncation guard re-appends it
-                    max_len = self.max_length
-                    if prompt_ids and self.bos_token_id != prompt_ids[0]:
-                        max_len -= 1
-                    if self.eos_token_id is not None:
-                        max_len -= 1
-                    if len(prompt_ids) + len(answer_ids) > max_len:
-                        answer_ids = answer_ids[: max_len - len(prompt_ids)]
-
-                # Assemble completion = prompt + (truncated) answer
-                completion_ids = prompt_ids + answer_ids
-
-                # Add BOS, which affects both prompt and the full completion
-                if self.bos_token_id is not None and (not prompt_ids or prompt_ids[0] != self.bos_token_id):
-                    prompt_ids = [self.bos_token_id] + prompt_ids
-                    completion_ids = [self.bos_token_id] + completion_ids
-
-                # Add EOS, which affects only the full completion
-                if not answer_ids or self.eos_token_id != answer_ids[-1]:
-                    completion_ids = completion_ids + [self.eos_token_id]
-
-                # Create labels: mask prompt tokens with -100
-                labels = [-100] * len(prompt_ids) + completion_ids[len(prompt_ids) :]
-
-                full_ids_list.append(completion_ids)
+                    full_ids = full_ids[: self.max_length]
+                    labels = labels[: self.max_length]
+                full_ids_list.append(full_ids)
                 labels_list.append(labels)
 
             batch[f"{prefix}_input_ids"] = pad(
@@ -412,8 +379,6 @@ class KTOTrainer(_BaseTrainer):
         if data_collator is None:
             data_collator = DataCollatorForUnpairedPreference(
                 pad_token_id=tokenizer.pad_token_id,
-                bos_token_id=tokenizer.bos_token_id,
-                eos_token_id=tokenizer.eos_token_id,
                 max_length=max_length,
             )
 
