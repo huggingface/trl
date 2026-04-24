@@ -155,7 +155,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                     completion_ids = [self.bos_token_id] + completion_ids
 
                 # Add EOS, which affects only the full completion
-                if not answer_ids or self.eos_token_id != answer_ids[-1]:
+                if self.eos_token_id is not None and (not answer_ids or self.eos_token_id != answer_ids[-1]):
                     completion_ids = completion_ids + [self.eos_token_id]
 
                 # Create labels: mask prompt tokens with -100
