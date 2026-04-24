@@ -39,6 +39,21 @@ config = Cohere2Config(
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    bos_token_id=2,
+    eos_token_id=3,
+    logit_scale=1.0,
+    max_position_embeddings=500000,
+    rope_theta=50000,
+    cache_implementation="hybrid",
+    layer_switch=4,
+    order_of_interleaved_layers="local_attn_first",
+    position_embedding_type="rope_gptj",
+    rotary_pct=1.0,
+    use_embedding_sharing=True,
+    use_gated_activation=True,
+    use_parallel_block=True,
+    use_parallel_embedding=False,
+    use_qk_norm=False,
 )
 model = Cohere2ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
