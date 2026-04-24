@@ -216,12 +216,14 @@ def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, f
             for root, _, files in os.walk(tmpdir)
             for name in files
         ]
-        api.create_commit(
+        commit_info = api.create_commit(
             repo_id=repo_id,
             operations=operations,
             commit_message=f"Upload tiny {model.__class__.__name__}",
             create_pr=exists and create_pr,
         )
+        if commit_info.pr_url:
+            print(f"[push_to_hub] PR opened: {commit_info.pr_url}")
 
 
 def init_weights_tiny_model(model):
