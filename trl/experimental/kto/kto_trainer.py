@@ -100,25 +100,25 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     maximum length of the batch.
 
     Args:
-        pad_token_id (`int`, defaults to `0`):
+        pad_token_id (`int`):
             Token ID to use for padding `input_ids` sequences.
+        bos_token_id (`int`):
+            Token ID for the beginning-of-sequence token. If set and not already present at the start of `prompt_ids`,
+            it is prepended to both prompt and completion.
+        eos_token_id (`int`):
+            Token ID for the end-of-sequence token. If set and not already present at the end of `completion_ids`, it
+            is appended to the completion.
         max_length (`int`, *optional*):
             Maximum sequence length after assembly. Sequences exceeding this limit are truncated from the end of the
             completion before BOS/EOS tokens are added.
-        bos_token_id (`int`, *optional*):
-            Token ID for the beginning-of-sequence token. If set and not already present at the start of `prompt_ids`,
-            it is prepended to both prompt and completion.
-        eos_token_id (`int`, *optional*):
-            Token ID for the end-of-sequence token. If set and not already present at the end of `completion_ids`, it
-            is appended to the completion.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
     """
 
-    pad_token_id: int = 0
+    pad_token_id: int
+    bos_token_id: int
+    eos_token_id: int
     max_length: int | None = None
-    bos_token_id: int | None = None
-    eos_token_id: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -412,9 +412,9 @@ class KTOTrainer(_BaseTrainer):
         if data_collator is None:
             data_collator = DataCollatorForUnpairedPreference(
                 pad_token_id=tokenizer.pad_token_id,
-                max_length=max_length,
                 bos_token_id=tokenizer.bos_token_id,
                 eos_token_id=tokenizer.eos_token_id,
+                max_length=max_length,
             )
 
             if args.remove_unused_columns:
