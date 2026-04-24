@@ -15,7 +15,7 @@
 # Note: R1-0528 is kept in addition to R1 because it has a different chat template.
 
 import torch
-from transformers import AutoConfig, AutoTokenizer, DeepseekV3Config, DeepseekV3ForCausalLM, GenerationConfig
+from transformers import AutoTokenizer, DeepseekV3Config, DeepseekV3ForCausalLM, GenerationConfig
 
 from .._common import (
     check_dtype_pattern,
@@ -35,7 +35,7 @@ MODEL_ID = "deepseek-ai/DeepSeek-R1-0528"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = DeepseekV3Config(
-    vocab_size=AutoConfig.from_pretrained(MODEL_ID).vocab_size,
+    vocab_size=len(tokenizer.vocab),
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import torch
-from transformers import AutoConfig, AutoTokenizer, GenerationConfig, GPT2Config, GPT2LMHeadModel
+from transformers import AutoTokenizer, GenerationConfig, GPT2Config, GPT2LMHeadModel
 
 from .._common import (
     check_dtype_pattern,
@@ -33,7 +33,7 @@ MODEL_ID = "openai-community/gpt2"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = GPT2Config(
-    vocab_size=AutoConfig.from_pretrained(MODEL_ID).vocab_size,
+    vocab_size=len(tokenizer.vocab),
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,

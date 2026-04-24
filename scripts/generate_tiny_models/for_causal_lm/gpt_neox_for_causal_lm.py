@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import torch
-from transformers import AutoConfig, AutoTokenizer, GenerationConfig, GPTNeoXConfig, GPTNeoXForCausalLM
+from transformers import AutoTokenizer, GenerationConfig, GPTNeoXConfig, GPTNeoXForCausalLM
 
 from .._common import (
     check_dtype_pattern,
@@ -33,7 +33,7 @@ MODEL_ID = "EleutherAI/pythia-14m"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = GPTNeoXConfig(
-    vocab_size=AutoConfig.from_pretrained(MODEL_ID).vocab_size,
+    vocab_size=len(tokenizer.vocab),
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,

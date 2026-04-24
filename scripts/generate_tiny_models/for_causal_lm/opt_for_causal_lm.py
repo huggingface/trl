@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import torch
-from transformers import AutoConfig, AutoTokenizer, GenerationConfig, OPTConfig, OPTForCausalLM
+from transformers import AutoTokenizer, GenerationConfig, OPTConfig, OPTForCausalLM
 
 from .._common import (
     check_dtype_pattern,
@@ -33,7 +33,7 @@ MODEL_ID = "facebook/opt-1.3b"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = OPTConfig(
-    vocab_size=AutoConfig.from_pretrained(MODEL_ID).vocab_size,
+    vocab_size=len(tokenizer.vocab),
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,

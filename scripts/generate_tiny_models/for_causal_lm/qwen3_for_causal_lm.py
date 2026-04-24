@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import torch
-from transformers import AutoConfig, AutoTokenizer, GenerationConfig, Qwen3Config, Qwen3ForCausalLM
+from transformers import AutoTokenizer, GenerationConfig, Qwen3Config, Qwen3ForCausalLM
 
 from .._common import (
     check_dtype_pattern,
@@ -35,7 +35,7 @@ REVISION = "refs/pr/14"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=REVISION)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID, revision=REVISION)
 config = Qwen3Config(
-    vocab_size=AutoConfig.from_pretrained(MODEL_ID).vocab_size,
+    vocab_size=len(tokenizer.vocab),
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
