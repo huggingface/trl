@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from peft import LoraConfig, get_peft_model
-from transformers import GenerationConfig, Qwen3ForCausalLM
+from transformers import Qwen3ForCausalLM
 
 from .._common import check_transformers_version, push_to_hub, smoke_test
 
@@ -25,6 +25,5 @@ BASE = "trl-internal-testing/tiny-Qwen3ForCausalLM"
 
 model = Qwen3ForCausalLM.from_pretrained(BASE, dtype="auto")
 model = get_peft_model(model, LoraConfig())
-generation_config = GenerationConfig.from_pretrained(BASE)
 smoke_test(model, None)
-push_to_hub(model, None, generation_config, "tiny")
+push_to_hub(model, None, None, "tiny")
