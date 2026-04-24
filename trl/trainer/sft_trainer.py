@@ -1557,10 +1557,6 @@ class SFTTrainer(_BaseTrainer):
             self._metrics[mode]["entropy"].append(entropy)
         elif not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
-                # Shift logits/labels so entropy is averaged over the same set of tokens the loss is computed on
-                # (positions with `labels == -100` are skipped). This keeps the metric comparable across
-                # `completion_only_loss`, packing, and `chunked_nll`, which otherwise disagree on which
-                # positions to include.
                 if "shift_labels" in inputs:
                     # When using CP or SP, labels are pre-shifted.
                     shift_logits = outputs.logits.contiguous()
@@ -1578,12 +1574,13 @@ class SFTTrainer(_BaseTrainer):
 
                 per_token_entropy = entropy_from_logits(shift_logits)
                 mask = shift_labels != -100
-                total = mask.sum()
-                if total > 0:
-                    entropy = (per_token_entropy * mask).sum() / total
-                else:
-                    entropy = per_token_entropy.new_zeros(())
-                entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
+                entropy_sum = (per_token_entropy * mask).sum()
+                total_tokens = mask.sum()
+
+                # Gather counts across ranks and weight-average
+                entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+                total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
+                entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
             self._metrics[mode]["entropy"].append(entropy)
 
         if mode == "train":
