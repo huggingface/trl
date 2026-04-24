@@ -6,7 +6,7 @@ This directory contains one script per tiny model used by the TRL test suite. Ea
 
 ```
 generate_tiny_models/
-├── _common.py                               # shared helpers (push_to_hub, smoke_test, print_config_diff, ...)
+├── _common.py                    # shared helpers (push_to_hub, smoke_test, print_config_diff, ...)
 ├── for_causal_lm/                # *ForCausalLM + GPT-2 LM head + small/PEFT variants
 ├── for_sequence_classification/  # *ForSequenceClassification (reward models)
 └── for_conditional_generation/   # *ForConditionalGeneration (VLMs + T5 + Bart encoder-decoder)
