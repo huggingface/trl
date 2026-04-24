@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import torch
-from transformers import AutoTokenizer, GenerationConfig, MistralConfig, MistralForCausalLM
+from transformers import AutoConfig, AutoTokenizer, GenerationConfig, MistralConfig, MistralForCausalLM
 
 from .._common import check_dtype_pattern, check_transformers_version, init_weights_tiny_model, print_config_diff, push_to_hub, smoke_test
 
@@ -25,7 +25,7 @@ MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.2"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = MistralConfig(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=AutoConfig.from_pretrained(MODEL_ID).vocab_size,
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,

@@ -15,7 +15,7 @@
 # Slightly bigger than the "tiny" variant: vLLM requires hidden_size // num_attention_heads = 32.
 
 import torch
-from transformers import AutoTokenizer, GenerationConfig, Qwen2Config, Qwen2ForCausalLM
+from transformers import AutoConfig, AutoTokenizer, GenerationConfig, Qwen2Config, Qwen2ForCausalLM
 
 from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub, smoke_test
 
@@ -27,7 +27,7 @@ MODEL_ID = "Qwen/Qwen2.5-32B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = Qwen2Config(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=AutoConfig.from_pretrained(MODEL_ID).vocab_size,
     hidden_size=128,
     num_attention_heads=4,
     num_key_value_heads=2,

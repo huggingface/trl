@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# python -m scripts.generate_tiny_models.for_conditional_generation.gemma3_for_conditional_generation
-
 import torch
 from transformers import AutoConfig, AutoProcessor, Gemma3ForConditionalGeneration, GenerationConfig
 

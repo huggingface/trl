@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import torch
-from transformers import AutoTokenizer, GemmaConfig, GemmaForCausalLM, GenerationConfig
+from transformers import AutoConfig, AutoTokenizer, GemmaConfig, GemmaForCausalLM, GenerationConfig
 
 from .._common import check_dtype_pattern, check_transformers_version, init_weights_tiny_model, print_config_diff, push_to_hub, smoke_test
 
@@ -25,7 +25,7 @@ MODEL_ID = "google/gemma-7b-it"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = GemmaConfig(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=AutoConfig.from_pretrained(MODEL_ID).vocab_size,
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
