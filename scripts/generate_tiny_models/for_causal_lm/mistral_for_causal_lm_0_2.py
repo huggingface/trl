@@ -15,7 +15,15 @@
 import torch
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig, MistralConfig, MistralForCausalLM
 
-from .._common import check_dtype_pattern, check_transformers_version, init_weights_tiny_model, print_config_diff, push_to_hub, smoke_test
+from .._common import (
+    check_dtype_pattern,
+    check_transformers_version,
+    init_weights_tiny_model,
+    print_config_diff,
+    push_to_hub,
+    smoke_test,
+)
+
 
 TRANSFORMERS_VERSION = "4.56.2"
 check_transformers_version(TRANSFORMERS_VERSION)

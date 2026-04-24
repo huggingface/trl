@@ -19,6 +19,7 @@ from transformers import AutoConfig, AutoProcessor, GenerationConfig, Qwen2VLFor
 
 from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub, smoke_test
 
+
 TRANSFORMERS_VERSION = "4.56.2"
 check_transformers_version(TRANSFORMERS_VERSION)
 

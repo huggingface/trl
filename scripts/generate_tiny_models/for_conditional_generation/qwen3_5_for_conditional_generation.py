@@ -24,6 +24,7 @@ from transformers import AutoConfig, AutoProcessor, Qwen3_5ForConditionalGenerat
 
 from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub, smoke_test
 
+
 TRANSFORMERS_VERSION = "5.2.0"
 check_transformers_version(TRANSFORMERS_VERSION)
 

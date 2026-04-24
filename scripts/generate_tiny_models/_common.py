@@ -50,7 +50,7 @@ def check_transformers_version(expected_version):
 
     if Version(transformers.__version__) != Version(expected_version):
         raise RuntimeError(
-            f"This script requires transformers=={expected_version}, " f"but {transformers.__version__} is installed."
+            f"This script requires transformers=={expected_version}, but {transformers.__version__} is installed."
         )
 
 
@@ -67,7 +67,12 @@ def smoke_test(model, tokenizer_or_processor=None):
         red = Image.new("RGB", (24, 24), color="red")
         blue = Image.new("RGB", (24, 24), color="blue")
         messages = [
-            [{"role": "user", "content": [{"type": "image", "image": red}, {"type": "text", "text": "What is this?"}]}],
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "image": red}, {"type": "text", "text": "What is this?"}],
+                }
+            ],
             [{"role": "user", "content": [{"type": "text", "text": "Is it blue?"}, {"type": "image", "image": blue}]}],
         ]
         inputs = processor.apply_chat_template(
@@ -211,8 +216,10 @@ def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, f
         model_card.save(os.path.join(tmpdir, "README.md"))
 
         operations = [
-            CommitOperationAdd(path_in_repo=os.path.relpath(os.path.join(root, name), tmpdir),
-                               path_or_fileobj=os.path.join(root, name))
+            CommitOperationAdd(
+                path_in_repo=os.path.relpath(os.path.join(root, name), tmpdir),
+                path_or_fileobj=os.path.join(root, name),
+            )
             for root, _, files in os.walk(tmpdir)
             for name in files
         ]
