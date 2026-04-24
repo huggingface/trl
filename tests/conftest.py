@@ -39,6 +39,7 @@ MODEL_REVISIONS = {
     # Add model_id: revision mappings here to test PRs
     "trl-internal-testing/tiny-CohereForCausalLM": "refs/pr/1",
     "trl-internal-testing/tiny-Cohere2ForCausalLM": "refs/pr/1",
+    "trl-internal-testing/tiny-DeepseekV3ForCausalLM": "refs/pr/2",
     "trl-internal-testing/tiny-Gemma3ForConditionalGeneration": "refs/pr/7",
 }
 

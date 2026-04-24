@@ -118,6 +118,8 @@ _TORCH_TO_SAFETENSORS_DTYPE = {
     torch.float16: "F16",
     torch.bfloat16: "BF16",
     torch.float64: "F64",
+    torch.float8_e4m3fn: "F8_E4M3",
+    torch.float8_e5m2: "F8_E5M2",
     torch.int8: "I8",
     torch.int16: "I16",
     torch.int32: "I32",
