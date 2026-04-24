@@ -228,7 +228,7 @@ def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, c
         commit_info = api.create_commit(
             repo_id=repo_id,
             operations=operations,
-            commit_message=f"Upload tiny {model.__class__.__name__}",
+            commit_message=f"Upload {model.__class__.__name__}",
             create_pr=exists and create_pr,
         )
         if commit_info.pr_url:
