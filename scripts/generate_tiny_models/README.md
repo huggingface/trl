@@ -25,10 +25,17 @@ Each script:
 1. Checks that the installed `transformers` version matches the one pinned in the script (fails otherwise).
 2. Builds the tiny model with random weights.
 3. Runs `smoke_test` — a minimal forward pass to catch config misspecification and NaNs.
-4. Runs `print_config_diff` — prints every flat-key difference between the reference Hub config and the tiny model's config (for debugging scale-downs).
-5. Pushes the model, tokenizer/processor, generation config, and model card to the Hub.
+4. Runs `check_dtype_pattern` — reads the reference safetensors header via the Hub API and flags any tensor whose dtype diverges from the reference (catches e.g. fp32 norms kept inside a bf16 checkpoint).
+5. Runs `print_config_diff` — prints every flat-key difference between the reference Hub config and the tiny model's config (for debugging scale-downs).
+6. Pushes the model, tokenizer/processor, generation config, and model card to the Hub in a single commit.
 
-If the repo already exists on the Hub, the push is skipped (pass `force=True` in `push_to_hub(...)` to overwrite).
+If the repo already exists on the Hub, the push is skipped by default. Pass `--create-pr` to open a PR against the existing repo instead:
+
+```bash
+python -m scripts.generate_tiny_models.for_causal_lm.qwen3_for_causal_lm --create-pr
+```
+
+Direct overwrites of `main` aren't supported — update via `--create-pr` and merge the PR on the Hub.
 
 ## Version pinning
 

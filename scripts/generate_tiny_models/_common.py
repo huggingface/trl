@@ -187,7 +187,7 @@ def _parse_args():
     return args
 
 
-def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, force=False, create_pr=None):
+def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None):
     if create_pr is None:
         create_pr = _parse_args().create_pr
 
@@ -201,7 +201,7 @@ def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, f
         repo_id += f"-{suffix}"
 
     exists = api.repo_exists(repo_id)
-    if exists and not force and not create_pr:
+    if exists and not create_pr:
         print(f"Model {repo_id} already exists, skipping (pass --create-pr to open a PR)")
         return
 
