@@ -39,7 +39,6 @@ config = CohereConfig(
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
-    logit_scale=0.125,
 )
 model = CohereForCausalLM(config).to(dtype=torch.float16)
 init_weights_tiny_model(model)
