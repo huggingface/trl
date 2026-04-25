@@ -386,7 +386,11 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer.response_schema = llama3_schema
     elif chat_template in [qwen3_chat_template, qwen3_vl_chat_template]:
         tokenizer.response_schema = qwen3_schema
-    elif chat_template in [qwen3_5_chat_template_2b_and_below, qwen3_5_chat_template_4b_and_above, qwen3_6_chat_template]:
+    elif chat_template in [
+        qwen3_5_chat_template_2b_and_below,
+        qwen3_5_chat_template_4b_and_above,
+        qwen3_6_chat_template,
+    ]:
         tokenizer.response_schema = qwen3_5_schema
     else:
         raise ValueError(
@@ -550,8 +554,8 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently DeepSeek-V3, Gemma, Gemma2, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Qwen2.5, Qwen3, and
-    Qwen3.6 are supported.
+    requirements. Currently DeepSeek-V3, Gemma, Gemma2, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Qwen2.5, Qwen3, and Qwen3.6
+    are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizerBase`):

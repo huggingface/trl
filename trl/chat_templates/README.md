@@ -53,6 +53,10 @@ Original Qwen3-VL chat template. Unlike text-only Qwen3, this template is alread
 
 Original Qwen3.5 chat templates.
 
+### `qwen3_6.jinja`
+
+Original Qwen3.6 chat template (shared across `Qwen3.6-27B`, `Qwen3.6-35B-A3B`, and their FP8 variants). Differs from `qwen3_5_4b_and_above.jinja` by adding a `preserve_thinking` flag and tweaking how non-string tool-call argument values are stringified.
+
 ## Training templates
 
 Patched templates that fix training-specific issues. Swapped in at init when tools are enabled (GRPO) or when `assistant_only_loss=True` (SFT).
@@ -135,3 +139,7 @@ Always include the thinking block regardless of message position. The original c
 ```
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `qwen3_6_training.jinja`
+
+Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (require both `<think>` and `</think>` before parsing, drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted, wrap assistant output in `{% generation %}` / `{% endgeneration %}`), applied to the Qwen3.6 base template.
