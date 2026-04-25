@@ -74,6 +74,8 @@ from transformers import (
     Qwen2VLForConditionalGeneration,
     Qwen3_5Config,
     Qwen3_5ForConditionalGeneration,
+    Qwen3_5MoeConfig,
+    Qwen3_5MoeForConditionalGeneration,
     Qwen3Config,
     Qwen3ForCausalLM,
     Qwen3ForSequenceClassification,
@@ -333,6 +335,7 @@ for model_id, model_class, dtype in [
     ("Qwen/Qwen2.5-VL-3B-Instruct", Qwen2_5_VLForConditionalGeneration, torch.bfloat16),
     ("Qwen/Qwen3-VL-2B-Instruct", Qwen3VLForConditionalGeneration, torch.bfloat16),
     ("Qwen/Qwen3.5-0.8B", Qwen3_5ForConditionalGeneration, torch.bfloat16),
+    ("Qwen/Qwen3.6-35B-A3B", Qwen3_5MoeForConditionalGeneration, torch.bfloat16),
 ]:
     processor = AutoProcessor.from_pretrained(model_id)
     generation_config = GenerationConfig.from_pretrained(model_id) if model_id != "Qwen/Qwen3.5-0.8B" else None
@@ -379,7 +382,7 @@ for model_id, model_class, dtype in [
         vision_config["depth"] = 2
         vision_config["out_hidden_size"] = 16
 
-    if issubclass(model_class.config_class, Qwen3_5Config):
+    if issubclass(model_class.config_class, (Qwen3_5Config, Qwen3_5MoeConfig)):
         # For tiny layer counts, default `layer_types` can end up with no full-attention layers (e.g. 2 layers and
         # default interval 4), which breaks Qwen3.5 dynamic cache logic. Keep one full-attention layer at the end.
         text_config["layer_types"] = ["linear_attention", "full_attention"]
@@ -393,6 +396,12 @@ for model_id, model_class, dtype in [
         vision_config["num_heads"] = 4
         vision_config["intermediate_size"] = 32
         vision_config["out_hidden_size"] = 16
+
+    if issubclass(model_class.config_class, Qwen3_5MoeConfig):
+        text_config["num_experts"] = 4
+        text_config["num_experts_per_tok"] = 2
+        text_config["moe_intermediate_size"] = 32
+        text_config["shared_expert_intermediate_size"] = 32
 
     if model_id == "llava-hf/llava-v1.6-mistral-7b-hf":
         # Hotfix: llava-hf/llava-v1.6-mistral-7b-hf mistakesly sets text_config.dtype to "bfloat16".
@@ -415,14 +424,15 @@ for model_id, model_class, dtype in [
         config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
     model = model_class(config).to(dtype=dtype)
 
-    if issubclass(model_class.config_class, Qwen3_5Config):
+    if issubclass(model_class.config_class, (Qwen3_5Config, Qwen3_5MoeConfig)):
         # Qwen3.5 models has some weights in float32, to mirror this in the tiny model we need to convert them to float32 manually.
         for layer in model.model.language_model.layers:
             if hasattr(layer, "linear_attn"):  # applies to linear attention layers only
                 layer.linear_attn.A_log.data = layer.linear_attn.A_log.data.float()
                 layer.linear_attn.norm.weight.data = layer.linear_attn.norm.weight.data.float()
 
-    push_to_hub(model, processor, generation_config, "tiny")
+    suffix = "3.6" if model_id == "Qwen/Qwen3.6-35B-A3B" else None
+    push_to_hub(model, processor, generation_config, "tiny", suffix)
 
 # PEFT models
 model = Qwen3ForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="auto")
