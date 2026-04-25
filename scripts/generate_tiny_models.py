@@ -424,8 +424,9 @@ for model_id, model_class, dtype in [
         config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
     model = model_class(config).to(dtype=dtype)
 
-    if issubclass(model_class.config_class, (Qwen3_5Config, Qwen3_5MoeConfig)):
+    if model_id.startswith("Qwen/Qwen3.5"):
         # Qwen3.5 models has some weights in float32, to mirror this in the tiny model we need to convert them to float32 manually.
+        # Qwen3.6 reuses the Qwen3_5Moe class but stores those weights in bf16, so the cast is not needed there.
         for layer in model.model.language_model.layers:
             if hasattr(layer, "linear_attn"):  # applies to linear attention layers only
                 layer.linear_attn.A_log.data = layer.linear_attn.A_log.data.float()
