@@ -1128,6 +1128,13 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
             reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
         ),
     ),
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV4ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.7.0.dev0"),
+            reason="DeepseekV4 models were introduced in transformers-5.7.0",
+        ),
+    ),
     "trl-internal-testing/tiny-Gemma2ForCausalLM",
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",

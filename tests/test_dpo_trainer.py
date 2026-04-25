@@ -171,6 +171,13 @@ class TestDPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             "trl-internal-testing/tiny-GptOssForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-DeepseekV4ForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.7.0.dev0"),
+                    reason="DeepseekV4 models were introduced in transformers-5.7.0",
+                ),
+            ),
         ],
     )
     def test_train(self, model_id):

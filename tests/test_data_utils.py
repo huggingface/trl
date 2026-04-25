@@ -526,6 +526,13 @@ class TestApplyChatTemplate(TrlTestCase):
         "trl-internal-testing/tiny-Cohere2ForCausalLM",
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+        pytest.param(
+            "trl-internal-testing/tiny-DeepseekV4ForCausalLM",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.7.0.dev0"),
+                reason="DeepseekV4 models were introduced in transformers-5.7.0",
+            ),
+        ),
         "trl-internal-testing/tiny-FalconMambaForCausalLM",
         "trl-internal-testing/tiny-Gemma2ForCausalLM",
         "trl-internal-testing/tiny-GemmaForCausalLM",

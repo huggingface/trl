@@ -349,6 +349,13 @@ class TestSFTTrainer(TrlTestCase):
         [
             "trl-internal-testing/tiny-Cohere2ForCausalLM",
             pytest.param(
+                "trl-internal-testing/tiny-DeepseekV4ForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.7.0.dev0"),
+                    reason="DeepseekV4 models were introduced in transformers-5.7.0",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-Glm4MoeForCausalLM",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
@@ -377,10 +384,11 @@ class TestSFTTrainer(TrlTestCase):
         # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+        # Check the params have changed — collect ALL unchanged params, not just the first.
+        unchanged = [
+            n for n, param in previous_trainable_params.items() if torch.allclose(param, trainer.model.get_parameter(n))
+        ]
+        assert not unchanged, f"{len(unchanged)} parameters did not change:\n" + "\n".join(unchanged)
 
     # Special case for harmony
     def test_train_gpt_oss(self):
