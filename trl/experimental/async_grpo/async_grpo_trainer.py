@@ -57,6 +57,7 @@ class RolloutWorkerProtocol(Protocol):
 
     def start(self) -> None: ...
     def stop(self) -> None: ...
+    def get_error(self) -> BaseException | None: ...
     def pause(self) -> None: ...
     def resume(self) -> None: ...
     def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None: ...
@@ -78,11 +79,19 @@ class StepIntervalCallback(TrainerCallback):
 
 
 class RolloutQueueDataset(torch.utils.data.IterableDataset):
-    def __init__(self, rollout_queue, model_version_fn, max_staleness=3, timeout=120.0):
+    def __init__(self, rollout_queue, model_version_fn, worker_error_fn, max_staleness=3, timeout=120.0):
         self.queue = rollout_queue
         self.model_version_fn = model_version_fn
+        self.worker_error_fn = worker_error_fn
         self.max_staleness = max_staleness
         self.timeout = timeout
+        self._stale_drops = 0
+        self._yielded = 0
+
+    def _raise_worker_error(self) -> None:
+        error = self.worker_error_fn()
+        if error is not None:
+            raise RuntimeError("Async rollout worker failed. See the original exception for details.") from error
 
     def __iter__(self):
         while True:
@@ -90,26 +99,42 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             qsize = self.queue.qsize()
             if qsize == 0:
                 logger.info("queue empty, waiting for rollout samples...")
-            try:
-                sample = self.queue.get(timeout=self.timeout)
-            except queue.Empty:
-                logger.warning(f"Rollout queue empty for {self.timeout}s, stopping epoch")
-                return  # StopIteration ends epoch
+            deadline = t0 + self.timeout
+            while True:
+                self._raise_worker_error()
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    logger.warning(f"Rollout queue empty for {self.timeout}s, stopping epoch")
+                    return  # StopIteration ends epoch
+                try:
+                    sample = self.queue.get(timeout=min(1.0, remaining))
+                    break
+                except queue.Empty:
+                    self._raise_worker_error()
+            self._raise_worker_error()
             queue_wait_time_s = time.time() - t0
             if queue_wait_time_s > 1.0:
                 logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={self.queue.qsize()})")
 
             staleness = self.model_version_fn() - sample.model_version
             if staleness > self.max_staleness:
+                self._stale_drops += 1
                 logger.info(f"dropping stale sample (staleness={staleness}, max={self.max_staleness})")
                 continue  # drop stale, pull next
+            self._yielded += 1
+            total_seen = self._yielded + self._stale_drops
 
             yield {
                 "input_ids": sample.input_ids,
                 "completion_mask": sample.completion_mask,
                 "old_log_probs": sample.old_log_probs,
                 "advantage": sample.advantage,
-                "metrics": {**sample.metrics, "queue_wait_time_s": queue_wait_time_s},
+                "metrics": {
+                    **sample.metrics,
+                    "queue_wait_time_s": queue_wait_time_s,
+                    "stale_drops": float(self._stale_drops),
+                    "stale_drop_ratio": self._stale_drops / total_seen,
+                },
             }
 
 
@@ -305,6 +330,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Reward functions
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
+        if not all(callable(reward_func) for reward_func in reward_funcs):
+            raise ValueError("AsyncGRPOTrainer currently supports callable reward functions only.")
 
         # Initialize the Trainer
         super().__init__(
@@ -320,6 +347,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
+        if self.is_deepspeed_enabled:
+            raise ValueError("AsyncGRPOTrainer does not support DeepSpeed ZeRO. Use single-process or FSDP2 training.")
 
         # Infer max_steps from dataset size when not explicitly set. This must happen after super().__init__()
         # so that self.accelerator.num_processes is available for the correct calculation.
@@ -333,12 +362,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.args.max_steps = int(self.args.num_train_epochs * samples_per_epoch / samples_per_step)
 
         # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
-        # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step.
+        # before they become stale is wasteful. Samples with staleness == max_staleness are still accepted, so the
+        # useful upper bound is (max_staleness + 1) * samples_per_step.
         if self.args.max_inflight_tasks < 0:
-            self.args.max_inflight_tasks = self.args.max_staleness * samples_per_step
+            self.args.max_inflight_tasks = (self.args.max_staleness + 1) * samples_per_step
             logger.info(
                 f"max_inflight_tasks set to {self.args.max_inflight_tasks} "
-                f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
+                f"((max_staleness + 1)={self.args.max_staleness + 1} * samples_per_step={samples_per_step})"
             )
 
         # Initialize the metrics
@@ -399,6 +429,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             dataset = RolloutQueueDataset(
                 rollout_queue=self.rollout_queue,
                 model_version_fn=lambda: self.model_version,
+                worker_error_fn=self.rollout_worker.get_error,
                 max_staleness=self.args.max_staleness,
                 timeout=self.args.vllm_server_timeout,
             )

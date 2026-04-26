@@ -63,7 +63,8 @@ class AsyncGRPOConfig(_BaseConfig):
 
         max_inflight_tasks (`int`, *optional*, defaults to `-1`):
             Maximum number of concurrent generation tasks sent to the vLLM server. Defaults to `-1` (auto), which
-            sets it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps * num_processes`.
+            sets it to `(max_staleness + 1) * per_device_train_batch_size * gradient_accumulation_steps *
+            num_processes`.
             If using tool-use environments, you may want to set this manually based on how many parallel environments
             you can run.
         max_staleness (`int`, *optional*, defaults to `4`):
@@ -163,7 +164,7 @@ class AsyncGRPOConfig(_BaseConfig):
         default=-1,
         metadata={
             "help": "Maximum number of concurrent generation tasks sent to the vLLM server. Defaults to -1 (auto), "
-            "which sets it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps * "
+            "which sets it to `(max_staleness + 1) * per_device_train_batch_size * gradient_accumulation_steps * "
             "num_processes`. Generating more samples than this is wasteful since they will be discarded as stale "
             "before the trainer can consume them. If using tool-use environments, you may want to set this manually "
             "based on how many parallel environments you can run."
@@ -200,6 +201,25 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.num_generations < 2:
+            raise ValueError(f"num_generations must be at least 2 for AsyncGRPOTrainer, got {self.num_generations}.")
+        if self.max_completion_length <= 0:
+            raise ValueError(f"max_completion_length must be greater than 0, got {self.max_completion_length}.")
+        if self.vllm_server_timeout <= 0:
+            raise ValueError(f"vllm_server_timeout must be greater than 0, got {self.vllm_server_timeout}.")
+        if self.request_timeout <= 0:
+            raise ValueError(f"request_timeout must be greater than 0, got {self.request_timeout}.")
+        if self.max_inflight_tasks != -1 and self.max_inflight_tasks < 1:
+            raise ValueError(
+                f"max_inflight_tasks must be -1 for auto sizing or at least 1, got {self.max_inflight_tasks}."
+            )
+        if self.max_staleness < 0:
+            raise ValueError(f"max_staleness must be greater than or equal to 0, got {self.max_staleness}.")
+        if self.queue_maxsize < 0:
+            raise ValueError(f"queue_maxsize must be greater than or equal to 0, got {self.queue_maxsize}.")
+        if self.weight_sync_steps < 1:
+            raise ValueError(f"weight_sync_steps must be at least 1, got {self.weight_sync_steps}.")
 
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader

@@ -120,6 +120,8 @@ class AsyncRolloutWorker:
         self.rollout_buffer: queue.Queue[RolloutSample] = queue.Queue(maxsize=queue_maxsize)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop_event: asyncio.Event | None = None
+        self._thread: threading.Thread | None = None
+        self._error: BaseException | None = None
         self._weight_update_info = {
             "names": weight_names,
             "dtype_names": weight_dtype_names,
@@ -210,7 +212,8 @@ class AsyncRolloutWorker:
             time.sleep(poll_interval_s)
 
     def _init_weight_transfer(self) -> None:
-        response = requests.get(f"{self.vllm_server_url}/get_world_size")
+        response = requests.get(f"{self.vllm_server_url}/get_world_size", timeout=30)
+        response.raise_for_status()
         inference_world_size = response.json()["world_size"]
         world_size = inference_world_size + 1
         master_address = get_ip()
@@ -222,10 +225,21 @@ class AsyncRolloutWorker:
             "rank_offset": 1,
             "world_size": world_size,
         }
+        init_error = []
+
+        def init_weight_transfer_engine() -> None:
+            try:
+                response = requests.post(
+                    f"{self.vllm_server_url}/init_weight_transfer_engine",
+                    json={"init_info": init_info},
+                    timeout=120,
+                )
+                response.raise_for_status()
+            except Exception as error:
+                init_error.append(error)
+
         t_init = threading.Thread(
-            target=requests.post,
-            args=(f"{self.vllm_server_url}/init_weight_transfer_engine",),
-            kwargs={"json": {"init_info": init_info}, "timeout": 120},
+            target=init_weight_transfer_engine,
         )
         t_init.start()
         self.model_update_group = NCCLWeightTransferEngine.trainer_init(
@@ -236,11 +250,16 @@ class AsyncRolloutWorker:
             }
         )
         t_init.join()
+        if init_error:
+            raise RuntimeError("Failed to initialize vLLM weight transfer engine.") from init_error[0]
 
         logger.info("Init weight sync group with vLLM")
 
     def update_model_version(self, model_version: int):
         self.model_version = model_version
+
+    def get_error(self) -> BaseException | None:
+        return self._error
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
         async with aiohttp.ClientSession() as session:
@@ -254,16 +273,21 @@ class AsyncRolloutWorker:
             )
 
     def start(self) -> None:
-        thread = threading.Thread(target=self._run, daemon=True)
-        thread.start()
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._error = None
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
 
     def stop(self) -> None:
         logger.info("Stopping worker thread...")
-        if self._loop and self._loop.is_running():
+        if self._loop and self._loop.is_running() and self._stop_event is not None:
             try:
                 self._loop.call_soon_threadsafe(self._stop_event.set)
             except RuntimeError:
                 pass
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=5)
 
     def _run(self) -> None:
         loop = asyncio.new_event_loop()
@@ -273,8 +297,8 @@ class AsyncRolloutWorker:
         try:
             loop.run_until_complete(self._run_loops(stop_event=self._stop_event))
         except Exception as e:
+            self._error = e
             logger.exception(f"Worker thread failed: {e}")
-            raise
         finally:
             loop.close()
             self._destroy_model_update_group()
@@ -289,22 +313,37 @@ class AsyncRolloutWorker:
 
     def pause(self) -> None:
         t0 = time.time()
-        requests.post(f"{self.vllm_server_url}/pause", params={"mode": "keep"})
+        response = requests.post(
+            f"{self.vllm_server_url}/pause", params={"mode": "keep"}, timeout=self.request_timeout
+        )
+        response.raise_for_status()
         logger.debug(f"[weight_sync] pause HTTP took {time.time() - t0:.1f}s")
 
     def resume(self) -> None:
         t0 = time.time()
-        requests.post(f"{self.vllm_server_url}/resume")
+        response = requests.post(f"{self.vllm_server_url}/resume", timeout=self.request_timeout)
+        response.raise_for_status()
         logger.debug(f"[weight_sync] resume HTTP took {time.time() - t0:.1f}s")
 
     def send_weights(self, iterator) -> None:
         if self.model_update_group is None:
             return
         t0 = time.time()
+        update_error = []
+
+        def update_weights() -> None:
+            try:
+                response = requests.post(
+                    f"{self.vllm_server_url}/update_weights",
+                    json={"update_info": self._weight_update_info},
+                    timeout=1800,
+                )
+                response.raise_for_status()
+            except Exception as error:
+                update_error.append(error)
+
         t_update = threading.Thread(
-            target=requests.post,
-            args=(f"{self.vllm_server_url}/update_weights",),
-            kwargs={"json": {"update_info": self._weight_update_info}, "timeout": 1800},
+            target=update_weights,
         )
         t_update.start()
         logger.debug(f"[weight_sync] /update_weights POST sent ({time.time() - t0:.1f}s)")
@@ -316,6 +355,8 @@ class AsyncRolloutWorker:
         logger.debug(f"[weight_sync] NCCL transfer took {time.time() - t_nccl:.1f}s")
         t_join = time.time()
         t_update.join()
+        if update_error:
+            raise RuntimeError("Failed to update vLLM weights.") from update_error[0]
         logger.debug(
             f"[weight_sync] /update_weights join took {time.time() - t_join:.1f}s (total send_weights: {time.time() - t0:.1f}s)"
         )
@@ -646,9 +687,20 @@ class AsyncRolloutWorker:
                 # vLLM drops connections or returns 503 during weight sync (/pause). Wait briefly and retry.
                 logger.debug("Server unavailable (likely weight sync pause), retrying...")
                 await asyncio.sleep(1.0)
-        choice = output["choices"][0]
-        completion_ids = choice["token_ids"]
-        completion_logprobs = choice["logprobs"]["token_logprobs"]
+        try:
+            choice = output["choices"][0]
+            completion_ids = choice["token_ids"]
+            completion_logprobs = choice["logprobs"]["token_logprobs"]
+        except (KeyError, IndexError, TypeError) as error:
+            raise RuntimeError(
+                "Unexpected vLLM completion response. AsyncGRPOTrainer requires token ids and processed token "
+                "logprobs; launch vLLM with `--logprobs-mode processed_logprobs`."
+            ) from error
+        if len(completion_ids) != len(completion_logprobs):
+            raise RuntimeError(
+                "Unexpected vLLM completion response. The number of token ids does not match the number of token "
+                "logprobs; launch vLLM with `--logprobs-mode processed_logprobs`."
+            )
         return completion_ids, completion_logprobs
 
     async def _score_group(self, group: RolloutGroup) -> list[RolloutSample]:

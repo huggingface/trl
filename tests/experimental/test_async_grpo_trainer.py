@@ -16,18 +16,28 @@ import itertools
 import queue
 
 import numpy as np
+import pytest
 import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
+from trl.experimental.async_grpo.async_grpo_trainer import RolloutQueueDataset
+from trl.experimental.async_grpo.async_rollout_worker import AsyncRolloutWorker, RolloutSample
 
 from ..testing_utils import TrlTestCase
 
 
 def dummy_reward_func(completions, **kwargs):
     return [float(hash(c[0]["content"]) % 100) / 100.0 for c in completions]
+
+
+class _RunningLoopWithoutStopEvent:
+    def is_running(self):
+        return True
+
+    def call_soon_threadsafe(self, fn):
+        raise AssertionError(f"unexpected callback registration: {fn}")
 
 
 class _StubRolloutWorker:
@@ -81,6 +91,9 @@ class _StubRolloutWorker:
     def stop(self):
         pass
 
+    def get_error(self):
+        return None
+
     def pause(self):
         pass
 
@@ -92,6 +105,22 @@ class _StubRolloutWorker:
 
 
 class TestAsyncGRPOTrainer(TrlTestCase):
+    def test_config_validation(self):
+        with pytest.raises(ValueError, match="num_generations"):
+            AsyncGRPOConfig(output_dir=self.tmp_dir, num_generations=1)
+
+        with pytest.raises(ValueError, match="max_inflight_tasks"):
+            AsyncGRPOConfig(output_dir=self.tmp_dir, max_inflight_tasks=0)
+
+        with pytest.raises(ValueError, match="max_staleness"):
+            AsyncGRPOConfig(output_dir=self.tmp_dir, max_staleness=-1)
+
+        with pytest.raises(ValueError, match="weight_sync_steps"):
+            AsyncGRPOConfig(output_dir=self.tmp_dir, weight_sync_steps=0)
+
+        config = AsyncGRPOConfig(output_dir=self.tmp_dir, num_generations=4, max_inflight_tasks=1)
+        assert config.max_inflight_tasks == 1
+
     def test_init_minimal(self):
         # Test that AsyncGRPOTrainer can be instantiated with only model, reward_model and train_dataset
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -102,6 +131,88 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
         )
+
+    def test_auto_max_inflight_tasks_allows_zero_staleness(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_staleness=0,
+            max_inflight_tasks=-1,
+            report_to="none",
+        )
+        AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+        )
+
+        assert training_args.max_inflight_tasks == 3
+
+    def test_rollout_queue_drops_stale_samples_and_reports_ratio(self):
+        rollout_queue = queue.Queue()
+        rollout_queue.put(
+            RolloutSample(
+                prompt=[],
+                completion=[],
+                input_ids=[0, 1],
+                completion_mask=[0, 1],
+                old_log_probs=[0.0, -0.5],
+                advantage=0.0,
+                model_version=0,
+                metrics={},
+            )
+        )
+        rollout_queue.put(
+            RolloutSample(
+                prompt=[],
+                completion=[],
+                input_ids=[0, 2],
+                completion_mask=[0, 1],
+                old_log_probs=[0.0, -0.5],
+                advantage=1.0,
+                model_version=1,
+                metrics={},
+            )
+        )
+        dataset = RolloutQueueDataset(
+            rollout_queue=rollout_queue,
+            model_version_fn=lambda: 2,
+            worker_error_fn=lambda: None,
+            max_staleness=1,
+            timeout=1.0,
+        )
+
+        sample = next(iter(dataset))
+
+        assert sample["input_ids"] == [0, 2]
+        assert sample["metrics"]["stale_drops"] == 1.0
+        assert sample["metrics"]["stale_drop_ratio"] == 0.5
+
+    def test_rollout_queue_surfaces_worker_error(self):
+        error = RuntimeError("worker exploded")
+        dataset = RolloutQueueDataset(
+            rollout_queue=queue.Queue(),
+            model_version_fn=lambda: 0,
+            worker_error_fn=lambda: error,
+            max_staleness=1,
+            timeout=1.0,
+        )
+
+        with pytest.raises(RuntimeError, match="Async rollout worker failed"):
+            next(iter(dataset))
+
+    def test_worker_stop_tolerates_partially_started_thread_state(self):
+        worker = object.__new__(AsyncRolloutWorker)
+        worker._loop = _RunningLoopWithoutStopEvent()
+        worker._stop_event = None
+        worker._thread = None
+
+        worker.stop()
 
     def test_training(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
