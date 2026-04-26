@@ -20,14 +20,16 @@ from .._lazy_module import _LazyModule
 
 _import_structure = {
     "accuracy_rewards": ["accuracy_reward", "reasoning_accuracy_reward"],
-    "format_rewards": ["think_format_reward"],
+    "calibration_rewards": ["brier_score_reward"],
+    "format_rewards": ["rlcr_format_reward", "think_format_reward"],
     "other_rewards": ["get_soft_overlong_punishment"],
 }
 
 
 if TYPE_CHECKING:
     from .accuracy_rewards import accuracy_reward, reasoning_accuracy_reward
-    from .format_rewards import think_format_reward
+    from .calibration_rewards import brier_score_reward
+    from .format_rewards import rlcr_format_reward, think_format_reward
     from .other_rewards import get_soft_overlong_punishment
 
 

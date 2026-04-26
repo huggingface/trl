@@ -10,9 +10,17 @@ This module contains some useful reward functions, primarily intended for use wi
 
 [[autodoc]] rewards.reasoning_accuracy_reward
 
+## brier_score_reward
+
+[[autodoc]] rewards.brier_score_reward
+
 ## think_format_reward
 
 [[autodoc]] rewards.think_format_reward
+
+## rlcr_format_reward
+
+[[autodoc]] rewards.rlcr_format_reward
 
 ## get_soft_overlong_punishment
 

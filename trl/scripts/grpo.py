@@ -42,7 +42,9 @@ class GRPOScriptArguments(ScriptArguments):
         reward_funcs (`list[str]`, *optional*):
             Reward functions to use. Supported values are:
                 - `"accuracy_reward"`
+                - `"brier_score_reward"`
                 - `"reasoning_accuracy_reward"`
+                - `"rlcr_format_reward"`
                 - `"think_format_reward"`
                 - `"get_soft_overlong_punishment"` (used value are `max_completion_len=1280`, `soft_punish_cache=256`)
                 - any dotted import path " (e.g., `'my_lib.rewards.custom_reward'`).
@@ -58,9 +60,10 @@ class GRPOScriptArguments(ScriptArguments):
     reward_funcs: list[str] | None = field(
         default=None,
         metadata={
-            "help": "Reward functions to use. Supported values are: `accuracy_reward`,  `reasoning_accuracy_reward`, `think_format_reward`, "
-            "`get_soft_overlong_punishment` (used values are `max_completion_len=1280`, `soft_punish_cache=256`), or "
-            "any dotted import path (e.g., `'my_lib.rewards.custom_reward'`)."
+            "help": "Reward functions to use. Supported values are: `accuracy_reward`, `brier_score_reward`, "
+            "`reasoning_accuracy_reward`, `rlcr_format_reward`, `think_format_reward`, `get_soft_overlong_punishment` "
+            "(used values are `max_completion_len=1280`, `soft_punish_cache=256`), or any dotted import path "
+            "(e.g., `'my_lib.rewards.custom_reward'`)."
         },
     )
 
@@ -73,8 +76,10 @@ def main(script_args, training_args, model_args, dataset_args):
     from trl import GRPOTrainer, get_dataset, get_kbit_device_map, get_peft_config, get_quantization_config
     from trl.rewards import (
         accuracy_reward,
+        brier_score_reward,
         get_soft_overlong_punishment,
         reasoning_accuracy_reward,
+        rlcr_format_reward,
         think_format_reward,
     )
 
@@ -82,7 +87,9 @@ def main(script_args, training_args, model_args, dataset_args):
 
     reward_funcs_registry = {
         "accuracy_reward": accuracy_reward,
+        "brier_score_reward": brier_score_reward,
         "reasoning_accuracy_reward": reasoning_accuracy_reward,
+        "rlcr_format_reward": rlcr_format_reward,
         "think_format_reward": think_format_reward,
         "get_soft_overlong_punishment": get_soft_overlong_punishment(max_completion_len=1280, soft_punish_cache=256),
     }

@@ -74,6 +74,27 @@ trainer.train()
 ```
 
 
+### Beyond Binary Rewards: Training LMs to Reason About Their Uncertainty
+
+**📜 Paper**: https://huggingface.co/papers/2507.16806
+
+RLCR trains reasoning models to report both an answer and a calibrated confidence estimate. The model is prompted to
+produce `<think>`, `<answer>`, `<analysis>`, and `<confidence>` blocks, then optimized with a correctness reward plus a
+Brier-style calibration reward.
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+from trl.rewards import accuracy_reward, brier_score_reward, rlcr_format_reward
+
+training_args = GRPOConfig(...)
+
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
+    reward_funcs=[rlcr_format_reward, accuracy_reward, brier_score_reward],
+)
+```
+
 ### Group Sequence Policy Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2507.18071

@@ -12,11 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import threading
 
-from trl.rewards import accuracy_reward, get_soft_overlong_punishment, reasoning_accuracy_reward, think_format_reward
+import pytest
+
+from trl.rewards import (
+    accuracy_reward,
+    brier_score_reward,
+    get_soft_overlong_punishment,
+    reasoning_accuracy_reward,
+    rlcr_format_reward,
+    think_format_reward,
+)
 
 from .testing_utils import TrlTestCase, require_math_latex
+
+
+def exact_text_correctness(completions, solution, **kwargs):
+    return [
+        float(completion[0]["content"].strip() == target)
+        for completion, target in zip(completions, solution, strict=True)
+    ]
 
 
 class TestThinkFormatReward(TrlTestCase):
@@ -61,6 +78,239 @@ class TestThinkFormatReward(TrlTestCase):
         expected_rewards = [1.0, 1.0, 0.0, 0.0]
         rewards = think_format_reward(completions)
         assert rewards == expected_rewards
+
+
+class TestRLCRFormatReward(TrlTestCase):
+    def test_valid_format(self):
+        completions = [
+            (
+                "<think>Reasoning.</think>"
+                "<answer>42</answer>"
+                "<analysis>Direct arithmetic.</analysis>"
+                "<confidence>0.9</confidence>"
+            ),
+            (
+                "\n<think>\nReasoning.\n</think>\n"
+                "<answer>\n42\n</answer>\n"
+                "<analysis>\nDirect arithmetic.\n</analysis>\n"
+                "<confidence>\n.5\n</confidence>\n"
+            ),
+        ]
+        completions = [[{"content": completion}] for completion in completions]
+        rewards = rlcr_format_reward(completions)
+        assert rewards == [1.0, 1.0]
+
+    def test_confidence_boundaries(self):
+        completions = [
+            (
+                "<think>Reasoning.</think>"
+                "<answer>42</answer>"
+                "<analysis>Direct arithmetic.</analysis>"
+                f"<confidence>{confidence}</confidence>"
+            )
+            for confidence in ["0", "0.0", "1", "1.0", ".5", "0.73"]
+        ]
+        completions = [[{"content": completion}] for completion in completions]
+        rewards = rlcr_format_reward(completions)
+        assert rewards == [1.0] * len(completions)
+
+    def test_invalid_confidence(self):
+        completions = [
+            (
+                "<think>Reasoning.</think>"
+                "<answer>42</answer>"
+                "<analysis>Direct arithmetic.</analysis>"
+                f"<confidence>{confidence}</confidence>"
+            )
+            for confidence in ["", "nan", "inf", "-0.1", "1.1", "not sure"]
+        ]
+        completions = [[{"content": completion}] for completion in completions]
+        rewards = rlcr_format_reward(completions)
+        assert rewards == [0.0] * len(completions)
+
+    def test_invalid_structure(self):
+        completions = [
+            # missing analysis
+            "<think>Reasoning.</think><answer>42</answer><confidence>0.9</confidence>",
+            # wrong order
+            "<think>Reasoning.</think><analysis>Direct.</analysis><answer>42</answer><confidence>0.9</confidence>",
+            # duplicate tag
+            (
+                "<think>Reasoning.</think><answer>42</answer><answer>43</answer>"
+                "<analysis>Direct.</analysis><confidence>0.9</confidence>"
+            ),
+            # nested outer tag
+            (
+                "<think>Reasoning with <answer>42</answer>.</think>"
+                "<answer>42</answer><analysis>Direct.</analysis><confidence>0.9</confidence>"
+            ),
+            # preamble
+            "Here is my answer. <think>Reasoning.</think><answer>42</answer>"
+            "<analysis>Direct.</analysis><confidence>0.9</confidence>",
+            # trailing content
+            "<think>Reasoning.</think><answer>42</answer><analysis>Direct.</analysis><confidence>0.9</confidence>!",
+        ]
+        completions = [[{"content": completion}] for completion in completions]
+        rewards = rlcr_format_reward(completions)
+        assert rewards == [0.0] * len(completions)
+
+
+class TestBrierScoreReward(TrlTestCase):
+    def test_scores_calibrated_confidence(self):
+        completions = [
+            (
+                "<think>Reasoning.</think>"
+                "<answer>correct</answer>"
+                "<analysis>Direct.</analysis>"
+                "<confidence>1.0</confidence>"
+            ),
+            (
+                "<think>Reasoning.</think>"
+                "<answer>correct</answer>"
+                "<analysis>Some uncertainty.</analysis>"
+                "<confidence>0.25</confidence>"
+            ),
+            (
+                "<think>Reasoning.</think>"
+                "<answer>wrong</answer>"
+                "<analysis>Very uncertain.</analysis>"
+                "<confidence>0.0</confidence>"
+            ),
+            (
+                "<think>Reasoning.</think>"
+                "<answer>wrong</answer>"
+                "<analysis>Overconfident.</analysis>"
+                "<confidence>0.8</confidence>"
+            ),
+        ]
+        completions = [[{"content": completion}] for completion in completions]
+        rewards = brier_score_reward(
+            completions, ["correct", "correct", "correct", "correct"], correctness_reward_func=exact_text_correctness
+        )
+        expected_rewards = [1.0, 1 - 0.75**2, 1.0, 1 - 0.8**2]
+        assert rewards == expected_rewards
+
+    def test_invalid_format_returns_zero(self):
+        completions = [
+            [
+                {
+                    "content": (
+                        "<think>Reasoning.</think>"
+                        "<answer>correct</answer>"
+                        "<analysis>Direct.</analysis>"
+                        "<confidence>not sure</confidence>"
+                    )
+                }
+            ],
+            [{"content": ("<think>Reasoning.</think><analysis>Direct.</analysis><confidence>0.9</confidence>")}],
+            [{"content": ("<think>Reasoning.</think><answer>correct</answer><confidence>0.9</confidence>")}],
+        ]
+
+        def raise_if_called(**kwargs):
+            raise AssertionError("Correctness reward should not be called when all rows are invalid.")
+
+        rewards = brier_score_reward(
+            completions, ["correct", "correct", "correct"], correctness_reward_func=raise_if_called
+        )
+        assert rewards == [0.0, 0.0, 0.0]
+
+    def test_none_correctness_propagates(self):
+        completions = [
+            [
+                {
+                    "content": (
+                        "<think>Reasoning.</think>"
+                        "<answer>unknown</answer>"
+                        "<analysis>No parseable gold answer.</analysis>"
+                        "<confidence>0.4</confidence>"
+                    )
+                }
+            ]
+        ]
+        rewards = brier_score_reward(completions, ["unknown"], correctness_reward_func=lambda **kwargs: [None])
+        assert rewards == [None]
+
+    def test_custom_correctness_wrong_length_raises(self):
+        completions = [
+            [
+                {
+                    "content": (
+                        "<think>Reasoning.</think>"
+                        "<answer>correct</answer>"
+                        "<analysis>Direct.</analysis>"
+                        "<confidence>0.9</confidence>"
+                    )
+                }
+            ]
+        ]
+        with pytest.raises(ValueError, match="one reward per completion"):
+            brier_score_reward(completions, ["correct"], correctness_reward_func=lambda **kwargs: [])
+
+    def test_custom_correctness_out_of_range_raises(self):
+        completions = [
+            [
+                {
+                    "content": (
+                        "<think>Reasoning.</think>"
+                        "<answer>correct</answer>"
+                        "<analysis>Direct.</analysis>"
+                        "<confidence>0.9</confidence>"
+                    )
+                }
+            ]
+        ]
+        with pytest.raises(ValueError, match=r"\[0\.0, 1\.0\]"):
+            brier_score_reward(completions, ["correct"], correctness_reward_func=lambda **kwargs: [1.5])
+
+    def test_log_extra_receives_parsed_values(self):
+        completions = [
+            [
+                {
+                    "content": (
+                        "<think>Reasoning.</think>"
+                        "<answer>correct</answer>"
+                        "<analysis>Direct.</analysis>"
+                        "<confidence>0.25</confidence>"
+                    )
+                }
+            ]
+        ]
+        extra_logs = {}
+
+        def log_extra(column, values):
+            extra_logs[column] = values
+
+        rewards = brier_score_reward(
+            completions,
+            ["correct"],
+            correctness_reward_func=exact_text_correctness,
+            log_extra=log_extra,
+        )
+
+        assert rewards == [1 - 0.75**2]
+        assert extra_logs == {
+            "rlcr_answer": ["correct"],
+            "rlcr_confidence": [0.25],
+            "rlcr_correctness": [1.0],
+            "brier_score_reward": [1 - 0.75**2],
+        }
+
+    @require_math_latex
+    def test_uses_accuracy_reward_by_default(self):
+        completions = [
+            [
+                {
+                    "content": (
+                        r"<think>Reasoning.</think>"
+                        r"<answer>\boxed{\frac{1}{3}}</answer>"
+                        r"<analysis>High confidence because the derivation is direct.</analysis>"
+                        r"<confidence>0.9</confidence>"
+                    )
+                }
+            ]
+        ]
+        rewards = brier_score_reward(completions, [r"\frac{1}{3}"])
+        assert math.isclose(rewards[0], 1 - (0.9 - 1.0) ** 2)
 
 
 class TestSoftOverlongPunishmentReward:
