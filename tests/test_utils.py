@@ -498,6 +498,98 @@ class TestRepeatRandomSampler(TrlTestCase):
         assert sampled[12:16] == sampled[16:20] == sampled[20:24]
         assert sampled[24:28] == sampled[28:32] == sampled[32:36]
 
+    def test_sampler_repeats_global_generation_chunks_before_advancing(self):
+        dataset = list(range(20))
+        num_generations = 4
+        num_iterations = 3
+        world_size = 8
+        per_device_train_batch_size = 4
+        steps_per_generation = 1
+        generation_batch_size = world_size * per_device_train_batch_size * steps_per_generation
+        unique_prompts_per_generation = generation_batch_size // num_generations
+        repeat_count = num_iterations * steps_per_generation
+        full_generation_chunks = len(dataset) // unique_prompts_per_generation
+
+        sampler = RepeatSampler(
+            dataset,
+            mini_repeat_count=num_generations,
+            batch_size=unique_prompts_per_generation,
+            repeat_count=repeat_count,
+            shuffle=False,
+        )
+        sampled = list(sampler)
+        generation_batches = [
+            sampled[i : i + generation_batch_size] for i in range(0, len(sampled), generation_batch_size)
+        ]
+
+        expected_first_generation_batch = [
+            idx for idx in range(unique_prompts_per_generation) for _ in range(num_generations)
+        ]
+        expected_second_generation_batch = [
+            idx
+            for idx in range(unique_prompts_per_generation, 2 * unique_prompts_per_generation)
+            for _ in range(num_generations)
+        ]
+
+        assert len(generation_batches) == full_generation_chunks * repeat_count
+        assert generation_batches[:repeat_count] == [expected_first_generation_batch] * repeat_count
+        assert generation_batches[repeat_count : 2 * repeat_count] == [expected_second_generation_batch] * repeat_count
+        assert set(sampled) == set(range(full_generation_chunks * unique_prompts_per_generation))
+        assert full_generation_chunks * unique_prompts_per_generation not in sampled
+
+    def test_sampler_layout_matches_distributed_generation_reuse(self):
+        dataset = list(range(20))
+        world_size = 8
+        per_device_train_batch_size = 4
+        steps_per_generation = 1
+        num_generations = 4
+        num_iterations = 3
+
+        generation_batch_size = world_size * per_device_train_batch_size * steps_per_generation
+        local_batch_size = per_device_train_batch_size * steps_per_generation
+        unique_prompts_per_generation = generation_batch_size // num_generations
+        repeat_count = num_iterations * steps_per_generation
+        full_generation_chunks = len(dataset) // unique_prompts_per_generation
+
+        sampler = RepeatSampler(
+            dataset,
+            mini_repeat_count=num_generations,
+            batch_size=unique_prompts_per_generation,
+            repeat_count=repeat_count,
+            shuffle=False,
+        )
+        sampled = list(sampler)
+        local_batches = [sampled[i : i + local_batch_size] for i in range(0, len(sampled), local_batch_size)]
+        global_steps = [
+            local_batches[step * world_size : (step + 1) * world_size]
+            for step in range(len(local_batches) // world_size)
+        ]
+        assert len(local_batches) == len(global_steps) * world_size
+        assert len(global_steps) == full_generation_chunks * repeat_count
+        rank_steps = [
+            [local_batches[step * world_size + rank] for step in range(len(global_steps))]
+            for rank in range(world_size)
+        ]
+
+        for rank in range(world_size):
+            assert rank_steps[rank][:repeat_count] == [[rank] * local_batch_size] * repeat_count
+            assert (
+                rank_steps[rank][repeat_count : 2 * repeat_count]
+                == [[rank + unique_prompts_per_generation] * local_batch_size] * repeat_count
+            )
+
+        first_generation_prompt_sets = [
+            sorted({idx for batch in step for idx in batch}) for step in global_steps[:repeat_count]
+        ]
+        second_generation_prompt_sets = [
+            sorted({idx for batch in step for idx in batch}) for step in global_steps[repeat_count : 2 * repeat_count]
+        ]
+        assert first_generation_prompt_sets == [list(range(unique_prompts_per_generation))] * repeat_count
+        assert (
+            second_generation_prompt_sets
+            == [list(range(unique_prompts_per_generation, 2 * unique_prompts_per_generation))] * repeat_count
+        )
+
 
 class TestEntropyFromLogits(TrlTestCase):
     @pytest.mark.parametrize("shape", [(768,), (32, 768), (8, 16, 768), (2, 4, 8, 768)])
