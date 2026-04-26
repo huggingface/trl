@@ -1171,6 +1171,11 @@ class RLOOTrainer(_BaseTrainer):
             forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
         else:
             forward_kwargs = {}
+            # For text-only models whose forward pass expects token_type_ids (e.g., gemma-3),
+            # create a zero tensor matching the prompt length. The extension block below will
+            # automatically pad it with zeros for the completion part.
+            if "token_type_ids" in self.model_kwarg_keys:
+                forward_kwargs["token_type_ids"] = torch.zeros_like(prompt_ids)
 
         # If token_type_ids are used, extend them with zeros for the completion part
         if "token_type_ids" in forward_kwargs:
