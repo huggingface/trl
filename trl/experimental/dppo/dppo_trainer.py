@@ -46,7 +46,7 @@ from ...data_utils import (
 from ...extras.profiling import profiling_context, profiling_decorator
 from ...models import unwrap_model_for_generation
 from ...models.utils import disable_gradient_checkpointing
-from ...trainer.grpo_trainer import EnvironmentFactory, GRPOTrainer, RewardFunc, RolloutFunc
+from ...trainer.grpo_trainer import EnvironmentFactory, GRPOTrainer, RewardFunc, RewardWeightsScheduler, RolloutFunc
 from ...trainer.utils import (
     entropy_from_logits,
     nanstd,
@@ -169,6 +169,9 @@ class DPPOTrainer(GRPOTrainer):
             process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
             `"logprobs"` fields. Any other fields are forwarded to the reward functions. This feature is experimental
             and may change or be removed at any time without prior notice.
+        reward_weights_scheduler (`Callable[[TrainerState], Sequence[float] | torch.Tensor]`, *optional*):
+            Function that returns the current reward weights from the [`~transformers.TrainerState`]. It must return
+            one weight for each reward function. This argument cannot be used together with `args.reward_weights`.
     """
 
     _tag_names = ["trl", "dppo"]
@@ -201,6 +204,7 @@ class DPPOTrainer(GRPOTrainer):
         tools: list[Callable] | None = None,
         rollout_func: RolloutFunc | None = None,
         environment_factory: EnvironmentFactory | None = None,
+        reward_weights_scheduler: RewardWeightsScheduler | None = None,
     ):
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
@@ -219,6 +223,7 @@ class DPPOTrainer(GRPOTrainer):
             eval_dataset=eval_dataset,
             processing_class=processing_class,
             reward_processing_classes=reward_processing_classes,
+            reward_weights_scheduler=reward_weights_scheduler,
             callbacks=callbacks,
             optimizers=optimizers,
             peft_config=peft_config,
@@ -1057,10 +1062,11 @@ class DPPOTrainer(GRPOTrainer):
         # rewards_per_func to extract each process's subset.
         rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
         num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+        reward_weights = self._get_reward_weights(device)
 
         if self.multi_objective_aggregation == "sum_then_normalize":
             # Apply weights to each reward function's output and sum
-            rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+            rewards = (rewards_per_func * reward_weights.unsqueeze(0)).nansum(dim=1)
             mean_grouped_rewards = rewards.view(-1, num_generations).mean(dim=1)
             mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(num_generations, dim=0)
             if self.scale_rewards in ["group", "none"]:
@@ -1092,7 +1098,7 @@ class DPPOTrainer(GRPOTrainer):
             std_k = nanstd(grouped, dim=1, keepdim=True) if num_generations > 1 else torch.zeros_like(mean_k)
             reward_k = (grouped - mean_k) / (std_k + 1e-4)
             reward_k = reward_k.view(-1, len(self.reward_funcs))
-            rewards = (reward_k * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+            rewards = (reward_k * reward_weights.unsqueeze(0)).nansum(dim=1)
             std_rewards = rewards.std().expand_as(rewards) if rewards.numel() > 1 else torch.zeros_like(rewards)
             advantages = (rewards - rewards.mean()) / (std_rewards + 1e-4)
             is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
@@ -1117,7 +1123,8 @@ class DPPOTrainer(GRPOTrainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
-        rewards = (rewards_per_func * self.reward_weights.to(rewards_per_func.device).unsqueeze(0)).nansum(dim=1)
+            self._metrics[mode][f"reward_weights/{reward_func_name}"].append(reward_weights[i].item())
+        rewards = (rewards_per_func * reward_weights.unsqueeze(0)).nansum(dim=1)
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(rewards.std().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())

@@ -136,10 +136,11 @@ While training and evaluating, we record the following reward metrics:
 - `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS.
 - `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
-- `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
-- `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
-- `reward`: The overall average reward after summing rewards across functions (weighted by `reward_weights`).
-- `reward_std`: The standard deviation of summed rewards across functions (weighted by `reward_weights`), computed over the full batch.
+- `rewards/{reward_func_name}/mean`: The average reward from a specific reward function.
+- `rewards/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
+- `reward_weights/{reward_func_name}`: The current weight applied to a specific reward function.
+- `reward`: The overall average reward after summing rewards across functions (weighted by `reward_weights` or `reward_weights_scheduler`).
+- `reward_std`: The standard deviation of summed rewards across functions (weighted by `reward_weights` or `reward_weights_scheduler`), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
@@ -531,6 +532,26 @@ trainer = RLOOTrainer(
 ```
 
 and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
+
+For dynamic reward weights, pass a `reward_weights_scheduler` callable to [`RLOOTrainer`]. The scheduler receives the trainer state and returns one weight per reward function. Raw per-function reward metrics stay unweighted, while the aggregate reward and advantages use the scheduled weights.
+
+```python
+from trl import RLOOTrainer
+
+
+def reward_weights_scheduler(state):
+    progress = state.global_step / max(state.max_steps, 1)
+    dense_reward_weight = max(0.0, 1.0 - progress)
+    sparse_reward_weight = 1.0
+    return [sparse_reward_weight, dense_reward_weight]
+
+
+trainer = RLOOTrainer(
+    reward_funcs=[sparse_reward_func, dense_reward_func],
+    reward_weights_scheduler=reward_weights_scheduler,
+    ...,
+)
+```
 
 Note that [`RLOOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 

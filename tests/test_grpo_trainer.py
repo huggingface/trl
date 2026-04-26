@@ -802,6 +802,75 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_reward_weights_scheduler(self):
+        """Test that GRPOTrainer can get dynamic reward weights from the scheduler."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func1(completions, **kwargs):
+            return [1.0] * len(completions)
+
+        def reward_func2(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        def reward_weights_scheduler(state):
+            return [1.0 + state.global_step, 0.5]
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=[reward_func1, reward_func2],
+            reward_weights_scheduler=reward_weights_scheduler,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.state.global_step = 2
+        reward_weights = trainer._get_reward_weights(trainer.accelerator.device)
+
+        assert torch.allclose(reward_weights.cpu(), torch.tensor([3.0, 0.5]))
+        assert torch.allclose(trainer.reward_weights, torch.tensor([3.0, 0.5]))
+
+    def test_reward_weights_scheduler_validation(self):
+        """Test that GRPOTrainer validates dynamic reward weights."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func1(completions, **kwargs):
+            return [1.0] * len(completions)
+
+        def reward_func2(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=[reward_func1, reward_func2],
+            reward_weights_scheduler=lambda state: [1.0],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        with pytest.raises(ValueError, match="Number of reward weights"):
+            trainer._get_reward_weights(trainer.accelerator.device)
+
+    def test_reward_weights_scheduler_conflict(self):
+        """Test that static and dynamic reward weights cannot be used together."""
+
+        def reward_func1(completions, **kwargs):
+            return [1.0] * len(completions)
+
+        def reward_func2(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none", reward_weights=[0.7, 0.3])
+        with pytest.raises(ValueError, match="cannot both be provided"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=[reward_func1, reward_func2],
+                reward_weights_scheduler=lambda state: [0.7, 0.3],
+                args=training_args,
+                train_dataset=None,
+            )
+
     @pytest.mark.parametrize("multi_objective_aggregation", ["sum_then_normalize", "normalize_then_sum"])
     def test_reward_metric_reflects_reward_weights(self, multi_objective_aggregation):
         """Test that the logged 'reward' metric uses reward_weights, not an unweighted sum."""
@@ -840,6 +909,44 @@ class TestGRPOTrainer(TrlTestCase):
             f"Expected logged reward to be ~0.7 (weighted), got {log['reward']}. "
             "The reward metric should reflect reward_weights."
         )
+
+    @pytest.mark.parametrize("multi_objective_aggregation", ["sum_then_normalize", "normalize_then_sum"])
+    def test_reward_metric_reflects_reward_weights_scheduler(self, multi_objective_aggregation):
+        """Test that the logged 'reward' metric uses scheduled reward weights."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def constant_reward_1(completions, **kwargs):
+            return [1.0] * len(completions)
+
+        def constant_reward_0(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            multi_objective_aggregation=multi_objective_aggregation,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=[constant_reward_1, constant_reward_0],
+            reward_weights_scheduler=lambda state: [0.7, 0.3],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        log = trainer.state.log_history[-1]
+        assert abs(log["reward"] - 0.7) < 1e-5, (
+            f"Expected logged reward to be ~0.7 (weighted), got {log['reward']}. "
+            "The reward metric should reflect reward_weights_scheduler."
+        )
+        assert abs(log["reward_weights/constant_reward_1"] - 0.7) < 1e-5
+        assert abs(log["reward_weights/constant_reward_0"] - 0.3) < 1e-5
 
     def test_training_multiple_mixed_reward_funcs(self):
         # Test if the trainer can handle a mix of reward functions and reward models

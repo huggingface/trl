@@ -20,7 +20,7 @@ import math
 import textwrap
 import time
 from collections import defaultdict, deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -46,6 +46,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    TrainerState,
     is_trackio_available,
     is_wandb_available,
 )
@@ -100,6 +101,7 @@ logger = get_logger(__name__)
 # arguments from the trainer (refer to the trainer's source for details). To ensure forward compatibility, it should
 # accept **kwargs.
 RewardFunc = str | PreTrainedModel | Callable[..., list[float | None]]
+RewardWeightsScheduler = Callable[[TrainerState], Sequence[float] | torch.Tensor]
 
 
 class RLOOTrainer(_BaseTrainer):
@@ -198,6 +200,9 @@ class RLOOTrainer(_BaseTrainer):
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
+        reward_weights_scheduler (`Callable[[TrainerState], Sequence[float] | torch.Tensor]`, *optional*):
+            Function that returns the current reward weights from the [`~transformers.TrainerState`]. It must return
+            one weight for each reward function. This argument cannot be used together with `args.reward_weights`.
     """
 
     _tag_names = ["trl", "rloo"]
@@ -230,12 +235,18 @@ class RLOOTrainer(_BaseTrainer):
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
+        reward_weights_scheduler: RewardWeightsScheduler | None = None,
     ):
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = RLOOConfig(f"{model_name}-RLOO")
+        if args.reward_weights is not None and reward_weights_scheduler is not None:
+            raise ValueError(
+                "`reward_weights` and `reward_weights_scheduler` cannot both be provided. Include any static weights "
+                "in the scheduler output."
+            )
 
         # Model
         if isinstance(model, str):
@@ -340,6 +351,7 @@ class RLOOTrainer(_BaseTrainer):
             atexit.register(shutdown_event_loop_in_daemon, self.async_loop_thread, self.async_loop)
 
         # Reward weights
+        self.reward_weights_scheduler = reward_weights_scheduler
         if args.reward_weights is not None:
             if len(args.reward_weights) != len(reward_funcs):
                 raise ValueError(
@@ -810,6 +822,20 @@ class RLOOTrainer(_BaseTrainer):
         """
         self._pending_metrics[name].append(value)
 
+    def _get_reward_weights(self, device: torch.device) -> torch.Tensor:
+        if self.reward_weights_scheduler is None:
+            return self.reward_weights.to(device)
+
+        reward_weights = torch.as_tensor(self.reward_weights_scheduler(self.state), dtype=torch.float32, device=device)
+        if reward_weights.numel() != len(self.reward_funcs):
+            raise ValueError(
+                f"Number of reward weights ({reward_weights.numel()}) must match number of reward "
+                f"functions ({len(self.reward_funcs)})"
+            )
+        reward_weights = reward_weights.reshape(len(self.reward_funcs)).detach()
+        self.reward_weights = reward_weights.cpu()
+        return reward_weights
+
     @profiling_decorator
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
         device = self.accelerator.device
@@ -1255,9 +1281,10 @@ class RLOOTrainer(_BaseTrainer):
         # rewards_per_func to extract each process's subset.
         rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
         num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+        reward_weights = self._get_reward_weights(device)
 
         # Apply weights to each reward function's output and sum
-        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+        rewards = (rewards_per_func * reward_weights.unsqueeze(0)).nansum(dim=1)
 
         # Apply reward clipping if specified
         if self.reward_clip_range:
@@ -1312,7 +1339,8 @@ class RLOOTrainer(_BaseTrainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
-        rewards = (rewards_per_func * self.reward_weights.to(rewards_per_func.device).unsqueeze(0)).nansum(dim=1)
+            self._metrics[mode][f"reward_weights/{reward_func_name}"].append(reward_weights[i].item())
+        rewards = (rewards_per_func * reward_weights.unsqueeze(0)).nansum(dim=1)
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(rewards.std().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
