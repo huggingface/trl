@@ -2179,7 +2179,7 @@ class GRPOTrainer(_BaseTrainer):
         # However, the KL penalty term (beta * per_token_kl) still produces gradients that
         # pull the model toward the reference policy without any reward signal. Zeroing
         # the completion mask for these groups eliminates the spurious KL gradients.
-        # See https://arxiv.org/abs/2505.22257 (Section 3.2).
+        # See https://huggingface.co/papers/2505.22257 (Section 3.2).
         is_std_zero_local = is_std_zero[process_slice]
         completion_mask = completion_mask * (~is_std_zero_local).unsqueeze(1).int()
 
