@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -21,6 +22,7 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
 from trl.experimental.gkd import GKDConfig, GKDTrainer
+from trl.trainer.sft_trainer import SFTTrainer
 
 from ..testing_utils import TrlTestCase, require_liger_kernel
 
@@ -196,6 +198,165 @@ class TestGeneralizedJSDLoss(TrlTestCase):
         identical_logits = torch.randn(self.batch_size, self.seq_length, self.vocab_size)
         loss = GKDTrainer.generalized_jsd_loss(identical_logits, identical_logits)
         assert round(abs(loss.item() - 0), 6) == 0
+
+    def test_accumulated_loss_matches_combined_batch_with_global_denominator(self):
+        torch.manual_seed(0)
+        student_logits_1 = torch.randn(1, 4, self.vocab_size)
+        teacher_logits_1 = torch.randn(1, 4, self.vocab_size)
+        labels_1 = torch.tensor([[0, -100, -100, -100]])
+
+        student_logits_2 = torch.randn(1, 4, self.vocab_size)
+        teacher_logits_2 = torch.randn(1, 4, self.vocab_size)
+        labels_2 = torch.tensor([[0, 1, 2, -100]])
+
+        total_tokens = labels_1.ne(-100).sum() + labels_2.ne(-100).sum()
+        accumulated = GKDTrainer.generalized_jsd_loss(
+            student_logits_1, teacher_logits_1, labels=labels_1, num_items_in_batch=total_tokens
+        ) + GKDTrainer.generalized_jsd_loss(
+            student_logits_2, teacher_logits_2, labels=labels_2, num_items_in_batch=total_tokens
+        )
+        combined = GKDTrainer.generalized_jsd_loss(
+            torch.cat([student_logits_1, student_logits_2]),
+            torch.cat([teacher_logits_1, teacher_logits_2]),
+            labels=torch.cat([labels_1, labels_2]),
+        )
+        old_style = GKDTrainer.generalized_jsd_loss(
+            student_logits_1, teacher_logits_1, labels=labels_1
+        ) + GKDTrainer.generalized_jsd_loss(student_logits_2, teacher_logits_2, labels=labels_2)
+
+        assert torch.allclose(accumulated, combined)
+        assert not torch.allclose(old_style, combined)
+
+    def test_batchmean_with_global_denominator_handles_zero_tokens(self):
+        student_logits = torch.randn(1, 3, self.vocab_size)
+        teacher_logits = torch.randn(1, 3, self.vocab_size)
+        labels = torch.full((1, 3), -100)
+
+        loss = GKDTrainer.generalized_jsd_loss(
+            student_logits, teacher_logits, labels=labels, num_items_in_batch=torch.tensor(0)
+        )
+
+        assert loss == 0
+
+    def test_generate_on_policy_outputs_masks_prompt_labels(self):
+        class DummyModel:
+            def generate(self, **kwargs):
+                return SimpleNamespace(sequences=torch.tensor([[0, 5, 6, 7, 0], [0, 8, 9, 10, 11]]))
+
+        inputs = {
+            "prompts": torch.tensor([[0, 5, 6], [0, 8, 9]]),
+            "prompt_attention_mask": torch.tensor([[0, 1, 1], [0, 1, 1]]),
+        }
+
+        _, new_attention_mask, new_labels = GKDTrainer.generate_on_policy_outputs(
+            DummyModel(), inputs, GenerationConfig(), pad_token_id=0
+        )
+
+        assert torch.all(new_labels[:, : inputs["prompts"].shape[1]] == -100)
+        assert new_labels[0, 3] == 7
+        assert new_labels[0, 4] == -100
+        assert new_attention_mask[0, 0] == 0
+        assert new_attention_mask[0, 4] == 0
+
+
+class TestGKDTrainerLossAccounting(TrlTestCase):
+    def test_compute_loss_forwards_num_items_in_batch(self, monkeypatch):
+        class DummyModel(torch.nn.Module):
+            def __init__(self, logits):
+                super().__init__()
+                self.logits = logits
+
+            def forward(self, input_ids, attention_mask):
+                return SimpleNamespace(logits=self.logits)
+
+        captured_kwargs = {}
+
+        def fake_generalized_jsd_loss(**kwargs):
+            captured_kwargs.update(kwargs)
+            return torch.tensor(1.0)
+
+        monkeypatch.setattr(GKDTrainer, "generalized_jsd_loss", staticmethod(fake_generalized_jsd_loss))
+
+        vocab_size = 11
+        trainer = GKDTrainer.__new__(GKDTrainer)
+        trainer.use_liger_gkd_loss = False
+        trainer.teacher_model = DummyModel(torch.randn(1, 5, vocab_size))
+        trainer.beta = 0.5
+        trainer.args = SimpleNamespace(average_tokens_across_devices=False, n_gpu=0)
+        trainer.model_accepts_loss_kwargs = True
+        trainer.accelerator = SimpleNamespace(num_processes=1)
+
+        denominator = torch.tensor(3)
+        inputs = {
+            "input_ids": torch.tensor([[1, 2, 3, 4, 5]]),
+            "attention_mask": torch.ones(1, 5),
+            "prompts": torch.tensor([[1, 2]]),
+            "labels": torch.tensor([[-100, -100, 3, 4, 5]]),
+        }
+
+        loss = trainer.compute_loss(
+            DummyModel(torch.randn(1, 5, vocab_size)),
+            inputs,
+            num_items_in_batch=denominator,
+        )
+
+        assert loss == 1.0
+        assert captured_kwargs["num_items_in_batch"] is denominator
+        assert captured_kwargs["labels"].shape == torch.Size([1, 3])
+
+    def test_get_batch_samples_counts_prepared_labels(self):
+        trainer = GKDTrainer.__new__(GKDTrainer)
+        trainer.model_accepts_loss_kwargs = True
+        trainer.compute_loss_func = None
+        trainer.args = SimpleNamespace(average_tokens_across_devices=False, n_gpu=0)
+        trainer.accelerator = SimpleNamespace(parallelism_config=None)
+        trainer.model_wrapped = object()
+        prepared_models = []
+
+        def prepare_inputs(model, inputs):
+            prepared_models.append(model)
+            inputs["labels"] = inputs["prepared_labels"]
+            inputs["_gkd_inputs_prepared"] = True
+
+        trainer._prepare_gkd_inputs_for_loss = prepare_inputs
+        original_labels = torch.tensor([[1, 2, 3, 4]])
+        batch_1 = {
+            "labels": original_labels.clone(),
+            "prepared_labels": torch.tensor([[1, -100, -100, -100]]),
+        }
+        batch_2 = {
+            "labels": original_labels.clone(),
+            "prepared_labels": torch.tensor([[1, 2, 3, -100]]),
+        }
+
+        batch_samples, num_items_in_batch = trainer.get_batch_samples(
+            iter([batch_1, batch_2]), num_batches=2, device=torch.device("cpu")
+        )
+
+        assert num_items_in_batch == 4
+        assert prepared_models == [trainer.model_wrapped, trainer.model_wrapped]
+        assert all(batch["_gkd_inputs_prepared"] for batch in batch_samples)
+
+    def test_training_step_skips_already_prepared_inputs(self, monkeypatch):
+        trainer = GKDTrainer.__new__(GKDTrainer)
+        prepare_calls = []
+
+        def prepare_inputs(model, inputs):
+            prepare_calls.append((model, inputs))
+
+        def fake_training_step(self, model, inputs, num_items_in_batch=None):
+            assert "_gkd_inputs_prepared" not in inputs
+            return torch.tensor(2.0)
+
+        trainer._prepare_gkd_inputs_for_loss = prepare_inputs
+        monkeypatch.setattr(SFTTrainer, "training_step", fake_training_step, raising=False)
+
+        inputs = {"_gkd_inputs_prepared": True}
+        loss = trainer.training_step(object(), inputs, num_items_in_batch=torch.tensor(4))
+
+        assert loss == 2.0
+        assert prepare_calls == []
+        assert inputs == {}
 
 
 class TestGKDTrainer(TrlTestCase):

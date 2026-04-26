@@ -14,7 +14,7 @@
 
 import random
 import textwrap
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import torch
@@ -166,6 +166,9 @@ class GKDTrainer(SFTTrainer):
             formatting_func=formatting_func,
         )
 
+        # GKD computes the loss itself, so Trainer needs to provide the accumulation-window token count here.
+        self.model_accepts_loss_kwargs = True
+
         if args.teacher_model_init_kwargs is None:
             teacher_model_init_kwargs = {}
         elif not isinstance(teacher_model, str):
@@ -220,7 +223,13 @@ class GKDTrainer(SFTTrainer):
 
     @staticmethod
     def generalized_jsd_loss(
-        student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0, reduction="batchmean"
+        student_logits,
+        teacher_logits,
+        labels=None,
+        beta=0.5,
+        temperature=1.0,
+        reduction="batchmean",
+        num_items_in_batch=None,
     ):
         """
         Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div. See Eq. (1)
@@ -240,6 +249,8 @@ class GKDTrainer(SFTTrainer):
                 Softmax temperature (default: 1.0)
             reduction:
                 Specifies the reduction to apply to the output (default: 'batchmean')
+            num_items_in_batch (`int` or `torch.Tensor`, *optional*):
+                Number of valid tokens in the gradient accumulation window. If `None`, uses the local batch count.
 
         Returns:
             loss: Scalar tensor with the generalized JSD loss
@@ -281,13 +292,66 @@ class GKDTrainer(SFTTrainer):
 
         # Apply reduction
         if reduction == "batchmean":
-            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / jsd.size(0)
+            if labels is None:
+                return jsd.sum() / jsd.size(0)
+            denominator = mask.sum() if num_items_in_batch is None else num_items_in_batch
+            if torch.is_tensor(denominator):
+                denominator = denominator.to(jsd.device)
+                denominator = torch.clamp(denominator, min=1)
+            else:
+                denominator = max(denominator, 1)
+            return jsd.sum() / denominator
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":
             return jsd.mean()
         else:
             return jsd
+
+    def _prepare_gkd_inputs_for_loss(self, model: nn.Module, inputs: dict[str, torch.Tensor | Any]) -> None:
+        if self.seq_kd:
+            with (
+                unwrap_model_for_generation(
+                    self.teacher_model,
+                    self.accelerator,
+                    generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                ) as unwrapped_model
+            ):
+                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
+                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                )
+            inputs["input_ids"] = new_input_ids
+            inputs["attention_mask"] = new_attention_mask
+            inputs["labels"] = new_labels
+        if random.random() <= self.lmbda:
+            with (
+                unwrap_model_for_generation(
+                    model,
+                    self.accelerator,
+                    generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                ) as unwrapped_model
+            ):
+                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
+                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                )
+            inputs["input_ids"] = new_input_ids
+            inputs["attention_mask"] = new_attention_mask
+            inputs["labels"] = new_labels
+        inputs["_gkd_inputs_prepared"] = True
+
+    def get_batch_samples(self, epoch_iterator: Iterator, num_batches: int, device: torch.device):
+        batch_samples = []
+        for _ in range(num_batches):
+            try:
+                batch_samples.append(next(epoch_iterator))
+            except StopIteration:
+                break
+
+        for inputs in batch_samples:
+            self._prepare_gkd_inputs_for_loss(self.model_wrapped, inputs)
+
+        num_items_in_batch = self._get_num_items_in_batch(batch_samples, device)
+        return batch_samples, num_items_in_batch
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if self.use_liger_gkd_loss:
@@ -352,6 +416,15 @@ class GKDTrainer(SFTTrainer):
                 student_bias=getattr(student_head, "bias", None),
                 teacher_bias=getattr(teacher_head, "bias", None),
             )
+            if num_items_in_batch is not None:
+                local_num_items = true_labels.ne(-100).sum()
+                denominator = num_items_in_batch
+                if torch.is_tensor(denominator):
+                    denominator = denominator.to(loss.device)
+                    denominator = torch.clamp(denominator, min=1)
+                else:
+                    denominator = max(denominator, 1)
+                loss = loss * local_num_items.to(loss.device) / denominator
 
             # Release hidden states after loss computation
             del student_hidden, teacher_hidden, true_labels
@@ -382,7 +455,15 @@ class GKDTrainer(SFTTrainer):
                 teacher_logits=shifted_teacher_logits,
                 labels=shifted_labels,
                 beta=self.beta,
+                num_items_in_batch=num_items_in_batch,
             )
+
+        if (
+            self.args.average_tokens_across_devices
+            and self.model_accepts_loss_kwargs
+            and num_items_in_batch is not None
+        ):
+            loss *= self.accelerator.num_processes if self.args.n_gpu <= 1 else self.args.n_gpu
 
         # empty cache
         empty_cache()
@@ -405,6 +486,7 @@ class GKDTrainer(SFTTrainer):
         # Calculate new attention mask
         new_attention_mask = torch.ones_like(generated_tokens)
         new_labels = generated_tokens.clone()
+        new_labels[:, : inputs["prompts"].shape[1]] = -100
 
         # If there's pad_token_id, set attention mask to 0 for padding tokens
         if pad_token_id is not None:
@@ -423,34 +505,7 @@ class GKDTrainer(SFTTrainer):
         `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
         the original inputs.
         """
-        if self.seq_kd:
-            with (
-                unwrap_model_for_generation(
-                    self.teacher_model,
-                    self.accelerator,
-                    generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
-                ) as unwrapped_model
-            ):
-                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
-                )
-            inputs["input_ids"] = new_input_ids
-            inputs["attention_mask"] = new_attention_mask
-            inputs["labels"] = new_labels
-        if random.random() <= self.lmbda:
-            with (
-                unwrap_model_for_generation(
-                    model,
-                    self.accelerator,
-                    generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
-                ) as unwrapped_model
-            ):
-                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
-                )
-            inputs["input_ids"] = new_input_ids
-            inputs["attention_mask"] = new_attention_mask
-            inputs["labels"] = new_labels
-
+        if not inputs.pop("_gkd_inputs_prepared", False):
+            self._prepare_gkd_inputs_for_loss(model, inputs)
         loss = super().training_step(model, inputs, num_items_in_batch)
         return loss
