@@ -1068,6 +1068,29 @@ training_args = DPOConfig(
 )
 ```
 
+### Understanding the Performance Gap between Online and Offline Alignment Algorithms
+
+**📜 Paper**: https://huggingface.co/papers/2407.08639
+
+The paper introduces beta-DPO, which adapts DPO's β at the batch level based on the current implicit reward margin. Instead of changing the preference loss itself, beta-DPO scales the existing β parameter:
+
+$$
+\beta_{\text{batch}} = \left[1 + \alpha\left(\overline{M}_{\text{batch}} - M_0\right)\right]\beta_0
+$$
+
+where  \\( \beta_0 \\)  is the base β,  \\( \alpha \\)  controls the update strength, and  \\( M_0 \\)  is a fixed or moving reference margin. In TRL, this strategy is enabled with `adaptive_beta="beta_dpo"` and can be combined with existing DPO loss types.
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="sigmoid",
+    beta=0.1,
+    adaptive_beta="beta_dpo",
+    beta_alpha=0.5,
+)
+```
+
 ### Anchored Preference Optimization and Contrastive Revisions: Addressing Underspecification in Alignment
 
 **📜 Paper**: https://huggingface.co/papers/2408.06266

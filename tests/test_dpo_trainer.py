@@ -345,6 +345,155 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    def test_adaptive_beta_config_validation(self):
+        DPOConfig(output_dir=self.tmp_dir, adaptive_beta="beta_dpo", beta_alpha=0.0, report_to="none")
+        DPOConfig(output_dir=self.tmp_dir, adaptive_beta="beta_dpo", beta_alpha=1.0, report_to="none")
+
+        with pytest.raises(ValueError, match="`adaptive_beta` must be `None` or `'beta_dpo'`"):
+            DPOConfig(output_dir=self.tmp_dir, adaptive_beta="beta-dpo", beta_alpha=0.5, report_to="none")
+
+        with pytest.raises(ValueError, match="`beta_alpha` must be provided"):
+            DPOConfig(output_dir=self.tmp_dir, adaptive_beta="beta_dpo", report_to="none")
+
+        with pytest.raises(ValueError, match="`beta_alpha` must be in the range"):
+            DPOConfig(output_dir=self.tmp_dir, adaptive_beta="beta_dpo", beta_alpha=1.1, report_to="none")
+
+    def test_train_with_adaptive_beta(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        # Initialize the trainer
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            loss_type=["sigmoid", "bco_pair", "sft"],  # check adaptive beta with a multi-loss setup
+            adaptive_beta="beta_dpo",
+            beta_alpha=0.5,
+            max_steps=2,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss and adaptive beta metrics are logged
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        adaptive_beta_logs = [log for log in trainer.state.log_history if "adaptive_beta/effective_beta" in log]
+        assert adaptive_beta_logs
+        assert adaptive_beta_logs[-1]["adaptive_beta/effective_beta"] > 0
+        assert "adaptive_beta/batch_margin" in adaptive_beta_logs[-1]
+        assert "adaptive_beta/reference_margin" in adaptive_beta_logs[-1]
+        assert trainer._beta_reference_margin is not None
+
+    def test_adaptive_beta_alpha_zero_matches_static_beta(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        # Initialize the trainers
+        training_args = DPOConfig(
+            output_dir=f"{self.tmp_dir}/static",
+            report_to="none",
+        )
+        adaptive_training_args = DPOConfig(
+            output_dir=f"{self.tmp_dir}/adaptive",
+            adaptive_beta="beta_dpo",
+            beta_alpha=0.0,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+        adaptive_trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=adaptive_training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        # Compute the eval loss on the same batch
+        batch = next(iter(trainer.get_eval_dataloader()))
+        adaptive_batch = next(iter(adaptive_trainer.get_eval_dataloader()))
+        trainer.model.eval()
+        adaptive_trainer.model.eval()
+        with torch.no_grad():
+            loss = trainer.compute_loss(trainer.model, trainer._prepare_inputs(batch))
+            adaptive_loss = adaptive_trainer.compute_loss(
+                adaptive_trainer.model, adaptive_trainer._prepare_inputs(adaptive_batch)
+            )
+
+        torch.testing.assert_close(adaptive_loss, loss)
+
+    def test_adaptive_beta_eval_does_not_initialize_reference_margin(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        # Initialize the trainer
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            adaptive_beta="beta_dpo",
+            beta_alpha=0.5,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        # Compute one eval batch before any train batch
+        batch = next(iter(trainer.get_eval_dataloader()))
+        trainer.model.eval()
+        with torch.no_grad():
+            trainer.compute_loss(trainer.model, trainer._prepare_inputs(batch))
+
+        assert trainer._beta_reference_margin is None
+
+    def test_adaptive_beta_fixed_reference_margin(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        # Initialize the trainer
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.2,
+            adaptive_beta="beta_dpo",
+            beta_alpha=0.5,
+            beta_reference_margin=0.25,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        # Compute one eval batch and check the fixed-margin beta formula
+        batch = next(iter(trainer.get_eval_dataloader()))
+        trainer.model.eval()
+        with torch.no_grad():
+            trainer.compute_loss(trainer.model, trainer._prepare_inputs(batch))
+
+        metrics = trainer._metrics["eval"]
+        batch_margin = metrics["adaptive_beta/batch_margin"][-1]
+        expected_beta = training_args.beta * (
+            1 + training_args.beta_alpha * (batch_margin - training_args.beta_reference_margin)
+        )
+        expected_beta = max(expected_beta, 1e-6)
+        assert metrics["adaptive_beta/reference_margin"][-1] == pytest.approx(training_args.beta_reference_margin)
+        assert metrics["adaptive_beta/effective_beta"][-1] == pytest.approx(expected_beta)
+        assert trainer._beta_reference_margin is None
+
     def test_train_with_wpo(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -746,6 +895,25 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
+    def test_adaptive_beta_with_liger_raises(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        # Initialize the trainer
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            adaptive_beta="beta_dpo",
+            beta_alpha=0.5,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        with pytest.raises(NotImplementedError, match="Adaptive beta is not supported with the Liger DPO loss"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
 
     def test_train_with_iterable_dataset(self):
         # Get the dataset

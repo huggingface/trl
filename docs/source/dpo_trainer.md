@@ -121,6 +121,26 @@ Several formulations of the objective have been proposed in the literature. Init
 | `"discopop"` | The [DiscoPOP](https://huggingface.co/papers/2406.08414) paper uses LLMs to discover more efficient offline preference optimization losses. In the paper the proposed DiscoPOP loss (which is a log-ratio modulated loss) outperformed other optimization losses on different tasks (IMDb positive text generation, Reddit TLDR summarization, and Alpaca Eval 2.0). |
 | `"sft"` | SFT (Supervised Fine-Tuning) loss is the negative log likelihood loss, used to train the model to generate preferred responses. |
 
+#### Adaptive beta
+
+[`DPOConfig`] supports the [beta-DPO](https://huggingface.co/papers/2407.08639) dynamic beta strategy with `adaptive_beta="beta_dpo"`. Instead of using the same `beta` for every batch, the trainer computes a batch-level beta from the current implicit reward margin:
+
+$$
+\beta_{\text{batch}} = \left[1 + \alpha\left(\overline{M}_{\text{batch}} - M_0\right)\right]\beta_0
+$$
+
+where  \\( \beta_0 \\)  is the configured `beta`,  \\( \alpha \\)  is `beta_alpha`, and  \\( M_0 \\)  is either `beta_reference_margin` or an exponential moving average of train-batch margins. Because this changes the beta scale rather than the loss formulation, it can be combined with existing DPO loss types such as `"sigmoid"`, `"ipo"`, `"sppo_hard"`, and multi-loss combinations.
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    beta=0.1,
+    adaptive_beta="beta_dpo",
+    beta_alpha=0.5,
+)
+```
+
 ## Logged metrics
 
 While training and evaluating we record the following reward metrics:
@@ -137,10 +157,14 @@ While training and evaluating we record the following reward metrics:
 * `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected completion.
 * `logps/chosen`: The average log-probability assigned by the model to the tokens in the chosen completion.
 * `logps/rejected`: The average log-probability assigned by the model to the tokens in the rejected completion.
-* `rewards/chosen`: The average implicit reward computed for the chosen completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y^{+}\!\mid x)}{\pi_{\mathrm{ref}}(y^{+}\!\mid x)} \\).
-* `rewards/rejected`: The average implicit reward computed for the rejected completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y^{-}\!\mid x)}{\pi_{\mathrm{ref}}(y^{-}\!\mid x)} \\).
+* `rewards/chosen`: The average implicit reward computed for the chosen completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y^{+}\!\mid x)}{\pi_{\mathrm{ref}}(y^{+}\!\mid x)} \\), where  \\( \beta \\)  is the configured beta or the adaptive batch beta.
+* `rewards/rejected`: The average implicit reward computed for the rejected completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y^{-}\!\mid x)}{\pi_{\mathrm{ref}}(y^{-}\!\mid x)} \\), where  \\( \beta \\)  is the configured beta or the adaptive batch beta.
 * `rewards/margins`: The average implicit reward margin between the chosen and rejected completions.
 * `rewards/accuracies`: The proportion of examples where the implicit reward for the chosen completion is higher than that for the rejected completion.
+* `adaptive_beta/effective_beta`: The batch-level beta used for the loss, logged only when `adaptive_beta="beta_dpo"`.
+* `adaptive_beta/base_beta`: The configured base beta, logged only when `adaptive_beta="beta_dpo"`.
+* `adaptive_beta/batch_margin`: The average batch margin used to compute the adaptive beta, logged only when `adaptive_beta="beta_dpo"`.
+* `adaptive_beta/reference_margin`: The fixed or moving reference margin used to compute the adaptive beta, logged only when `adaptive_beta="beta_dpo"`.
 
 ## Customization
 
@@ -152,7 +176,8 @@ Some argument combinations are intentionally restricted in the current [`DPOTrai
 * With `use_liger_kernel=True`:
   * only a single `loss_type` is supported,
   * `compute_metrics` is not supported,
-  * `precompute_ref_log_probs=True` is not supported.
+  * `precompute_ref_log_probs=True` is not supported,
+  * `adaptive_beta="beta_dpo"` is not supported.
 * `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
 * `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
 * `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval).

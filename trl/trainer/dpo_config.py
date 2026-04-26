@@ -96,6 +96,15 @@ class DPOConfig(_BaseConfig):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type='ipo'`), this value is the regularization parameter denoted
             by τ in the [paper](https://huggingface.co/papers/2310.12036).
+        adaptive_beta (`str`, *optional*):
+            Adaptive β strategy to use. Currently, the only supported value is `"beta_dpo"`, which scales `beta`
+            dynamically per batch based on the batch preference margin.
+        beta_alpha (`float`, *optional*):
+            Scaling factor α for the adaptive β update. Required when `adaptive_beta="beta_dpo"` and must be in
+            `[0.0, 1.0]`.
+        beta_reference_margin (`float`, *optional*):
+            Fixed reference margin M₀ used by `adaptive_beta="beta_dpo"`. If `None`, the trainer uses an exponential
+            moving average of train-batch margins.
         use_weighting (`bool`, *optional*, defaults to `False`):
             Whether to apply WPO-style weighting (https://huggingface.co/papers/2406.11827) to preference pairs using
             the policy's length-normalized sequence probabilities.
@@ -265,6 +274,27 @@ class DPOConfig(_BaseConfig):
             "denoted by τ in the [paper](https://huggingface.co/papers/2310.12036)."
         },
     )
+    adaptive_beta: str | None = field(
+        default=None,
+        metadata={
+            "help": "Adaptive β strategy to use. Currently, the only supported value is `'beta_dpo'`, which scales "
+            "`beta` dynamically per batch based on the batch preference margin."
+        },
+    )
+    beta_alpha: float | None = field(
+        default=None,
+        metadata={
+            "help": "Scaling factor α for the adaptive β update. Required when `adaptive_beta='beta_dpo'` and must "
+            "be in `[0.0, 1.0]`."
+        },
+    )
+    beta_reference_margin: float | None = field(
+        default=None,
+        metadata={
+            "help": "Fixed reference margin M₀ used by `adaptive_beta='beta_dpo'`. If `None`, the trainer uses an "
+            "exponential moving average of train-batch margins."
+        },
+    )
     use_weighting: bool = field(
         default=False,
         metadata={
@@ -325,6 +355,13 @@ class DPOConfig(_BaseConfig):
                 "`loss_weights` must have the same length as `loss_type` when combining multiple losses. "
                 f"Got {len(self.loss_weights)} weights for {len(self.loss_type)} loss types."
             )
+        if self.adaptive_beta is not None:
+            if self.adaptive_beta != "beta_dpo":
+                raise ValueError("`adaptive_beta` must be `None` or `'beta_dpo'`.")
+            if self.beta_alpha is None:
+                raise ValueError("`beta_alpha` must be provided when `adaptive_beta='beta_dpo'`.")
+            if not (0.0 <= self.beta_alpha <= 1.0):
+                raise ValueError(f"`beta_alpha` must be in the range [0.0, 1.0], but got {self.beta_alpha}.")
         if self.pad_token is not None:
             warnings.warn(
                 "`pad_token` is deprecated and will be removed in v2.0.0. "
