@@ -111,6 +111,8 @@ if is_trackio_available():
 
 logger = get_logger(__name__)
 
+_SENTENCE_BOUNDARY_CHARS = ".!?;:\n\u3002\uff01\uff1f\uff1b\uff1a"
+
 # A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
 # a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
 # arguments from the trainer (refer to the trainer's source for details). To ensure forward compatibility, it should
@@ -569,6 +571,8 @@ class GRPOTrainer(_BaseTrainer):
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
+        if self.use_liger_kernel and self.importance_sampling_level == "sentence":
+            raise NotImplementedError("Liger kernel does not support sentence-level importance sampling yet.")
         if self.use_liger_kernel and self.importance_sampling_level not in ("token", "sequence"):
             raise ValueError(
                 f"Unknown importance sampling level: {self.importance_sampling_level}. "
@@ -1908,6 +1912,11 @@ class GRPOTrainer(_BaseTrainer):
             if tool_mask is not None:
                 tool_mask = tool_mask * (~is_truncated).unsqueeze(1).int()
 
+        sentence_ids = None
+        if self.importance_sampling_level == "sentence":
+            loss_mask = completion_mask if tool_mask is None else completion_mask * tool_mask
+            sentence_ids = self._get_sentence_ids(completion_ids, loss_mask)
+
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
@@ -2264,6 +2273,8 @@ class GRPOTrainer(_BaseTrainer):
             output["sampling_per_token_logps"] = sampling_per_token_logps
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
+        if sentence_ids is not None:
+            output["sentence_ids"] = sentence_ids
         if "pixel_values" in forward_kwargs:
             output["pixel_values"] = forward_kwargs["pixel_values"]
         if "image_grid_thw" in forward_kwargs:
@@ -2332,6 +2343,35 @@ class GRPOTrainer(_BaseTrainer):
         normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
         return loss / normalizer
 
+    def _get_sentence_ids(self, completion_ids: torch.Tensor, loss_mask: torch.Tensor) -> torch.Tensor:
+        sentence_ids = torch.full_like(completion_ids, -1, dtype=torch.long)
+        boundary_chars = set(_SENTENCE_BOUNDARY_CHARS)
+
+        for batch_idx in range(completion_ids.size(0)):
+            current_sentence_id = 0
+            start_new_sentence = False
+            for token_idx in range(completion_ids.size(1)):
+                if loss_mask[batch_idx, token_idx].item() == 0:
+                    continue
+
+                token_id = completion_ids[batch_idx, token_idx].item()
+                token_text = self._tokenizer.decode(
+                    [token_id], skip_special_tokens=True, clean_up_tokenization_spaces=False
+                )
+                has_boundary = any(char in boundary_chars for char in token_text)
+                has_text = any((not char.isspace()) and char not in boundary_chars for char in token_text)
+
+                if start_new_sentence and has_text:
+                    current_sentence_id += 1
+                    start_new_sentence = False
+
+                sentence_ids[batch_idx, token_idx] = current_sentence_id
+
+                if has_boundary:
+                    start_new_sentence = True
+
+        return sentence_ids
+
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
@@ -2364,6 +2404,26 @@ class GRPOTrainer(_BaseTrainer):
         is_pos_adv = advantages >= 0
         is_low_kl = avg_seq_kl <= off_policy_threshold
         return (is_pos_adv | is_low_kl).to(dtype=mask.dtype)  # (B, 1)
+
+    @staticmethod
+    def _get_sentence_log_importance_weights(log_ratio: torch.Tensor, sentence_ids: torch.Tensor) -> torch.Tensor:
+        log_importance_weights = torch.zeros_like(log_ratio)
+        for batch_idx in range(log_ratio.size(0)):
+            row_sentence_ids = sentence_ids[batch_idx]
+            valid = row_sentence_ids >= 0
+            if not valid.any():
+                continue
+
+            valid_sentence_ids = row_sentence_ids[valid]
+            num_sentences = valid_sentence_ids.max().item() + 1
+            sums = torch.zeros(num_sentences, dtype=log_ratio.dtype, device=log_ratio.device)
+            counts = torch.zeros(num_sentences, dtype=log_ratio.dtype, device=log_ratio.device)
+            sums.scatter_add_(0, valid_sentence_ids, log_ratio[batch_idx, valid])
+            counts.scatter_add_(0, valid_sentence_ids, torch.ones_like(log_ratio[batch_idx, valid]))
+            means = sums / counts.clamp(min=1.0)
+            log_importance_weights[batch_idx, valid] = means[valid_sentence_ids]
+
+        return log_importance_weights
 
     @staticmethod
     @torch.no_grad()
@@ -2478,13 +2538,17 @@ class GRPOTrainer(_BaseTrainer):
         log_ratio = per_token_logps - old_per_token_logps
         if self.importance_sampling_level == "token":
             log_importance_weights = log_ratio
+        elif self.importance_sampling_level == "sentence":
+            if "sentence_ids" not in inputs:
+                raise ValueError("`sentence_ids` is required when `importance_sampling_level='sentence'`.")
+            log_importance_weights = self._get_sentence_log_importance_weights(log_ratio, inputs["sentence_ids"])
         elif self.importance_sampling_level == "sequence":
             log_importance_weights = (log_ratio * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)
             log_importance_weights = log_importance_weights.unsqueeze(-1)
         else:
             raise ValueError(
-                f"Unknown importance sampling level: {self.importance_sampling_level}. Possible values are 'token' "
-                "and 'sequence'."
+                f"Unknown importance sampling level: {self.importance_sampling_level}. Possible values are 'token', "
+                "'sentence', and 'sequence'."
             )
 
         coef_1 = torch.exp(log_importance_weights)
@@ -2500,7 +2564,7 @@ class GRPOTrainer(_BaseTrainer):
                 per_token_kl = per_token_kl * coef_1
 
         # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
-        # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
+        # importance_sampling_level: "token" and "sentence" levels: (B, T); "sequence" level: (B, 1)
         if self.loss_type == "cispo":
             clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
             per_token_loss = -clamped_ratios * advantages * per_token_logps

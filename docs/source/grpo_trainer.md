@@ -185,13 +185,29 @@ While training and evaluating, we record the following reward metrics:
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
-- `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \quad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \\). A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
-- `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
-- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
-- `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
-- `clip_ratio/high_max`: The maximum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+- `clip_ratio/region_mean`: The ratio of token probabilities, sentence probabilities (if `importance_sampling_level="sentence"`), or sequence probabilities (if `importance_sampling_level="sequence"`) where the GRPO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \quad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \\). A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change. Sentence-level and sequence-level ratios are still reported as token-counted metrics, with each token inheriting its sentence or sequence clipping status.
+- `clip_ratio/low_mean`: The average ratio of token probabilities, sentence probabilities (if `importance_sampling_level="sentence"`), or sequence probabilities (if `importance_sampling_level="sequence"`) that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/low_min`: The minimum ratio of token probabilities, sentence probabilities (if `importance_sampling_level="sentence"`), or sequence probabilities (if `importance_sampling_level="sequence"`) that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/high_mean`: The average ratio of token probabilities, sentence probabilities (if `importance_sampling_level="sentence"`), or sequence probabilities (if `importance_sampling_level="sequence"`) that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+- `clip_ratio/high_max`: The maximum ratio of token probabilities, sentence probabilities (if `importance_sampling_level="sentence"`), or sequence probabilities (if `importance_sampling_level="sequence"`) that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 
 ## Customization
+
+### Choose importance sampling granularity
+
+By default, GRPO computes one importance sampling ratio per token. You can set `importance_sampling_level="sequence"` to use a single geometric-mean ratio for the whole completion, as in GSPO. You can also set `importance_sampling_level="sentence"` to use one geometric-mean ratio for each punctuation-delimited linguistic unit, as in LPO:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    importance_sampling_level="sentence",
+)
+```
+
+Sentence-level ratios are applied uniformly to all valid tokens in the corresponding sentence. Padding tokens, masked tool or environment tokens, and masked truncated completions are excluded from the sentence ratios. If no sentence boundary is detected, the completion is treated as one sentence unit.
+
+Sentence-level importance sampling is not supported with `use_liger_kernel=True` yet.
 
 ### Speed up training with vLLM-powered generation
 

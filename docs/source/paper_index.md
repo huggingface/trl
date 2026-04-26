@@ -124,6 +124,24 @@ $$
 
 This token-level ratio is then combined with a shared advantage  \\( \hat{A}_i \\), and the GRPO objective clips and optimizes each token independently across the sequence.
 
+### Ling 2.0: An Efficient, Reward-Driven Language Model with Reasoning Capability
+
+**📜 Paper**: https://huggingface.co/papers/2510.22115
+
+Introduces Linguistic-unit Policy Optimization (LPO), a GRPO-family method that computes importance sampling ratios at the sentence level. LPO segments each detokenized completion into punctuation-delimited linguistic units, computes a geometric-mean policy ratio for each unit, and applies that unit ratio to every token in the unit. To use this setting:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    importance_sampling_level="sentence",
+    loss_type="grpo",
+    epsilon=0.03,  # LPO paper training setting
+)
+```
+
+If a completion has no detected sentence boundary, the completion is treated as a single linguistic unit and the ratio matches the sequence-level formulation for that sample.
+
 ### DAPO: An Open-Source LLM Reinforcement Learning System at Scale
 
 **📜 Paper**: https://huggingface.co/papers/2503.14476

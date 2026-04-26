@@ -159,6 +159,79 @@ class TestGetHighEntropyMask(TrlTestCase):
         torch.testing.assert_close(entropy_mask, expected_mask)
 
 
+class _DummyTokenizer:
+    def __init__(self, pieces):
+        self.pieces = pieces
+
+    def decode(self, token_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False):
+        return self.pieces[int(token_ids[0])]
+
+
+class TestGRPOSentenceImportanceSampling:
+    def _make_trainer(self, pieces):
+        trainer = object.__new__(GRPOTrainer)
+        trainer._tokenizer = _DummyTokenizer(pieces)
+        return trainer
+
+    def test_sentence_ids_split_on_punctuation(self):
+        trainer = self._make_trainer({1: "First", 2: ".", 3: " Second", 4: "!"})
+        completion_ids = torch.tensor([[1, 2, 3, 4, 0]])
+        loss_mask = torch.tensor([[1, 1, 1, 1, 0]])
+
+        sentence_ids = trainer._get_sentence_ids(completion_ids, loss_mask)
+
+        expected_sentence_ids = torch.tensor([[0, 0, 1, 1, -1]])
+        torch.testing.assert_close(sentence_ids, expected_sentence_ids)
+
+    def test_sentence_ids_respect_loss_mask(self):
+        trainer = self._make_trainer({1: "First", 2: ".", 3: " tool.", 4: " Second"})
+        completion_ids = torch.tensor([[1, 2, 3, 4]])
+        loss_mask = torch.tensor([[1, 1, 0, 1]])
+
+        sentence_ids = trainer._get_sentence_ids(completion_ids, loss_mask)
+
+        expected_sentence_ids = torch.tensor([[0, 0, -1, 1]])
+        torch.testing.assert_close(sentence_ids, expected_sentence_ids)
+
+    def test_sentence_ids_no_punctuation_matches_sequence_unit(self):
+        trainer = self._make_trainer({1: "One", 2: " continuous", 3: " unit"})
+        completion_ids = torch.tensor([[1, 2, 3]])
+        loss_mask = torch.tensor([[1, 1, 1]])
+
+        sentence_ids = trainer._get_sentence_ids(completion_ids, loss_mask)
+
+        expected_sentence_ids = torch.tensor([[0, 0, 0]])
+        torch.testing.assert_close(sentence_ids, expected_sentence_ids)
+
+    def test_sentence_log_importance_weights(self):
+        log_ratio = torch.tensor([[0.1, 0.3, 1.0, 1.4]])
+        sentence_ids = torch.tensor([[0, 0, 1, 1]])
+
+        weights = GRPOTrainer._get_sentence_log_importance_weights(log_ratio, sentence_ids)
+
+        expected_weights = torch.tensor([[0.2, 0.2, 1.2, 1.2]])
+        torch.testing.assert_close(weights, expected_weights)
+
+    def test_sentence_log_importance_weights_ignore_negative_ids(self):
+        log_ratio = torch.tensor([[2.0, 4.0, 6.0, 8.0]])
+        sentence_ids = torch.tensor([[0, -1, 0, -1]])
+
+        weights = GRPOTrainer._get_sentence_log_importance_weights(log_ratio, sentence_ids)
+
+        expected_weights = torch.tensor([[4.0, 0.0, 4.0, 0.0]])
+        torch.testing.assert_close(weights, expected_weights)
+
+    def test_sentence_log_importance_weights_backpropagates(self):
+        log_ratio = torch.tensor([[0.1, 0.3, 1.0, 1.4]], requires_grad=True)
+        sentence_ids = torch.tensor([[0, 0, 1, 1]])
+
+        weights = GRPOTrainer._get_sentence_log_importance_weights(log_ratio, sentence_ids)
+        weights.sum().backward()
+
+        expected_grad = torch.ones_like(log_ratio)
+        torch.testing.assert_close(log_ratio.grad, expected_grad)
+
+
 class TestGRPORolloutDispatch:
     def _make_trainer(self):
         trainer = object.__new__(GRPOTrainer)
@@ -2339,6 +2412,59 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_training_sentence_importance_sampling(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            num_iterations=2,  # the importance sampling weights won't be 0 in this case
+            importance_sampling_level="sentence",
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_liger_sentence_importance_sampling_not_supported(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            importance_sampling_level="sentence",
+            report_to="none",
+        )
+
+        with pytest.raises(NotImplementedError, match="sentence-level importance sampling"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
 
     def test_training_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")

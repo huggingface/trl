@@ -197,9 +197,12 @@ class GRPOConfig(_BaseConfig):
             how aggressively we down-weight samples with high importance weights (when the importance sampling ratio >
             1).
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
-            Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
-            keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
-            log-probability ratios across valid tokens to produce a single ratio per sequence. The [GSPO
+            Controls whether importance sampling ratios are computed at the `"token"`, `"sentence"`, or `"sequence"`
+            level. `"token"` keeps the raw per-token log-probability ratios (one weight per token). `"sentence"`
+            averages the log-probability ratios across valid tokens in each punctuation-delimited linguistic unit and
+            applies the resulting ratio to all tokens in that unit. This sentence-level formulation was introduced in
+            the [LPO paper](https://huggingface.co/papers/2510.22115). `"sequence"` averages the log-probability ratios
+            across valid tokens to produce a single ratio per sequence. The [GSPO
             paper](https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more
             stable training and better alignment with sequence-level rewards.
         reward_weights (`list[float]`, *optional*):
@@ -668,11 +671,13 @@ class GRPOConfig(_BaseConfig):
     importance_sampling_level: str = field(
         default="token",
         metadata={
-            "help": "Controls whether importance sampling ratios are computed at the `'token'` or `'sequence'` level. "
-            "`'token'` keeps the raw per-token log-probability ratios (one weight per token).  `'sequence'` averages "
-            "the log-probability ratios across valid tokens to produce a single ratio per sequence. The GSPO paper "
-            "shows that sequence-level sampling often yields more stable training and better alignment with "
-            "sequence-level rewards."
+            "help": "Controls whether importance sampling ratios are computed at the `'token'`, `'sentence'`, or "
+            "`'sequence'` level. `'token'` keeps the raw per-token log-probability ratios (one weight per token). "
+            "`'sentence'` averages the log-probability ratios across valid tokens in each punctuation-delimited "
+            "linguistic unit and applies the resulting ratio to all tokens in that unit, as introduced in the LPO "
+            "paper. `'sequence'` averages the log-probability ratios across valid tokens to produce a single ratio "
+            "per sequence. The GSPO paper shows that sequence-level sampling often yields more stable training and "
+            "better alignment with sequence-level rewards."
         },
     )
     reward_weights: list[float] | None = field(
