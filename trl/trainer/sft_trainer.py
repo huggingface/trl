@@ -702,22 +702,22 @@ class SFTTrainer(_BaseTrainer):
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
-            tokenizer = processing_class.tokenizer
+            self._tokenizer = processing_class.tokenizer
             self._is_vlm = True
         elif isinstance(processing_class, PreTrainedTokenizerBase):
-            tokenizer = processing_class
+            self._tokenizer = processing_class
             self._is_vlm = False
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
         if args.eos_token is not None:
-            if args.eos_token not in tokenizer.get_vocab():
+            if args.eos_token not in self._tokenizer.get_vocab():
                 raise ValueError(
                     f"The specified `eos_token` ('{args.eos_token}') is not found in the vocabulary of the given "
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `eos_token` exists "
                     "in the vocabulary before using it as an EOS token."
                 )
-            tokenizer.eos_token = args.eos_token
+            self._tokenizer.eos_token = args.eos_token
 
         if args.chat_template_path is not None:
             if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
@@ -880,16 +880,16 @@ class SFTTrainer(_BaseTrainer):
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
-            pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
-            if pad_token not in tokenizer.get_vocab():
+            pad_token = args.pad_token or self._tokenizer.pad_token or self._tokenizer.eos_token
+            if pad_token not in self._tokenizer.get_vocab():
                 raise ValueError(
                     f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
-            tokenizer.pad_token = pad_token
+            self._tokenizer.pad_token = pad_token
             data_collator = DataCollatorForLanguageModeling(
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=self._tokenizer.pad_token_id,
                 max_length=None if self.padding_free else args.max_length,
                 truncation_mode=args.truncation_mode,
                 completion_only_loss=self.completion_only_loss,
@@ -1102,7 +1102,7 @@ class SFTTrainer(_BaseTrainer):
                         **map_kwargs,
                     )
 
-                # Apply the chat template if needed
+                # Add EOS token if needed: non-conversational only
                 first_example = next(iter(dataset))
                 if not is_conversational(first_example):
                     if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -1115,10 +1115,9 @@ class SFTTrainer(_BaseTrainer):
                             example["completion"] = example["completion"] + eos_token
                         return example
 
-                    eos_token = processing_class.tokenizer.eos_token if self._is_vlm else processing_class.eos_token
                     dataset = dataset.map(
                         add_eos,
-                        fn_kwargs={"eos_token": eos_token},
+                        fn_kwargs={"eos_token": self._tokenizer.eos_token},
                         remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                         **map_kwargs,
                     )
@@ -1288,22 +1287,30 @@ class SFTTrainer(_BaseTrainer):
         # Compute entropy
         if not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
-                per_token_entropy = entropy_from_logits(outputs.logits)
-                # When using Prompt Tuning, skip the virtual tokens in logits before entropy computation, since they
-                # do not correspond to actual input tokens.
+                if "shift_labels" in inputs:
+                    # When using CP or SP, labels are pre-shifted.
+                    shift_logits = outputs.logits.contiguous()
+                    shift_labels = inputs["shift_labels"]
+                else:
+                    shift_logits = outputs.logits[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+
+                # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
                 if (
                     self.num_virtual_tokens > 0
                     and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
                 ):
-                    per_token_entropy = per_token_entropy[:, self.num_virtual_tokens :]
-                if "attention_mask" in inputs:
-                    attention_mask = inputs["attention_mask"]
-                    entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
-                elif "position_ids" in inputs:
-                    entropy = torch.mean(per_token_entropy)
-                else:
-                    raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
-                entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
+                    shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
+
+                per_token_entropy = entropy_from_logits(shift_logits)
+                mask = shift_labels != -100
+                entropy_sum = (per_token_entropy * mask).sum()
+                total_tokens = mask.sum()
+
+                # Gather counts across ranks and weight-average
+                entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+                total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
+                entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
             self._metrics[mode]["entropy"].append(entropy)
 
         if mode == "train":

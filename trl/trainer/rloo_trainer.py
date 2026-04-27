@@ -267,16 +267,14 @@ class RLOOTrainer(_BaseTrainer):
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
-            tokenizer = processing_class.tokenizer
+            self._tokenizer = processing_class.tokenizer
         elif isinstance(processing_class, PreTrainedTokenizerBase):
-            tokenizer = processing_class
+            self._tokenizer = processing_class
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        self.pad_token_id = tokenizer.pad_token_id
-        self.eos_token_id = tokenizer.eos_token_id
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
         if is_peft_available() and is_peft_model(model) and peft_config is not None:
             raise ValueError(
@@ -332,14 +330,14 @@ class RLOOTrainer(_BaseTrainer):
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
 
-        self._has_async_reward_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
-        if self._has_async_reward_funcs:
-            self.async_reward_loop_thread, self.async_reward_loop, self.async_reward_loop_ready_event = (
-                start_event_loop_in_daemon(name="RLOOTrainer-AsyncRewardLoop")
+        self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
+        if self._has_async_funcs:
+            self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
+                name="RLOOTrainer-AsyncRewardLoop"
             )
             # wait until the event loop is running in the daemon thread
-            self.async_reward_loop_ready_event.wait()
-            atexit.register(shutdown_event_loop_in_daemon, self.async_reward_loop_thread, self.async_reward_loop)
+            self.async_loop_ready_event.wait()
+            atexit.register(shutdown_event_loop_in_daemon, self.async_loop_thread, self.async_loop)
 
         # Reward weights
         if args.reward_weights is not None:
@@ -532,9 +530,9 @@ class RLOOTrainer(_BaseTrainer):
             generation_kwargs = {
                 "max_new_tokens": self.max_completion_length,
                 "do_sample": True,
-                "pad_token_id": tokenizer.pad_token_id,
-                "bos_token_id": tokenizer.bos_token_id,
-                "eos_token_id": tokenizer.eos_token_id,
+                "pad_token_id": self._tokenizer.pad_token_id,
+                "bos_token_id": self._tokenizer.bos_token_id,
+                "eos_token_id": self._tokenizer.eos_token_id,
                 "temperature": self.temperature,
                 "top_p": self.top_p,
                 "top_k": self.top_k,
@@ -866,7 +864,7 @@ class RLOOTrainer(_BaseTrainer):
         # Execute async custom functions in parallel using asyncio.gather
         if async_funcs_info:
 
-            async def _invoke_async_reward(index, func, func_name):
+            async def _invoke_async(index, func, func_name):
                 with profiling_context(self, func_name):
                     output = await func(
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
@@ -875,10 +873,10 @@ class RLOOTrainer(_BaseTrainer):
                     return index, output
 
             async def _run_async_funcs():
-                coros = [_invoke_async_reward(i, func, func_name) for (i, func, func_name) in async_funcs_info]
+                coros = [_invoke_async(i, func, func_name) for (i, func, func_name) in async_funcs_info]
                 return await asyncio.gather(*coros)
 
-            async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_reward_loop).result()
+            async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_loop).result()
             for idx, output_reward_func in async_results:
                 rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
@@ -993,7 +991,7 @@ class RLOOTrainer(_BaseTrainer):
         else:
             # Regular generation path: left-pad token IDs into tensors
             prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
-            padded_ids = pad(prompt_tensors, padding_value=self.pad_token_id, padding_side="left")
+            padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
             attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
             generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
             # For VLMs, include multimodal fields as tensors (pixel_values, image_grid_thw, etc.)
@@ -1026,7 +1024,7 @@ class RLOOTrainer(_BaseTrainer):
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
             # Mask everything after the first EOS token
-            is_eos = completion_ids == self.eos_token_id
+            is_eos = completion_ids == self._tokenizer.eos_token_id
             eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -1073,7 +1071,7 @@ class RLOOTrainer(_BaseTrainer):
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
         # Identify sequences that terminated with EOS and log their lengths
-        eos_and_pad = [self.eos_token_id, self.pad_token_id]
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
@@ -1127,7 +1125,7 @@ class RLOOTrainer(_BaseTrainer):
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
         prompt_ids = pad(
             prompt_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="left",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -1138,7 +1136,7 @@ class RLOOTrainer(_BaseTrainer):
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         completion_ids = pad(
             completion_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -1148,7 +1146,7 @@ class RLOOTrainer(_BaseTrainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
-            eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
             # Mask completion_mask for attention masking
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
