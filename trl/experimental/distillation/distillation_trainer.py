@@ -429,6 +429,11 @@ class DistillationTrainer(_BaseTrainer):
                 processing_class.pad_token = processing_class.eos_token
 
         # ── PEFT ──
+        if peft_config is not None and not is_peft_available():
+            raise ImportError(
+                "You passed `peft_config` but the `peft` library is not installed. "
+                "Install it with `pip install trl[peft]`."
+            )
         if peft_config is not None:
             model = get_peft_model(model, peft_config)
 
