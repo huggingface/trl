@@ -417,12 +417,17 @@ class PPOTrainer(_BaseTrainer):
             )
 
         # PEFT
-        if peft_config is not None and not is_peft_available():
-            raise ImportError(
-                "You passed `peft_config` but the `peft` library is not installed. "
-                "Install it with `pip install trl[peft]`."
-            )
-        elif is_peft_available() and peft_config is not None:
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
             if isinstance(self.policy_model, PeftModel):
                 raise ValueError(
                     "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
