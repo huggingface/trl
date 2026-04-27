@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl[peft,quantization]",
-#     "transformers>=5.3.0",
+#     "transformers>=5.7.0",
 #     "trackio",
 #     "mamba_ssm==2.2.5",
 #     "causal_conv1d==1.5.2",
@@ -27,7 +27,7 @@ Fine-tune NVIDIA Nemotron 3 models with SFT.
 
 Prerequisites:
 
-    pip install "transformers>=5.3.0"
+    pip install "transformers>=5.7.0"
     pip install --no-build-isolation mamba_ssm==2.2.5
     pip install --no-build-isolation causal_conv1d==1.5.2
 
@@ -62,9 +62,6 @@ from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, 
 
 
 def main(script_args, training_args, model_args):
-    # NemotronH does not support gradient checkpointing
-    training_args.gradient_checkpointing = False
-
     # Load model
     model_kwargs = dict(
         revision=model_args.model_revision,

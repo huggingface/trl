@@ -545,8 +545,8 @@ class TestApplyChatTemplate(TrlTestCase):
         pytest.param(
             "trl-internal-testing/tiny-NemotronHForCausalLM",
             marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.3.0"),
-                reason="NemotronH models were introduced in transformers-5.3.0",
+                Version(transformers.__version__) < Version("5.7.0"),
+                reason="NemotronH gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
             ),
         ),
         "trl-internal-testing/tiny-Phi3ForCausalLM-3",
