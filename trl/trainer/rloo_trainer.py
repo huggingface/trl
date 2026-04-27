@@ -330,14 +330,14 @@ class RLOOTrainer(_BaseTrainer):
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
 
-        self._has_async_reward_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
-        if self._has_async_reward_funcs:
-            self.async_reward_loop_thread, self.async_reward_loop, self.async_reward_loop_ready_event = (
-                start_event_loop_in_daemon(name="RLOOTrainer-AsyncRewardLoop")
+        self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
+        if self._has_async_funcs:
+            self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
+                name="RLOOTrainer-AsyncRewardLoop"
             )
             # wait until the event loop is running in the daemon thread
-            self.async_reward_loop_ready_event.wait()
-            atexit.register(shutdown_event_loop_in_daemon, self.async_reward_loop_thread, self.async_reward_loop)
+            self.async_loop_ready_event.wait()
+            atexit.register(shutdown_event_loop_in_daemon, self.async_loop_thread, self.async_loop)
 
         # Reward weights
         if args.reward_weights is not None:
@@ -864,7 +864,7 @@ class RLOOTrainer(_BaseTrainer):
         # Execute async custom functions in parallel using asyncio.gather
         if async_funcs_info:
 
-            async def _invoke_async_reward(index, func, func_name):
+            async def _invoke_async(index, func, func_name):
                 with profiling_context(self, func_name):
                     output = await func(
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
@@ -873,10 +873,10 @@ class RLOOTrainer(_BaseTrainer):
                     return index, output
 
             async def _run_async_funcs():
-                coros = [_invoke_async_reward(i, func, func_name) for (i, func, func_name) in async_funcs_info]
+                coros = [_invoke_async(i, func, func_name) for (i, func, func_name) in async_funcs_info]
                 return await asyncio.gather(*coros)
 
-            async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_reward_loop).result()
+            async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_loop).result()
             for idx, output_reward_func in async_results:
                 rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 

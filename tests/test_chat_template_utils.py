@@ -152,6 +152,7 @@ class TestAddResponseSchema:
         [
             pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
             pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
+            pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36"),
         ],
     )
     def test_add_response_schema_vlm(self, processor_name):
@@ -217,6 +218,14 @@ class TestSupportsToolCalling:
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
                 id="qwen35",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                id="qwen36",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
@@ -444,6 +453,14 @@ class TestIsChatTemplatePrefixPreserving:
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+            id="qwen36",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
     ],
 )
 class TestGetTrainingChatTemplate:
@@ -648,6 +665,7 @@ class TestGetTrainingChatTemplate:
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36"),
         pytest.param(
             "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
             id="gemma4",
