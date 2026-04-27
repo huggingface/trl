@@ -416,10 +416,11 @@ class PPOTrainer(_BaseTrainer):
                 "[Approximating KL Divergence](http://joschu.net/blog/kl-approx.html) for details."
             )
 
-        # peft support
-        if not is_peft_available() and peft_config is not None:
+        # PEFT
+        if peft_config is not None and not is_peft_available():
             raise ImportError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
+                "You passed `peft_config` but the `peft` library is not installed. "
+                "Install it with `pip install trl[peft]`."
             )
         elif is_peft_available() and peft_config is not None:
             if isinstance(self.policy_model, PeftModel):
