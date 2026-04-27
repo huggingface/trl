@@ -440,7 +440,6 @@ class DistillationTrainer(_BaseTrainer):
                     f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
                     f"got {type(peft_config).__name__}."
                 )
-        if peft_config is not None:
             model = get_peft_model(model, peft_config)
 
         # ── Data collator ──
