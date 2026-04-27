@@ -178,13 +178,14 @@ class ORPOTrainer(_BaseTrainer):
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
+        # PEFT
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
         self._peft_has_been_casted_to_bf16 = False
-
-        if not is_peft_available() and peft_config is not None:
-            raise ValueError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
+        if peft_config is not None and not is_peft_available():
+            raise ImportError(
+                "You passed `peft_config` but the `peft` library is not installed. "
+                "Install it with `pip install trl[peft]`."
             )
         elif is_peft_available() and peft_config is not None:
             if isinstance(model, PeftModel):
