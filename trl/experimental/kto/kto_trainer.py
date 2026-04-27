@@ -16,7 +16,7 @@ import inspect
 import textwrap
 from collections import defaultdict
 from collections.abc import Callable
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -29,7 +29,6 @@ from accelerate import PartialState, logging
 from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
 from packaging.version import Version
-from torch import autocast
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoProcessor,
@@ -1189,12 +1188,7 @@ class KTOTrainer(_BaseTrainer):
         return_outputs=False,
         num_items_in_batch=None,
     ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        compute_loss_context_manager = (
-            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
-        )
-
-        with compute_loss_context_manager:
-            loss, metrics = self.get_batch_loss_metrics(model, inputs)
+        loss, metrics = self.get_batch_loss_metrics(model, inputs)
 
         # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
         loss = loss.to(self.args.device)
@@ -1230,10 +1224,7 @@ class KTOTrainer(_BaseTrainer):
             else:
                 ignore_keys = []
 
-        prediction_context_manager = (
-            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
-        )
-        with torch.no_grad(), prediction_context_manager:
+        with torch.no_grad():
             loss, metrics = self.get_batch_loss_metrics(model, inputs)
 
         # force log the metrics
