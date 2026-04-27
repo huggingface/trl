@@ -1287,22 +1287,30 @@ class SFTTrainer(_BaseTrainer):
         # Compute entropy
         if not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
-                per_token_entropy = entropy_from_logits(outputs.logits)
-                # When using Prompt Tuning, skip the virtual tokens in logits before entropy computation, since they
-                # do not correspond to actual input tokens.
+                if "shift_labels" in inputs:
+                    # When using CP or SP, labels are pre-shifted.
+                    shift_logits = outputs.logits.contiguous()
+                    shift_labels = inputs["shift_labels"]
+                else:
+                    shift_logits = outputs.logits[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+
+                # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
                 if (
                     self.num_virtual_tokens > 0
                     and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
                 ):
-                    per_token_entropy = per_token_entropy[:, self.num_virtual_tokens :]
-                if "attention_mask" in inputs:
-                    attention_mask = inputs["attention_mask"]
-                    entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
-                elif "position_ids" in inputs:
-                    entropy = torch.mean(per_token_entropy)
-                else:
-                    raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
-                entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
+                    shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
+
+                per_token_entropy = entropy_from_logits(shift_logits)
+                mask = shift_labels != -100
+                entropy_sum = (per_token_entropy * mask).sum()
+                total_tokens = mask.sum()
+
+                # Gather counts across ranks and weight-average
+                entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+                total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
+                entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
             self._metrics[mode]["entropy"].append(entropy)
 
         if mode == "train":
