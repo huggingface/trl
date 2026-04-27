@@ -754,7 +754,12 @@ class SFTTrainer(_BaseTrainer):
                 "tokens in input_ids. Use truncation_mode='keep_start' (the default) or set max_length=None."
             )
 
-        # PEFT configuration and model wrapping
+        # PEFT
+        if peft_config is not None and not is_peft_available():
+            raise ImportError(
+                "You passed `peft_config` but the `peft` library is not installed. "
+                "Install it with `pip install trl[peft]`."
+            )
         if peft_config is not None:
             if added_tokens:
                 # Ensure that the added tokens are trainable

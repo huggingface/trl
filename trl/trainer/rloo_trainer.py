@@ -276,6 +276,12 @@ class RLOOTrainer(_BaseTrainer):
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
+        # PEFT
+        if peft_config is not None and not is_peft_available():
+            raise ImportError(
+                "You passed `peft_config` but the `peft` library is not installed. "
+                "Install it with `pip install trl[peft]`."
+            )
         if is_peft_available() and is_peft_model(model) and peft_config is not None:
             raise ValueError(
                 "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
