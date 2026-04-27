@@ -291,10 +291,6 @@ class KTOTrainer(_BaseTrainer):
         # has been called in order to properly call autocast if needed.
         self._peft_has_been_casted_to_bf16 = False
 
-        if not is_peft_available() and peft_config is not None:
-            raise ValueError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it with `pip install peft` to use the PEFT models"
-            )
         if is_peft_available() and is_peft_model(model) and peft_config is not None:
             raise ValueError(
                 "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
