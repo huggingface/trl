@@ -67,7 +67,7 @@ if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearKTOLoss
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 
 if TYPE_CHECKING:
@@ -293,17 +293,23 @@ class KTOTrainer(_BaseTrainer):
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
         self._peft_has_been_casted_to_bf16 = False
-        if peft_config is not None and not is_peft_available():
-            raise ImportError(
-                "You passed `peft_config` but the `peft` library is not installed. "
-                "Install it with `pip install trl[peft]`."
-            )
-        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
-            raise ValueError(
-                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
-                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
-                "with the new `peft_config` to the trainer."
-            )
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            if isinstance(model, PeftModel):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                    "with the new `peft_config` to the trainer."
+                )
         if is_peft_available() and isinstance(model, PeftModel) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during KTO training.
