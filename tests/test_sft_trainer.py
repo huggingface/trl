@@ -2458,10 +2458,17 @@ class TestChunkedCrossEntropyLoss:
         torch.testing.assert_close(weight_c.grad, weight_r.grad, atol=1e-5, rtol=1e-5)
 
     def test_all_ignored_returns_zero(self):
-        """If every label is ignored, loss/correct/entropy_sum are all zero and backward still works."""
+        """If every label is ignored, loss/correct/entropy_sum are all zero and backward still works.
+
+        Every trainable parameter of the chunked path (hidden_states, lm_head_weight, and lm_head_bias when present)
+        must receive a gradient — otherwise DDP / FSDP synchronization hangs or errors at the all-reduce step.
+        """
         hidden, weight, labels = self._inputs(requires_grad=True)
+        bias = torch.zeros(self.V, dtype=torch.float32, requires_grad=True)
         labels[:] = -100
-        loss, correct, ent_sum = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels)
+        loss, correct, ent_sum = _chunked_cross_entropy_loss(
+            hidden, weight, self.CHUNK_SIZE, labels, lm_head_bias=bias
+        )
         assert loss.item() == 0.0
         assert correct.item() == 0.0
         assert ent_sum.item() == 0.0
@@ -2471,6 +2478,7 @@ class TestChunkedCrossEntropyLoss:
         loss.backward()
         assert hidden.grad is not None and hidden.grad.abs().sum().item() == 0.0
         assert weight.grad is not None and weight.grad.abs().sum().item() == 0.0
+        assert bias.grad is not None and bias.grad.abs().sum().item() == 0.0
 
     def test_shift_labels_matches_labels(self):
         """`shift_labels` path (CP/SP) must match the default `labels` path after external shifting."""

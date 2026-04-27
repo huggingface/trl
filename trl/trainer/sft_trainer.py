@@ -174,9 +174,12 @@ def _chunked_cross_entropy_loss(
     correct = hidden.new_zeros((), dtype=torch.float32)
     entropy_sum = hidden.new_zeros((), dtype=torch.float32)
     if n_valid == 0:
-        # Keep the loss connected to the autograd graph so `.backward()` works when an entire
-        # micro-batch is masked (can happen with completion-only loss + truncation).
+        # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
+        # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
+        # FSDP gradient sync doesn't hang on a missing param.
         loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
+        if lm_head_bias is not None:
+            loss = loss + lm_head_bias.float().sum() * 0.0
         return loss, correct, entropy_sum
 
     loss = hidden.new_zeros((), dtype=torch.float32)
