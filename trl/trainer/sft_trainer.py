@@ -1017,7 +1017,6 @@ class SFTTrainer(_BaseTrainer):
                     peft_config.trainable_token_indices["embed_tokens"] = added_tokens
                 else:
                     peft_config.trainable_token_indices["embed_tokens"].extend(added_tokens)
-
                 # Ensure that the lm_head is trainable
                 if peft_config.modules_to_save is None or "lm_head" not in peft_config.modules_to_save:
                     logger.warning(
@@ -1031,7 +1030,6 @@ class SFTTrainer(_BaseTrainer):
                         peft_config.modules_to_save = ["lm_head"]
                     else:
                         peft_config.modules_to_save.append("lm_head")
-
             # Create PEFT model
             model = get_peft_model(model, peft_config)
 
