@@ -188,15 +188,10 @@ class KTOTrainer(_BaseTrainer):
             The data collator to use for training. If None is specified, the default data collator
             ([`~experimental.kto.kto_trainer.DataCollatorForUnpairedPreference`]) will be used which will pad the
             sequences to the maximum length of the sequences in the batch.
-        model_init (`Callable[[], transformers.PreTrainedModel]`):
-            The model initializer to use for training. If None is specified, the default model initializer will be
-            used.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
             The optimizer and scheduler to use for training.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
-            The function to use to preprocess the logits before computing the metrics.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -228,10 +223,8 @@ class KTOTrainer(_BaseTrainer):
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         data_collator: DataCollator | None = None,
-        model_init: Callable[[], PreTrainedModel] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
         peft_config: "PeftConfig | None" = None,
         compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
     ):
@@ -285,13 +278,25 @@ class KTOTrainer(_BaseTrainer):
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        if is_peft_available() and is_peft_model(model) and peft_config is not None:
-            raise ValueError(
-                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
-                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
-                "with the new `peft_config` to the trainer."
-            )
-        if is_peft_available() and is_peft_model(model) and ref_model is None:
+        # PEFT
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            if isinstance(model, PeftModel):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                    "with the new `peft_config` to the trainer."
+                )
+        if is_peft_available() and isinstance(model, PeftModel) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during KTO training.
             model.add_adapter("ref", model.peft_config["default"])
@@ -412,11 +417,9 @@ class KTOTrainer(_BaseTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
-            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
         # Reference model
