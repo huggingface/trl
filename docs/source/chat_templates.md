@@ -20,11 +20,17 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 ## Supported model families
 
-TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: DeepSeek-V3, Gemma, GLM-4-MoE, GPT-OSS, Llama 3 / 3.1 / 3.2, Qwen2.5, Qwen3, Qwen3-VL, Qwen3.5, Qwen3.6.
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, DeepSeek-V3, Gemma, GLM-4-MoE, GPT-OSS, Llama 3 / 3.1 / 3.2, Qwen2.5, Qwen3, Qwen3-VL, Qwen3.5, Qwen3.6.
 
 ## Training templates
 
 Patched templates that fix training-specific issues. Swapped in at init when tools are enabled (GRPO) or when `assistant_only_loss=True` (SFT).
+
+### `cohere_training.jinja`
+
+Patched Cohere template. Diff vs `cohere.jinja`:
+
+Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `deepseekv3_training.jinja`
 

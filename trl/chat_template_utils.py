@@ -307,6 +307,8 @@ qwen3_5_schema = {
 }
 
 
+cohere_chat_template = (_CHAT_TEMPLATES_DIR / "cohere.jinja").read_text()
+
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
 
 gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text()
@@ -530,6 +532,8 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase
     return ids2[: len(ids1)] == ids1
 
 
+cohere_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere_training.jinja").read_text()
+
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text()
 
 gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma_training.jinja").read_text()
@@ -558,7 +562,7 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    Currently DeepSeek-V3, Gemma, Gemma2, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Qwen2.5, Qwen3, and Qwen3.6 are
+    Currently Cohere, DeepSeek-V3, Gemma, Gemma2, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Qwen2.5, Qwen3, and Qwen3.6 are
     supported.
 
     Args:
@@ -624,6 +628,9 @@ def get_training_chat_template(
     prefix_ok = not supports_tool_calling(processing_class) or is_chat_template_prefix_preserving(processing_class)
     if prefix_ok and "{% generation %}" in processing_class.chat_template:
         return None  # No patching needed
+
+    if processing_class.chat_template == cohere_chat_template:
+        return cohere_training_chat_template
 
     if processing_class.chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
