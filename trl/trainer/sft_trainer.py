@@ -212,23 +212,24 @@ def _chunked_cross_entropy_loss(
 
 def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
     """
-    Patch a causal LM so its `forward` computes the language modeling loss via [`_chunked_cross_entropy_loss`] when
-    `labels` are provided.
+    Patch a causal LM so `forward` computes the language modeling loss via [`_chunked_cross_entropy_loss`].
 
-    The patched forward calls the base decoder directly (`model.get_decoder()`) to obtain hidden states, skips the
-    `lm_head` matmul on positions with `labels == -100`, and computes the cross-entropy in chunks of `chunk_size` valid
-    tokens. It returns a [`_ChunkedCELMHeadOutput`] with `loss` set, `logits` set to `None`, and `token_accuracy` /
-    `entropy` fields set to the mean values over non-ignored tokens. Also accepts pre-shifted `shift_labels` in place
-    of `labels`, for the context / sequence parallelism path. When both are `None`, the original forward is invoked so
-    generation and labels-free evaluation preserve any per-model logits post-processing (e.g. `logit_scale`,
+    When `labels` (or pre-shifted `shift_labels`, for CP/SP) are provided, the patched forward calls
+    `model.get_decoder()` directly, drops positions with `labels == -100` before the `lm_head` matmul, and computes the
+    cross-entropy in chunks of `chunk_size` valid tokens. It returns a [`_ChunkedCELMHeadOutput`] with `loss` set,
+    `logits` set to `None`, and `num_correct_tokens` / `entropy_sum` populated over non-ignored tokens. For MoE models
+    with `output_router_logits=True`, the load-balancing auxiliary loss is added with the same coefficient and formula
+    as the model's own forward, keeping the chunked path numerically equivalent to the reference.
+
+    With both `labels` and `shift_labels` set to `None` the original forward runs unchanged, so generation and
+    labels-free evaluation preserve any per-model logits post-processing (e.g. `logit_scale`,
     `final_logit_softcapping`).
 
-    For MoE models with `output_router_logits=True`, the load-balancing auxiliary loss is added to the main loss with
-    the same coefficient (`router_aux_loss_coef`) and formula (`load_balancing_loss_func`) used by the model's own
-    forward, so the chunked path remains numerically equivalent to the reference.
+    For PEFT, pass the inner causal LM (`peft_model.get_base_model()`) rather than the `PeftModel` wrapper, so that
+    prompt-learning variants (PromptTuning, PrefixTuning, PTuning) keep their virtual-token injection in
+    `PeftModel.forward` before delegating into the patched forward.
 
-    Not supported yet: VLM / multimodal models whose forward injects visual tokens outside the base decoder, and
-    PEFT-wrapped models.
+    Not supported yet: VLM / multimodal models whose forward injects visual tokens outside the base decoder.
     """
     final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
     logit_scale = getattr(model.config, "logit_scale", 1.0)
@@ -1230,9 +1231,12 @@ class SFTTrainer(_BaseTrainer):
                 # wraps the patched forward.
                 if self._is_vlm:
                     raise NotImplementedError("`loss_type='chunked_nll'` is not supported for VLM models yet.")
-                if peft_config is not None or is_peft_model(model):
-                    raise NotImplementedError("`loss_type='chunked_nll'` is not supported with PEFT yet.")
-                _patch_chunked_ce_lm_head(model, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE)
+                # For PEFT, patch the inner causal LM rather than the `PeftModel` wrapper. LoRA / IA³ /
+                # `modules_to_save` adapters live in the module tree, so they're hit even when we bypass
+                # `PeftModel.forward`. Prompt-learning variants need `PeftModel.forward` to run first (to inject
+                # virtual tokens), then it delegates into the patched inner forward.
+                target = model.get_base_model() if is_peft_model(model) else model
+                _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE)
             else:
                 raise ValueError(
                     f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
