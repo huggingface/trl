@@ -297,7 +297,7 @@ class RLOOTrainer(_BaseTrainer):
             # Create PEFT model
             model = get_peft_model(model, peft_config)
 
-        if is_peft_available() and is_peft_model(model):
+        elif is_peft_available() and is_peft_model(model):
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during the training.
             model.add_adapter("ref", model.peft_config["default"])
