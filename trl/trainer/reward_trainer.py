@@ -416,7 +416,6 @@ class RewardTrainer(_BaseTrainer):
                     f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
                     f"got {type(peft_config).__name__}."
                 )
-        if peft_config is not None:
             if added_tokens:
                 # Ensure that the added tokens are trainable
                 if peft_config.trainable_token_indices is None:
@@ -440,15 +439,14 @@ class RewardTrainer(_BaseTrainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
 
-        if is_peft_available() and is_peft_model(model) and peft_config is not None:
-            raise ValueError(
-                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
-                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
-                "with the new `peft_config` to the trainer."
-            )
+            if is_peft_model(model):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                    "with the new `peft_config` to the trainer."
+                )
 
-        # Create PEFT model
-        if peft_config is not None:
+            # Create PEFT model
             model = get_peft_model(model, peft_config)
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
