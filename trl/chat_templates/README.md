@@ -15,7 +15,11 @@ Used for identity comparison only.
 
 ### `cohere.jinja`
 
-Original Cohere Command chat template (as shipped by CohereForAI/c4ai-command-r-v01 and related checkpoints).
+Original Cohere Command chat template (as shipped by `CohereForAI/c4ai-command-r-v01` and related checkpoints).
+
+### `cohere2.jinja`
+
+Original Cohere2 chat template (as shipped by `CohereLabs/c4ai-command-r7b-12-2024` and related checkpoints).
 
 ### `deepseekv3.jinja`
 
@@ -70,6 +74,12 @@ Patched templates that fix training-specific issues. Swapped in at init when too
 Patched Cohere template. Diff vs `cohere.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `cohere2_training.jinja`
+
+Patched Cohere2 template. Diff vs `cohere2.jinja`:
+
+Move the trailing `<|END_OF_TURN_TOKEN|>` from after the role-dispatch `{% endif %}` into each role branch, so it can be wrapped together with the assistant content. Wrap the assistant branch (`<|START_RESPONSE|>...<|END_RESPONSE|><|END_OF_TURN_TOKEN|>`) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `deepseekv3_training.jinja`
 
