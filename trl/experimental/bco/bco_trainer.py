@@ -377,7 +377,7 @@ class BCOTrainer(_BaseTrainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        peft_config (`dict`, defaults to `None`):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
             a PEFT model.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -421,7 +421,7 @@ class BCOTrainer(_BaseTrainer):
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
-        peft_config: dict | None = None,
+        peft_config: "PeftConfig | None" = None,
         compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
         model_adapter_name: str | None = None,
         ref_adapter_name: str | None = None,
