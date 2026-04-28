@@ -218,6 +218,14 @@ class ScriptArguments:
         speculative_config (`str`, *optional*):
             JSON string for vLLM speculative decoding config, forwarded to `LLM(speculative_config=...)`. When unset,
             speculative decoding is disabled. Example: `'{"method": "qwen3_next_mtp", "num_speculative_tokens": 5}'`.
+        reasoning_parser (`str`, *optional*):
+            Reasoning parser for thinking models (e.g., `"qwen3"`, `"deepseek_r1"`). When set, vLLM configures a
+            `ReasoningConfig` on the engine so that `thinking_token_budget` can be used in `generation_kwargs`.
+        reasoning_config (`str`, *optional*):
+            JSON string for vLLM reasoning config specifying thinking delimiters, forwarded to
+            `LLM(reasoning_config=...)`. Example:
+            `'{"reasoning_start_str": "<think>", "reasoning_end_str": "</think>"}'`. If only `reasoning_parser` is set,
+            this is not required — vLLM will infer the delimiters from the parser.
     """
 
     model: str = field(
@@ -329,6 +337,20 @@ class ScriptArguments:
             'Example: \'{"method": "qwen3_next_mtp", "num_speculative_tokens": 5}\''
         },
     )
+    reasoning_parser: str | None = field(
+        default=None,
+        metadata={
+            "help": "Reasoning parser for thinking models (e.g., 'qwen3', 'deepseek_r1'). "
+            "Enables vLLM's ReasoningConfig so that thinking_token_budget works in generation_kwargs."
+        },
+    )
+    reasoning_config: str | None = field(
+        default=None,
+        metadata={
+            "help": "JSON string for vLLM reasoning config. "
+            'Example: \'{"reasoning_start_str": "<think>", "reasoning_end_str": "</think>"}\''
+        },
+    )
 
 
 def llm_worker(
@@ -362,6 +384,8 @@ def llm_worker(
         # Important so temperature scaling/logit tweaking affects the TIS log probs
         logprobs_mode="processed_logprobs",
         speculative_config=json.loads(script_args.speculative_config) if script_args.speculative_config else None,
+        reasoning_config=json.loads(script_args.reasoning_config) if script_args.reasoning_config else None,
+        reasoning_parser=script_args.reasoning_parser,
     )
 
     # Send ready signal to parent process
