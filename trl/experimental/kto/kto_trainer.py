@@ -569,8 +569,6 @@ class KTOTrainer(_BaseTrainer):
                     map_kwargs["desc"] = f"Unpairing {dataset_name} dataset"
                 dataset = unpair_preference_dataset(dataset, **map_kwargs)
 
-            tokenizer = getattr(processing_class, "tokenizer", processing_class)
-
             # Add EOS token if needed: non-conversational only
             first_example = next(iter(dataset))
             if not is_conversational(first_example):
@@ -582,7 +580,7 @@ class KTOTrainer(_BaseTrainer):
                         example["completion"] = example["completion"] + eos_token
                     return example
 
-                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": tokenizer.eos_token}, **map_kwargs)
+                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": self._tokenizer.eos_token}, **map_kwargs)
 
             # Tokenize dataset
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
