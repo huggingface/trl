@@ -187,6 +187,8 @@ for model_id, config_class, model_class, dtype, suffix in [
     ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForCausalLM, torch.bfloat16, "2.5"),
     ("Qwen/Qwen2.5-Coder-0.5B", Qwen2Config, Qwen2ForCausalLM, torch.bfloat16, "2.5-Coder"),
     ("Qwen/Qwen3-8B", Qwen3Config, Qwen3ForCausalLM, torch.bfloat16, None),
+    # It's important to have Qwen3-4B-Instruct-2507 as it doesn't have the same chat template (non-thinking variant)
+    ("Qwen/Qwen3-4B-Instruct-2507", Qwen3Config, Qwen3ForCausalLM, torch.bfloat16, "Instruct-2507"),
 ]:
     revision = "refs/pr/14" if model_id == "Qwen/Qwen3-8B" else "main"  # chat template with {% generation %}
     tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
