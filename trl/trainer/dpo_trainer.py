@@ -586,6 +586,9 @@ class DPOTrainer(_BaseTrainer):
                     "and unload the existing adapter, save the resulting base model, and then pass that base model along "
                     "with the new `peft_config` to the trainer."
                 )
+            # Create PEFT model
+            model = get_peft_model(model, peft_config)
+
         if is_peft_available() and is_peft_model(model) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during DPO training.
@@ -595,10 +598,6 @@ class DPOTrainer(_BaseTrainer):
                     ref_name = name.replace(".default.", ".ref.")
                     ref_param = model.get_parameter(ref_name)
                     ref_param.data.copy_(param.data)
-
-        # Create PEFT model
-        if peft_config is not None:
-            model = get_peft_model(model, peft_config)
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
