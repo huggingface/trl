@@ -15,6 +15,7 @@
 import contextlib
 import json
 import os
+import types
 import warnings
 from collections import defaultdict
 from collections.abc import Callable
@@ -22,8 +23,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import accelerate
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
@@ -39,6 +42,7 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
@@ -65,8 +69,241 @@ from .utils import (
 )
 
 
+_CHUNKED_LM_HEAD_CHUNK_SIZE = 256
+
+
 if is_peft_available():
     from peft import PeftConfig, PeftModel, PeftType, get_peft_model
+
+
+@dataclass
+class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
+    """`CausalLMOutputWithPast` with extra fields populated by the chunked-CE path."""
+
+    num_correct_tokens: torch.Tensor | None = None
+    entropy_sum: torch.Tensor | None = None
+    aux_loss: torch.Tensor | None = None
+
+
+def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
+    logits = h.float() @ w.float().t()
+    if b is not None:
+        logits = logits + b.float()
+    if logit_scale != 1.0:
+        logits = logits * logit_scale
+    if final_logit_softcapping is not None:
+        logits = final_logit_softcapping * torch.tanh(logits / final_logit_softcapping)
+    log_p = F.log_softmax(logits, dim=-1)
+    chunk_loss = F.nll_loss(log_p, lbl, reduction="sum")
+    chunk_correct = (logits.argmax(dim=-1) == lbl).sum().float()
+    chunk_entropy = -(log_p.exp() * log_p).sum(dim=-1).sum()
+    return chunk_loss, chunk_correct, chunk_entropy
+
+
+def _chunked_cross_entropy_loss(
+    hidden_states: torch.Tensor,
+    lm_head_weight: torch.Tensor,
+    chunk_size: int,
+    labels: torch.Tensor | None = None,
+    shift_labels: torch.Tensor | None = None,
+    num_items_in_batch: torch.Tensor | int | None = None,
+    logit_scale: float = 1.0,
+    final_logit_softcapping: float | None = None,
+    lm_head_bias: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Memory-efficient next-token cross-entropy over hidden states and an `lm_head` weight.
+
+    The full `lm_head` projection is never materialized. Positions where labels equal `-100` are dropped before the
+    matmul, and the remaining tokens are processed in chunks of `chunk_size`. Each chunk's `[chunk_size, vocab_size]`
+    logits tensor is kept alive only during its own forward/backward pass via gradient checkpointing, so peak
+    logits-activation memory is `chunk_size * vocab_size` instead of `batch_size * seq_len * vocab_size`.
+
+    At least one of `labels` or `shift_labels` must be provided. Passing `labels` alone is the standard path and
+    triggers the internal `labels[..., 1:]` / `hidden_states[..., :-1, :]` shift. Passing `shift_labels` skips the
+    shift and assumes the caller has already aligned labels with hidden states — this is the contract used under
+    context / sequence parallelism, where labels are shifted before being sharded. If both are provided, `shift_labels`
+    wins (matching [`~transformers.loss.ForCausalLMLoss`]).
+
+    Args:
+        hidden_states (`torch.Tensor`):
+            Base decoder output of shape `(B, S, H)`, i.e. before the `lm_head` projection.
+        lm_head_weight (`torch.Tensor`):
+            Weight of the `lm_head` linear layer, shape `(V, H)`.
+        chunk_size (`int`):
+            Number of valid tokens processed per chunk. Peak memory scales linearly with this.
+        labels (`torch.Tensor`, *optional*):
+            Labels of shape `(B, S)`. Positions equal to `-100` are excluded from both the `lm_head` matmul and the
+            loss. Mutually exclusive with `shift_labels`.
+        shift_labels (`torch.Tensor`, *optional*):
+            Pre-shifted labels of shape `(B, S)`, aligned with `hidden_states` (position `i` predicts
+            `shift_labels[i]`). Mutually exclusive with `labels`.
+        num_items_in_batch (`torch.Tensor`, `int` or `None`, *optional*):
+            Total number of valid tokens across the global batch, as plumbed by [`~transformers.Trainer`]. When
+            provided, the loss is reduced as `sum / num_items_in_batch`, matching the gradient-accumulation-correct
+            behavior of HF's default cross-entropy. When `None`, reduction is `mean` over local valid tokens.
+        logit_scale (`float`, *optional*, defaults to `1.0`):
+            Multiplier applied to each chunk's logits before the cross-entropy, matching the `logit_scale` behavior of
+            Cohere-style models.
+        final_logit_softcapping (`float`, *optional*):
+            If set, applies `softcap * tanh(logits / softcap)` to each chunk's logits before the cross-entropy,
+            matching the `final_logit_softcapping` behavior of Gemma-style models. Applied after `logit_scale`.
+        lm_head_bias (`torch.Tensor`, *optional*):
+            Bias of the `lm_head` linear layer, shape `(V,)`. Added to each chunk's logits when provided.
+
+    Returns:
+        `tuple[torch.Tensor, torch.Tensor, torch.Tensor]`: scalar loss, number of correctly-predicted tokens (count),
+        and sum of per-token Shannon entropy (in nats) — all over the local batch. Raw sums are returned so callers can
+        reduce correctly across ranks.
+    """
+    if labels is None and shift_labels is None:
+        raise ValueError("At least one of `labels` or `shift_labels` must be provided.")
+
+    if shift_labels is not None:
+        hidden = hidden_states.reshape(-1, hidden_states.size(-1))
+        labels = shift_labels.reshape(-1)
+    else:
+        hidden = hidden_states[..., :-1, :].reshape(-1, hidden_states.size(-1))
+        labels = labels[..., 1:].reshape(-1)
+
+    valid = labels != -100
+    hidden = hidden[valid]
+    labels = labels[valid]
+    n_valid = hidden.size(0)
+
+    correct = hidden.new_zeros((), dtype=torch.float32)
+    entropy_sum = hidden.new_zeros((), dtype=torch.float32)
+    if n_valid == 0:
+        # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
+        # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
+        # FSDP gradient sync doesn't hang on a missing param.
+        loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
+        if lm_head_bias is not None:
+            loss = loss + lm_head_bias.float().sum() * 0.0
+        return loss, correct, entropy_sum
+
+    loss = hidden.new_zeros((), dtype=torch.float32)
+
+    for start in range(0, n_valid, chunk_size):
+        h_chunk = hidden[start : start + chunk_size]
+        lbl_chunk = labels[start : start + chunk_size]
+        chunk_loss, chunk_correct, chunk_entropy = torch.utils.checkpoint.checkpoint(
+            _chunk,
+            h_chunk,
+            lm_head_weight,
+            lm_head_bias,
+            lbl_chunk,
+            logit_scale,
+            final_logit_softcapping,
+            use_reentrant=False,
+        )
+        loss = loss + chunk_loss
+        correct = correct + chunk_correct
+        entropy_sum = entropy_sum + chunk_entropy
+
+    if num_items_in_batch is None:
+        loss = loss / n_valid
+    else:
+        if isinstance(num_items_in_batch, torch.Tensor):
+            num_items_in_batch = num_items_in_batch.to(loss.device)
+        loss = loss / num_items_in_batch
+    return loss, correct, entropy_sum
+
+
+def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
+    """
+    Patch a causal LM so its `forward` computes the language modeling loss via [`_chunked_cross_entropy_loss`] when
+    `labels` are provided.
+
+    The patched forward calls the base decoder directly (`model.get_decoder()`) to obtain hidden states, skips the
+    `lm_head` matmul on positions with `labels == -100`, and computes the cross-entropy in chunks of `chunk_size` valid
+    tokens. It returns a [`_ChunkedCELMHeadOutput`] with `loss` set, `logits` set to `None`, and `token_accuracy` /
+    `entropy` fields set to the mean values over non-ignored tokens. Also accepts pre-shifted `shift_labels` in place
+    of `labels`, for the context / sequence parallelism path. When both are `None`, the original forward is invoked so
+    generation and labels-free evaluation preserve any per-model logits post-processing (e.g. `logit_scale`,
+    `final_logit_softcapping`).
+
+    For MoE models with `output_router_logits=True`, the load-balancing auxiliary loss is added to the main loss with
+    the same coefficient (`router_aux_loss_coef`) and formula (`load_balancing_loss_func`) used by the model's own
+    forward, so the chunked path remains numerically equivalent to the reference.
+
+    Not supported yet: VLM / multimodal models whose forward injects visual tokens outside the base decoder, and
+    PEFT-wrapped models.
+    """
+    final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
+    logit_scale = getattr(model.config, "logit_scale", 1.0)
+    original_forward = model.forward
+
+    def _chunked_ce_forward(
+        self: torch.nn.Module,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        num_items_in_batch: torch.Tensor | int | None = None,
+        shift_labels: torch.Tensor | None = None,
+        output_router_logits: bool | None = None,
+        **kwargs,
+    ) -> CausalLMOutputWithPast:
+        # Without labels, fall back to the original forward so generation and labels-free evaluation
+        # preserve any per-model logits post-processing (e.g. Cohere `logit_scale`, Gemma
+        # `final_logit_softcapping`, `logits_to_keep` slicing).
+        if labels is None and shift_labels is None:
+            if output_router_logits is not None:
+                kwargs["output_router_logits"] = output_router_logits
+            return original_forward(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+
+        if output_router_logits is None:
+            output_router_logits = getattr(self.config, "output_router_logits", False)
+
+        kwargs.pop("use_cache", None)
+        decoder_kwargs = {}
+        if output_router_logits:
+            decoder_kwargs["output_router_logits"] = True
+        outputs: BaseModelOutputWithPast = self.get_decoder()(
+            input_ids=input_ids, attention_mask=attention_mask, use_cache=False, **decoder_kwargs, **kwargs
+        )
+        hidden_states = outputs.last_hidden_state
+
+        loss, num_correct_tokens, entropy_sum = _chunked_cross_entropy_loss(
+            hidden_states,
+            self.lm_head.weight,
+            chunk_size,
+            labels=labels,
+            shift_labels=shift_labels,
+            num_items_in_batch=num_items_in_batch,
+            logit_scale=logit_scale,
+            final_logit_softcapping=final_logit_softcapping,
+            lm_head_bias=self.lm_head.bias,
+        )
+
+        aux_loss = None
+        if output_router_logits:
+            # Mirror the per-family MoE forward: add `router_aux_loss_coef * load_balancing_loss_func(...)` to
+            # the main loss. Mixtral is the source of truth — every MoE family (Qwen3Moe, GptOss, OLMoE,
+            # Qwen2Moe, DBRX, JetMoE, PhiMoE, …) pulls this function from mixtral via the modular system, so a
+            # single import keeps us in lockstep with upstream for every family we test.
+            from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
+
+            aux_loss = load_balancing_loss_func(
+                outputs.router_logits,
+                self.num_experts,
+                self.num_experts_per_tok,
+                attention_mask,
+            )
+            loss = loss + self.router_aux_loss_coef * aux_loss.to(loss.device)
+
+        return _ChunkedCELMHeadOutput(
+            loss=loss,
+            logits=None,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+            num_correct_tokens=num_correct_tokens,
+            entropy_sum=entropy_sum,
+            aux_loss=aux_loss,
+        )
+
+    model.forward = types.MethodType(_chunked_ce_forward, model)
 
 
 logger = get_logger(__name__)
@@ -976,8 +1213,22 @@ class SFTTrainer(_BaseTrainer):
                         "passing a `compute_loss_func` is not allowed."
                     )
                 compute_loss_func = dft_loss
+            elif args.loss_type == "chunked_nll":
+                # Same math as `"nll"` but the `lm_head` matmul is skipped on ignored tokens and the CE is computed in
+                # chunks of tokens. Implemented by patching the model's forward before `super().__init__` so accelerate
+                # wraps the patched forward.
+                if self._is_vlm:
+                    raise NotImplementedError("`loss_type='chunked_nll'` is not supported for VLM models yet.")
+                if peft_config is not None or is_peft_model(model):
+                    raise NotImplementedError("`loss_type='chunked_nll'` is not supported with PEFT yet.")
+                _patch_chunked_ce_lm_head(model, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE)
             else:
-                raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
+                raise ValueError(
+                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
+                    "'chunked_nll'."
+                )
+        elif args.loss_type == "chunked_nll":
+            raise ValueError("`loss_type='chunked_nll'` is not compatible with `use_liger_kernel=True`.")
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
@@ -1009,6 +1260,24 @@ class SFTTrainer(_BaseTrainer):
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+
+        # Under FSDP2 with `reshard_after_forward=True` (accelerate's default), the chunked CE path triggers a
+        # redundant `lm_head.weight` all-gather per chunk during backward, adding significant wall-time. Setting
+        # `reshard_after_forward=False` keeps the un-wrapped `lm_head` resident and closes the gap without meaningfully
+        # affecting peak memory.
+        # `AcceleratorState.is_fsdp2` was added in accelerate 1.6.0; guard so older (but still-supported) versions
+        # don't `AttributeError` on every SFTTrainer init.
+        if (
+            args.loss_type == "chunked_nll"
+            and Version(accelerate.__version__) >= Version("1.6.0")
+            and self.accelerator.state.is_fsdp2
+            and self.accelerator.state.fsdp_plugin.reshard_after_forward
+        ):
+            logger.warning(
+                "`loss_type='chunked_nll'` under FSDP2 with `reshard_after_forward=True` is significantly slower than "
+                "necessary due to per-chunk all-gathers of `lm_head.weight`. Consider passing "
+                "`--fsdp_reshard_after_forward false` to `accelerate launch` (or equivalent in your FSDP config)."
+            )
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1285,7 +1554,13 @@ class SFTTrainer(_BaseTrainer):
         )
 
         # Compute entropy
-        if not self.args.use_liger_kernel:  # liger doesn't return logits
+        if self.args.loss_type == "chunked_nll":
+            shift_labels = inputs["shift_labels"] if "shift_labels" in inputs else labels[..., 1:]
+            n_valid = self.accelerator.gather_for_metrics((shift_labels != -100).sum()).sum()
+            entropy_sum = self.accelerator.gather_for_metrics(outputs.entropy_sum).sum()
+            entropy = (entropy_sum / n_valid).item() if n_valid > 0 else 0.0
+            self._metrics[mode]["entropy"].append(entropy)
+        elif not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
                 if "shift_labels" in inputs:
                     # When using CP or SP, labels are pre-shifted.
@@ -1326,7 +1601,13 @@ class SFTTrainer(_BaseTrainer):
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        if self.args.use_liger_kernel:
+        if self.args.loss_type == "chunked_nll":
+            shift_labels = inputs["shift_labels"] if "shift_labels" in inputs else labels[..., 1:]
+            n_valid = self.accelerator.gather_for_metrics((shift_labels != -100).sum()).sum()
+            correct = self.accelerator.gather_for_metrics(outputs.num_correct_tokens).sum()
+            accuracy = (correct / n_valid).item() if n_valid > 0 else 0.0
+            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+        elif self.args.use_liger_kernel:
             if hasattr(outputs, "token_accuracy") and outputs.token_accuracy is not None:
                 token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
                 self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)

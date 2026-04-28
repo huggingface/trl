@@ -20,7 +20,7 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 ## Supported model families
 
-TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: DeepSeek-V3, Gemma, GLM-4-MoE, GPT-OSS, Llama 3 / 3.1 / 3.2, Qwen2.5, Qwen3, Qwen3-VL, Qwen3.5.
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: DeepSeek-V3, Gemma, GLM-4-MoE, GPT-OSS, Llama 3 / 3.1 / 3.2, Qwen2.5, Qwen3, Qwen3-VL, Qwen3.5, Qwen3.6.
 
 ## Training templates
 
@@ -97,6 +97,10 @@ Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endge
 Patched Qwen2.5 template. Diff vs `qwen2_5.jinja`:
 
 Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `qwen3_6_training.jinja`
+
+Patched Qwen3.6 template. Diff vs `qwen3_6.jinja`: same set of changes as `qwen3_training.jinja` — require both `<think>` and `</think>` to be present before parsing, drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation), and wrap assistant output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
 
 ## Related utilities
 
