@@ -1003,6 +1003,12 @@ class SFTTrainer(_BaseTrainer):
                     f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
                     f"got {type(peft_config).__name__}."
                 )
+            if is_peft_model(model):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                    "with the new `peft_config` to the trainer."
+                )
             if added_tokens:
                 # Ensure that the added tokens are trainable
                 if peft_config.trainable_token_indices is None:
@@ -1025,13 +1031,6 @@ class SFTTrainer(_BaseTrainer):
                         peft_config.modules_to_save = ["lm_head"]
                     else:
                         peft_config.modules_to_save.append("lm_head")
-
-            if is_peft_model(model):
-                raise ValueError(
-                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
-                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
-                    "with the new `peft_config` to the trainer."
-                )
 
             # Create PEFT model
             model = get_peft_model(model, peft_config)
