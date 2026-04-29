@@ -53,13 +53,13 @@ class TestOnlineDPOTrainer(TrlTestCase):
             learning_rate=5.0e-7,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
         trainer = OnlineDPOTrainer(
             model=self.model,
             reward_funcs=self.reward_model,
             args=training_args,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             processing_class=self.tokenizer,
             reward_processing_classes=self.reward_tokenizer,
         )
@@ -75,13 +75,13 @@ class TestOnlineDPOTrainer(TrlTestCase):
             learning_rate=5.0e-7,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = OnlineDPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=self.reward_model,
             args=training_args,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             processing_class=self.tokenizer,
             reward_processing_classes=self.reward_tokenizer,
         )
@@ -97,14 +97,14 @@ class TestOnlineDPOTrainer(TrlTestCase):
             learning_rate=5.0e-7,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = OnlineDPOTrainer(
             model=self.model,
             ref_model=self.ref_model,
             reward_funcs=self.reward_model,
             args=training_args,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             processing_class=self.tokenizer,
             reward_processing_classes=self.reward_tokenizer,
         )
@@ -120,7 +120,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         with pytest.raises(ValueError):
             OnlineDPOTrainer(
@@ -128,7 +128,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
                 ref_model=self.model,  # ref_model can't be the same as model
                 reward_funcs=self.reward_model,
                 args=training_args,
-                train_dataset=dummy_dataset,
+                train_dataset=dataset,
                 processing_class=self.tokenizer,
                 reward_processing_classes=self.reward_tokenizer,
             )
@@ -143,13 +143,13 @@ class TestOnlineDPOTrainer(TrlTestCase):
             learning_rate=5.0e-7,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = OnlineDPOTrainer(
             model=self.model,
             reward_funcs=self.reward_model,
             args=training_args,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             processing_class=self.tokenizer,
             reward_processing_classes=self.reward_tokenizer,
             peft_config=lora_config,
@@ -169,14 +169,14 @@ class TestOnlineDPOTrainer(TrlTestCase):
             learning_rate=5.0e-7,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = OnlineDPOTrainer(
             model=self.model,
             ref_model=self.ref_model,
             reward_funcs=self.reward_model,
             args=training_args,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             processing_class=self.tokenizer,
             reward_processing_classes=self.reward_tokenizer,
             peft_config=lora_config,
@@ -211,13 +211,13 @@ class TestOnlineDPOTrainer(TrlTestCase):
             vllm_gpu_memory_utilization=0.2,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
         trainer = OnlineDPOTrainer(
             model=model,
             reward_funcs=self.reward_model,
             args=training_args,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             processing_class=tokenizer,
             reward_processing_classes=self.reward_tokenizer,
         )
@@ -253,13 +253,13 @@ class TestOnlineDPOTrainer(TrlTestCase):
             repetition_penalty=1.1,
             max_new_tokens=32,
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = OnlineDPOTrainer(
             model=model,
             reward_funcs=self.reward_model,
             args=training_args,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             processing_class=tokenizer,
             reward_processing_classes=self.reward_tokenizer,
         )
@@ -328,13 +328,13 @@ class TestOnlineDPOTrainer(TrlTestCase):
             generation_kwargs={"do_sample": False},
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = OnlineDPOTrainer(
             model=self.model,
             reward_funcs=self.reward_model,
             args=training_args,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             processing_class=self.tokenizer,
             reward_processing_classes=self.reward_tokenizer,
         )
@@ -365,13 +365,13 @@ class TestOnlineDPOTrainer(TrlTestCase):
             reward_weights=[0.7, 0.3],
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
         trainer = OnlineDPOTrainer(
             model=self.model,
             reward_funcs=[simple_reward_func, simple_reward_func],
             args=training_args,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             processing_class=self.tokenizer,
         )
         trainer.train()

@@ -97,7 +97,7 @@ class TestNashMDTrainer(TrlTestCase):
             learning_rate=9e-1,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
         trainer = NashMDTrainer(
             model=self.model,
@@ -105,7 +105,7 @@ class TestNashMDTrainer(TrlTestCase):
             reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
         )
 
         trainer.train()
@@ -122,14 +122,14 @@ class TestNashMDTrainer(TrlTestCase):
             learning_rate=5.0e-7,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = NashMDTrainer(
             model=self.model,
             reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             peft_config=lora_config,
         )
 
@@ -147,7 +147,7 @@ class TestNashMDTrainer(TrlTestCase):
             learning_rate=5.0e-7,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = NashMDTrainer(
             model=self.model,
@@ -155,7 +155,7 @@ class TestNashMDTrainer(TrlTestCase):
             reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             peft_config=lora_config,
         )
 
@@ -178,7 +178,7 @@ class TestNashMDTrainer(TrlTestCase):
             report_to="none",
             remove_unused_columns=False,  # Important for the dummy dataset
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")["train"]
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")["train"]
 
         trainer = NashMDTrainer(
             model=peft_model_instance,  # Pass the already PEFT model
@@ -186,7 +186,7 @@ class TestNashMDTrainer(TrlTestCase):
             reward_funcs=self.reward_model,  # To trigger GeometricMixtureWrapper path
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             # peft_config is not passed, as model is already PEFT
         )
 
