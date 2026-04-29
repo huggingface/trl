@@ -22,11 +22,12 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.types
-from datasets import Dataset, DatasetDict, IterableDatasetDict
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from transformers import PreTrainedTokenizerBase, ProcessorMixin
 
 
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
+IterableDatasetType = TypeVar("IterableDatasetType", IterableDataset, IterableDatasetDict)
 
 
 def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | None = None) -> list[dict[str, Any]]:
@@ -407,22 +408,22 @@ def _unpair_row(examples: list[dict[str, list[dict[str, str]]]]) -> list[dict[st
 
 
 def unpair_preference_dataset(
-    dataset: DatasetType, num_proc: int | None = None, desc: str | None = None
-) -> DatasetType:
-    r"""
+    dataset: DatasetType | IterableDatasetType, **map_kwargs
+) -> DatasetType | IterableDatasetType:
+    # docstyle-ignore
+    """
     Unpair a preference dataset.
 
     Args:
-        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
-        num_proc (`int`, *optional*):
-            Number of processes to use for processing the dataset.
-        desc (`str`, *optional*):
-            Meaningful description to be displayed alongside with the progress bar while mapping examples.
+        **map_kwargs (`dict`, *optional*):
+            Additional keyword arguments to pass to the dataset's map method when unpairing preferences.
 
     Returns:
-        [`~datasets.Dataset`]: The unpaired preference dataset.
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]:
+            The unpaired preference dataset.
 
     Example:
 
@@ -446,7 +447,7 @@ def unpair_preference_dataset(
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
     """
-    return dataset.map(_unpair_row, batched=True, remove_columns=["chosen", "rejected"], num_proc=num_proc, desc=desc)
+    return dataset.map(_unpair_row, batched=True, remove_columns=["chosen", "rejected"], **map_kwargs)
 
 
 def maybe_unpair_preference_dataset(

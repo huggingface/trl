@@ -177,9 +177,8 @@ class TestGRPORolloutDispatch:
         trainer.processing_class = SimpleNamespace(
             batch_decode=MagicMock(return_value=["decoded"]),
         )
+        trainer._tokenizer = SimpleNamespace(eos_token_id=2, pad_token_id=0)
         trainer.tools = None
-        trainer.eos_token_id = 2
-        trainer.pad_token_id = 0
         trainer._metrics = {
             "train": {
                 "num_tokens": [],
@@ -1935,6 +1934,13 @@ class TestGRPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",

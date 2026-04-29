@@ -404,8 +404,24 @@ class RewardTrainer(_BaseTrainer):
         else:
             added_tokens = []
 
-        # PEFT configuration and model wrapping
+        # PEFT
         if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            if is_peft_model(model):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                    "with the new `peft_config` to the trainer."
+                )
             if added_tokens:
                 # Ensure that the added tokens are trainable
                 if peft_config.trainable_token_indices is None:
@@ -414,7 +430,6 @@ class RewardTrainer(_BaseTrainer):
                     peft_config.trainable_token_indices["embed_tokens"] = added_tokens
                 else:
                     peft_config.trainable_token_indices["embed_tokens"].extend(added_tokens)
-
                 # Ensure that the lm_head is trainable
                 if peft_config.modules_to_save is None or "lm_head" not in peft_config.modules_to_save:
                     logger.warning(
@@ -428,16 +443,7 @@ class RewardTrainer(_BaseTrainer):
                         peft_config.modules_to_save = ["lm_head"]
                     else:
                         peft_config.modules_to_save.append("lm_head")
-
-        if is_peft_available() and is_peft_model(model) and peft_config is not None:
-            raise ValueError(
-                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
-                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
-                "with the new `peft_config` to the trainer."
-            )
-
-        # Create PEFT model
-        if peft_config is not None:
+            # Create PEFT model
             model = get_peft_model(model, peft_config)
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
@@ -559,7 +565,7 @@ class RewardTrainer(_BaseTrainer):
 
         with PartialState().main_process_first():
             if not is_processed:
-                # Add EOS token to the end of the sequences if needed
+                # Add EOS token if needed: non-conversational only
                 first_example = next(iter(dataset))
                 if not is_conversational(first_example):
                     if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`

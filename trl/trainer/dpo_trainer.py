@@ -557,24 +557,39 @@ class DPOTrainer(_BaseTrainer):
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
-            tokenizer = processing_class.tokenizer
+            self._tokenizer = processing_class.tokenizer
             self._is_vlm = True
         elif isinstance(processing_class, PreTrainedTokenizerBase):
-            tokenizer = processing_class
+            self._tokenizer = processing_class
             self._is_vlm = False
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        if is_peft_available() and is_peft_model(model) and peft_config is not None:
-            raise ValueError(
-                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
-                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
-                "with the new `peft_config` to the trainer."
-            )
-        if is_peft_available() and is_peft_model(model) and ref_model is None:
+        # PEFT
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            if is_peft_model(model):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                    "with the new `peft_config` to the trainer."
+                )
+            # Create PEFT model
+            model = get_peft_model(model, peft_config)
+
+        elif is_peft_available() and is_peft_model(model) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during DPO training.
             model.add_adapter("ref", model.peft_config["default"])
@@ -583,10 +598,6 @@ class DPOTrainer(_BaseTrainer):
                     ref_name = name.replace(".default.", ".ref.")
                     ref_param = model.get_parameter(ref_name)
                     ref_param.data.copy_(param.data)
-
-        # Create PEFT model
-        if peft_config is not None:
-            model = get_peft_model(model, peft_config)
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
@@ -629,16 +640,16 @@ class DPOTrainer(_BaseTrainer):
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
-            pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
-            if pad_token not in tokenizer.get_vocab():
+            pad_token = args.pad_token or self._tokenizer.pad_token or self._tokenizer.eos_token
+            if pad_token not in self._tokenizer.get_vocab():
                 raise ValueError(
                     f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
-            tokenizer.pad_token = pad_token
+            self._tokenizer.pad_token = pad_token
             data_collator = DataCollatorForPreference(
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=self._tokenizer.pad_token_id,
                 max_length=args.max_length,
                 truncation_mode=args.truncation_mode,
                 pad_to_multiple_of=args.pad_to_multiple_of,
@@ -880,7 +891,7 @@ class DPOTrainer(_BaseTrainer):
                     map_kwargs["desc"] = f"Extracting prompt from {dataset_name} dataset"
                 dataset = dataset.map(extract_prompt, **map_kwargs)
 
-            # Apply the chat template if needed
+            # Add EOS token if needed: non-conversational only
             first_example = next(iter(dataset))
             if not is_conversational(first_example):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -893,8 +904,7 @@ class DPOTrainer(_BaseTrainer):
                         example["rejected"] = example["rejected"] + eos_token
                     return example
 
-                eos_token = processing_class.tokenizer.eos_token if self._is_vlm else processing_class.eos_token
-                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": eos_token}, **map_kwargs)
+                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": self._tokenizer.eos_token}, **map_kwargs)
 
             # Tokenize the dataset
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -1383,8 +1393,14 @@ class DPOTrainer(_BaseTrainer):
         # Log the metrics
         # Entropy
         per_token_entropy = entropy_from_logits(shift_logits.detach())
-        entropy = per_token_entropy[shift_completion_mask.bool()].mean()
-        entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
+        mask = shift_completion_mask
+        entropy_sum = (per_token_entropy * mask).sum()
+        total_tokens = mask.sum()
+
+        # Gather counts across ranks and weight-average
+        entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+        total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
+        entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
         self._metrics[mode]["entropy"].append(entropy)
 
         # Number of tokens

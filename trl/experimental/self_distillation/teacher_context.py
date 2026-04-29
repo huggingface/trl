@@ -80,6 +80,6 @@ class PromptTokenizer:
         prompt_ids = [torch.tensor(ids, device=self.trainer.accelerator.device) for ids in prompt_ids]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
         return TokenizedPromptBatch(
-            prompt_ids=pad(prompt_ids, padding_value=self.trainer.pad_token_id, padding_side="left"),
+            prompt_ids=pad(prompt_ids, padding_value=self.trainer._tokenizer.pad_token_id, padding_side="left"),
             prompt_mask=pad(prompt_mask, padding_value=0, padding_side="left"),
         )
