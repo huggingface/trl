@@ -358,6 +358,13 @@ for model_id, model_class, dtype in [
     }
     kwargs = {}
 
+    if model_id == "google/gemma-3-4b-it":
+        # Gemma3 SigLIP processes images at 896×896 → 4,096 patches, producing 1 GB+ attention matrices per layer
+        # during training. Use 224×224 → 256 patches instead; this matches mm_tokens_per_image=256, so the
+        # projector's AvgPool2d degenerates to kernel_size=1 (identity) and memory stays manageable.
+        vision_config["image_size"] = 224
+        processor.image_processor.size = {"height": 224, "width": 224}
+
     if issubclass(model_class.config_class, (Qwen2VLConfig, Qwen2_5_VLConfig)):
         text_config["rope_scaling"] = {"type": "default", "mrope_section": [1, 1], "rope_type": "default"}
         vision_config["depth"] = 2
