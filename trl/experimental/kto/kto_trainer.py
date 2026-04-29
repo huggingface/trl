@@ -477,7 +477,7 @@ class KTOTrainer(_BaseTrainer):
                     "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
                     "`precompute_ref_log_probs=False`."
                 )
-            if self.is_peft_model:
+            if is_peft_model(self.model):
                 raise ValueError(
                     "You cannot use `use_liger_kernel=True` with Peft models. Please set `use_liger_kernel=False`."
                 )
@@ -676,7 +676,7 @@ class KTOTrainer(_BaseTrainer):
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
-        if self.is_peft_model:
+        if is_peft_model(self.model):
             model = self.accelerator.unwrap_model(self.model)
             with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
                 yield
