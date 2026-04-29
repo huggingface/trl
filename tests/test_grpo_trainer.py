@@ -947,9 +947,9 @@ class TestGRPOTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
             new_ref_param = trainer.ref_model.get_parameter(n)
-            assert not torch.equal(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
+            assert not torch.allclose(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
 
     def test_train_beta_non_zero(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

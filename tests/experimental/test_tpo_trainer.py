@@ -128,7 +128,7 @@ class TestTPOTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize("loss_type", ["sigmoid", "hinge", "ipo", "tpo-l"])
     def test_train_loss_types(self, loss_type):
@@ -160,7 +160,7 @@ class TestTPOTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_conversational(self):
         # Get the dataset and synthesize a reference (gold) completion
@@ -187,7 +187,7 @@ class TestTPOTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_without_nll(self):
         # Setting tpo_alpha=0.0 disables the NLL term, skips the corresponding cross-entropy, and also drops the
@@ -222,7 +222,7 @@ class TestTPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_implicit_prompt(self):
         # Implicit-prompt variant: no `prompt` column, the prompt is embedded in `chosen`/`rejected` and (for TPO)
@@ -251,7 +251,7 @@ class TestTPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_implicit_prompt_mismatched_reference_raises(self):
         # When the dataset has no `prompt` column and the `reference` completion does not share the implicit
@@ -310,4 +310,4 @@ class TestTPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             if "lora" in n:
                 new_param = trainer.model.get_parameter(n)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."

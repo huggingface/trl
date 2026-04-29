@@ -49,4 +49,4 @@ class TestMiniLLMTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."

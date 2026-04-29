@@ -145,7 +145,7 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize(
         "config_name",
@@ -175,7 +175,7 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_model(self):
         model = AutoModelForSequenceClassification.from_pretrained(
@@ -198,7 +198,7 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_from_sequence_classification_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
@@ -219,7 +219,7 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_model_dtype(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
@@ -251,7 +251,7 @@ class TestRewardTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             # Check the torch dtype
             assert new_param.dtype == torch.float16
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
     def test_train_dense_with_peft_config(self):
@@ -280,9 +280,9 @@ class TestRewardTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
     def test_train_moe_with_peft_config(self):
@@ -311,9 +311,9 @@ class TestRewardTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
     def test_train_peft_model(self):
@@ -344,9 +344,9 @@ class TestRewardTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_dense_with_peft_config`, since gradient checkpointing is
     # enabled by default in `RewardTrainer`. We keep it as a regression guard: if the default ever changes, we still
@@ -378,9 +378,9 @@ class TestRewardTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize("use_reentrant", [True, False])
     @require_peft
@@ -415,9 +415,9 @@ class TestRewardTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize(
         "chosen_column,rejected_column,expect_deprecation_warning",
@@ -461,7 +461,7 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_iterable_dataset(self):
         dataset = load_dataset(
@@ -484,7 +484,7 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
@@ -528,7 +528,7 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_set_chat_template_from_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
@@ -555,7 +555,7 @@ class TestRewardTrainer(TrlTestCase):
             # this parameter.
             if n == "gpt_neox.final_layer_norm.bias":
                 continue
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_set_chat_template_from_path(self, lazy_shared_datadir):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
@@ -586,7 +586,7 @@ class TestRewardTrainer(TrlTestCase):
             # this parameter.
             if n == "gpt_neox.final_layer_norm.bias":
                 continue
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
         # Check that the template saved in the output directory is the same as the one used for training
         template_path = pathlib.Path(self.tmp_dir) / "checkpoint-9" / "chat_template.jinja"
@@ -617,7 +617,7 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_toolcall_data_as_json(self):
         # Tabular backends (Arrow/Parquet) can insert `None` for missing keys in nested structures.
@@ -647,7 +647,7 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_eval(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference")
@@ -725,7 +725,7 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize("use_reentrant", [True, False])
     def test_train_with_gradient_checkpointing_reentrant(self, use_reentrant):
@@ -752,7 +752,7 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_tag_added(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
@@ -803,7 +803,7 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_center_rewards_coefficient(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
@@ -824,4 +824,4 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
