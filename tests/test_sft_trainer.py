@@ -26,7 +26,13 @@ from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from packaging.version import Version
 from packaging.version import parse as parse_version
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    TrainingArguments,
+)
 from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
@@ -2492,6 +2498,13 @@ _CHUNKED_CE_MODEL_IDS = [
 ]
 
 
+_CHUNKED_CE_VLM_MODEL_IDS = [
+    "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+    "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+    "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+]
+
+
 class TestChunkedCrossEntropyLoss:
     B, S, H, V = 2, 8, 4, 16
     CHUNK_SIZE = 3  # deliberately small to force multiple chunks and a partial final chunk
@@ -2670,6 +2683,22 @@ class TestPatchChunkedCELMHead:
         num_items = int((labels[..., 1:] != -100).sum())
         return ref_model, chunked_model, input_ids, labels, num_items
 
+    def _setup_vlm(self, model_id):
+        """VLM equivalent of `_setup`: load via `AutoModelForImageTextToText`, patch with `is_vlm=True`, and feed
+        text-only inputs (no `pixel_values`) — the multimodal wrapper still runs the embedding lookup + text decoder,
+        which is enough to exercise the patched forward's `self.base_model(...)` routing and `text_config` lookups."""
+        ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE, is_vlm=True)
+
+        B, S = 2, 16
+        vocab_size = ref_model.config.text_config.vocab_size
+        input_ids = torch.randint(0, vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+        return ref_model, chunked_model, input_ids, labels, num_items
+
     @pytest.mark.parametrize("model_id", _CHUNKED_CE_MODEL_IDS)
     def test_forward_matches_reference(self, model_id):
         ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
@@ -2727,6 +2756,42 @@ class TestPatchChunkedCELMHead:
             chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
         )
         # Base decoder gradients
+        for name, ref_param in ref_model.model.named_parameters():
+            if ref_param.grad is None:
+                continue
+            chunked_param = chunked_model.model.get_parameter(name)
+            torch.testing.assert_close(
+                chunked_param.grad, ref_param.grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+            )
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_CE_VLM_MODEL_IDS)
+    def test_forward_matches_reference_vlm(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        assert out.logits is None
+        assert out.num_correct_tokens is not None and out.num_correct_tokens.item() >= 0
+        assert out.entropy_sum is not None and out.entropy_sum.item() >= 0.0
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_CE_VLM_MODEL_IDS)
+    def test_backward_matches_reference_vlm(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        ref_out.loss.backward()
+
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        out.loss.backward()
+
+        # lm_head gradient
+        torch.testing.assert_close(
+            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
+        )
+        # Multimodal-wrapper gradients (covers both vision tower and inner text decoder).
         for name, ref_param in ref_model.model.named_parameters():
             if ref_param.grad is None:
                 continue
