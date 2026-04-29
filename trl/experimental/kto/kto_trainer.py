@@ -331,8 +331,6 @@ class KTOTrainer(_BaseTrainer):
                 "Please use a causal LM (e.g., GPT, Llama, Mistral) instead of an encoder-decoder model (e.g., T5, BART)."
             )
 
-        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
-
         if args.max_length is None:
             logger.warning(
                 "When using DataCollatorForUnpairedPreference, you should set `max_length` in the KTOTrainer's init"
