@@ -2732,8 +2732,8 @@ class TestPatchChunkedCELMHead:
     def test_num_valid_tokens_with_prompt_learning_peft(self):
         """For prompt-learning PEFT (PromptTuning, P-Tuning), `PeftModel.forward` prepends `-100`-padded virtual
         tokens before delegating into the patched inner forward. The patched output's `num_valid_tokens` must reflect
-        the padded labels — when original `label[0] != -100`, it counts as a valid target paired with the last
-        virtual token's hidden state, so it must be included in the metric denominator to keep accuracy ≤ 1."""
+        the padded labels — when original `label[0] != -100`, it counts as a valid target paired with the last virtual
+        token's hidden state, so it must be included in the metric denominator to keep accuracy ≤ 1."""
         base = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32
         ).to(torch_device)
