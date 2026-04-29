@@ -685,7 +685,7 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
                 tool_call["arguments"] = {}
 
 
-def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
+def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int]) -> dict:
     r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
 
@@ -696,7 +696,7 @@ def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
     ensure all required fields exist.
 
     Args:
-        tokenizer (`PreTrainedTokenizer`):
+        tokenizer (`PreTrainedTokenizerBase`):
             Tokenizer with a `parse_response()` method.
         ids (`list[int]`):
             List of token sequences.
