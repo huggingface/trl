@@ -432,7 +432,7 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
             new_ref_param = trainer.ref_model.get_parameter(n)
-            torch.testing.assert_close(param, new_ref_param), f"Reference model parameter {n} has changed"
+            torch.testing.assert_close(param, new_ref_param, msg=f"Reference model parameter {n} has changed")
 
     def test_train_with_sync_ref_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -524,7 +524,7 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -559,7 +559,7 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -592,7 +592,7 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -631,7 +631,7 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -1072,7 +1072,7 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n.startswith("model.visual"):
-                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is updated"
+                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
             else:
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
@@ -1142,7 +1142,7 @@ class TestDPOTrainer(TrlTestCase):
                 param = param.float()
 
             if "lora" not in n:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "lora" in n:  # We expect the peft params to be different
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
             else:
