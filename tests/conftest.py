@@ -13,10 +13,23 @@
 # limitations under the License.
 
 import gc
+import os
+import sys
 from functools import wraps
 
 import pytest
 import torch
+
+
+def pytest_runtest_logstart(nodeid, location):
+    """Print PID → xdist worker → test mapping to stderr before each test.
+
+    When a CUDA OOM error shows process IDs, search the CI log for the PID to identify which worker and test was
+    responsible for the large allocation.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+    sys.stderr.write(f"[PID={os.getpid()} worker={worker}] STARTED {nodeid}\n")
+    sys.stderr.flush()
 
 
 # ============================================================================
