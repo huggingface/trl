@@ -296,7 +296,10 @@ class KTOTrainer(_BaseTrainer):
                     "and unload the existing adapter, save the resulting base model, and then pass that base model along "
                     "with the new `peft_config` to the trainer."
                 )
-        if is_peft_available() and isinstance(model, PeftModel) and ref_model is None:
+            # Create PEFT model
+            model = get_peft_model(model, peft_config)
+
+        elif is_peft_available() and isinstance(model, PeftModel) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during KTO training.
             model.add_adapter("ref", model.peft_config["default"])
@@ -305,10 +308,6 @@ class KTOTrainer(_BaseTrainer):
                     ref_name = name.replace(".default.", ".ref.")
                     ref_param = model.get_parameter(ref_name)
                     ref_param.data.copy_(param.data)
-
-        # Create PEFT model
-        if peft_config is not None:
-            model = get_peft_model(model, peft_config)
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
