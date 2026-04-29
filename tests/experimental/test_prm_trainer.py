@@ -267,7 +267,7 @@ class TestPRMTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+                assert not torch.equal(param, new_param)
 
     def test_train_full_pretokenized(self):
         dummy_dataset = Dataset.from_dict(
@@ -320,7 +320,7 @@ class TestPRMTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+                assert not torch.equal(param, new_param)
 
     @require_peft
     def test_train_lora(self):
@@ -360,7 +360,7 @@ class TestPRMTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param, atol=1e-12, rtol=1e-12)
+            assert not torch.equal(param, new_param)
 
         # Check that the non trainable parameters have not changed
         for n, param in previous_non_trainable_params.items():

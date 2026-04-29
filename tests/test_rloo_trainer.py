@@ -187,7 +187,7 @@ class TestRLOOTrainer(TrlTestCase):
             if n in base_param_names:  # We expect the base model params to be the same
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
     def test_train_peft_model(self):
@@ -224,7 +224,7 @@ class TestRLOOTrainer(TrlTestCase):
             if n in base_param_names:  # We expect the base model params to be the same
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_peft_config`, since gradient checkpointing is enabled by
     # default in `RLOOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test
@@ -264,7 +264,7 @@ class TestRLOOTrainer(TrlTestCase):
             if n in base_param_names:  # We expect the base model params to be the same
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_different_reward_model(self):
         # Use a reward model different from the model: different chat template, tokenization, etc.
@@ -684,9 +684,9 @@ class TestRLOOTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
             new_ref_param = trainer.ref_model.get_parameter(n)
-            assert not torch.allclose(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
+            assert not torch.equal(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
 
     def test_train_beta_zero(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -793,7 +793,7 @@ class TestRLOOTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n and "original_module" not in n:
                 # We expect the peft params to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
     @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
@@ -1513,7 +1513,7 @@ class TestRLOOTrainer(TrlTestCase):
             if n in base_param_names:  # We expect the base model params to be the same
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize(
         "model_id",

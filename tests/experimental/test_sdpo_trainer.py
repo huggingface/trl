@@ -201,7 +201,7 @@ class TestSDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Parameter {n} has not changed."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_without_successful_rollouts(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
