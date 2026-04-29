@@ -212,30 +212,36 @@ def _chunked_cross_entropy_loss(
     return loss, correct, entropy_sum, n_valid_tensor
 
 
-def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
+def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: bool = False) -> None:
     """
-    Patch a causal LM so `forward` computes the language modeling loss via [`_chunked_cross_entropy_loss`].
+    Patch `model.forward` to compute the LM loss via [`_chunked_cross_entropy_loss`].
 
-    When `labels` (or pre-shifted `shift_labels`, for CP/SP) are provided, the patched forward calls
-    `model.get_decoder()` directly, drops positions with `labels == -100` before the `lm_head` matmul, and computes the
-    cross-entropy in chunks of `chunk_size` valid tokens. It returns a [`_ChunkedCELMHeadOutput`] with `loss` set,
-    `logits` set to `None`, and `num_correct_tokens` / `entropy_sum` / `num_valid_tokens` populated over non-ignored
-    tokens. For MoE models with `output_router_logits=True`, the load-balancing auxiliary loss is added with the same
-    coefficient and formula as the model's own forward, keeping the chunked path numerically equivalent to the
-    reference.
+    When `labels` (or pre-shifted `shift_labels`, for CP/SP) are provided, the patched forward runs the decoder up to
+    `last_hidden_state` (skipping the `lm_head` matmul), drops `labels == -100` positions, and computes the
+    cross-entropy in chunks of `chunk_size` valid tokens. Returns a [`_ChunkedCELMHeadOutput`] with `loss` set,
+    `logits=None`, and `num_correct_tokens` / `entropy_sum` / `num_valid_tokens` over non-ignored tokens. For MoE
+    models (`output_router_logits=True`), the load-balancing aux loss is added with the same coefficient and formula as
+    the model's reference forward.
 
-    With both `labels` and `shift_labels` set to `None` the original forward runs unchanged, so generation and
-    labels-free evaluation preserve any per-model logits post-processing (e.g. `logit_scale`,
-    `final_logit_softcapping`).
+    Without labels, the original forward runs unchanged — generation and labels-free eval preserve any per-model logits
+    post-processing (`logit_scale`, `final_logit_softcapping`, `logits_to_keep` slicing).
 
-    For PEFT, pass the inner causal LM (`peft_model.get_base_model()`) rather than the `PeftModel` wrapper, so that
-    prompt-learning variants (PromptTuning, PrefixTuning, PTuning) keep their virtual-token injection in
-    `PeftModel.forward` before delegating into the patched forward.
-
-    Not supported yet: VLM / multimodal models whose forward injects visual tokens outside the base decoder.
+    Args:
+        model (`torch.nn.Module`):
+            Model to patch. For PEFT, pass `peft_model.get_base_model()` rather than the `PeftModel` wrapper, so
+            prompt-learning variants (PromptTuning, PrefixTuning, PTuning) keep their virtual-token injection in
+            `PeftModel.forward` before delegating into the patched forward.
+        chunk_size (`int`):
+            Number of valid tokens processed per CE chunk.
+        is_vlm (`bool`):
+            Set to `True` for VLMs. Only used to read `logit_scale` / `final_logit_softcapping` / `output_router_logits`
+            from `model.config.text_config` instead of the top-level config.
     """
-    final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
-    logit_scale = getattr(model.config, "logit_scale", 1.0)
+    # VLM scaling configs (`logit_scale`, `final_logit_softcapping`, MoE `output_router_logits`) live on `text_config`;
+    # text-only models keep them on the top-level config.
+    text_config = model.config.text_config if is_vlm else model.config
+    final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
+    logit_scale = getattr(text_config, "logit_scale", 1.0)
     original_forward = model.forward
 
     def _chunked_ce_forward(
@@ -257,13 +263,22 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
             return original_forward(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 
         if output_router_logits is None:
-            output_router_logits = getattr(self.config, "output_router_logits", False)
+            output_router_logits = getattr(text_config, "output_router_logits", False)
 
         kwargs.pop("use_cache", None)
         decoder_kwargs = {}
         if output_router_logits:
             decoder_kwargs["output_router_logits"] = True
-        outputs: BaseModelOutputWithPast = self.get_decoder()(
+        # `self.base_model` resolves to `getattr(self, self.base_model_prefix, self)`, which gives:
+        # - VLMs: the multimodal wrapper (`self.model`, e.g. `LlavaModel`), so vision-token injection runs before the
+        #   text decoder.
+        # - Modern text-only LMs (Llama / Qwen / Mistral / Gemma / ...): the inner decoder (`self.model`).
+        # - Older text-only LMs (GPT-2 / OPT / GPT-Neo / ...): the inner decoder under its family-specific name
+        #   (`self.transformer`, etc.).
+        # Note that `self.get_decoder()` would skip injection and feed image-placeholder IDs into the text stack.
+        # In every case the returned module produces `last_hidden_state` without applying `lm_head`, so chunked CE
+        # still avoids the (B, S, V) materialization.
+        outputs: BaseModelOutputWithPast = self.base_model(
             input_ids=input_ids, attention_mask=attention_mask, use_cache=False, **decoder_kwargs, **kwargs
         )
         hidden_states = outputs.last_hidden_state
@@ -1228,8 +1243,6 @@ class SFTTrainer(_BaseTrainer):
                 # Same math as `"nll"` but the `lm_head` matmul is skipped on ignored tokens and the CE is computed in
                 # chunks of tokens. Implemented by patching the model's forward before `super().__init__` so accelerate
                 # wraps the patched forward.
-                if self._is_vlm:
-                    raise NotImplementedError("`loss_type='chunked_nll'` is not supported for VLM models yet.")
                 # For PEFT, patch the inner causal LM rather than the `PeftModel` wrapper. LoRA / IA³ /
                 # `modules_to_save` adapters live in the module tree, so they're hit even when we bypass
                 # `PeftModel.forward`. Prompt-learning variants need `PeftModel.forward` to run first (to inject
@@ -1248,7 +1261,7 @@ class SFTTrainer(_BaseTrainer):
                             "this is a real use case for you, please open an issue at "
                             "https://github.com/huggingface/trl/issues."
                         )
-                _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE)
+                _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
             else:
                 raise ValueError(
                     f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
