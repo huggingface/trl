@@ -656,7 +656,7 @@ def get_training_chat_template(
     if processing_class.chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
 
-    if tokenizer.chat_template == qwen3_6_chat_template:
+    if processing_class.chat_template == qwen3_6_chat_template:
         return qwen3_6_training_chat_template
 
     raise ValueError(
