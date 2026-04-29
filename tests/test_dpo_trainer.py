@@ -478,7 +478,7 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
             new_ref_param = trainer.ref_model.get_parameter(n)
-            torch.testing.assert_close(param, new_ref_param), f"Reference model parameter {n} has changed"
+            torch.testing.assert_close(param, new_ref_param, msg=f"Reference model parameter {n} has changed")
 
     def test_training_with_sync_ref_model(self):
         # Get the dataset
@@ -1222,7 +1222,7 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n.startswith("model.visual"):
-                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is updated"
+                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
             else:
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
