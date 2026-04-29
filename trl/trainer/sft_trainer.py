@@ -1053,7 +1053,7 @@ class SFTTrainer(_BaseTrainer):
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_available() and is_peft_model(model) and args.gradient_checkpointing:
+        if is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -1069,7 +1069,7 @@ class SFTTrainer(_BaseTrainer):
         # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
         # input. We store the number of these tokens so we can account for them correctly when calculating accuracy.
         self.num_virtual_tokens = 0
-        if is_peft_available() and is_peft_model(model):
+        if is_peft_model(model):
             if model.active_adapter in model.peft_config:
                 peft_model_config = model.peft_config[model.active_adapter]
                 self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", 0)
