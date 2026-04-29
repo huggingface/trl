@@ -381,7 +381,7 @@ class TestBCOTrainer(TrlTestCase):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         training_args = BCOConfig(
             output_dir=self.tmp_dir,
@@ -393,7 +393,7 @@ class TestBCOTrainer(TrlTestCase):
             model=model,
             args=training_args,
             processing_class=tokenizer,
-            train_dataset=dataset["train"],
+            train_dataset=dataset,
             peft_config=lora_config,
         )
 

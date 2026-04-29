@@ -29,8 +29,7 @@ class TestLogCompletionsCallback(TrlTestCase):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer.pad_token = self.tokenizer.eos_token
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
-        dataset["train"] = dataset["train"].select(range(8))
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train[:8]")
 
         def tokenize_function(examples):
             out = self.tokenizer(examples["prompt"], padding="max_length", max_length=16, truncation=True)

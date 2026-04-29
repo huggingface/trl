@@ -243,13 +243,13 @@ class TestGKDTrainer(TrlTestCase):
             report_to="none",
             use_liger_kernel=True,
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=training_args,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dummy_dataset,
             processing_class=self.tokenizer,
         )
 

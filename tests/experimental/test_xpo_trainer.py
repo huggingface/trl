@@ -47,7 +47,7 @@ class TestXPOTrainer(TrlTestCase):
             learning_rate=9e-1,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
         trainer = XPOTrainer(
             model=self.model,
@@ -55,7 +55,7 @@ class TestXPOTrainer(TrlTestCase):
             reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dummy_dataset,
         )
 
         trainer.train()
@@ -72,14 +72,14 @@ class TestXPOTrainer(TrlTestCase):
             learning_rate=5.0e-7,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = XPOTrainer(
             model=self.model,
             reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dummy_dataset,
             peft_config=lora_config,
         )
 
@@ -97,7 +97,7 @@ class TestXPOTrainer(TrlTestCase):
             learning_rate=5.0e-7,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = XPOTrainer(
             model=self.model,
@@ -105,7 +105,7 @@ class TestXPOTrainer(TrlTestCase):
             reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dummy_dataset,
             peft_config=lora_config,
         )
 

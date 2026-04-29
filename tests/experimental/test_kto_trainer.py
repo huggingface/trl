@@ -87,7 +87,7 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         with pytest.raises(ValueError):
             KTOTrainer(
@@ -95,7 +95,7 @@ class TestKTOTrainer(TrlTestCase):
                 ref_model=self.model,  # ref_model can't be the same as model
                 args=training_args,
                 processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
+                train_dataset=dummy_dataset,
             )
 
     def test_tokenize_and_process_tokens(self):
@@ -259,13 +259,13 @@ class TestKTOTrainer(TrlTestCase):
             use_liger_kernel=True,  # Enable Liger kernel
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         trainer = KTOTrainer(
             model=self.model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dummy_dataset,
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
