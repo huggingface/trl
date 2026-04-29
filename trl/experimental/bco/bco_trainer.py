@@ -33,7 +33,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import Accelerator, PartialState, logging
-from accelerate.utils import tqdm
+from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset
 from packaging.version import Version
 from torch import autocast
@@ -484,7 +484,7 @@ class BCOTrainer(_BaseTrainer):
                     f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
                     f"got {type(peft_config).__name__}."
                 )
-            if isinstance(model, PeftModel):
+            if is_peft_model(model):
                 raise ValueError(
                     "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
                     "merge and unload the existing adapter, save the resulting base model, and then pass that base "
