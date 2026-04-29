@@ -345,6 +345,7 @@ for model_id, model_class, dtype in [
     text_config = {
         "num_hidden_layers": 2,
         "hidden_size": 16,
+        "intermediate_size": 32,
         "num_attention_heads": 4,
         "num_key_value_heads": 2,
         "layer_types": None,  # Set it automatically from num_hidden_layers
@@ -352,11 +353,19 @@ for model_id, model_class, dtype in [
     vision_config = {
         "num_hidden_layers": 2,
         "hidden_size": 16,
+        "intermediate_size": 32,
         "num_attention_heads": 4,
         "num_key_value_heads": 2,
         "embed_dim": 64,
     }
     kwargs = {}
+
+    if model_id == "google/gemma-3-4b-it":
+        # Gemma3 SigLIP processes images at 896×896 → 4,096 patches, producing 1 GB+ attention matrices per layer
+        # during training. Use 224×224 → 256 patches instead; this matches mm_tokens_per_image=256, so the
+        # projector's AvgPool2d degenerates to kernel_size=1 (identity) and memory stays manageable.
+        vision_config["image_size"] = 224
+        processor.image_processor.size = {"height": 224, "width": 224}
 
     if issubclass(model_class.config_class, (Qwen2VLConfig, Qwen2_5_VLConfig)):
         text_config["rope_scaling"] = {"type": "default", "mrope_section": [1, 1], "rope_type": "default"}
@@ -396,7 +405,6 @@ for model_id, model_class, dtype in [
         vision_config.pop("embed_dim", None)
         vision_config["depth"] = 2
         vision_config["num_heads"] = 4
-        vision_config["intermediate_size"] = 32
         vision_config["out_hidden_size"] = 16
 
     if issubclass(model_class.config_class, Qwen3_5MoeConfig):
@@ -421,6 +429,9 @@ for model_id, model_class, dtype in [
         config.text_config.num_kv_shared_layers = 0
         config.text_config.global_head_dim = 8
         config.text_config.hidden_size_per_layer_input = 16
+        # position_embedding_size drives a one_hot tensor of shape [batch, patches, 2, position_embedding_size],
+        # which blows up for large images. 64 supports images up to 64×16=1024 px per side — enough for tests.
+        config.vision_config.position_embedding_size = 64
         config.audio_config = None
     else:
         config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
