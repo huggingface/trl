@@ -49,7 +49,7 @@ class SelfDistillationCaptureCallback(TrainerCallback):
 
 
 class TestSDFTTrainer(TrlTestCase):
-    def test_training_rejects_none_privileged_context(self):
+    def test_train_rejects_none_privileged_context(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2."],
@@ -74,7 +74,7 @@ class TestSDFTTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="`privileged_context` must not be None"):
             trainer.train()
 
-    def test_training_with_generate_from_teacher(self):
+    def test_train_with_generate_from_teacher(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
@@ -109,7 +109,7 @@ class TestSDFTTrainer(TrlTestCase):
         assert "Solve 2+2." in capture_callback.captured_generation_prompt_text
         assert "Teacher hint" in capture_callback.captured_generation_prompt_text
 
-    def test_training_with_chat_template_kwargs(self):
+    def test_train_with_chat_template_kwargs(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": [
@@ -152,7 +152,7 @@ class TestSDFTTrainer(TrlTestCase):
         assert capture_callback.captured_generation_prompt_text == expected_prompt
 
     @require_peft
-    def test_training_with_peft_model(self):
+    def test_train_with_peft_model(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
@@ -187,7 +187,7 @@ class TestSDFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     @require_peft
-    def test_training_with_peft_model_and_sync_ref_model(self):
+    def test_train_with_peft_model_and_sync_ref_model(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
@@ -274,7 +274,7 @@ class TestSDFTTrainer(TrlTestCase):
         for key in teacher_state:
             torch.testing.assert_close(teacher_state[key].float(), callback.shadow_weights[key])
 
-    def test_training_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
+    def test_train_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
@@ -308,7 +308,7 @@ class TestSDFTTrainer(TrlTestCase):
 
         assert capture_callback.captured_old_per_token_logps is not None
 
-    def test_training_reuses_buffered_generation_batches(self):
+    def test_train_reuses_buffered_generation_batches(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],

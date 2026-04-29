@@ -73,7 +73,7 @@ class TestKTOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -195,7 +195,7 @@ class TestKTOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -243,7 +243,7 @@ class TestKTOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             if "lora" in n:
                 new_param = trainer.model.get_parameter(n)

@@ -253,7 +253,7 @@ class TestUpdateWithReplayBuffer:
 @pytest.mark.low_priority
 @pytest.mark.parametrize("scale_rewards", ["batch", "group"])
 class TestGRPOWithReplayBufferTrainer(TrlTestCase):
-    def test_training_with_replay_buffer(self, scale_rewards):
+    def test_train_with_replay_buffer(self, scale_rewards):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         # Guarantee that some rewards have 0 std

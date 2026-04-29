@@ -60,11 +60,10 @@ class TestXPOTrainer(TrlTestCase):
 
         trainer.train()
 
-        # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
-    def test_training_with_peft(self):
+    def test_train_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         training_args = XPOConfig(
             output_dir=self.tmp_dir,
@@ -86,11 +85,10 @@ class TestXPOTrainer(TrlTestCase):
 
         trainer.train()
 
-        # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
-    def test_training_with_peft_and_ref_model(self):
+    def test_train_with_peft_and_ref_model(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         training_args = XPOConfig(
             output_dir=self.tmp_dir,
@@ -113,11 +111,10 @@ class TestXPOTrainer(TrlTestCase):
 
         trainer.train()
 
-        # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
-    def test_training_pre_pefted_model_implicit_ref(self):
+    def test_train_pre_pefted_model_implicit_ref(self):
         lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
         peft_model_instance = get_peft_model(self.model, lora_config)
 
