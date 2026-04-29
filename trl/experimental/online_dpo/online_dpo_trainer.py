@@ -60,7 +60,7 @@ from .online_dpo_config import OnlineDPOConfig
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel
+    from peft import PeftConfig
 
 
 if is_sagemaker_mp_enabled():
@@ -282,7 +282,19 @@ class OnlineDPOTrainer(_BaseTrainer):
         self.is_encoder_decoder = model.config.is_encoder_decoder
         self.is_vision_model = model.config.model_type in MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.keys()
 
-        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
+        # PEFT
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+        if peft_config is not None or is_peft_model(model):
             model = prepare_peft_model(model, peft_config, args)
 
         # Enable gradient checkpointing if requested
@@ -349,17 +361,14 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
-            tokenizer = processing_class.tokenizer
+            self._tokenizer = processing_class.tokenizer
         elif isinstance(processing_class, PreTrainedTokenizerBase):
-            tokenizer = processing_class
+            self._tokenizer = processing_class
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        self.pad_token_id = tokenizer.pad_token_id
-        self.eos_token_id = tokenizer.eos_token_id
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
         # Vision tokens for VLM support
         self.image_token_id = getattr(processing_class, "image_token_id", None)
@@ -368,11 +377,11 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Get the image token string for token collapsing
         self.image_token = None
         if self.image_token_id is not None:
-            self.image_token = tokenizer.decode([self.image_token_id])
+            self.image_token = self._tokenizer.decode([self.image_token_id])
 
         # Define the collator if not provided
         if data_collator is None:
-            data_collator = DPODataCollatorWithPadding(pad_token_id=self.pad_token_id)
+            data_collator = DPODataCollatorWithPadding(pad_token_id=self._tokenizer.pad_token_id)
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
@@ -505,9 +514,9 @@ class OnlineDPOTrainer(_BaseTrainer):
             generation_kwargs = {
                 "max_new_tokens": args.max_new_tokens,
                 "do_sample": True,
-                "pad_token_id": self.pad_token_id,
-                "bos_token_id": tokenizer.bos_token_id,
-                "eos_token_id": self.eos_token_id,
+                "pad_token_id": self._tokenizer.pad_token_id,
+                "bos_token_id": self._tokenizer.bos_token_id,
+                "eos_token_id": self._tokenizer.eos_token_id,
                 "temperature": self.temperature,
                 "top_k": self.top_k,
                 "top_p": self.top_p,
@@ -583,8 +592,8 @@ class OnlineDPOTrainer(_BaseTrainer):
         return model
 
     def _generate_vllm(self, prompts, images=None):
-        eos_token_id = self.eos_token_id
-        pad_token_id = self.pad_token_id
+        eos_token_id = self._tokenizer.eos_token_id
+        pad_token_id = self._tokenizer.pad_token_id
 
         # Generate completion_ids and prompt_ids based on mode
         if self.vllm_mode == "server":
@@ -893,8 +902,8 @@ class OnlineDPOTrainer(_BaseTrainer):
     def _generate(self, model, prompts, images=None):
         """Generate completions using the model"""
         device = next(model.parameters()).device
-        eos_token_id = self.eos_token_id
-        pad_token_id = self.pad_token_id
+        eos_token_id = self._tokenizer.eos_token_id
+        pad_token_id = self._tokenizer.pad_token_id
 
         # Apply chat template and tokenize the input
         inputs = [{"prompt": prompt} for prompt in prompts]
@@ -923,9 +932,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                 else:
                     # If the chat template doesn't use the image token, remove all instances
                     if self.vision_end_token_id is not None:
-                        escaped_eoi_token = re.escape(
-                            self.processing_class.tokenizer.decode([self.vision_end_token_id])
-                        )
+                        escaped_eoi_token = re.escape(self._tokenizer.decode([self.vision_end_token_id]))
                         prompts_text = [
                             re.sub(rf"({escaped_img_token})+{escaped_eoi_token}", "", text) for text in prompts_text
                         ]
@@ -1118,7 +1125,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         else:
             prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts, images)
 
-        contain_eos_token = torch.any(completion_ids == self.eos_token_id, dim=-1)
+        contain_eos_token = torch.any(completion_ids == self._tokenizer.eos_token_id, dim=-1)
 
         # Extract vision inputs if available for VLM support
         vision_inputs = None
