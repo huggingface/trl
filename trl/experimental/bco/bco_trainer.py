@@ -555,7 +555,7 @@ class BCOTrainer(_BaseTrainer):
 
         if ref_model:
             self.ref_model = ref_model
-        elif self.is_peft_model or args.precompute_ref_log_probs:
+        elif is_peft_model(model) or args.precompute_ref_log_probs:
             # The `model` with adapters turned off will be used as the reference model
             self.ref_model = None
         else:
@@ -767,7 +767,7 @@ class BCOTrainer(_BaseTrainer):
                 )
 
         if self.ref_model is None:
-            if not (self.is_peft_model or self.precompute_ref_log_probs):
+            if not (is_peft_model(model) or self.precompute_ref_log_probs):
                 raise ValueError(
                     "No reference model and model is not a Peft model. Try setting `precompute_ref_log_probs=True`"
                 )
@@ -939,7 +939,7 @@ class BCOTrainer(_BaseTrainer):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
         with (
             self.accelerator.unwrap_model(self.model).disable_adapter()
-            if self.is_peft_model and not self.ref_adapter_name
+            if is_peft_model(self.model) and not self.ref_adapter_name
             else nullcontext()
         ):
             if self.ref_adapter_name:
