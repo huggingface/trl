@@ -60,7 +60,7 @@ from .online_dpo_config import OnlineDPOConfig
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel
+    from peft import PeftConfig
 
 
 if is_sagemaker_mp_enabled():
@@ -294,7 +294,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                     f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
                     f"got {type(peft_config).__name__}."
                 )
-        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
+        if peft_config is not None or is_peft_model(model):
             model = prepare_peft_model(model, peft_config, args)
 
         # Enable gradient checkpointing if requested

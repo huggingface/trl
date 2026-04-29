@@ -28,6 +28,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
+from accelerate.utils import is_peft_model
 from datasets import Dataset
 from packaging.version import Version
 from torch import autocast
@@ -61,7 +62,7 @@ from .cpo_config import CPOConfig
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
 
 
 if is_wandb_available():
@@ -184,7 +185,7 @@ class CPOTrainer(_BaseTrainer):
                     f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
                     f"got {type(peft_config).__name__}."
                 )
-            if isinstance(model, PeftModel):
+            if is_peft_model(model):
                 raise ValueError(
                     "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
                     "merge and unload the existing adapter, save the resulting base model, and then pass that base "
