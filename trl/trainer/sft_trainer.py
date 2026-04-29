@@ -1235,6 +1235,19 @@ class SFTTrainer(_BaseTrainer):
                 # `PeftModel.forward`. Prompt-learning variants need `PeftModel.forward` to run first (to inject
                 # virtual tokens), then it delegates into the patched inner forward.
                 target = model.get_base_model() if is_peft_model(model) else model
+                # The chunked path reads `lm_head.weight` directly, which would silently drop the adapter delta
+                # (and starve its parameters of gradients) if `lm_head` itself is a PEFT tuner layer.
+                if is_peft_model(model):
+                    from peft.tuners.tuners_utils import BaseTunerLayer
+
+                    if isinstance(target.lm_head, BaseTunerLayer):
+                        raise ValueError(
+                            "`loss_type='chunked_nll'` is not supported when `lm_head` is wrapped by a PEFT "
+                            "adapter (e.g. `target_modules='all-linear'` or explicitly including `'lm_head'`). "
+                            "Either remove `lm_head` from `target_modules`, or switch to `loss_type='nll'`. If "
+                            "this is a real use case for you, please open an issue at "
+                            "https://github.com/huggingface/trl/issues."
+                        )
                 _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE)
             else:
                 raise ValueError(
