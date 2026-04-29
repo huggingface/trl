@@ -234,8 +234,8 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         chunk_size (`int`):
             Number of valid tokens processed per CE chunk.
         is_vlm (`bool`):
-            Set to `True` for VLMs. Only used to read `logit_scale` / `final_logit_softcapping` / `output_router_logits`
-            from `model.config.text_config` instead of the top-level config.
+            Set to `True` for VLMs. Only used to read `logit_scale` / `final_logit_softcapping` /
+            `output_router_logits` from `model.config.text_config` instead of the top-level config.
     """
     # VLM scaling configs (`logit_scale`, `final_logit_softcapping`, MoE `output_router_logits`) live on `text_config`;
     # text-only models keep them on the top-level config.
