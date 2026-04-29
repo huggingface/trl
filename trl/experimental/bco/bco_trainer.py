@@ -65,7 +65,7 @@ from .bco_config import BCOConfig
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
 
 if is_wandb_available():
     import wandb
@@ -549,7 +549,6 @@ class BCOTrainer(_BaseTrainer):
         else:
             self.is_encoder_decoder = args.is_encoder_decoder
 
-        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = model_adapter_name
         self.ref_adapter_name = ref_adapter_name
 
