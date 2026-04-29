@@ -533,7 +533,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -2574,12 +2574,11 @@ class TestPatchChunkedCELMHead:
     CHUNK_SIZE = 5  # small, to exercise the chunk loop
 
     def _setup(self, model_id):
-        ref_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32).to(torch_device)
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32, device_map=torch_device)
         chunked_model = copy.deepcopy(ref_model)
         _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
 
         B, S = 2, 16
-        torch.manual_seed(42)
         input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
         labels[:, :4] = -100  # prompt-like mask
@@ -2610,13 +2609,12 @@ class TestPatchChunkedCELMHead:
         """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
         to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
         ref_model = AutoModelForCausalLM.from_pretrained(
-            model_id, torch_dtype=torch.float32, output_router_logits=True
-        ).to(torch_device)
+            model_id, torch_dtype=torch.float32, output_router_logits=True, device_map=torch_device
+        )
         chunked_model = copy.deepcopy(ref_model)
         _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
 
         B, S = 2, 16
-        torch.manual_seed(42)
         input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
         labels[:, :4] = -100
@@ -2696,14 +2694,13 @@ class TestPatchChunkedCELMHead:
         the unpatched PEFT reference for both LoRA-style (adapters live in the module tree) and prompt-learning
         (`PeftModel.forward` injects virtual tokens, then delegates into the patched inner forward)."""
         base = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32
-        ).to(torch_device)
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32, device_map=torch_device
+        )
         ref_model = get_peft_model(copy.deepcopy(base), peft_config_factory())
         chunked_model = copy.deepcopy(ref_model)
         _patch_chunked_ce_lm_head(chunked_model.get_base_model(), chunk_size=self.CHUNK_SIZE)
 
         B, S = 2, 16
-        torch.manual_seed(42)
         input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
         labels[:, :4] = -100
@@ -2735,14 +2732,13 @@ class TestPatchChunkedCELMHead:
         the padded labels — when original `label[0] != -100`, it counts as a valid target paired with the last virtual
         token's hidden state, so it must be included in the metric denominator to keep accuracy ≤ 1."""
         base = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32
-        ).to(torch_device)
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32, device_map=torch_device
+        )
         peft_config = PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
         chunked_model = get_peft_model(base, peft_config)
         _patch_chunked_ce_lm_head(chunked_model.get_base_model(), chunk_size=self.CHUNK_SIZE)
 
         B, S = 2, 16
-        torch.manual_seed(42)
         input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()  # all positions valid, including label[0]
 
