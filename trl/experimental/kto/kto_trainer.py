@@ -290,7 +290,7 @@ class KTOTrainer(_BaseTrainer):
                     f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
                     f"got {type(peft_config).__name__}."
                 )
-            if isinstance(model, PeftModel):
+            if is_peft_model(model):
                 raise ValueError(
                     "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
                     "and unload the existing adapter, save the resulting base model, and then pass that base model along "
@@ -299,7 +299,7 @@ class KTOTrainer(_BaseTrainer):
             # Create PEFT model
             model = get_peft_model(model, peft_config)
 
-        elif is_peft_available() and isinstance(model, PeftModel) and ref_model is None:
+        elif is_peft_model(model) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during KTO training.
             model.add_adapter("ref", model.peft_config["default"])
@@ -311,7 +311,7 @@ class KTOTrainer(_BaseTrainer):
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_available() and isinstance(model, PeftModel) and args.gradient_checkpointing:
+        if is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -330,8 +330,6 @@ class KTOTrainer(_BaseTrainer):
                 "KTO only supports causal language models. Encoder-decoder models are not supported. "
                 "Please use a causal LM (e.g., GPT, Llama, Mistral) instead of an encoder-decoder model (e.g., T5, BART)."
             )
-
-        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
         if args.max_length is None:
             logger.warning(
@@ -477,7 +475,7 @@ class KTOTrainer(_BaseTrainer):
                     "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
                     "`precompute_ref_log_probs=False`."
                 )
-            if self.is_peft_model:
+            if is_peft_model(self.model):
                 raise ValueError(
                     "You cannot use `use_liger_kernel=True` with Peft models. Please set `use_liger_kernel=False`."
                 )
@@ -676,7 +674,7 @@ class KTOTrainer(_BaseTrainer):
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
-        if self.is_peft_model:
+        if is_peft_model(self.model):
             model = self.accelerator.unwrap_model(self.model)
             with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
                 yield
