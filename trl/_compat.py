@@ -83,90 +83,6 @@ def _patch_vllm_logging() -> None:
         os.environ["VLLM_LOGGING_LEVEL"] = os.getenv("VLLM_LOGGING_LEVEL", "ERROR")
 
 
-def _patch_vllm_disabled_tqdm() -> None:
-    """
-    Fix DisabledTqdm class in vLLM.
-
-    - Bug introduced in https://github.com/vllm-project/vllm/pull/52
-    - Fixed in https://github.com/vllm-project/vllm/pull/28471 (released in v0.11.1)
-    - Since TRL currently supports vLLM v0.11.0-0.18.0, we patch it here
-    - This can be removed when TRL requires vLLM>=0.11.1
-    """
-    if _is_package_version_below("vllm", "0.11.1"):
-        try:
-            import vllm.model_executor.model_loader.weight_utils
-            from tqdm import tqdm
-
-            class DisabledTqdm(tqdm):
-                def __init__(self, *args, **kwargs):
-                    kwargs["disable"] = True
-                    super().__init__(*args, **kwargs)
-
-            vllm.model_executor.model_loader.weight_utils.DisabledTqdm = DisabledTqdm
-        except (ImportError, AttributeError) as e:
-            warnings.warn(f"Failed to patch vLLM DisabledTqdm: {e}", stacklevel=2)
-
-
-def _patch_vllm_cached_tokenizer() -> None:
-    """
-    Fix get_cached_tokenizer for transformers v5 compatibility.
-
-    - Issue: vLLM's get_cached_tokenizer accesses all_special_tokens_extended
-    - Removed in transformers: https://github.com/huggingface/transformers/pull/40936 (transformers>=5.0.0)
-    - Fixed in https://github.com/vllm-project/vllm/pull/29686 (released in v0.12.0)
-    - This can be removed when TRL requires vLLM>=0.12.0
-    """
-    if _is_package_version_at_least("transformers", "5.0.0") and _is_package_version_below("vllm", "0.12.0"):
-        try:
-            import contextlib
-            import copy
-
-            import vllm.transformers_utils.tokenizer
-
-            def get_cached_tokenizer(tokenizer):
-                cached_tokenizer = copy.copy(tokenizer)
-                tokenizer_all_special_ids = tokenizer.all_special_ids
-                tokenizer_all_special_tokens = tokenizer.all_special_tokens
-                tokenizer_vocab = tokenizer.get_vocab()
-                tokenizer_len = len(tokenizer)
-
-                max_token_id = max(tokenizer_vocab.values())
-                if hasattr(tokenizer, "vocab_size"):
-                    with contextlib.suppress(NotImplementedError):
-                        max_token_id = max(max_token_id, tokenizer.vocab_size)
-
-                class CachedTokenizer(tokenizer.__class__):  # type: ignore
-                    @property
-                    def all_special_ids(self) -> list[int]:
-                        return tokenizer_all_special_ids
-
-                    @property
-                    def all_special_tokens(self) -> list[str]:
-                        return tokenizer_all_special_tokens
-
-                    @property
-                    def max_token_id(self) -> int:
-                        return max_token_id
-
-                    def get_vocab(self) -> dict[str, int]:
-                        return tokenizer_vocab
-
-                    def __len__(self) -> int:
-                        return tokenizer_len
-
-                    def __reduce__(self):
-                        return get_cached_tokenizer, (tokenizer,)
-
-                CachedTokenizer.__name__ = f"Cached{tokenizer.__class__.__name__}"
-
-                cached_tokenizer.__class__ = CachedTokenizer
-                return cached_tokenizer
-
-            vllm.transformers_utils.tokenizer.get_cached_tokenizer = get_cached_tokenizer
-        except (ImportError, AttributeError) as e:
-            warnings.warn(f"Failed to patch vLLM cached_tokenizer: {e}", stacklevel=2)
-
-
 def _patch_transformers_hybrid_cache() -> None:
     """
     Fix HybridCache import for transformers v5 compatibility.
@@ -242,8 +158,6 @@ def _patch_transformers_parallelism_config() -> None:
 
 # Apply vLLM patches
 _patch_vllm_logging()
-_patch_vllm_disabled_tqdm()
-_patch_vllm_cached_tokenizer()
 
 # Apply transformers patches
 _patch_transformers_hybrid_cache()

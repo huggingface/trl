@@ -319,13 +319,16 @@ class GRPOTrainer(_BaseTrainer):
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
-            tokenizer = processing_class.tokenizer
+            self._tokenizer = processing_class.tokenizer
             self._is_vlm = True
         elif isinstance(processing_class, PreTrainedTokenizerBase):
-            tokenizer = processing_class
+            self._tokenizer = processing_class
             self._is_vlm = False
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
         # when tool responses inject images into the completion (see _generate forward_kwargs block).
@@ -333,26 +336,36 @@ class GRPOTrainer(_BaseTrainer):
         self._video_pad_token_id = None
         if self._is_vlm:
             for candidate in ("<|image_pad|>", "<|image|>"):
-                tid = tokenizer.convert_tokens_to_ids(candidate)
-                if tid != tokenizer.unk_token_id:
+                tid = self._tokenizer.convert_tokens_to_ids(candidate)
+                if tid != self._tokenizer.unk_token_id:
                     self._image_pad_token_id = tid
                     break
-            tid = tokenizer.convert_tokens_to_ids("<|video_pad|>")
-            if tid != tokenizer.unk_token_id:
+            tid = self._tokenizer.convert_tokens_to_ids("<|video_pad|>")
+            if tid != self._tokenizer.unk_token_id:
                 self._video_pad_token_id = tid
 
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        self.pad_token_id = tokenizer.pad_token_id
-        self.eos_token_id = tokenizer.eos_token_id
+        # PEFT
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            if is_peft_model(model):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                    "with the new `peft_config` to the trainer."
+                )
+            # Create PEFT model
+            model = get_peft_model(model, peft_config)
 
-        if is_peft_available() and is_peft_model(model) and peft_config is not None:
-            raise ValueError(
-                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
-                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
-                "with the new `peft_config` to the trainer."
-            )
-        if is_peft_available() and is_peft_model(model) and args.beta != 0.0:
+        elif is_peft_model(model) and args.beta != 0.0:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during GRPO training.
             model.add_adapter("ref", model.peft_config["default"])
@@ -362,13 +375,9 @@ class GRPOTrainer(_BaseTrainer):
                     ref_param = model.get_parameter(ref_name)
                     ref_param.data.copy_(param.data)
 
-        # Create PEFT model
-        if peft_config is not None:
-            model = get_peft_model(model, peft_config)
-
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_available() and is_peft_model(model) and args.gradient_checkpointing:
+        if is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -528,8 +537,7 @@ class GRPOTrainer(_BaseTrainer):
         # While waiting for broader adoption, we provide this utility function to manually set the response schema for
         # known chat templates. `response_schema` lives on the (inner) tokenizer, since `parse_response` is a tokenizer
         # method that reads `self.response_schema`.
-        tokenizer = processing_class.tokenizer if self._is_vlm else processing_class
-        if self.tools and getattr(tokenizer, "response_schema", None) is None:
+        if self.tools and getattr(self._tokenizer, "response_schema", None) is None:
             processing_class = add_response_schema(processing_class)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
@@ -785,9 +793,9 @@ class GRPOTrainer(_BaseTrainer):
             generation_kwargs = {
                 "max_new_tokens": self.max_completion_length,
                 "do_sample": True,
-                "pad_token_id": tokenizer.pad_token_id,
-                "bos_token_id": tokenizer.bos_token_id,
-                "eos_token_id": tokenizer.eos_token_id,
+                "pad_token_id": self._tokenizer.pad_token_id,
+                "bos_token_id": self._tokenizer.bos_token_id,
+                "eos_token_id": self._tokenizer.eos_token_id,
                 "temperature": self.temperature,
                 "top_p": self.top_p,
                 "top_k": self.top_k,
@@ -1370,7 +1378,7 @@ class GRPOTrainer(_BaseTrainer):
         else:
             # Regular generation path: left-pad token IDs into tensors
             prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
-            padded_ids = pad(prompt_tensors, padding_value=self.pad_token_id, padding_side="left")
+            padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
             attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
             generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
             # For VLMs, include multimodal fields as tensors (pixel_values, image_grid_thw, etc.)
@@ -1403,7 +1411,7 @@ class GRPOTrainer(_BaseTrainer):
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
             # Mask everything after the first EOS token
-            is_eos = completion_ids == self.eos_token_id
+            is_eos = completion_ids == self._tokenizer.eos_token_id
             eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -1459,7 +1467,7 @@ class GRPOTrainer(_BaseTrainer):
         # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
         # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
         # <turn|>) skip this trimming.
-        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self.eos_token_id]
+        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self._tokenizer.eos_token_id]
         if eos_positions:
             prefix_ids = prefix_ids[: eos_positions[-1] + 1]
 
@@ -1657,9 +1665,8 @@ class GRPOTrainer(_BaseTrainer):
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
-            # Decode post-tool completions
-            tokenizer = self.processing_class.tokenizer if self._is_vlm else self.processing_class
-            post_tool_completions = [parse_response(tokenizer, ids) if ids else {} for ids in post_tool_ids]
+            # Decode post-tool completions.
+            post_tool_completions = [parse_response(self._tokenizer, ids) if ids else {} for ids in post_tool_ids]
 
             # Add post-tool completions to the existing completions
             for idx in range(len(idxs_with_tool)):
@@ -1709,13 +1716,12 @@ class GRPOTrainer(_BaseTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
-            tokenizer = self.processing_class.tokenizer if self._is_vlm else self.processing_class
             if (
                 Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
-                and hasattr(tokenizer, "response_schema")  # attribute not set by default for now
-                and tokenizer.response_schema is not None  # only works if the tokenizer has a schema
+                and hasattr(self._tokenizer, "response_schema")  # attribute not set by default for now
+                and self._tokenizer.response_schema is not None  # only works if the tokenizer has a schema
             ):
-                completions = [[parse_response(tokenizer, ids)] for ids in completion_ids]
+                completions = [[parse_response(self._tokenizer, ids)] for ids in completion_ids]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
@@ -1769,7 +1775,7 @@ class GRPOTrainer(_BaseTrainer):
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
         # Identify sequences that terminated with EOS and log their lengths
-        eos_and_pad = [self.eos_token_id, self.pad_token_id]
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
@@ -1867,7 +1873,7 @@ class GRPOTrainer(_BaseTrainer):
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
         prompt_ids = pad(
             prompt_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="left",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -1878,7 +1884,7 @@ class GRPOTrainer(_BaseTrainer):
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         completion_ids = pad(
             completion_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -1905,7 +1911,7 @@ class GRPOTrainer(_BaseTrainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions for attention and loss masking
         if self.mask_truncated_completions:
-            eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
