@@ -365,7 +365,7 @@ class GRPOTrainer(_BaseTrainer):
             # Create PEFT model
             model = get_peft_model(model, peft_config)
 
-        elif is_peft_available() and is_peft_model(model) and args.beta != 0.0:
+        elif is_peft_model(model) and args.beta != 0.0:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during GRPO training.
             model.add_adapter("ref", model.peft_config["default"])
@@ -377,7 +377,7 @@ class GRPOTrainer(_BaseTrainer):
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_available() and is_peft_model(model) and args.gradient_checkpointing:
+        if is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the

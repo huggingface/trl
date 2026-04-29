@@ -22,6 +22,7 @@ import torch
 import torch.nn as nn
 import transformers
 from accelerate import PartialState, logging
+from accelerate.utils import is_peft_model
 from datasets import Dataset, features
 from packaging.version import Version
 from transformers import (
@@ -44,7 +45,7 @@ from .prm_config import PRMConfig
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel
+    from peft import PeftConfig
 
 logger = logging.get_logger(__name__)
 
@@ -184,7 +185,7 @@ class PRMTrainer(_BaseTrainer):
                     f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
                     f"got {type(peft_config).__name__}."
                 )
-        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
+        if peft_config is not None or is_peft_model(model):
             model = prepare_peft_model(model, peft_config, args)
 
         # Disable dropout in the model
