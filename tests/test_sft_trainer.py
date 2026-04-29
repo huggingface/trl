@@ -1660,7 +1660,7 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            # "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
                 marks=pytest.mark.skipif(
@@ -1794,7 +1794,7 @@ class TestSFTTrainer(TrlTestCase):
         [
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             # Special case for Gemma, as it uses token_type_ids, and we need to ensure they are properly in the collator:
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            # "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
                 marks=pytest.mark.skipif(

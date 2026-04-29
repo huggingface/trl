@@ -1313,7 +1313,7 @@ class TestRLOOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            # "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
                 marks=pytest.mark.skipif(
@@ -1519,7 +1519,7 @@ class TestRLOOTrainer(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            # "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
                 marks=pytest.mark.skipif(

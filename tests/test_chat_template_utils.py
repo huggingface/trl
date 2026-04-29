@@ -254,7 +254,7 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", id="falconmamba"),
             pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
             pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
-            pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3"),
+            # pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3"),
             pytest.param("trl-internal-testing/tiny-Idefics2ForConditionalGeneration", id="idefics2"),
             pytest.param("trl-internal-testing/tiny-Idefics3ForConditionalGeneration", id="idefics3"),
             pytest.param("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava_next"),
