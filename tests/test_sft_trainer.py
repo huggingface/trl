@@ -2714,9 +2714,6 @@ class TestPatchChunkedCELMHead:
         return ref_model, chunked_model, input_ids, labels, num_items
 
     def _setup_vlm(self, model_id):
-        """VLM equivalent of `_setup`: load via `AutoModelForImageTextToText`, patch with `is_vlm=True`, and feed
-        text-only inputs (no `pixel_values`) — the multimodal wrapper still runs the embedding lookup + text decoder,
-        which is enough to exercise the patched forward's `self.base_model(...)` routing and `text_config` lookups."""
         ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
         chunked_model = copy.deepcopy(ref_model)
         _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE, is_vlm=True)
