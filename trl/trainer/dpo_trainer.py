@@ -589,7 +589,7 @@ class DPOTrainer(_BaseTrainer):
             # Create PEFT model
             model = get_peft_model(model, peft_config)
 
-        elif is_peft_available() and is_peft_model(model) and ref_model is None:
+        elif is_peft_model(model) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during DPO training.
             model.add_adapter("ref", model.peft_config["default"])
