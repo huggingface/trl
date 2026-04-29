@@ -147,11 +147,11 @@ class SSDTrainer(_BaseTrainer):
                     f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
                     f"got {type(peft_config).__name__}."
                 )
-        if is_peft_available() and is_peft_model(model) and peft_config is not None:
-            raise ValueError(
-                "You passed a `PeftModel` instance together with a `peft_config` to SSDTrainer. Pass either a base "
-                "model with `peft_config`, or a pre-wrapped PEFT model."
-            )
+            if is_peft_model(model):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to SSDTrainer. Pass either a base "
+                    "model with `peft_config`, or a pre-wrapped PEFT model."
+                )
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
 
