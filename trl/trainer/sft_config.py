@@ -172,12 +172,11 @@ class SFTConfig(_BaseConfig):
             "If `None`, uses all GPUs (world_size). For Qwen3-30B-A3B (4 KV heads), max is 4."
         },
     )
-    fuse_moe_experts: bool = field(
-        default=False,
+    experts_implementation: str | None = field(
+        default=None,
         metadata={
-            "help": "Whether to fuse individual MoE expert weights into grouped tensors for FSDP2 compatibility. "
-            "This fixes the collective shape mismatch that prevents vanilla FSDP2 from training MoE models. "
-            "Only needed when using FSDP2 with MoE architectures."
+            "help": "MoE expert dispatch kernel to use (e.g. 'grouped_mm', 'sonicmoe'). "
+            "If None, defaults to 'grouped_mm' when torch_compile is enabled and the model is MoE."
         },
     )
     chat_template_path: str | None = field(

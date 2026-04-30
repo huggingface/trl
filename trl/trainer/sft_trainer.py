@@ -64,7 +64,6 @@ from .utils import (
     create_model_from_path,
     entropy_from_logits,
     flush_left,
-    fuse_moe_experts,
     get_config_model_id,
     pad,
     selective_log_softmax,
@@ -965,9 +964,6 @@ class SFTTrainer(_BaseTrainer):
                     "The `model_init_kwargs` will be ignored."
                 )
 
-        if args.fuse_moe_experts:
-            model = fuse_moe_experts(model)
-
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
@@ -1273,6 +1269,12 @@ class SFTTrainer(_BaseTrainer):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
+        # Set MoE experts implementation when explicitly requested.
+        if getattr(args, "experts_implementation", None) and not isinstance(model, str):
+            if getattr(model.config, "num_local_experts", 0) > 0 or getattr(model.config, "num_experts", 0) > 0:
+                model.config._experts_implementation = args.experts_implementation
+                logger.info(f"MoE experts_implementation set to '{args.experts_implementation}'")
+
         super().__init__(
             model=model,
             args=args,
@@ -1321,6 +1323,11 @@ class SFTTrainer(_BaseTrainer):
         # MFU tracking
         self._flops_per_token = compute_flops_per_token(model.config, args.max_length or 1024)
         self._world_size = self.accelerator.num_processes
+        # Track previous log point so we can report instantaneous (per-window) TPS/MFU in addition to
+        # the cumulative numbers — the cumulative ones are dominated by step-1 compile/autotune cost
+        # for many steps and underreport steady-state throughput.
+        self._last_log_time: float | None = None
+        self._last_log_tokens: int = 0
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
@@ -1718,21 +1725,36 @@ class SFTTrainer(_BaseTrainer):
 
         logs = {**logs, **metrics}
 
-        # Compute MFU: speed_metrics is computed inside super().log(), so we replicate the TPS calculation here
+        # Compute MFU: speed_metrics is computed inside super().log(), so we replicate the TPS calculation here.
+        # We report both cumulative (whole-run-average, dominated by step-1 compile cost) and instantaneous
+        # (per-logging-window, ≈ steady-state once compile is done) numbers.
         if mode == "train" and start_time is not None and self.args.include_num_input_tokens_seen != "no":
             import time
 
-            runtime = time.time() - start_time
+            now = time.time()
+            runtime = now - start_time
+            tokens = self.state.num_input_tokens_seen
+            # TODO(transformers): num_input_tokens_seen overcounts with CP and SP.
+            # Both split sequences across ranks, but the Trainer counts full sequence length
+            # per sample. Divide by cp_size and sp_size to get actual unique tokens/second.
+            pc = getattr(self.accelerator, "parallelism_config", None)
+            cp_size = getattr(pc, "cp_size", 1) or 1
+            sp_size = getattr(pc, "sp_size", 1) or 1
+            cp_sp = cp_size * sp_size
             if runtime > 0:
-                tps = self.state.num_input_tokens_seen / runtime
-                # TODO(transformers): num_input_tokens_seen overcounts with CP and SP.
-                # Both split sequences across ranks, but the Trainer counts full sequence length
-                # per sample. Divide by cp_size and sp_size to get actual unique tokens/second.
-                pc = getattr(self.accelerator, "parallelism_config", None)
-                cp_size = getattr(pc, "cp_size", 1) or 1
-                sp_size = getattr(pc, "sp_size", 1) or 1
-                tps = tps / (cp_size * sp_size)
-                logs["mfu"] = compute_mfu(self._flops_per_token, tps, self._world_size)
+                tps_cum = tokens / runtime / cp_sp
+                logs["mfu"] = compute_mfu(self._flops_per_token, tps_cum, self._world_size)
+            # Per-logging-window (instantaneous) TPS/MFU. Skips the first log so we don't include the
+            # initialization phase (compile, dataset prep, FSDP wrap) in the window.
+            if self._last_log_time is not None:
+                dt = now - self._last_log_time
+                d_tokens = tokens - self._last_log_tokens
+                if dt > 0 and d_tokens > 0:
+                    tps_win = d_tokens / dt / cp_sp
+                    logs["tps_window"] = tps_win
+                    logs["mfu_window"] = compute_mfu(self._flops_per_token, tps_win, self._world_size)
+            self._last_log_time = now
+            self._last_log_tokens = tokens
 
         super().log(logs, start_time)
         self._metrics[mode].clear()
