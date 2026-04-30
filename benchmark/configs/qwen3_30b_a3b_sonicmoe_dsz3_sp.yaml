@@ -1,0 +1,21 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+runs:
+  # 64k DS-Z3 + SP=4 + FA3 + sonicmoe — match historical best 64k MoE config (12.5% MFU)
+  # Per-rank seq = 16k via Ulysses SP=4
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 4
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5

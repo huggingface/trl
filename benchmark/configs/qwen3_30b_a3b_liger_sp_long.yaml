@@ -1,0 +1,61 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+# Liger + SP path at long context. Compare to chunked_nll champions:
+#   256k SP=2 + compile + chunked: 59.61% peak / 52.40% cum, 69.4 GB
+#   512k SP=4 + compile + chunked: 58.24% peak / 38.76% cum, 70.7 GB
+#   1M   SP=8 + compile + chunked: 37.46% peak / 35.65% cum, 72.2 GB
+#
+# Replace chunked_nll with Liger's FLCE (mutually exclusive in TRL). Same per-rank seq=128k sweet spot.
+# Keep swiglu=False to be safe (sonicmoe is preferred for the experts forward).
+
+runs:
+  # 256k SP=2 + compile + Liger
+  - context_length: 262144
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 2
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5
+
+  # 512k SP=4 + compile + Liger
+  - context_length: 524288
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 20
+    logging_steps: 5
+
+  # 1M SP=8 + compile + Liger
+  - context_length: 1048576
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 8
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 15
+    logging_steps: 5

@@ -1,0 +1,62 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+
+# Long-context EP=8 with FA3 + sonicmoe + wrapper clamp+mask. With FA3 attention is O(seq),
+# so 64k/128k per-rank should fit where pre-fix sdpa OOM'd. Layout dp=N/8 tp=8 ep=8.
+
+runs:
+  # 64k, 2 nodes — EP=8 intra-node, DP=2 across nodes
+  - context_length: 65536
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
+
+  # 64k, 4 nodes
+  - context_length: 65536
+    nodes: 4
+    backend: fsdp2
+    dp: 4
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
+
+  # 128k, 4 nodes
+  - context_length: 131072
+    nodes: 4
+    backend: fsdp2
+    dp: 4
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
+
+  # 128k, 8 nodes
+  - context_length: 131072
+    nodes: 8
+    backend: fsdp2
+    dp: 8
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5

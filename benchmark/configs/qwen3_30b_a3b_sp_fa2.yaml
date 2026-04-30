@@ -1,0 +1,22 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+# Try DS-Z3+SP=4 with kernels-community/flash-attn2 (default for SP backend)
+# Historical 64k 2n DS-Z3 SP=4 hit 78.6 GB peak (99%); current FA3 attempt OOM'd.
+# Drop attn_implementation override to let SP use its default flash-attn2.
+
+runs:
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 4
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 1
+    attn_implementation: "kernels-community/flash-attn2"
+    max_steps: 50
+    logging_steps: 5

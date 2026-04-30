@@ -1,0 +1,48 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+extra_args: --fuse_moe_experts --dtype bfloat16
+
+runs:
+  # 1. Eager baseline (no compile, no pad_to_multiple_of)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+
+  # 2. Eager + pad_to_multiple_of=16384
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    extra_args: --fuse_moe_experts --dtype bfloat16 --pad_to_multiple_of 16384
+
+  # 3. Compiled (no pad_to_multiple_of)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    extra_args: --fuse_moe_experts --dtype bfloat16 --torch_compile true
+
+  # 4. Compiled + pad_to_multiple_of=16384
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    extra_args: --fuse_moe_experts --dtype bfloat16 --torch_compile true --pad_to_multiple_of 16384

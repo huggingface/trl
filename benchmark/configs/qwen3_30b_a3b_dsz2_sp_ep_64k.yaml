@@ -1,0 +1,24 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8
+zero_stage: 2
+
+# DS-Z2 + SP + EP at 64k — the originally-targeted combo. Now possible after the
+# DS-Z2+EP integration: stage_1_and_2.py has full is_moe_param plumbing, our
+# transformers patches tag EP params, optimizer param groups split correctly.
+
+runs:
+  - context_length: 65536
+    nodes: 4
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5

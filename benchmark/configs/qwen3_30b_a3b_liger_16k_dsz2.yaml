@@ -1,0 +1,23 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+# 16k DS-Z2+EP=8+Liger retry. Original 22094539 was FSDP+EP+Liger which hangs at NCCL because
+# Liger's FLCE chunks lm_head matmul → per-chunk all-gather under FSDP (same pattern as
+# chunked_nll on FSDP). DS-Z2 doesn't shard params across DP, so no per-chunk gather → should work.
+
+runs:
+  - context_length: 16384
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    zero_stage: 2
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5

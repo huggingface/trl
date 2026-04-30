@@ -1,0 +1,75 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8
+
+# Chunked-CE smoke test (TRL PR #5575). Compare chunked_nll vs default nll at:
+# - 16k FSDP+EP=8: correctness check (loss curve match? peak mem reduction?)
+# - 32k DS-Z2+EP=8: does chunked_nll reduce activation pressure enough to fit (was 18.55 GiB OOM)?
+# - 32k FSDP+EP=8 (no CP): same question for FSDP path
+# - 64k FSDP+EP=8+CP=2: does chunked help at the 32k per-rank seq EP buffer ceiling?
+#
+# Per the docstring, FSDP2 + chunked_nll wants reshard_after_forward=false to avoid
+# re-gathering lm_head.weight per chunk in backward.
+
+runs:
+  # === 16k baseline + chunked, FSDP+EP=8 (validates correctness vs 40.4% champion) ===
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    reshard_after_forward: false
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 30
+    logging_steps: 5
+
+  # === 32k FSDP+EP=8 — was OOM with default nll, see if chunked unlocks it ===
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    reshard_after_forward: false
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 30
+    logging_steps: 5
+
+  # === 32k DS-Z2+EP=8 — was 18.55 GiB OOM, see if chunked_nll fits ===
+  - context_length: 32768
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    zero_stage: 2
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 30
+    logging_steps: 5
+
+  # === 64k FSDP+EP=8+CP=2 — per-rank seq=32k, hits 18.55 GiB EP buffer ceiling. Does chunked help? ===
+  - context_length: 65536
+    nodes: 4
+    backend: fsdp2
+    dp: 4
+    tp: 8
+    pp: 1
+    cp: 2
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    reshard_after_forward: false
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 30
+    logging_steps: 5

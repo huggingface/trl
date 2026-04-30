@@ -1,0 +1,34 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+
+# 16k FA3 EP=8 sonicmoe — confirmed at 40.4% on 2n. Test if it scales to 4n/8n.
+# Layout dp=N tp=8 ep=8 (DP=N across nodes, EP=8 intra-node).
+
+runs:
+  - context_length: 16384
+    nodes: 4
+    backend: fsdp2
+    dp: 4
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
+
+  - context_length: 16384
+    nodes: 8
+    backend: fsdp2
+    dp: 8
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5

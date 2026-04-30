@@ -1,0 +1,19 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+runs:
+  # 64k EP=8 + CP=4 on 4 nodes — DP=1, TP=8, CP=4 = 32 GPUs, per-rank seq=16k
+  # 16k per-rank attention is what we know fits with sdpa
+  - context_length: 65536
+    nodes: 4
+    backend: fsdp2
+    dp: 1
+    tp: 8
+    pp: 1
+    cp: 4
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5

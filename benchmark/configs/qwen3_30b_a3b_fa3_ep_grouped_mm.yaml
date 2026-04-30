@@ -1,0 +1,32 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+runs:
+  # FA3 + EP=8 with grouped_mm (no sonicmoe) — bisect NaN cause
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8
+    max_steps: 5
+    logging_steps: 1
+
+  # sdpa + EP=8 + sonicmoe — known good baseline (already 32% MFU)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 5
+    logging_steps: 1

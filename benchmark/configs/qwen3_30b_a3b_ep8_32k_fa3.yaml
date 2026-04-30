@@ -1,0 +1,34 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+
+# 32k EP=8 with FA3 no CP — pre-fix sdpa OOM'd at 32k per-rank, but FA3 attention is O(seq)
+# instead of O(seq²) so might fit. Per-rank seq is 32k regardless of node count.
+
+runs:
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
+
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 4
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5

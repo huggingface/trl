@@ -1,0 +1,24 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+use_regional_compilation: true
+
+# Champion config (40.4% MFU) + accelerate PR #4022 per-layer compile.
+# Validated PR-#4022 alone (no EP): 31-32% on FSDP2 + per-layer compile.
+# This run stacks compile on top of the FSDP+EP+FA3+sonicmoe path that already gives 40%.
+
+runs:
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5

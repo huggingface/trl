@@ -1,0 +1,21 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 16
+
+# 256k DS-Z3+SP=16 — per-rank seq = 16k (16 ranks per SP group). 8 nodes / 16 GPUs/group = 4 DP groups.
+# First viable 256k attempt; vs FSDP+EP+CP=8 256k 8n (just OOM'd at 18.55 GiB).
+runs:
+  - context_length: 262144
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 4
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 16
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5

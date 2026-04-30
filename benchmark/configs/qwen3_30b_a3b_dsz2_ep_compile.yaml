@@ -1,0 +1,23 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8
+zero_stage: 2
+use_regional_compilation: true
+
+# DS-Z2+EP+compile — DS uses plain tensors (no DTensor mesh mix), so compile may
+# avoid the Adam _group_tensors_by_device_and_dtype error that blocks FSDP+EP+compile.
+
+runs:
+  - context_length: 16384
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
