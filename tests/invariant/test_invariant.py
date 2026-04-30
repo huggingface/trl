@@ -202,8 +202,16 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
         "tol": 2e-1,
         "residual_tol": 5e-2,
         "members": [
-            _build("sft_bf16_eager", "sft", SFT_DATASET, bf16=True, max_steps=5),
-            _build("sft_bf16_fa2", "sft", SFT_DATASET, attn="kernels-community/flash-attn2", bf16=True, max_steps=5),
+            _build("sft_bf16_eager", "sft", SFT_DATASET, bf16=True, dtype="bfloat16", max_steps=5),
+            _build(
+                "sft_bf16_fa2",
+                "sft",
+                SFT_DATASET,
+                attn="kernels-community/flash-attn2",
+                bf16=True,
+                dtype="bfloat16",
+                max_steps=5,
+            ),
         ],
     },
     "dpo": {
