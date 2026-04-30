@@ -164,14 +164,16 @@ def compare_scalars(a: Trajectory, b: Trajectory, tol: float = TOL, residual_tol
 
 
 def _build(name: str, method: str, dataset: str, attn: str = "eager", **overrides) -> CorrectnessConfig:
-    # Force fp32 end-to-end. `model_init_kwargs.dtype` is left unset because trl's `create_model_from_path`
-    # already defaults to float32 (overriding the model config's `bfloat16`). But mixed-precision is a separate
-    # axis: `_BaseConfig.__post_init__` sets `bf16=True` by default, which would enable bf16 autocast during
-    # training even with fp32 weights — so we must explicitly disable it. Tighter tolerances depend on this.
-    model_init_kwargs = json.dumps({"revision": MODEL_REVISION, "attn_implementation": attn})
+    # Force fp32 end-to-end. The trl scripts (sft.py, dpo.py) instantiate the model themselves from
+    # `ModelConfig` fields (`--model_revision`, `--attn_implementation`, `--dtype`) and ignore
+    # `--model_init_kwargs`, so we use the ModelConfig CLI args. `dtype` is left at its default (float32 in
+    # `create_model_from_path`). Mixed-precision is a separate axis: `_BaseConfig.__post_init__` sets
+    # `bf16=True` by default, which would enable bf16 autocast during training even with fp32 weights — so we
+    # must explicitly disable it. Tighter tolerances depend on this.
     args: dict[str, str] = {
         "model_name_or_path": MODEL,
-        "model_init_kwargs": model_init_kwargs,
+        "model_revision": MODEL_REVISION,
+        "attn_implementation": attn,
         "dataset_name": dataset,
         "max_steps": str(NUM_STEPS),
         "max_length": str(MAX_LENGTH),
