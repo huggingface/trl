@@ -359,9 +359,12 @@ for model_id, model_class, dtype in [
     kwargs = {}
 
     if model_id == "google/gemma-3-4b-it":
-        # Gemma3 SigLIP processes images at 896×896 → 4,096 patches, producing 1 GB+ attention matrices per layer
-        # during training. Use 224×224 → 256 patches instead; this matches mm_tokens_per_image=256, so the
-        # projector's AvgPool2d degenerates to kernel_size=1 (identity) and memory stays manageable.
+        # Gemma3 SigLIP defaults to image_size=896 → 4,096 patches. With production-scale intermediate_size
+        # (~4,304), the vision FFN saves [batch, 4,096, 4,304] activations for backprop (~134 MB/layer).
+        # Use image_size=224 → 256 patches (matching mm_tokens_per_image=256, so the projector's AvgPool2d
+        # gets kernel_size=1, i.e. identity) and scale down intermediate_size to keep activations tiny.
+        text_config["intermediate_size"] = 32
+        vision_config["intermediate_size"] = 32
         vision_config["image_size"] = 224
         processor.image_processor.size = {"height": 224, "width": 224}
 
