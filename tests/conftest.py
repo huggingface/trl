@@ -13,27 +13,13 @@
 # limitations under the License.
 
 import gc
+import os
+import sys
 import traceback
 from functools import wraps
 
 import pytest
 import torch
-
-
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_makereport(item, call):
-    """Clear traceback frame locals after a failed test to release CUDA tensor references.
-
-    When a test fails (especially with OOM), the exception traceback holds references to every local variable in every
-    frame on the call stack at the time of failure — including the model, trainer, and all intermediate tensors.
-    gc.collect() cannot free objects that are still reachable through a live traceback, so memory accumulates across
-    reruns (~2 GiB per rerun for Gemma4, reaching 5 × 2.38 GiB = 11.89 GiB after 5 reruns). Clearing the frame locals
-    breaks those reference chains so that the subsequent gc.collect() + empty_cache() in cleanup_gpu can actually
-    reclaim the CUDA memory before the next attempt.
-    """
-    yield
-    if call.when == "call" and call.excinfo is not None:
-        traceback.clear_frames(call.excinfo.tb)
 
 
 # ============================================================================
@@ -98,6 +84,50 @@ def apply_model_revisions(monkeypatch):
         ProcessorMixin,
     ]:
         monkeypatch.setattr(cls, "from_pretrained", create_classmethod_wrapper(cls.from_pretrained))
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Clear traceback frame locals after a failed test to release CUDA tensor references.
+
+    When a test fails (especially with OOM), the exception traceback holds references to every local variable in every
+    frame on the call stack at the time of failure — including the model, trainer, and all intermediate tensors.
+    gc.collect() cannot free objects that are still reachable through a live traceback, so memory accumulates across
+    reruns (~2 GiB per rerun for Gemma4, reaching 5 × 2.38 GiB = 11.89 GiB after 5 reruns). Clearing the frame locals
+    breaks those reference chains so that the subsequent gc.collect() + empty_cache() in cleanup_gpu can actually
+    reclaim the CUDA memory before the next attempt.
+    """
+    yield
+    if call.when == "call" and call.excinfo is not None:
+        traceback.clear_frames(call.excinfo.tb)
+
+
+def _host_pid() -> int:
+    """Return the host-namespace PID.
+
+    Inside a Docker container os.getpid() returns the container-namespace PID, but CUDA OOM errors report the
+    host-namespace PID. /proc/self/status NSpid lists PIDs from innermost (container) to outermost (host) namespace, so
+    the last entry is the one that appears in CUDA error messages.
+    """
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("NSpid:"):
+                    return int(line.split()[-1])
+    except OSError:
+        pass
+    return os.getpid()
+
+
+def pytest_runtest_logstart(nodeid, location):
+    """Print host PID → xdist worker → test mapping to stderr before each test.
+
+    When a CUDA OOM error shows process IDs, search the CI log for the PID to identify which worker and test was
+    responsible for the large allocation.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+    sys.stderr.write(f"[PID={_host_pid()} worker={worker}] STARTED {nodeid}\n")
+    sys.stderr.flush()
 
 
 @pytest.fixture(autouse=True)
