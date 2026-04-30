@@ -38,10 +38,6 @@ NUM_STEPS = 50
 SEED = 42
 MAX_LENGTH = 512
 
-# Tolerances are deliberately generous; tighten after first reference run.
-TOL = 5e-3
-RESIDUAL_TOL = 1e-3
-
 
 def _trl_commit() -> str:
     """Return the current trl commit SHA (with `-dirty` suffix if the working tree has uncommitted changes).
@@ -138,7 +134,7 @@ def load(path: Path) -> Trajectory:
     )
 
 
-def compare_scalars(a: Trajectory, b: Trajectory, tol: float = TOL, residual_tol: float = RESIDUAL_TOL) -> list[str]:
+def compare_scalars(a: Trajectory, b: Trajectory, tol: float, residual_tol: float) -> list[str]:
     """Compare scalar series (loss, grad_norm). Returns a list of error messages, empty if equal."""
     errors: list[str] = []
     if len(a.steps) != len(b.steps):
@@ -188,23 +184,41 @@ def _build(name: str, method: str, dataset: str, attn: str = "eager", **override
     return CorrectnessConfig(name=name, method=method, args=args)
 
 
-# Equivalence classes: each list groups configs that must produce the same trajectory. The first entry in each
-# list is the canonical config — it owns the class's reference snapshot and is the only one re-recorded under
-# `--update-references`. Every other entry is asserted to match that snapshot.
-EQUIVALENCE_CLASSES: dict[str, list[CorrectnessConfig]] = {
-    "sft": [
-        _build("sft_default", "sft", SFT_DATASET),
-        _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
-        _build("sft_attn_fa2_kernels", "sft", SFT_DATASET, attn="kernels-community/flash-attn2"),
-    ],
-    "dpo": [
-        _build("dpo_default", "dpo", DPO_DATASET),
-        _build("dpo_pdb1_gas8", "dpo", DPO_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
-    ],
+# Equivalence classes: each maps to a `members` list and a tolerance pair. The first member is the canonical
+# config — it owns the class's reference snapshot and is the only one re-recorded under `--update-references`.
+# Every other member is asserted to match that snapshot.
+# The `sft_bf16` class exists specifically to cover FA2: the kernels-community/flash-attn2 op only supports
+# fp16/bf16, so it can't share a class with the fp32 baseline. bf16 reduction noise is ~10³× larger than fp32,
+# hence the much looser tolerances.
+EQUIVALENCE_CLASSES: dict[str, dict] = {
+    "sft": {
+        "tol": 2e-2,
+        "residual_tol": 5e-3,
+        "members": [
+            _build("sft_default", "sft", SFT_DATASET),
+            _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
+        ],
+    },
+    "sft_bf16": {
+        "tol": 5e-1,
+        "residual_tol": 1e-1,
+        "members": [
+            _build("sft_bf16_eager", "sft", SFT_DATASET, bf16=True),
+            _build("sft_bf16_fa2", "sft", SFT_DATASET, attn="kernels-community/flash-attn2", bf16=True),
+        ],
+    },
+    "dpo": {
+        "tol": 2e-2,
+        "residual_tol": 5e-3,
+        "members": [
+            _build("dpo_default", "dpo", DPO_DATASET),
+            _build("dpo_pdb1_gas8", "dpo", DPO_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
+        ],
+    },
 }
 
 
-_ALL = [(klass, c) for klass, configs in EQUIVALENCE_CLASSES.items() for c in configs]
+_ALL = [(klass, c) for klass, ec in EQUIVALENCE_CLASSES.items() for c in ec["members"]]
 
 
 @pytest.mark.invariant
@@ -216,7 +230,8 @@ def test_invariant(klass, config):
 
     trajectory = run(config)
     reference = load(ref_path)
-    errors = compare_scalars(trajectory, reference)
+    ec = EQUIVALENCE_CLASSES[klass]
+    errors = compare_scalars(trajectory, reference, tol=ec["tol"], residual_tol=ec["residual_tol"])
     assert not errors, f"'{config.name}' diverges from class '{klass}' reference:\n  " + "\n  ".join(errors)
 
 
@@ -245,7 +260,7 @@ if __name__ == "__main__":
 
     classes = cli_args.klass or list(EQUIVALENCE_CLASSES)
     for klass in classes:
-        canonical = EQUIVALENCE_CLASSES[klass][0]
+        canonical = EQUIVALENCE_CLASSES[klass]["members"][0]
         print(f"recording '{klass}' from canonical config '{canonical.name}'")  # noqa: T201
         trajectory = run(canonical)
         ref_path = REFERENCES_DIR / f"{klass}.json"
