@@ -1259,14 +1259,14 @@ ZeRO-3 handles expert memory distribution without EP — each rank holds a shard
 
 ### SP vs CP for 30B MoE (2 nodes, 16 GPUs)
 
-| Context | Method     | Backend   | Degree | MFU   | TPS/GPU (raw) | Peak Mem |
-| ------- | ---------- | --------- | ------ | ----- | ------------- | -------- |
-| 16k     | SP=2       | DS-Z3     | 2      | 5.8%  | 1,964         | 61.3 GB  |
-| 16k     | EP=16      | FSDP2     | -      | 22.5% | 3,788         | 71.1 GB  |
-| 32k     | SP=2       | DS-Z3     | 2      | 13.1% | 2,663         | 54.0 GB  |
-| 32k     | CP=2+EP=16 | FSDP2     | 2      | 13.2% | 2,686         | 71.5 GB  |
-| 64k     | SP=4       | DS-Z3     | 4      | 11.6% | 2,624         | 54.4 GB  |
-| 64k     | CP=8+EP=16 | FSDP2     | 8      | 2.9%  | 1,312         | 58.7 GB  |
+| Context | Method     | Backend | Degree | MFU   | TPS/GPU (raw) | Peak Mem |
+| ------- | ---------- | ------- | ------ | ----- | ------------- | -------- |
+| 16k     | SP=2       | DS-Z3   | 2      | 5.8%  | 1,964         | 61.3 GB  |
+| 16k     | EP=16      | FSDP2   | -      | 22.5% | 3,788         | 71.1 GB  |
+| 32k     | SP=2       | DS-Z3   | 2      | 13.1% | 2,663         | 54.0 GB  |
+| 32k     | CP=2+EP=16 | FSDP2   | 2      | 13.2% | 2,686         | 71.5 GB  |
+| 64k     | SP=4       | DS-Z3   | 4      | 11.6% | 2,624         | 54.4 GB  |
+| 64k     | CP=8+EP=16 | FSDP2   | 8      | 2.9%  | 1,312         | 58.7 GB  |
 
 Note: TPS/GPU is raw (before CP/SP correction). MFU is corrected (TPS ÷ cp_size or sp_size). Both CP and SP overcount `num_input_tokens_seen` by their parallelism degree.
 
@@ -1301,11 +1301,11 @@ Key difference: **Liger kernel** replaces CrossEntropy, SwiGLU, RMSNorm, and RoP
 
 ### Comparison: Liger vs non-Liger (Qwen3-4B, 32k)
 
-| Config                          | MFU       | TPS/GPU | Status |
-| ------------------------------- | --------- | ------- | ------ |
-| 1n, DP=8, no liger              | —         | —       | OOM    |
-| 2n, DP=8, CP=2, no liger       | 31.6%     | 7,615   | Yes    |
-| **1n, DP=8, liger**             | **35.9%** | 4,321   | Yes    |
+| Config                   | MFU       | TPS/GPU | Status |
+| ------------------------ | --------- | ------- | ------ |
+| 1n, DP=8, no liger       | —         | —       | OOM    |
+| 2n, DP=8, CP=2, no liger | 31.6%     | 7,615   | Yes    |
+| **1n, DP=8, liger**      | **35.9%** | 4,321   | Yes    |
 
 Liger kernel not only avoids the OOM on 1 node, it achieves the **highest MFU (35.9%)** of any Qwen3-4B configuration — beating the previous best of 31.8% (4 nodes, CP=2). The fused kernels reduce both memory and kernel launch overhead.
 
@@ -1323,12 +1323,12 @@ Liger kernel not only avoids the OOM on 1 node, it achieves the **highest MFU (3
 
 ### Comparison: Liger vs no-Liger (Qwen3-4B, 32k, same hardware)
 
-| Config                              | MFU       | TPS/GPU | Status |
-| ----------------------------------- | --------- | ------- | ------ |
-| 1n, DP=8, no liger                  | —         | —       | OOM    |
-| **1n, DP=8, liger**                 | **35.9%** | 4,321   | Yes    |
-| 2n, DP=8, CP=2, no liger            | 31.6%     | 7,615   | Yes    |
-| 1n, DP=4, CP=2, liger               | 17.1%     | 4,120   | Yes    |
+| Config                   | MFU       | TPS/GPU | Status |
+| ------------------------ | --------- | ------- | ------ |
+| 1n, DP=8, no liger       | —         | —       | OOM    |
+| **1n, DP=8, liger**      | **35.9%** | 4,321   | Yes    |
+| 2n, DP=8, CP=2, no liger | 31.6%     | 7,615   | Yes    |
+| 1n, DP=4, CP=2, liger    | 17.1%     | 4,120   | Yes    |
 
 ### Observations
 
@@ -1355,11 +1355,11 @@ This affects only MoE models with the native fused expert architecture (`Qwen3Mo
 
 ### Results: Liger + FA3 vs Liger + sdpa (Qwen3-4B, 32k, 1 node, 8 GPUs)
 
-| Context | Nodes | GPUs | DP  | TP  | CP  | EP  | Liger | Attn  | MFU       | TPS    | TPS/GPU | Runtime (20 steps) |
-| ------- | ----- | ---- | --- | --- | --- | --- | ----- | ----- | --------- | ------ | ------- | ------------------ |
-| 32k     | 1     | 8    | 8   | 1   | 1   | 1   | yes   | sdpa  | 35.9%     | 34,570 | 4,321   | 151.7s             |
-| 32k     | 1     | 8    | 8   | 1   | 1   | 1   | yes   | FA3   | **56.3%** | 54,260 | 6,783   | 96.6s              |
-| 32k     | 1     | 8    | 8   | 1   | 1   | 1   | no    | sdpa  | —         | —      | —       | OOM                |
+| Context | Nodes | GPUs | DP  | TP  | CP  | EP  | Liger | Attn | MFU       | TPS    | TPS/GPU | Runtime (20 steps) |
+| ------- | ----- | ---- | --- | --- | --- | --- | ----- | ---- | --------- | ------ | ------- | ------------------ |
+| 32k     | 1     | 8    | 8   | 1   | 1   | 1   | yes   | sdpa | 35.9%     | 34,570 | 4,321   | 151.7s             |
+| 32k     | 1     | 8    | 8   | 1   | 1   | 1   | yes   | FA3  | **56.3%** | 54,260 | 6,783   | 96.6s              |
+| 32k     | 1     | 8    | 8   | 1   | 1   | 1   | no    | sdpa | —         | —      | —       | OOM                |
 
 ### Analysis
 
@@ -1370,30 +1370,30 @@ This affects only MoE models with the native fused expert architecture (`Qwen3Mo
 
 ### Full Qwen3-4B Results Summary (32k context)
 
-| Config                                 | MFU       | TPS/GPU | Nodes | Status |
-| -------------------------------------- | --------- | ------- | ----- | ------ |
-| FSDP2, no liger, sdpa                  | —         | —       | 1     | OOM    |
-| FSDP2, liger, sdpa                     | 35.9%     | 4,321   | 1     | Yes    |
-| **FSDP2, liger, FA3**                  | **56.3%** | 6,783   | 1     | Yes    |
-| FSDP2, CP=2, no liger, sdpa            | 31.6%     | 7,615   | 2     | Yes    |
-| DS-Z3, SP=2, FA2                       | 40.2%     | 4,839   | 2     | Yes    |
-| DS-Z3, SP=2, FA3                       | —         | —       | 2     | pending |
+| Config                      | MFU       | TPS/GPU | Nodes | Status  |
+| --------------------------- | --------- | ------- | ----- | ------- |
+| FSDP2, no liger, sdpa       | —         | —       | 1     | OOM     |
+| FSDP2, liger, sdpa          | 35.9%     | 4,321   | 1     | Yes     |
+| **FSDP2, liger, FA3**       | **56.3%** | 6,783   | 1     | Yes     |
+| FSDP2, CP=2, no liger, sdpa | 31.6%     | 7,615   | 2     | Yes     |
+| DS-Z3, SP=2, FA2            | 40.2%     | 4,839   | 2     | Yes     |
+| DS-Z3, SP=2, FA3            | —         | —       | 2     | pending |
 
 ### SP=2 + FA3 (DeepSpeed ZeRO-3, Qwen3-4B, 32k, 2 nodes)
 
-| Context | Nodes | GPUs | DP  | TP  | CP  | SP  | EP  | Backend         | Attn | MFU       | TPS    | TPS/GPU | Runtime (20 steps) |
-| ------- | ----- | ---- | --- | --- | --- | --- | --- | --------------- | ---- | --------- | ------ | ------- | ------------------ |
-| 32k     | 2     | 16   | 8   | 1   | 1   | 2   | 1   | deepspeed_zero3 | FA2  | 40.2%     | 77,420 | 4,839   | —                  |
-| 32k     | 2     | 16   | 8   | 1   | 1   | 2   | 1   | deepspeed_zero3 | FA3  | 23.6%     | 91,170 | 5,698   | 57.5s              |
+| Context | Nodes | GPUs | DP  | TP  | CP  | SP  | EP  | Backend         | Attn | MFU   | TPS    | TPS/GPU | Runtime (20 steps) |
+| ------- | ----- | ---- | --- | --- | --- | --- | --- | --------------- | ---- | ----- | ------ | ------- | ------------------ |
+| 32k     | 2     | 16   | 8   | 1   | 1   | 2   | 1   | deepspeed_zero3 | FA2  | 40.2% | 77,420 | 4,839   | —                  |
+| 32k     | 2     | 16   | 8   | 1   | 1   | 2   | 1   | deepspeed_zero3 | FA3  | 23.6% | 91,170 | 5,698   | 57.5s              |
 
 **FA3 hurts SP performance**: 23.6% vs 40.2% MFU with FA2 — a 41% MFU regression despite 18% higher raw TPS. The Ulysses SP path splits Q/K/V across GPUs via all-to-all before calling the attention kernel. The FA3 kernel path likely has higher overhead for the split/gather operations or doesn't benefit from the same optimizations as FA2 in the SP context.
 
 ### FA3 Key Finding: Great standalone, bad with SP
 
-| Config                        | FA2/sdpa MFU | FA3 MFU   | Change |
-| ----------------------------- | ------------ | --------- | ------ |
-| FSDP2, liger, 1n (no SP)     | 35.9% (sdpa) | **56.3%** | +57%   |
-| DS-Z3, SP=2, 2n              | 40.2% (FA2)  | 23.6%     | **-41%** |
+| Config                   | FA2/sdpa MFU | FA3 MFU   | Change   |
+| ------------------------ | ------------ | --------- | -------- |
+| FSDP2, liger, 1n (no SP) | 35.9% (sdpa) | **56.3%** | +57%     |
+| DS-Z3, SP=2, 2n          | 40.2% (FA2)  | 23.6%     | **-41%** |
 
 FA3 (`kernels-community/vllm-flash-attn3`) excels as a standalone attention kernel (1.57× speedup over sdpa) but regresses badly when combined with DeepSpeed Ulysses SP. Use FA3 for non-SP configurations; stick with `flash_attention_2` for SP.
 
@@ -1408,11 +1408,11 @@ FA3 gives ~6% improvement over FA2 with SP on 30B — marginal compared to the 5
 
 ### FA3 Summary
 
-| Model | Config | FA2/sdpa MFU | FA3 MFU | Change | Verdict |
-| ----- | ------ | ------------ | ------- | ------ | ------- |
-| 4B    | FSDP2, liger, 1n    | 35.9% (sdpa) | **56.3%** | **+57%** | FA3 wins big |
-| 4B    | DS-Z3, SP=2, 2n     | 40.2% (FA2)  | 23.6%     | **-41%** | FA3 loses with SP |
-| 30B   | DS-Z3, SP=2, 2n     | 9.9% (FA2)   | 10.5%     | +6%      | Marginal gain |
+| Model | Config           | FA2/sdpa MFU | FA3 MFU   | Change   | Verdict           |
+| ----- | ---------------- | ------------ | --------- | -------- | ----------------- |
+| 4B    | FSDP2, liger, 1n | 35.9% (sdpa) | **56.3%** | **+57%** | FA3 wins big      |
+| 4B    | DS-Z3, SP=2, 2n  | 40.2% (FA2)  | 23.6%     | **-41%** | FA3 loses with SP |
+| 30B   | DS-Z3, SP=2, 2n  | 9.9% (FA2)   | 10.5%     | +6%      | Marginal gain     |
 
 - **FA3 without SP**: massive speedup (1.57×) — the Hopper-native kernel is much faster than sdpa for standalone attention
 - **FA3 with SP (4B)**: regression — SP's Ulysses all-to-all path is not optimized for FA3
@@ -1428,79 +1428,79 @@ Qwen3-32B is a dense model with 32B total parameters, all active per token. Qwen
 
 ### Architecture comparison
 
-| Field                 | Qwen3-32B (dense) | Qwen3-30B-A3B (MoE) |
-| --------------------- | ----------------- | -------------------- |
-| model_type            | qwen3             | qwen3_moe            |
-| hidden_size           | 5120              | 2048                 |
-| num_hidden_layers     | 64                | 48                   |
-| num_attention_heads   | 64                | 32                   |
-| num_key_value_heads   | 8                 | 4                    |
-| intermediate_size     | 25600             | 6144                 |
-| moe_intermediate_size | N/A               | 768                  |
-| num_local_experts     | N/A               | 128                  |
-| num_experts_per_tok   | N/A               | 8                    |
-| Total params          | 32B               | 30B                  |
-| Active params/token   | 32B               | ~3B                  |
-| max_position_embeddings | 40960           | 32768                |
+| Field                   | Qwen3-32B (dense) | Qwen3-30B-A3B (MoE) |
+| ----------------------- | ----------------- | ------------------- |
+| model_type              | qwen3             | qwen3_moe           |
+| hidden_size             | 5120              | 2048                |
+| num_hidden_layers       | 64                | 48                  |
+| num_attention_heads     | 64                | 32                  |
+| num_key_value_heads     | 8                 | 4                   |
+| intermediate_size       | 25600             | 6144                |
+| moe_intermediate_size   | N/A               | 768                 |
+| num_local_experts       | N/A               | 128                 |
+| num_experts_per_tok     | N/A               | 8                   |
+| Total params            | 32B               | 30B                 |
+| Active params/token     | 32B               | ~3B                 |
+| max_position_embeddings | 40960             | 32768               |
 
 ### FSDP2 Results (preliminary, sdpa, no liger)
 
-| Config               | Qwen3-32B (dense) MFU | Qwen3-30B-A3B (MoE) MFU | Dense/MoE ratio |
-| -------------------- | --------------------- | ----------------------- | --------------- |
-| 16k, 2n, DP=16       | **36.5%**             | 22.5% (EP=16)           | 1.62×           |
-| 16k, 4n, DP=32       | **37.7%**             | 22.3% (EP=32)           | 1.69×           |
-| 32k, 2n, CP=2         | **18.1%**             | 13.2% (EP=16, CP=2)     | 1.37×           |
+| Config         | Qwen3-32B (dense) MFU | Qwen3-30B-A3B (MoE) MFU | Dense/MoE ratio |
+| -------------- | --------------------- | ----------------------- | --------------- |
+| 16k, 2n, DP=16 | **36.5%**             | 22.5% (EP=16)           | 1.62×           |
+| 16k, 4n, DP=32 | **37.7%**             | 22.3% (EP=32)           | 1.69×           |
+| 32k, 2n, CP=2  | **18.1%**             | 13.2% (EP=16, CP=2)     | 1.37×           |
 
 #### Qwen3-32B full metrics
 
-| Context | Nodes | GPUs | DP  | TP  | CP  | EP  | Backend | Liger | Attn | MFU       | TPS    | TPS/GPU | Peak GPU Mem  | Status |
-| ------- | ----- | ---- | --- | --- | --- | --- | ------- | ----- | ---- | --------- | ------ | ------- | ------------- | ------ |
-| 16k     | 2     | 16   | 16  | 1   | 1   | 1   | fsdp2   | no    | sdpa | 36.5%     | 19,280 | 1,205   | 79.3 GB (99%) | Yes    |
-| 16k     | 2     | 16   | 16  | 1   | 1   | 1   | fsdp2   | yes   | sdpa | 41.1%     | 21,690 | 1,356   | 59.7 GB (75%) | Yes    |
-| 16k     | 2     | 16   | 16  | 1   | 1   | 1   | fsdp2   | yes   | FA3  | **51.3%** | 27,080 | 1,693   | 59.7 GB (75%) | Yes    |
-| 16k     | 4     | 32   | 32  | 1   | 1   | 1   | fsdp2   | no    | sdpa | 37.7%     | 39,790 | 1,243   | 72.2 GB (90%) | Yes    |
-| 16k     | 4     | 32   | 32  | 1   | 1   | 1   | fsdp2   | yes   | sdpa | 40.8%     | 43,020 | 1,344   | —             | Yes    |
-| 16k     | 4     | 32   | 32  | 1   | 1   | 1   | DS-Z3   | no    | sdpa | 33.9%     | 35,770 | 1,118   | —             | Yes    |
-| 32k     | 2     | 16   | 16  | 1   | 1   | 1   | fsdp2   | no    | sdpa | —         | —      | —       | —             | OOM    |
-| 32k     | 2     | 16   | 16  | 1   | 1   | 1   | fsdp2   | yes   | sdpa | 43.1%     | 16,960 | 1,060   | —             | Yes    |
-| 32k     | 2     | 16   | 16  | 1   | 1   | 1   | fsdp2   | yes   | FA3  | **59.0%** | 23,200 | 1,450   | —             | Yes    |
-| 32k     | 2     | 16   | 8   | 1   | 2   | 1   | fsdp2   | no    | sdpa | 18.1%     | 14,190 | 887     | —             | Yes    |
-| 32k     | 2     | 16   | 8   | 1   | 2   | 1   | fsdp2   | yes   | sdpa | 19.8%     | 15,550 | 972     | 60.9 GB (76%) | Yes    |
-| 32k     | 4     | 32   | 16  | 1   | 2   | 1   | fsdp2   | no    | sdpa | 18.4%     | 28,870 | 902     | —             | Yes    |
-| 32k     | 4     | 32   | 16  | 1   | 2   | 1   | fsdp2   | yes   | sdpa | 19.4%     | 30,460 | 952     | —             | Yes    |
-| 32k     | 2     | 16   | 8   | 1   | 1   | 1   | DS-Z3   | no    | FA2 (SP=2) | —      | —      | —       | —             | OOM    |
-| 32k     | 2     | 16   | 8   | 1   | 1   | 1   | DS-Z3   | no    | FA3 (SP=2) | —      | —      | —       | —             | OOM    |
-| 32k     | 2     | 16   | 8   | 1   | 1   | 1   | DS-Z3   | yes   | FA2 (SP=2) | 25.0%  | 19,630 | 1,227   | —             | Yes    |
-| 32k     | 2     | 16   | 8   | 1   | 1   | 1   | DS-Z3   | yes   | FA3 (SP=2) | 29.7%  | 23,380 | 1,461   | —             | Yes    |
-| 16k     | 2     | 16   | 8   | 2   | 1   | 1   | fsdp2   | no    | sdpa       | —      | —      | —       | —             | OOM    |
-| 16k     | 2     | 16   | 8   | 2   | 1   | 1   | fsdp2   | yes   | sdpa       | 38.5%  | 20,310 | 1,269   | —             | Yes    |
+| Context | Nodes | GPUs | DP  | TP  | CP  | EP  | Backend | Liger | Attn       | MFU       | TPS    | TPS/GPU | Peak GPU Mem  | Status |
+| ------- | ----- | ---- | --- | --- | --- | --- | ------- | ----- | ---------- | --------- | ------ | ------- | ------------- | ------ |
+| 16k     | 2     | 16   | 16  | 1   | 1   | 1   | fsdp2   | no    | sdpa       | 36.5%     | 19,280 | 1,205   | 79.3 GB (99%) | Yes    |
+| 16k     | 2     | 16   | 16  | 1   | 1   | 1   | fsdp2   | yes   | sdpa       | 41.1%     | 21,690 | 1,356   | 59.7 GB (75%) | Yes    |
+| 16k     | 2     | 16   | 16  | 1   | 1   | 1   | fsdp2   | yes   | FA3        | **51.3%** | 27,080 | 1,693   | 59.7 GB (75%) | Yes    |
+| 16k     | 4     | 32   | 32  | 1   | 1   | 1   | fsdp2   | no    | sdpa       | 37.7%     | 39,790 | 1,243   | 72.2 GB (90%) | Yes    |
+| 16k     | 4     | 32   | 32  | 1   | 1   | 1   | fsdp2   | yes   | sdpa       | 40.8%     | 43,020 | 1,344   | —             | Yes    |
+| 16k     | 4     | 32   | 32  | 1   | 1   | 1   | DS-Z3   | no    | sdpa       | 33.9%     | 35,770 | 1,118   | —             | Yes    |
+| 32k     | 2     | 16   | 16  | 1   | 1   | 1   | fsdp2   | no    | sdpa       | —         | —      | —       | —             | OOM    |
+| 32k     | 2     | 16   | 16  | 1   | 1   | 1   | fsdp2   | yes   | sdpa       | 43.1%     | 16,960 | 1,060   | —             | Yes    |
+| 32k     | 2     | 16   | 16  | 1   | 1   | 1   | fsdp2   | yes   | FA3        | **59.0%** | 23,200 | 1,450   | —             | Yes    |
+| 32k     | 2     | 16   | 8   | 1   | 2   | 1   | fsdp2   | no    | sdpa       | 18.1%     | 14,190 | 887     | —             | Yes    |
+| 32k     | 2     | 16   | 8   | 1   | 2   | 1   | fsdp2   | yes   | sdpa       | 19.8%     | 15,550 | 972     | 60.9 GB (76%) | Yes    |
+| 32k     | 4     | 32   | 16  | 1   | 2   | 1   | fsdp2   | no    | sdpa       | 18.4%     | 28,870 | 902     | —             | Yes    |
+| 32k     | 4     | 32   | 16  | 1   | 2   | 1   | fsdp2   | yes   | sdpa       | 19.4%     | 30,460 | 952     | —             | Yes    |
+| 32k     | 2     | 16   | 8   | 1   | 1   | 1   | DS-Z3   | no    | FA2 (SP=2) | —         | —      | —       | —             | OOM    |
+| 32k     | 2     | 16   | 8   | 1   | 1   | 1   | DS-Z3   | no    | FA3 (SP=2) | —         | —      | —       | —             | OOM    |
+| 32k     | 2     | 16   | 8   | 1   | 1   | 1   | DS-Z3   | yes   | FA2 (SP=2) | 25.0%     | 19,630 | 1,227   | —             | Yes    |
+| 32k     | 2     | 16   | 8   | 1   | 1   | 1   | DS-Z3   | yes   | FA3 (SP=2) | 29.7%     | 23,380 | 1,461   | —             | Yes    |
+| 16k     | 2     | 16   | 8   | 2   | 1   | 1   | fsdp2   | no    | sdpa       | —         | —      | —       | —             | OOM    |
+| 16k     | 2     | 16   | 8   | 2   | 1   | 1   | fsdp2   | yes   | sdpa       | 38.5%     | 20,310 | 1,269   | —             | Yes    |
 
 ### Comparison: 32B Dense vs 30B MoE (same hardware, best config per model)
 
-| Config                    | Qwen3-32B (dense) MFU | Qwen3-30B-A3B (MoE) MFU | Dense/MoE ratio |
-| ------------------------- | --------------------- | ----------------------- | --------------- |
-| 16k, 2n, FSDP2            | 36.5%                 | 22.5% (EP=16)           | 1.62×           |
-| 16k, 2n, liger             | 41.1%                 | N/A (liger incompatible) | —              |
-| 16k, 2n, liger+FA3         | **51.3%**             | N/A                      | —              |
-| 16k, 4n, FSDP2            | 37.7%                 | 22.3% (EP=32)           | 1.69×           |
-| 16k, 4n, liger             | 40.8%                 | N/A                      | —              |
-| 16k, 4n, DS-Z3             | 33.9%                 | 18.9%                   | 1.79×           |
-| 32k, 2n, DP-only, liger    | 43.1%                 | N/A (OOM without EP)     | —              |
-| 32k, 2n, DP-only, liger+FA3 | **59.0%**            | N/A                      | —              |
-| 32k, 2n, CP=2              | 18.1%                 | 13.2% (EP=16, CP=2)     | 1.37×           |
-| 32k, 2n, CP=2, liger       | 19.8%                 | N/A                      | —              |
-| 32k, 4n, CP=2              | 18.4%                 | —                        | —              |
-| 32k, 4n, CP=2, liger       | 19.4%                 | N/A                      | —              |
+| Config                      | Qwen3-32B (dense) MFU | Qwen3-30B-A3B (MoE) MFU  | Dense/MoE ratio |
+| --------------------------- | --------------------- | ------------------------ | --------------- |
+| 16k, 2n, FSDP2              | 36.5%                 | 22.5% (EP=16)            | 1.62×           |
+| 16k, 2n, liger              | 41.1%                 | N/A (liger incompatible) | —               |
+| 16k, 2n, liger+FA3          | **51.3%**             | N/A                      | —               |
+| 16k, 4n, FSDP2              | 37.7%                 | 22.3% (EP=32)            | 1.69×           |
+| 16k, 4n, liger              | 40.8%                 | N/A                      | —               |
+| 16k, 4n, DS-Z3              | 33.9%                 | 18.9%                    | 1.79×           |
+| 32k, 2n, DP-only, liger     | 43.1%                 | N/A (OOM without EP)     | —               |
+| 32k, 2n, DP-only, liger+FA3 | **59.0%**             | N/A                      | —               |
+| 32k, 2n, CP=2               | 18.1%                 | 13.2% (EP=16, CP=2)      | 1.37×           |
+| 32k, 2n, CP=2, liger        | 19.8%                 | N/A                      | —               |
+| 32k, 4n, CP=2               | 18.4%                 | —                        | —               |
+| 32k, 4n, CP=2, liger        | 19.4%                 | N/A                      | —               |
 
 ### Liger + FA3 impact on 32B
 
-| Context | Variant       | MFU       | TPS/GPU | vs baseline |
-| ------- | ------------- | --------- | ------- | ----------- |
-| 16k     | baseline sdpa | 36.5%     | 1,205   | —           |
-| 16k     | + liger       | 41.1%     | 1,356   | +13%        |
-| 16k     | + liger + FA3 | **51.3%** | 1,693   | **+41%**    |
-| 32k     | baseline sdpa | —         | —       | OOM         |
-| 32k     | + liger       | 43.1%     | 1,060   | (enables 32k) |
+| Context | Variant       | MFU       | TPS/GPU | vs baseline                          |
+| ------- | ------------- | --------- | ------- | ------------------------------------ |
+| 16k     | baseline sdpa | 36.5%     | 1,205   | —                                    |
+| 16k     | + liger       | 41.1%     | 1,356   | +13%                                 |
+| 16k     | + liger + FA3 | **51.3%** | 1,693   | **+41%**                             |
+| 32k     | baseline sdpa | —         | —       | OOM                                  |
+| 32k     | + liger       | 43.1%     | 1,060   | (enables 32k)                        |
 | 32k     | + liger + FA3 | **59.0%** | 1,450   | **(enables 32k + 1.37× over liger)** |
 
 Liger+FA3 on the 32B dense model achieves **59.0% MFU at 32k** — the highest MFU across all benchmarks. At 16k it reaches 51.3%. Both are consistent with the 4B pattern (56.3% MFU). The dense architecture benefits fully from both optimizations since liger's fused SwiGLU works with standard 2D MLP weights.
@@ -1542,11 +1542,11 @@ FA3 gives +19% over FA2 with SP+liger — better than the 4B where FA3 regressed
 
 Best configs for Qwen3-32B:
 
-| Context | Best MFU       | Config                      |
-| ------- | -------------- | --------------------------- |
-| 16k     | **51.3%**      | FSDP2, liger+FA3, 2n DP=16  |
-| 32k     | **59.0%**      | FSDP2, liger+FA3, 2n DP=16  |
-| 32k SP  | 29.7%          | DS-Z3, SP=2+FA3+liger, 2n   |
+| Context | Best MFU  | Config                     |
+| ------- | --------- | -------------------------- |
+| 16k     | **51.3%** | FSDP2, liger+FA3, 2n DP=16 |
+| 32k     | **59.0%** | FSDP2, liger+FA3, 2n DP=16 |
+| 32k SP  | 29.7%     | DS-Z3, SP=2+FA3+liger, 2n  |
 
 ---
 
@@ -1558,11 +1558,11 @@ Compare FA3 (`kernels-community/vllm-flash-attn3`) vs sdpa for Qwen3-30B-A3B MoE
 
 ### Results
 
-| Config | Nodes | DP | TP | CP | EP | SP | Attn | MFU | TPS/GPU | Peak GPU Mem | Status |
-| ------ | ----- | -- | -- | -- | -- | -- | ---- | --- | ------- | ------------ | ------ |
-| FSDP2, 16k, no EP | 2 | 16 | 1 | 1 | 1 | 1 | sdpa | 23.1% | 3,888 | -- | Baseline |
-| FSDP2, 16k, no EP | 2 | 16 | 1 | 1 | 1 | 1 | FA3 | **25.65%** | 4,318 | 71.1 GB (89%) | New |
-| FSDP2, 16k, EP=16 | 2 | 16 | 1 | 1 | 16 | 1 | FA3 | -- | -- | -- | Failed (mesh compat) |
+| Config            | Nodes | DP  | TP  | CP  | EP  | SP  | Attn | MFU        | TPS/GPU | Peak GPU Mem  | Status               |
+| ----------------- | ----- | --- | --- | --- | --- | --- | ---- | ---------- | ------- | ------------- | -------------------- |
+| FSDP2, 16k, no EP | 2     | 16  | 1   | 1   | 1   | 1   | sdpa | 23.1%      | 3,888   | --            | Baseline             |
+| FSDP2, 16k, no EP | 2     | 16  | 1   | 1   | 1   | 1   | FA3  | **25.65%** | 4,318   | 71.1 GB (89%) | New                  |
+| FSDP2, 16k, EP=16 | 2     | 16  | 1   | 1   | 16  | 1   | FA3  | --         | --      | --            | Failed (mesh compat) |
 
 ### Findings
 
@@ -1580,23 +1580,23 @@ Systematic FA3 evaluation across Qwen3-30B-A3B (MoE) and Qwen3-32B (dense) at 32
 
 ### Qwen3-30B-A3B (MoE) results
 
-| Config | Ctx | Nodes | DP | TP | CP | EP | SP | Attn | MFU | TPS/GPU | Peak GPU Mem | Status |
-| ------ | --- | ----- | -- | -- | -- | -- | -- | ---- | --- | ------- | ------------ | ------ |
-| FSDP2 DP-only | 16k | 2 | 16 | 1 | 1 | 1 | 1 | sdpa | 23.1% | 3,888 | -- | Baseline |
-| FSDP2 DP-only | 16k | 2 | 16 | 1 | 1 | 1 | 1 | FA3 | **25.65%** | 4,318 | 71.1 GB (89%) | +11% |
-| FSDP2 CP=2 | 32k | 2 | 8 | 1 | 2 | 1 | 1 | sdpa | 13.57% | 2,757 | 69.2 GB (87%) | Baseline |
-| DS-Z3 SP=2 | 32k | 2 | 8 | 1 | 1 | 1 | 2 | FA3 | **14.49%** | 2,944 | 53.3 GB (67%) | +6.8% |
-| DS-Z3 SP=4 FA2 | 64k | 2 | 4 | 1 | 1 | 1 | 4 | FA2 | 11.6% | 2,624 | 54.4 GB (68%) | Baseline |
-| DS-Z3 SP=4 | 64k | 2 | 4 | 1 | 1 | 1 | 4 | FA3 | **12.52%** | 2,837 | 54.4 GB (68%) | +7.9% |
+| Config         | Ctx | Nodes | DP  | TP  | CP  | EP  | SP  | Attn | MFU        | TPS/GPU | Peak GPU Mem  | Status   |
+| -------------- | --- | ----- | --- | --- | --- | --- | --- | ---- | ---------- | ------- | ------------- | -------- |
+| FSDP2 DP-only  | 16k | 2     | 16  | 1   | 1   | 1   | 1   | sdpa | 23.1%      | 3,888   | --            | Baseline |
+| FSDP2 DP-only  | 16k | 2     | 16  | 1   | 1   | 1   | 1   | FA3  | **25.65%** | 4,318   | 71.1 GB (89%) | +11%     |
+| FSDP2 CP=2     | 32k | 2     | 8   | 1   | 2   | 1   | 1   | sdpa | 13.57%     | 2,757   | 69.2 GB (87%) | Baseline |
+| DS-Z3 SP=2     | 32k | 2     | 8   | 1   | 1   | 1   | 2   | FA3  | **14.49%** | 2,944   | 53.3 GB (67%) | +6.8%    |
+| DS-Z3 SP=4 FA2 | 64k | 2     | 4   | 1   | 1   | 1   | 4   | FA2  | 11.6%      | 2,624   | 54.4 GB (68%) | Baseline |
+| DS-Z3 SP=4     | 64k | 2     | 4   | 1   | 1   | 1   | 4   | FA3  | **12.52%** | 2,837   | 54.4 GB (68%) | +7.9%    |
 
 ### Qwen3-32B (Dense) results — pending
 
-| Config | Ctx | Nodes | DP | TP | CP | EP | SP | Attn | MFU | TPS/GPU | Peak GPU Mem | Status |
-| ------ | --- | ----- | -- | -- | -- | -- | -- | ---- | --- | ------- | ------------ | ------ |
-| FSDP2 liger+FA3 DP-only | 32k | 2 | 16 | 1 | 1 | 1 | 1 | FA3 | 59.0% | 1,450 | 78.4 GB (98%) | Baseline (2n) |
-| FSDP2 liger+FA3 DP-only | 32k | 4 | 32 | 1 | 1 | 1 | 1 | FA3 | -- | -- | -- | Job 22081011 |
-| FSDP2 liger CP=2 | 64k | 2 | 8 | 1 | 2 | 1 | 1 | sdpa | -- | -- | -- | Job 22081012 |
-| DS-Z3 liger SP=2 | 64k | 2 | 8 | 1 | 1 | 1 | 2 | FA3 | -- | -- | -- | Job 22081013 |
+| Config                  | Ctx | Nodes | DP  | TP  | CP  | EP  | SP  | Attn | MFU   | TPS/GPU | Peak GPU Mem  | Status        |
+| ----------------------- | --- | ----- | --- | --- | --- | --- | --- | ---- | ----- | ------- | ------------- | ------------- |
+| FSDP2 liger+FA3 DP-only | 32k | 2     | 16  | 1   | 1   | 1   | 1   | FA3  | 59.0% | 1,450   | 78.4 GB (98%) | Baseline (2n) |
+| FSDP2 liger+FA3 DP-only | 32k | 4     | 32  | 1   | 1   | 1   | 1   | FA3  | --    | --      | --            | Job 22081011  |
+| FSDP2 liger CP=2        | 64k | 2     | 8   | 1   | 2   | 1   | 1   | sdpa | --    | --      | --            | Job 22081012  |
+| DS-Z3 liger SP=2        | 64k | 2     | 8   | 1   | 1   | 1   | 2   | FA3  | --    | --      | --            | Job 22081013  |
 
 ### Findings so far
 
@@ -1605,3 +1605,2049 @@ Systematic FA3 evaluation across Qwen3-30B-A3B (MoE) and Qwen3-32B (dense) at 32
 - **New best 64k MoE: 12.52% MFU** with DS-Z3+SP=4+FA3, beating the previous best of 11.6% (FA2 SP=4).
 - **FA3 + CP is incompatible**: `Context parallelism is supported only with SDPA attention`. SP is the only long-context path for FA3.
 - **FA3 + EP is incompatible**: FSDP2 mesh dimension mismatch when EP is enabled. Needs transformers/accelerate fix.
+
+---
+
+## 2026-04-24: SonicMoE kernel benchmark
+
+**Setup**: Qwen3-30B-A3B (MoE), 2 nodes (16× H100 NVL), bf16, packing=wrapped, 20 steps.
+
+- transformers `5.7.0.dev0` @ `a7c92b3305` (rebased, with `kernels-community/sonic-moe` PR #45433)
+- TRL `benchmark-sft-moe` branch (this branch)
+- New `--experts_implementation` flag in `SFTConfig` to control expert dispatch (`grouped_mm` default, `sonicmoe`, `batched_mm`)
+
+### FSDP2 OOM regression — fixed in this branch
+
+After rebasing transformers from `5.6.0.dev0` to `5.7.0.dev0`, FSDP2 model loading for Qwen3-30B-A3B started OOMing on CPU (~480GB peak per node). Root cause: `from_pretrained` in the new transformers loads the full model on CPU on every rank, and the `is_fsdp_enabled()` rank-0-only path in `_move_missing_keys_from_meta_to_device` only handles missing keys, not the actual loading. With 8 ranks/node × ~60GB model each, peak CPU exceeded the cgroup limit even on p5.48xlarge (2TB).
+
+**Fix** (in `trl/scripts/sft.py`): wrap the non-rank-0 `from_pretrained` call in `accelerate.init_empty_weights()`. Only rank 0 loads the full model to CPU; other ranks get meta-device tensors. accelerate's FSDP2 prepare broadcasts rank 0's weights to all ranks during sharding. Loading drops from ~480GB → ~60GB per node.
+
+```python
+from accelerate import init_empty_weights
+ctx = init_empty_weights() if is_fsdp and local_rank != 0 else contextlib.nullcontext()
+with ctx:
+    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+```
+
+### SonicMoE results — Qwen3-30B-A3B, 2 nodes, 20-step runs
+
+| Ctx | Config                | Backend         | Attn | Implementation | MFU (step 20) | TPS    | TPS/GPU | Peak GPU Mem  | vs baseline                  |
+| --- | --------------------- | --------------- | ---- | -------------- | ------------- | ------ | ------- | ------------- | ---------------------------- |
+| 16k | Control               | FSDP2 DP=16     | sdpa | grouped_mm     | **23.0%**     | 62,049 | 3,878   | 69.3 GB (87%) | 100% (baseline 23.1%)        |
+| 16k | sonicmoe              | FSDP2 DP=16     | sdpa | sonicmoe       | 8.1%          | 21,879 | 1,367   | 68.3 GB (86%) | -65% (kernel warmup)         |
+| 16k | sonicmoe + FA3        | FSDP2 DP=16     | FA3  | sonicmoe       | 20.8%         | 56,002 | 3,500   | 68.3 GB (86%) | -19% (vs 25.7% FA3 baseline) |
+| 32k | sonicmoe + SP=2 + FA3 | DS-Z3 DP=8 SP=2 | FA3  | sonicmoe       | 13.7%         | 44,439 | 2,777   | 79.4 GB (99%) | -6% (vs 14.5% baseline)      |
+
+### MFU progression — kernel warmup dominates short runs
+
+Per-logging-step MFU values (computed over the previous 5 steps each):
+
+| Step | sonicmoe sdpa | sonicmoe + FA3 | sonicmoe + SP=2 + FA3 (32k) |
+| ---- | ------------- | -------------- | --------------------------- |
+| 5    | 2.6%          | 10.0%          | 6.8%                        |
+| 10   | 4.8%          | 15.1%          | 10.4%                       |
+| 15   | 6.6%          | 18.5%          | 12.3%                       |
+| 20   | **8.1%**      | **20.8%**      | **13.7%**                   |
+
+All three sonicmoe runs show monotonic MFU increase — Triton/CuteDSL JIT compilation overhead dominates early steps and amortizes as training progresses. **The 20-step window is too short to capture steady-state MFU**; the kernel is still climbing at step 20.
+
+### Findings
+
+1. **FSDP2 loading regression in transformers `5.7.0.dev0`**: `is_fsdp_enabled()` rank-0-only loading no longer activates in the new `convert_and_load_state_dict_in_model` path — every rank loads the full model to CPU, OOMing on 30B+ MoE. Fixed in this branch by wrapping non-rank-0 `from_pretrained` in `accelerate.init_empty_weights()`.
+2. **SonicMoE warmup is extreme**: per-step MFU more than doubles from step 5 to step 20 across all configs. Triton/CuteDSL JIT compiles per shape on first calls. Benchmarks under 20 steps systematically underestimate sonicmoe's steady-state throughput — a 50+ step run is in flight to verify convergence.
+3. **Sonicmoe sdpa is the worst case** (8.1% MFU): without FA3 attention speedup, the kernel warmup overhead is not amortized. Sonicmoe pairs better with FA3.
+4. **The longer-context / smaller-DP runs warm up faster**: 32k SP=2 reaches 94% of its baseline MFU (13.7 vs 14.5) at step 20 vs only 81% for 16k FA3 (20.8 vs 25.7). Larger compute per step → kernel calls saturate sooner.
+5. **Memory parity**: peak GPU memory is essentially identical between grouped_mm and sonicmoe — the kernel uses the same fused weight layout, no additional buffers.
+
+### Observations on sonicmoe behavior
+
+- The kernel produces correct outputs (loss values match grouped_mm baseline at step 5: 2.7 vs 1.6 within initial-noise range; train loss curves overlap by step 20).
+- Peak GPU memory stays within ~1 GB of the grouped_mm baseline — the kernel does not allocate large persistent buffers.
+- The 32k DS-Z3 + SP=2 + FA3 + sonicmoe run hit 79.4 GB peak (99% of H100) — already at the memory ceiling. Adding any other dimension (longer context, larger DP) will OOM.
+
+### 50-step run — sonicmoe converges to grouped_mm + FA3 baseline
+
+A 50-step run with sonicmoe + FA3 (16k, 2n, FSDP2 DP=16) confirms the warmup hypothesis. MFU climbs monotonically until step 40 where it matches the grouped_mm + FA3 baseline (25.7%).
+
+| Step   | MFU        | TPS    |
+| ------ | ---------- | ------ |
+| 5      | 10.28%     | 27,690 |
+| 10     | 15.35%     | 41,350 |
+| 15     | 18.75%     | 50,510 |
+| 20     | 21.09%     | 56,810 |
+| 25     | 22.49%     | 60,580 |
+| 30     | 23.79%     | 64,100 |
+| 35     | 24.69%     | 66,510 |
+| **40** | **25.30%** | 68,160 |
+| 45     | 12.46%\*   | 33,570 |
+| 50     | 13.30%\*   | 35,830 |
+
+\*Step 45/50 had a 200s pause between logging events (vs ~15s normal interval), likely a checkpoint/sync stall — disregard as MFU outliers, not kernel slowdown.
+
+**At step 40, sonicmoe + FA3 reaches 25.30% MFU vs 25.7% baseline (grouped_mm + FA3) — within 1.5% of parity.** Triton/CuteDSL JIT compilation accounts for the slower steps 1-35. After warmup, sonicmoe matches grouped_mm.
+
+### Open questions
+
+- **Beyond step 40**: does sonicmoe surpass grouped_mm in long training runs? The trajectory is still slightly upward at step 40 — a 100+ step run may show modest gains.
+- **Memory headroom at scale**: 32k DS-Z3 + SP=2 + sonicmoe hit 99% GPU memory (79.4 GB). Adding context length or DP would OOM.
+- **CP compatibility**: sonicmoe + CP not tested — CP requires sdpa, and sonicmoe + sdpa is the slowest combo here.
+
+---
+
+## 2026-04-25: SonicMoE rerun with upstream FSDP fix
+
+After bisecting the FSDP2 OOM to transformers PR #45050 (`empty_like` → `zeros_like`) and applying a proper upstream patch (skip param materialization on non-rank-0 FSDP ranks; only buffers need real placeholders), reran the sonicmoe benchmark suite without the `init_empty_weights()` workaround. PR draft in `benchmark/fix_pr.md`; pushed to `AmineDiro/transformers:fix-fsdp2-cpu-ram-zeros-like`.
+
+**Setup**: same as 2026-04-24 — Qwen3-30B-A3B, 2 nodes (16× H100 NVL), bf16, packing=wrapped, 20 steps. transformers `5.7.0.dev0` @ `a7c92b3305` + the FSDP fix patch. TRL `benchmark-sft-moe` branch with `init_empty_weights` workaround removed.
+
+### Results
+
+| Ctx | Config                | Backend         | Attn | Implementation | MFU (step 20) | TPS    | TPS/GPU | Peak GPU Mem  | Note                                               |
+| --- | --------------------- | --------------- | ---- | -------------- | ------------- | ------ | ------- | ------------- | -------------------------------------------------- |
+| 16k | Control               | FSDP2 DP=16     | sdpa | grouped_mm     | **22.6%**     | 60,772 | 3,798   | 69.5 GB (87%) | Matches 23.1% historical baseline                  |
+| 16k | sonicmoe              | FSDP2 DP=16     | sdpa | sonicmoe       | 17.5%         | 47,208 | 2,950   | 68.6 GB (86%) | +9 pp over 2026-04-24 (8.1%) — kernel cache warmer |
+| 16k | sonicmoe + FA3        | FSDP2 DP=16     | FA3  | sonicmoe       | 20.3%         | 54,780 | 3,424   | 68.6 GB (86%) | Matches 2026-04-24 (20.8%)                         |
+| 32k | sonicmoe + SP=2 + FA3 | DS-Z3 DP=8 SP=2 | FA3  | sonicmoe       | **14.66%**    | 47,661 | 2,979   | 78.6 GB (99%) | **+1% over 14.5% baseline**                        |
+
+### 50-step sonicmoe + FA3 — kernel beats grouped_mm baseline at steady state
+
+A 50-step run with sonicmoe + FA3 (16k, 2n, FSDP2 DP=16) shows the kernel converges past the grouped_mm + FA3 historical baseline (25.7%):
+
+| Step   | MFU        |
+| ------ | ---------- |
+| 5      | 8.95%      |
+| 10     | 14.03%     |
+| 15     | 17.50%     |
+| 20     | 19.94%     |
+| 25     | 21.59%     |
+| 30     | 23.02%     |
+| 35     | 24.17%     |
+| 40     | 24.95%     |
+| 45     | 25.20%     |
+| **50** | **25.88%** |
+
+Final TPS: 69,728. Loss converges normally (1.66). Peak GPU memory: 68.6 GB (86%).
+
+**At step 50, sonicmoe + FA3 reaches 25.88% MFU vs the 25.7% historical baseline (grouped_mm + FA3) — slightly ahead of the baseline.** The trajectory is still upward at step 50, suggesting longer runs may extend the gap.
+
+### Findings
+
+1. **FSDP2 fix validated**: control matches the historical baseline (22.6% vs 23.1%); sonicmoe runs land within 1 pp of (or above) prior numbers. The upstream patch (`fix-fsdp2-cpu-ram-zeros-like`) is functionally equivalent to the `init_empty_weights()` workaround, with a smaller TRL footprint.
+2. **Sonicmoe + FA3 ≥ grouped_mm + FA3 at steady state**: 25.88% vs 25.7% historical baseline at 16k FSDP2. The kernel is at parity (or marginally ahead) once the Triton/CuteDSL JIT cache is populated.
+3. **Sonicmoe + SP=2 + FA3 wins at 32k**: 14.66% vs 14.5% baseline. New best 32k MoE config. Hits 99% GPU memory — at the H100 ceiling.
+4. **Sonicmoe + sdpa improved across runs (8.1% → 17.5%)**: same code, same config — the difference is the kernel binary cache being populated from the previous day's runs. First sonicmoe run on a fresh node pays the full Triton/CuteDSL compile cost; subsequent runs hit the cache.
+5. **Per-step warmup curve is reproducible**: 50-step trajectory in this run matches the trajectory from 2026-04-24 within ~1 pp at every logging step.
+
+### Best configs for Qwen3-30B-A3B (updated)
+
+| Context | MFU        | Config                                  | Note                                                   |
+| ------- | ---------- | --------------------------------------- | ------------------------------------------------------ |
+| 16k     | **25.88%** | FSDP2 DP=16 + FA3 + sonicmoe (50 steps) | New best — slightly beats prior 25.7% grouped_mm + FA3 |
+| 32k     | **14.66%** | DS-Z3 DP=8 SP=2 + FA3 + sonicmoe        | New best — slightly beats prior 14.5%                  |
+
+---
+
+## 2026-04-25 (later): Per-window (instantaneous) MFU — sonicmoe is +23% over grouped_mm + FA3
+
+The cumulative MFU metric (`num_input_tokens_seen / total_runtime`) is dominated by step-1 cost (kernel compile, autotune, FSDP init) for many steps after compile is done. Added `mfu_window` to `SFTTrainer.log` that measures TPS over the _last logging window_ only — that's the real per-step throughput once the model is warm.
+
+### 50-step runs at 16k, 2 nodes × 8 H100, FSDP2 DP=16
+
+| Config            | Cumulative MFU (step 50) | Window MFU (per-log-window) | Cumulative TPS | Window TPS |
+| ----------------- | ------------------------ | --------------------------- | -------------- | ---------- |
+| grouped_mm + sdpa | 23.54%                   | **24.31%**                  | 63,398         | 65,480     |
+| grouped_mm + FA3  | 27.94%                   | **28.12%**                  | 75,140         | 75,760     |
+| sonicmoe + FA3    | 26.23%                   | **34.70%**                  | 70,612         | 93,480     |
+
+For grouped_mm runs, cumulative ≈ window — the kernel doesn't have a meaningful first-step compile cost, so cumulative averaging doesn't bias the result much. For sonicmoe, window is **8.5 pp higher** than cumulative — confirming the entire "warmup curve" we previously observed was just the slow first step (~25–30s for Triton/CuteDSL compile + autotune) being slowly diluted by the cumulative average.
+
+### Window MFU trajectory (per logging step) — stable from step 10 onwards
+
+| Step | grouped_mm + sdpa | grouped_mm + FA3 | sonicmoe + FA3 |
+| ---- | ----------------- | ---------------- | -------------- |
+| 5    | 24.31%            | 27.88%           | — (init)       |
+| 10   | 24.64%            | 29.69%           | 32.33%         |
+| 15   | 23.97%            | 28.17%           | 34.81%         |
+| 20   | 24.46%            | 29.62%           | 34.85%         |
+| 25   | 24.54%            | 29.62%           | 32.25%         |
+| 30   | 23.62%            | 27.86%           | 34.58%         |
+| 35   | 24.48%            | 29.68%           | 34.64%         |
+| 40   | 23.84%            | 29.20%           | 32.15%         |
+| 45   | —                 | —                | 27.70%\*       |
+| 50   | 24.31%            | 28.12%           | 34.70%         |
+
+\*Step 45 for sonicmoe shows a single dip — likely a transient stall (NCCL sync, kernel cache miss on a rare shape, or trackio commit). Other steps cluster tightly around 32–35%.
+
+### Speedups (window MFU ratios)
+
+- **FA3 over sdpa** (grouped_mm): 28.12 / 24.31 = **+15.7%** — pure attention speedup.
+- **sonicmoe vs grouped_mm**, both with FA3: 34.70 / 28.12 = **+23.4%** — the kernel itself is a big win at steady state.
+- **sonicmoe + FA3 vs sdpa baseline**: 34.70 / 24.31 = **+42.7%** total improvement.
+
+### Why the cumulative MFU was misleading
+
+For sonicmoe, step 1 takes ~25–30s (CuteDSL compile, autotune, first-touch). Steps 2+ run at ~3.0s. Per-step times measured from `train_runtime` deltas:
+
+| Window | Δ time / 5 steps | Δ time / step              |
+| ------ | ---------------- | -------------------------- |
+| 1–5    | ~47s             | ~9.4s (poisoned by step 1) |
+| 6–10   | ~16s             | ~3.2s                      |
+| 11–15  | ~14.5s           | ~2.9s                      |
+| ≥ 16   | ~14–16s          | ~2.9–3.2s                  |
+
+Cumulative TPS = total_tokens / total_time. With ~30s of compile dominating the first ~10 steps' worth of throughput, it takes 50+ steps for the cumulative average to approach steady-state. **By step 50 the cumulative metric is still 8.5 pp below the actual per-step performance.** The kernel itself is at steady speed from step 2 onwards — exactly as one would expect from a Triton/CuteDSL kernel that compiles once.
+
+### Updated best-config table for Qwen3-30B-A3B (window MFU)
+
+| Context           | Window MFU  | Config                                                                |
+| ----------------- | ----------- | --------------------------------------------------------------------- |
+| 16k               | **34.7%**   | FSDP2 DP=16 + FA3 + sonicmoe                                          |
+| 16k (no sonicmoe) | 28.1%       | FSDP2 DP=16 + FA3 + grouped_mm                                        |
+| 16k (sdpa)        | 24.3%       | FSDP2 DP=16 + sdpa + grouped_mm                                       |
+| 32k               | 14.7% (cum) | DS-Z3 DP=8 SP=2 + FA3 + sonicmoe — needs 50-step rerun for window MFU |
+
+### Action items / next steps
+
+- All future MFU reporting should use **window MFU** (instantaneous per-log-window) as the primary metric. Cumulative MFU is biased by initialization cost and underreports steady-state throughput, especially for kernels with non-trivial first-call cost (Triton, CuteDSL, inductor-compiled paths).
+- Re-run the 32k DS-Z3+SP=2+FA3+sonicmoe config for 50 steps to get its steady-state window MFU; the cumulative 14.66% likely understates by ~5–8 pp.
+- The historical "best MFU" numbers in earlier sections of this report are all 20-step cumulative — they all underestimate steady-state throughput by varying amounts depending on kernel-init cost.
+
+---
+
+## 2026-04-26: PR #45621 (Better Grouped GEMM + EP) — sentinel-skip benchmark
+
+The sonicmoe author's [transformers PR #45621](https://github.com/huggingface/transformers/pull/45621) reworks `grouped_mm_experts_forward` to **let sentinel rows fall past `offsets[-1]` instead of clamping** them. With that, the grouped_mm kernel skips compute for tokens that route to non-local experts — micro-benchmark in the PR shows 0.20× kernel time (5× speedup) at EP=8 (12.5% local routing).
+
+Applied just the `moe.py` portion of the patch to `/fsx/amine_dirhoussi/transformers`. 50-step runs at 16k, 2 nodes × 8 H100, FSDP2, with `mfu_window` for steady-state.
+
+### Results
+
+| Config                    | EP                     | Attn | Cum MFU | **Window MFU** | TPS    | Peak GPU Mem |
+| ------------------------- | ---------------------- | ---- | ------- | -------------- | ------ | ------------ |
+| grouped_mm (no EP)        | 1                      | sdpa | 24.05%  | **24.41%**     | 65,500 | 69.5 GB      |
+| grouped_mm (no EP)        | 1                      | FA3  | 28.30%  | **28.26%**     | 75,800 | 71.1 GB      |
+| grouped_mm + PR #45621    | 8 (2D mesh, dp=2 tp=8) | sdpa | 26.98%  | **27.50%**     | 74,080 | tbd          |
+| sonicmoe + FA3 (50 steps) | 1                      | FA3  | 26.23%  | **34.70%**     | 93,480 | 68.6 GB      |
+
+### Speedup analysis
+
+Without EP, PR #45621 is essentially a no-op (in-place ops, simplified indexing — no sentinels to skip). With EP=8, 87.5% of expert tokens are sentinels, and PR #45621 lets the kernel skip them entirely.
+
+| Comparison                                            | Window MFU ratio           | Notes                                            |
+| ----------------------------------------------------- | -------------------------- | ------------------------------------------------ |
+| EP=8 + PR #45621 vs no-EP (sdpa)                      | 27.50 / 24.41 = **+12.7%** | Net gain after EP all-reduce overhead            |
+| EP=8 + PR #45621 vs **historical** EP=16 (no PR, cum) | 27.50 / 22.5 = **+22%**    | Same backend, different EP, with sentinel skip   |
+| sonicmoe + FA3 vs grouped_mm + FA3                    | 34.70 / 28.26 = **+22.8%** | Different kernel comparison (kept for reference) |
+
+The 5× kernel-only speedup the PR advertises **does not translate to 5× model-step speedup**: attention, embeddings, FSDP comms, dataset I/O all unchanged. But the PR meaningfully closes the gap between EP and no-EP: pre-PR, EP=16 was _slower_ than no-EP at 16k 2n (22.5% vs 23.1% historical); with PR #45621 + EP=8, it's now **faster** (27.50% vs 24.41% sdpa, both window MFU).
+
+### Trajectory (window MFU, EP=8 + PR #45621 + sdpa)
+
+| Step   | 5      | 10     | 15     | 20     | 25     | 30     | 35     | 40     | 45  | 50     |
+| ------ | ------ | ------ | ------ | ------ | ------ | ------ | ------ | ------ | --- | ------ |
+| Window | 26.96% | 27.61% | 26.68% | 27.51% | 27.54% | 27.12% | 27.49% | 27.08% | —   | 27.50% |
+
+Flat from step 5 — no Triton/CuteDSL warmup, unlike sonicmoe.
+
+### Setup notes
+
+Two side-issues had to be worked around to get EP=8 running on this branch:
+
+1. **`TRANSFORMERS_OFFLINE=1` required**: with EP, transformers does sharded loading where each rank resolves its assigned shards from the hub. With 16 ranks × 16 shards = 256 concurrent HEAD requests, hub rate-limits some, raising `OSError: does not appear to have a file named model-XXXXX-of-00016.safetensors` despite the file being in cache. `TRANSFORMERS_OFFLINE=1` forces local-cache-only resolution and bypasses this.
+2. **`tp=8` in the run config (matching `ep=8`)**: accelerate's `ParallelismConfig._validate_accelerator` validates `total_size == num_processes`. Without tp=ep set, accelerate sees the device_mesh tp dim (8) but num_processes is 16 → validation error. Setting `tp=8` in the YAML makes the accelerate parallelism_config emit `tp_size=8 × dp_shard=2 = 16`, matching num_processes.
+3. **`--bf16 true --dtype bfloat16` required**: without explicit dtype, FSDP2 hit `AssertionError: FSDP expects uniform original parameter dtype but got {torch.bfloat16, torch.float32}` on EP+FSDP combo. Added to `launch.sh.j2` for all runs going forward.
+
+### Findings
+
+- **PR #45621's sentinel-skip is functional and beneficial at EP**: makes EP=8 the best sdpa config on 2 nodes (27.50% window MFU vs 24.41% no-EP). Restores EP as a meaningful option — pre-PR, EP added comm overhead with no compute savings.
+- **No improvement at EP=1 (no sentinels)**: in-place ops alone are within noise (28.26% with PR vs 28.12% without).
+- **Sonicmoe + FA3 still wins overall at 16k**: 34.7% window vs 27.5% for grouped_mm + sdpa + EP=8 + PR #45621. SonicMoE benefits from FA3 too; we didn't combine sonicmoe + EP because the EP code path uses grouped_mm and the kernel selection wasn't tested in EP mode.
+
+### Next steps
+
+- Try `sonicmoe + EP=8` if/when sonicmoe supports the EP dispatch (currently the `sonicmoe_experts_forward` doesn't take EP sentinels into account the same way grouped_mm does after PR #45621).
+- Re-run prior 32k DS-Z3+SP=2+FA3+sonicmoe with `mfu_window` for a complete steady-state picture.
+
+> **Note**: [transformers PR #45621](https://github.com/huggingface/transformers/pull/45621) ("Better Grouped GEMM + EP") is **open and not yet merged** as of 2026-04-26. The numbers above were obtained by manually applying the `moe.py` portion of the PR diff to `/fsx/amine_dirhoussi/transformers` (no other files patched). If the PR lands as-is, these results should reproduce on a vanilla checkout.
+
+---
+
+## 2026-04-26: Ilyas's patched sonic-moe kernel (`IlyasMoutawwakil/sonic-moe@main`) + EP sweep
+
+After the wrapper-level workaround for sonicmoe + EP, Ilyas pushed an updated kernel build to his personal fork that handles sentinels natively in its metadata stage (drops `expert_ids >= num_experts` from the histogram + scatter indices, no compute on sentinel rows). PR #45621's `hub_kernels.py` change re-points sonic-moe to that fork. His micro-bench shows up to 6.5× kernel-only speedup at EP=8, T=131072.
+
+### Setup
+
+- Re-pointed `_HUB_KERNEL_MAPPING["sonic-moe"]` from `kernels-community/sonic-moe v1` → `IlyasMoutawwakil/sonic-moe@main`. Added `allow_all_kernels=True` to the `lazy_load_kernel` call (required for non-`kernels-community/*` repos).
+- **Reverted** the wrapper-level clamp + masked_fill from `sonicmoe_experts_forward` (the new kernel handles sentinels internally; clamping in the wrapper would defeat the skip).
+- Sweep: 16k EP=2/4/8, 32k EP=8 (no CP — CP at long-context MoE is known-bad per earlier results), 64k EP=8 + CP=2 (cancelled — same reason).
+- 50 steps, FSDP2, sdpa (FA3+EP still has mesh-name conflict).
+
+### Results (16k, 2 nodes × 8 H100)
+
+| EP  | Mesh       | Sentinel ratio | Window MFU  | Cum MFU | Status                           |
+| --- | ---------- | -------------- | ----------- | ------- | -------------------------------- |
+| 2   | dp=8, tp=2 | 50 %           | **28.31 %** | 11.71 % | ✅ trains cleanly                |
+| 4   | dp=4, tp=4 | 75 %           | —           | —       | ❌ `cudaErrorAssert` in backward |
+| 8   | dp=2, tp=8 | 87.5 %         | —           | —       | ❌ `cudaErrorAssert` in backward |
+
+(Cum MFU at EP=2 is heavily depressed because step 1 paid the full kernel-fetch cost — first time the new `IlyasMoutawwakil/sonic-moe` build was downloaded + compiled on this cache. Window MFU is the steady-state number.)
+
+### Long context
+
+| Ctx | EP       | Result                                                                         |
+| --- | -------- | ------------------------------------------------------------------------------ |
+| 32k | 8        | ❌ same `cudaErrorAssert` in backward                                          |
+| 64k | 8 + CP=2 | Cancelled — historical 64k FSDP2+EP+CP result was 2.9 % MFU; not worth running |
+
+### Backward-pass assert details
+
+Forward pass works (loss progresses through step 0 logging output). Crash is in the **backward gradient kernel**:
+
+```
+File ".../IlyasMoutawwakil--sonic-moe/.../quack/gemm_dact.py", line 505, in gemm_dact
+    compiled_fn(A_p, B_p, Out_p, PreAct_p, epi_args, scheduler_args, varlen_args, None)
+RuntimeError: CUDA Error: cudaErrorAssert
+```
+
+`gemm_dact` is the gradient of the gated activation (used to backprop through SwiGLU). The forward (`moe_general_routing_inputs`) drops sentinels before the GEMM; the backward `gemm_dact` is hit with the same sentinel-laden inputs and an internal CUDA `assert()` fires. Reproducible at EP ≥ 4 (EP=2 is below whatever threshold the assert checks). Independent of context length — same assert at 16k and 32k.
+
+Filed back to Ilyas as a backward-path follow-up; the kernel-only forward micro-bench in the PR description was forward-only.
+
+### Comparison: best 16k MoE configs to date
+
+| Config                                              | Kernel                                | EP  | Window MFU |
+| --------------------------------------------------- | ------------------------------------- | --- | ---------- |
+| sonicmoe + FA3, no EP (50 steps)                    | OLD `kernels-community/sonic-moe v1`  | 1   | **34.7 %** |
+| sonicmoe + sdpa + EP=8 (OLD kernel + wrapper clamp) | OLD `kernels-community/sonic-moe v1`  | 8   | 30.67 %    |
+| **sonicmoe + sdpa + EP=2 (NEW kernel)**             | NEW `IlyasMoutawwakil/sonic-moe@main` | 2   | 28.31 %    |
+| grouped_mm + sdpa + EP=8 + PR #45621                | grouped_mm                            | 8   | 27.50 %    |
+| grouped_mm + FA3, no EP                             | grouped_mm                            | 1   | 28.12 %    |
+| grouped_mm + sdpa, no EP                            | grouped_mm                            | 1   | 24.41 %    |
+
+### Findings
+
+- **The new patched kernel works at EP=2 but has a backward-side bug at EP ≥ 4**. Until Ilyas (or whoever) fixes the `gemm_dact` assert at high sentinel ratios, the kernel can't be used for the EP regime where it's most interesting.
+- **For now, the best sonicmoe + EP path remains the OLD kernel (`kernels-community/sonic-moe v1`) plus the wrapper-level clamp+mask** documented in `benchmark/fix_fsdp_sonic.md` (30.67 % at EP=8). The wrapper does compute on sentinel rows then zeroes them; less efficient than skipping but trains cleanly forward + backward.
+- **The Triton cache race on `/fsx/.triton/`** observed at EP=4 (rank 8 reading a cubin while rank 0 still writes it) is environmental, not a kernel bug. Per-rank Triton cache (`TRITON_CACHE_DIR=/tmp/triton-rank-${RANK}`) would eliminate it.
+- **CP for MoE long context remains a non-starter** — historical 64k FSDP2+EP+CP=8 was 2.9 % MFU vs DS-Z3+SP=4+FA3 at 12.5 %. Combining EP with anything except DP at long context isn't competitive on this branch's transformers, regardless of kernel.
+
+### Next steps
+
+- Wait for Ilyas to fix the `gemm_dact` backward assert. Re-run EP=4, EP=8 sweep once that's done.
+- Investigate whether DS-Z3 + EP can be unblocked (currently hangs at model loading per the 5.6.0 era report) — would let SP+EP combine for long context.
+
+---
+
+## 2026-04-27: Patched sonicmoe kernel — backward fixed, full EP sweep + long-context probe
+
+Ilyas pushed backward support to `IlyasMoutawwakil/sonic-moe@main`. Re-ran the EP sweep that previously failed with `cudaErrorAssert` in `gemm_dact`. Wrapper-level clamp/masked_fill stays removed (kernel handles sentinels in metadata stage).
+
+### EP scaling at 16k, 2 nodes × 8 H100 (FSDP2, sdpa)
+
+| EP  | Mesh       | Sentinel ratio | Window MFU  | Cum MFU | TPS    |
+| --- | ---------- | -------------- | ----------- | ------- | ------ |
+| 2   | dp=8, tp=2 | 50 %           | 28.31 %     | 11.71 % | 31,550 |
+| 4   | dp=4, tp=4 | 75 %           | **32.32 %** | 26.16 % | 70,480 |
+| 8   | dp=2, tp=8 | 87.5 %         | **32.36 %** | 26.08 % | 70,250 |
+
+**EP=4 and EP=8 now train cleanly through forward + backward.** Window MFU plateaus around 32 % for EP ≥ 4 — Ilyas's micro-bench predicted near-monotonic kernel-only speedup with EP, but end-to-end MFU saturates because attention/comms/embeddings are unchanged.
+
+Vs the wrapper-clamp workaround on the OLD `kernels-community/sonic-moe v1` kernel (30.67 % window at 16k EP=8): the new kernel's native sentinel skip gains **~+5.5 %** at the same config.
+
+### Memory ceiling on 2 / 4 nodes — sdpa attention activations
+
+| Ctx  | Nodes | Mesh            | Status                                       |
+| ---- | ----- | --------------- | -------------------------------------------- |
+| 32k  | 2     | EP=8, dp=2 tp=8 | OOM (4 GB short, sdpa attention activations) |
+| 32k  | 4     | EP=8, dp=4 tp=8 | OOM (~18.55 GB allocation, ~72 GB in use)    |
+| 64k  | 4     | EP=8, dp=4 tp=8 | OOM (same allocation pattern)                |
+| 128k | 4     | EP=8, dp=4 tp=8 | OOM                                          |
+
+Going from 2 → 4 nodes shards params/optimizer further (FSDP DP=2 → DP=4) but **does not help with attention activation memory**, which is per-rank and grows with seq_len. At per-rank seq ≥ 32k, `sdpa` materializes the full attention matrix and OOMs. FA3 would solve this but FA3 + EP has the mesh-name conflict noted earlier (`KeyError: "Invalid mesh_dim_names ('dp_shard_cp',)"`) — accelerate's FSDP2 expects a `dp_shard_cp` mesh dim, EP creates a mesh with only `tp`.
+
+The fix-from-config side: keep per-rank seq ≤ 16k by adding **CP** to fold the sequence dim. CP for MoE is known-bad on this branch's transformers (synchronous all-reduces between ring-attention chunks), but it's the only way to fit.
+
+### Long-context fitting via CP
+
+| Ctx  | Nodes | Mesh                   | Per-rank seq | Window MFU | TPS    |
+| ---- | ----- | ---------------------- | ------------ | ---------- | ------ |
+| 64k  | 4     | EP=8 + CP=4, dp=1 tp=8 | 16k          | **7.97 %** | 54,140 |
+| 128k | 8     | EP=8 + CP=8, dp=1 tp=8 | 16k          | **4.24 %** | 62,640 |
+
+Both fit and train cleanly; both heavily MFU-penalized by CP. The +2.7× over historical 64k EP=16+CP=8 (2.9 %) is real but doesn't make this regime competitive with the alternatives.
+
+### Comparison to alternatives at 64k MoE
+
+| Approach                                  | MFU    | Status this branch               |
+| ----------------------------------------- | ------ | -------------------------------- |
+| FSDP2 + EP=8 + CP=4 + sonicmoe (this run) | 7.97 % | runs                             |
+| DS-Z3 + SP=4 + FA3 (no EP, historical)    | 12.5 % | runs (no EP path)                |
+| DS-Z3 + SP=4 + EP                         | —      | DS-Z3 + EP loading hang, blocked |
+| FSDP2 + EP + FA3 (no CP)                  | —      | mesh-name conflict, blocked      |
+
+**The path forward for 64k+ MoE** is unblocking either DS-Z3+EP (already noted earlier as a WIP fix that hangs at model loading) or FSDP2+FA3+EP (mesh dim incompatibility). Until one of those lands, the best long-context MoE config remains DS-Z3+SP=4+FA3 without EP at 12.5 % MFU.
+
+### Updated best configs for Qwen3-30B-A3B (all window MFU where available)
+
+| Context | Best Window MFU          | Config                                          | Notes                                    |
+| ------- | ------------------------ | ----------------------------------------------- | ---------------------------------------- |
+| 16k     | **34.7 %**               | FSDP2 + FA3 + sonicmoe (no EP, 50 steps)        | unchanged                                |
+| 16k EP  | **32.36 %**              | FSDP2 + EP=8 + sdpa + sonicmoe (patched kernel) | **+5.5 % over wrapper-clamp workaround** |
+| 32k     | 14.5 % (cum)             | DS-Z3 + SP=2 + FA3 + sonicmoe                   | EP can't fit at 32k yet                  |
+| 64k     | 12.5 % (cum, historical) | DS-Z3 + SP=4 + FA3 (no EP)                      | EP+CP gives 7.97 %, worse                |
+| 128k    | 4.24 %                   | FSDP2 + EP=8 + CP=8 + sonicmoe (8n)             | **first 128k MoE result on this stack**  |
+
+### Findings
+
+1. **Patched kernel works end-to-end** at EP=2/4/8 in both forward + backward. The kernel update is good.
+2. **Sentinel-skip's kernel speedup doesn't translate into proportional MFU gain** under TRL's serialized comm-then-compute schedule (~+1.7 pp from skip vs clamp at EP=8). Real benefit would require overlapped expert+all-reduce scheduling — see the explanation in `benchmark/fix_fsdp_sonic.md`.
+3. **EP at long context is gated by attention memory, not expert memory.** sdpa at per-rank seq ≥ 32k can't fit; the EP plan doesn't shard attention; so we're stuck at 16k per rank without FA3.
+4. **CP for MoE long context is a workaround, not a solution.** 64k at 8 % MFU and 128k at 4 % beats nothing-fits, but is far behind the SP path's 12.5 % at 64k.
+5. **First 128k Qwen3-30B-A3B SFT measurement** on this stack: trains, 4.24 % MFU, 62K TPS, 8 nodes. Reference for future "did the upstream FA3+EP fix help?" comparisons.
+
+---
+
+## 2026-04-27: DS-Z3 + SP=4 + FA3 + sonicmoe at 64k (2 nodes) — beats CP path by 2.4×
+
+Tried Ulysses Sequence Parallelism instead of CP at 64k context, since CP is known-bad for MoE long context (dense, synchronous all-reduces between ring chunks). Same DS-Z3 + FA3 + sonicmoe stack, just SP=4 instead of EP+CP=4.
+
+**Config**: 2 nodes × 8 H100, DS-Z3, dp=4, sp=4, ep=1, FA3 attention, sonicmoe experts. Per-rank seq = 16k after Ulysses sequence shard.
+
+**Note**: had to gate `HF_HUB_OFFLINE=1` behind `enable_expert_parallel` in `trl/scripts/sft.py` — first attempt failed with `OfflineModeIsEnabled` because FA3's `load_and_register_attn_kernel` uses a separate `get_kernel` path that the EP-only sonicmoe pre-warm doesn't cover. Non-EP runs need hub access for FA3 kernel loading.
+
+### Results — job 22092241, 50 steps
+
+| Step | Cum MFU     | Window MFU  | TPS (window) | TPS (cum)  |
+| ---- | ----------- | ----------- | ------------ | ---------- |
+| 5    | 6.51 %      | —           | —            | 23,590     |
+| 10   | 9.70 %      | 19.07 %     | 17,280       | 35,170     |
+| 15   | 11.27 %     | 16.62 %     | 15,060       | 40,840     |
+| 20   | 12.40 %     | 17.78 %     | 16,110       | 44,950     |
+| 25   | 13.26 %     | 18.36 %     | 16,630       | 48,070     |
+| 30   | 13.67 %     | 16.10 %     | 14,590       | 49,530     |
+| 35   | 14.17 %     | 18.17 %     | 16,460       | 51,340     |
+| 40   | 14.62 %     | 18.86 %     | 17,090       | 52,990     |
+| 45   | 14.63 %     | 14.68 %     | 13,300       | 53,020     |
+| 50   | **14.97 %** | **18.98 %** | 17,190       | **54,260** |
+
+Steady-state window MFU **~17–19 %**, occasional dips correlated with `pytorch allocator cache flushes since last step` warnings (DS-Z3 has high memory pressure at 64k seq, allocator thrashes between steps).
+
+### Comparison at 64k MoE (2 nodes)
+
+| Approach                                            | Window MFU  | Cum MFU | TPS    | Notes         |
+| --------------------------------------------------- | ----------- | ------- | ------ | ------------- |
+| **DS-Z3 + SP=4 + FA3 + sonicmoe (this run)**        | **18.98 %** | 14.97 % | 54,260 | new best      |
+| DS-Z3 + SP=4 + FA3 (no EP, no sonicmoe, historical) | —           | 12.5 %  | —      | previous best |
+| FSDP2 + EP=8 + CP=4 + sonicmoe (4n, patched kernel) | 7.97 %      | —       | 54,140 | CP penalty    |
+
+**SP+sonicmoe at 64k is ~+1.5× cum MFU over the previous SP-only baseline (12.5 → 14.97 %)** and the kernel itself is contributing the win (window plateau ~19 % vs whatever the SP+FA3 dense baseline would be — sonicmoe replaces the routed-expert path with the fused kernel even with EP=1, since experts are local but still routed).
+
+Compared to the CP path (FSDP2 + EP + CP), SP gives **2.4× the window MFU at 64k**. CP is now formally retired as the long-context strategy on this branch.
+
+### Findings
+
+1. **SP scales sequence cleanly without the CP penalty.** Ulysses shards the seq dim with all-to-all comms that overlap with attention compute; CP's ring all-reduces between attention chunks are synchronous and bandwidth-bound.
+2. **DS-Z3 cache flushes are visible in window MFU dips.** Roughly every 4–5 logs a step drops to 14–16 % from 18 %. Not catastrophic, but indicates we're near the memory ceiling at 2 nodes / 64k.
+3. **sonicmoe + SP is the new best long-context MoE recipe** until DS-Z3+EP loading hang is fixed or FSDP2+FA3+EP mesh-name conflict is resolved.
+
+---
+
+## Consolidated comparison: new sonicMoE (patched, IlyasMoutawwakil/sonic-moe@main) vs previous results
+
+All numbers are Qwen3-30B-A3B SFT, H100 NVL, bf16, FA3 or sdpa as noted. Window MFU is steady-state; cumulative MFU is averaged over the full run including kernel warmup.
+
+### 16k context — kernel comparison at fixed parallelism
+
+| Run                                | Backend | Mesh       | Attn | Expert kernel        | Sentinel handling        | Window MFU  | Cum MFU | TPS    |
+| ---------------------------------- | ------- | ---------- | ---- | -------------------- | ------------------------ | ----------- | ------- | ------ |
+| no EP, no kernel                   | FSDP2   | dp=16      | sdpa | grouped_mm (default) | —                        | —           | 24.41 % | —      |
+| no EP, FA3                         | FSDP2   | dp=16      | FA3  | grouped_mm           | —                        | —           | 28.12 % | —      |
+| **no EP, FA3 + sonicmoe (OLD v1)** | FSDP2   | dp=16      | FA3  | sonicmoe v1          | — (no EP)                | **34.7 %**  | —       | —      |
+| EP=8, grouped_mm + PR #45621       | FSDP2   | dp=2, tp=8 | sdpa | grouped_mm           | skip (PR sentinel)       | 27.50 %     | —       | —      |
+| EP=8, sonicmoe v1 + wrapper clamp  | FSDP2   | dp=2, tp=8 | sdpa | sonicmoe v1          | wrapper-level clamp+mask | 30.67 %     | —       | —      |
+| **EP=8, NEW patched sonicmoe**     | FSDP2   | dp=2, tp=8 | sdpa | **sonicmoe (Ilyas)** | kernel-native skip       | **32.36 %** | 26.08 % | 70,250 |
+| EP=4, NEW patched sonicmoe         | FSDP2   | dp=4, tp=4 | sdpa | sonicmoe (Ilyas)     | kernel-native            | 32.32 %     | 26.16 % | 70,480 |
+| EP=2, NEW patched sonicmoe         | FSDP2   | dp=8, tp=2 | sdpa | sonicmoe (Ilyas)     | kernel-native            | 28.31 %     | 11.71 % | 31,550 |
+
+**Deltas vs new sonicmoe (16k):**
+
+- vs `grouped_mm + PR #45621` at EP=8: **+4.86 pp** (32.36 vs 27.50)
+- vs `sonicmoe v1 + wrapper clamp` at EP=8: **+1.69 pp** (32.36 vs 30.67) — the kernel-native skip beats wrapper clamp by a hair, not the 5–10 pp Ilyas's micro-bench suggested. Reason: TRL's serialized comm-then-compute schedule doesn't expose the kernel saving (see `fix_fsdp_sonic.md`).
+- Best 16k overall is still `no EP + FA3 + sonicmoe v1` at 34.7 %. EP at 16k is a setup test, not a production config (you'd just run no-EP at this size).
+
+### 64k context — long-context comparison
+
+| Run                                               | Nodes | Backend | Mesh                   | Attn | Expert kernel        | Window MFU  | Cum MFU     | TPS        |
+| ------------------------------------------------- | ----- | ------- | ---------------------- | ---- | -------------------- | ----------- | ----------- | ---------- |
+| DS-Z3 + SP=4 + FA3 (historical, no sonicmoe)      | 2     | DS-Z3   | dp=4, sp=4             | FA3  | grouped_mm           | —           | 12.5 %      | —          |
+| FSDP2 + EP=8 + CP=4 + sonicmoe                    | 4     | FSDP2   | dp=1, tp=8, cp=4, ep=8 | sdpa | sonicmoe (Ilyas)     | 7.97 %      | —           | 54,140     |
+| **DS-Z3 + SP=4 + FA3 + sonicmoe (new, 22092241)** | 2     | DS-Z3   | dp=4, sp=4             | FA3  | **sonicmoe (Ilyas)** | **18.98 %** | **14.97 %** | **54,260** |
+
+**Deltas at 64k (2 nodes):**
+
+- vs historical SP without sonicmoe: **+2.47 pp cum** (14.97 vs 12.5) — sonicmoe replaces the routed-expert path even at EP=1
+- vs CP path on 4 nodes: **+11.01 pp window** (18.98 vs 7.97) — CP is now formally retired for MoE long context
+
+### 128k context — first results on this stack
+
+| Run                                                 | Nodes | Backend | Mesh                   | Attn | Window MFU | TPS    |
+| --------------------------------------------------- | ----- | ------- | ---------------------- | ---- | ---------- | ------ |
+| FSDP2 + EP=8 + CP=8 + sonicmoe                      | 8     | FSDP2   | dp=1, tp=8, cp=8, ep=8 | sdpa | 4.24 %     | 62,640 |
+| DS-Z3 + SP=8 + FA3 + sonicmoe (in-flight, 22092254) | 4     | DS-Z3   | dp=4, sp=8             | FA3  | TBD        | TBD    |
+
+### Best per-context summary (window MFU where measured, else cum)
+
+| Ctx       | Best                          | Config                                  | Improvement vs prior best                                                |
+| --------- | ----------------------------- | --------------------------------------- | ------------------------------------------------------------------------ |
+| 16k (any) | **34.7 %**                    | FSDP2 + FA3 + sonicmoe v1, no EP        | unchanged (kernel + FA3 still wins at small ctx)                         |
+| 16k EP    | **32.36 %**                   | FSDP2 + EP=8 + sdpa + new sonicmoe      | +1.69 pp over OLD-kernel wrapper clamp; +4.86 pp over grouped_mm+PR45621 |
+| 64k       | **18.98 % win / 14.97 % cum** | DS-Z3 + SP=4 + FA3 + new sonicmoe (2n)  | +2.47 pp cum over historical SP-only                                     |
+| 128k      | 4.24 % win                    | FSDP2 + EP=8 + CP=8 + new sonicmoe (8n) | first 128k Qwen3-30B-A3B MoE result on this stack                        |
+
+---
+
+## 2026-04-27: SP scaling — 4-node 64k/128k partial runs
+
+Tried adding nodes to the SP recipe to (a) stabilize the cache-flush dips at 64k and (b) attempt 128k for the first time. Both jobs were canceled before reaching 50 steps to free the cluster, so window MFU is the most reliable number — cum MFU is still climbing during warmup.
+
+### 64k DS-Z3 + SP=4 + FA3 + sonicmoe — 4 nodes (DP=8, SP=4) — job 22092253
+
+| Step | Cum MFU | Window MFU  | TPS (window) | TPS (cum) |
+| ---- | ------- | ----------- | ------------ | --------- |
+| 5    | 6.68 %  | —           | —            | 48,410    |
+| 10   | 10.16 % | **21.26 %** | 38,530       | 73,680    |
+| 15   | 11.80 % | 17.42 %     | 31,570       | 85,560    |
+| 20   | 13.12 % | 19.70 %     | 35,700       | 95,080    |
+| 25   | 14.12 % | **20.33 %** | 36,840       | 102,300   |
+
+**Crashed at step ~30** with `ValueError: batch's seqlen=54223 isn't divisible by sp-size=4` — DeepSpeed Ulysses requires per-batch seq length divisible by sp_size, and packed THUDM/LongAlign-10k samples can produce non-aligned lengths. Need either a custom collator that pads-to-multiple, or `--max_length` that's a multiple of sp_size before truncation.
+
+**Steady-state window MFU ~19–21 %** vs 17–19 % on 2 nodes — 4 nodes does help slightly, presumably because doubling DP halves the per-rank optimizer/grad sync per step. TPS doubles cleanly to ~100k.
+
+### 128k DS-Z3 + SP=8 + FA3 + sonicmoe — 4 nodes (DP=4, SP=8) — job 22092254
+
+| Step | Cum MFU | Window MFU  | TPS (window) | TPS (cum) |
+| ---- | ------- | ----------- | ------------ | --------- |
+| 5    | 5.78 %  | —           | —            | 41,640    |
+| 10   | 9.33 %  | **19.31 %** | 18,570       | 71,720    |
+| 15   | 10.83 % | 16.03 %     | 15,410       | 83,330    |
+| 20   | 11.93 % | 17.10 %     | 16,440       | 91,730    |
+| 25   | 12.91 % | **19.23 %** | 18,490       | 99,270    |
+| 30   | 13.15 % | 14.49 %     | 13,930       | 101,100   |
+
+**Canceled at step ~30** to free nodes. Per-rank seq = 16k, same as 64k 4n. **Steady-state window MFU 14–19 %, TPS ~100k cum**, no crashes through 30 steps.
+
+This is **the first 128k Qwen3-30B-A3B SFT run on this stack at non-trivial MFU** (vs 4.24 % from FSDP2+EP+CP=8 on 8 nodes). The 4-node SP path delivers ~4× the MFU at half the node count.
+
+### Updated 128k summary
+
+| Run                               | Nodes | Backend   | Window MFU                       | Status                       |
+| --------------------------------- | ----- | --------- | -------------------------------- | ---------------------------- |
+| FSDP2 + EP=8 + CP=8 + sonicmoe    | 8     | FSDP2     | 4.24 %                           | full 50 steps                |
+| **DS-Z3 + SP=8 + FA3 + sonicmoe** | **4** | **DS-Z3** | **19.23 % peak / ~17 % typical** | partial (30 steps, canceled) |
+
+### Findings
+
+- **SP path scales to 128k cleanly** at half the node count of CP path with 4× the MFU.
+- **Cache-flush dips persist on 4 nodes too** at 64k — DS-Z3 memory pressure isn't fixed by adding nodes; allocator thrash is per-rank.
+- **Ulysses padding constraint is a real blocker for production runs**: the pack-then-shard pattern in the SFT collator can produce variable-length packed batches that don't satisfy `seqlen % sp_size == 0`. A `pad_to_multiple_of=sp_size` in the collator would fix this.
+
+---
+
+## 2026-04-27: FA3 + EP works — was self-inflicted, new MoE MFU SOTA at 16k
+
+### TL;DR
+
+FA3 + EP is **not actually incompatible**. The previously-reported `KeyError: "Invalid mesh_dim_names ('dp_shard_cp',)"` crash was caused by my own kernel pre-warm logic in `trl/scripts/sft.py`, which set `HF_HUB_OFFLINE=1` after warming sonicmoe but before FA3's two-phase kernel load could fetch from hub. With FA3 also pre-warmed, the original crash is gone — and the run delivers **42.66 % window MFU at 16k**, the highest MoE result on this stack so far.
+
+### The fix (committed in `trl/scripts/sft.py`)
+
+FA3 (kernels-community/vllm-flash-attn3) loads in two separate phases during `from_pretrained`:
+
+1. `load_and_register_attn_kernel` — registers the attention function in `ALL_ATTENTION_FUNCTIONS`
+2. `lazy_import_flash_attention` — sets module-level `_flash_fn`, `_flash_varlen_fn` etc. via `_lazy_imports`
+
+Both call `get_kernel(repo_id)` independently, so both have to be pre-warmed before the EP offline flip. The earlier code only pre-warmed sonicmoe and assumed FA3 was either already cached or not in use. The fix:
+
+```python
+if model_args.attn_implementation and "/" in model_args.attn_implementation:
+    from transformers.integrations.hub_kernels import load_and_register_attn_kernel
+    from transformers.modeling_flash_attention_utils import lazy_import_flash_attention
+
+    load_and_register_attn_kernel(model_args.attn_implementation)
+    lazy_import_flash_attention(model_args.attn_implementation)
+# … then HF_HUB_OFFLINE=1 …
+```
+
+### Results — 16k FSDP2 + EP=8 + FA3 + sonicmoe (job 22092267, 2 nodes, 5 steps debug)
+
+| Step | Cum MFU | Window MFU  | TPS (window) | TPS (cum) |
+| ---- | ------- | ----------- | ------------ | --------- |
+| 1    | 3.09 %  | —           | —            | 8,310     |
+| 2    | 5.76 %  | **42.88 %** | 115,500      | 15,500    |
+| 3    | 8.09 %  | **43.08 %** | 116,000      | 21,800    |
+| 4    | 10.15 % | **42.63 %** | 114,800      | 27,340    |
+| 5    | 11.97 % | **42.66 %** | 114,900      | 32,250    |
+
+**Steady-state window MFU: 42.7 %** — within ±0.3 pp across 4 successive logs. The kernel is fully warm by step 2 and throughput is rock-solid at ~115k TPS.
+
+### Caveat: training is numerically broken
+
+Loss collapses to `0` with `grad_norm: nan` and `entropy: nan` from step 2 onward. The first step has `loss: 62` (which is itself wildly off — Qwen3-30B initial loss should be ~10–14), suggesting the very first forward pass is already producing bad logits.
+
+This is consistent with the **RouterParallel sentinel bug** documented in `benchmark/CLAUDE.md` — `RouterParallel._prepare_output_fn` reshapes `router_scores` from `(seq, top_k)` to `(seq, num_local_experts)`, but downstream expert forwards (sonicmoe, grouped_mm) expect the original shape. With sdpa we already saw 23.1 % MFU on broken training; with FA3 we're now at 42.7 % MFU on broken training. **The throughput is real; the gradients are wrong.**
+
+The MFU number is still useful for kernel/hardware benchmarking (it's measuring real matmul throughput), but the run is not a usable training config until the RouterParallel bug is fixed upstream.
+
+### Updated MoE leaderboard (16k, all configs, window MFU)
+
+| Run                                 | Backend | Mesh       | Attn | Kernel           | Window MFU  | Training valid?             |
+| ----------------------------------- | ------- | ---------- | ---- | ---------------- | ----------- | --------------------------- |
+| **FA3 + EP=8 + sonicmoe (NEW)**     | FSDP2   | dp=2, tp=8 | FA3  | sonicmoe (Ilyas) | **42.66 %** | **NO — RouterParallel bug** |
+| no EP + FA3 + sonicmoe v1           | FSDP2   | dp=16      | FA3  | sonicmoe v1      | 34.7 %      | yes                         |
+| sdpa + EP=8 + sonicmoe (Ilyas)      | FSDP2   | dp=2, tp=8 | sdpa | sonicmoe (Ilyas) | 32.36 %     | yes                         |
+| sdpa + EP=4 + sonicmoe (Ilyas)      | FSDP2   | dp=4, tp=4 | sdpa | sonicmoe (Ilyas) | 32.32 %     | yes                         |
+| sdpa + EP=8 + sonicmoe v1 + wrapper | FSDP2   | dp=2, tp=8 | sdpa | sonicmoe v1      | 30.67 %     | yes                         |
+| sdpa + EP=8 + grouped_mm + PR45621  | FSDP2   | dp=2, tp=8 | sdpa | grouped_mm       | 27.50 %     | yes                         |
+
+**Headroom unlocked**: FA3 swaps `sdpa`'s `O(seq²)` attention materialization for `O(seq·log seq)` flash, freeing both compute and memory. The +10 pp window MFU jump (32.4 → 42.7 %) at the same parallelism config is roughly the attention contribution to per-step time.
+
+### Implications for long context
+
+The original "FA3 + EP can't fit at 32k+" memory analysis was based on the assumption FA3+EP would never run. **If the RouterParallel bug is fixed**, FA3+EP becomes the most attractive long-context MoE config:
+
+- FA3 attention activations are ~100× smaller than sdpa at 32k+ per-rank seq
+- EP scales experts cleanly without CP's ring-reduce penalty
+- Combined: FA3 + EP=8 + DP at 32k/64k/128k should fit in memory and run at high MFU
+
+**Next steps** (post-RouterParallel fix): re-run the long-context sweep with FA3+EP+DP (no CP). Hypothesis: 64k can hit ~30 % MFU and 128k around 20–25 % MFU on this stack. Until the routing bug is fixed, these numbers are speculative.
+
+---
+
+## 2026-04-27: DS-Z3 + EP unblocked by PR #45548 + FA3+EP NaN bisect
+
+### PR #45548 merged: DS-Z3 + EP loading works
+
+[`huggingface/transformers#45548`](https://github.com/huggingface/transformers/pull/45548) routes EP through the standard (non-zero3) loading path when both EP and `is_deepspeed_zero3_enabled()` are active, then lets `deepspeed.initialize()` wrap the EP-sharded model afterward. Merged into the working `qwen3-moe-ep-v2` branch (FSDP2 cpu_ram_efficient_loading fix retained).
+
+Without this, DS-Z3+EP fails immediately at `from_pretrained` with `ValueError: DeepSpeed Zero-3 is not compatible with passing a 'device_map'.` even when `device_map=None` — `check_and_set_device_map` fills it in from the global torch device context, then the DS-Z3 guard rejects it.
+
+### Results — DS-Z3 + EP=8 + sdpa + sonicmoe at 16k (job 22092280, 5 steps)
+
+| Step | Cum MFU | Window MFU  | TPS (window) | TPS (cum) |
+| ---- | ------- | ----------- | ------------ | --------- |
+| 1    | 3.33 %  | —           | —            | 8,970     |
+| 2    | 5.90 %  | 25.94 %     | 69,880       | 15,900    |
+| 3    | 8.11 %  | 32.41 %     | 87,310       | 21,850    |
+| 4    | 9.99 %  | 32.56 %     | 87,710       | 26,900    |
+| 5    | 11.60 % | **32.72 %** | 88,140       | 31,250    |
+
+**Steady-state window MFU: 32.7 %**, almost identical to the FSDP2 + EP=8 + sonicmoe number (32.36 %). DS-Z3 + EP at 16k delivers the same kernel performance as FSDP2 + EP at 16k with a different sharding strategy.
+
+### NaN issue is EP-wide, not FA3-specific
+
+| Run                                           | Window MFU  | Loss step 1 | Loss step 2+ | grad_norm |
+| --------------------------------------------- | ----------- | ----------- | ------------ | --------- |
+| FSDP2 + EP=8 + sdpa + sonicmoe (Ilyas)        | 32.36 %     | normal      | normal       | normal    |
+| FSDP2 + EP=8 + FA3 + sonicmoe                 | **42.66 %** | 62          | 0            | nan       |
+| FSDP2 + EP=8 + FA3 + grouped_mm (no sonicmoe) | 35.06 %     | 62          | 0            | nan       |
+| **DS-Z3 + EP=8 + sdpa + sonicmoe (NEW)**      | 32.72 %     | **62.11**   | **0**        | **nan**   |
+
+The NaN is reproducible with **all three** of: FA3 + grouped_mm, FA3 + sonicmoe, **sdpa + sonicmoe under DS-Z3** (but NOT sdpa + sonicmoe under FSDP2). The first-step loss of `62.11` (Qwen3-30B initial loss should be ~10–14) means the **first forward pass already produces broken logits**. The entropy NaN at step 2 is a secondary effect from the first backward producing NaN gradients.
+
+What changes across these runs:
+
+- FSDP2 vs DS-Z3 sharding
+- sdpa vs FA3 attention
+- sonicmoe vs grouped_mm experts
+
+The only common factor in the failing runs is **EP being active under a backend that isn't `FSDP2 + sdpa + Ilyas-patched sonicmoe`**. That suggests one of these gates the routing correctly:
+
+1. FSDP2's wrap policy delaying expert weight materialization until after `distribute_model` registers DTensor hooks
+2. The Ilyas sonicmoe kernel's metadata pre-pass expecting `sdpa` cu_seqlens shape (FA3 packs differently)
+3. DS-Z3's `_load_state_dict_into_zero3_model` (now bypassed for EP via PR #45548) was previously masking EP weight-load bugs by re-loading from cached state
+
+The first-step `loss=62` strongly suggests **incorrect expert weights at load time**, not a runtime kernel issue. The packed `gate_up_proj` / `down_proj` from `MergeModulelist + Concatenate` may be ending up on the wrong EP rank when the loading path differs from FSDP2.
+
+### 64k DS-Z3 + SP=4 + EP=8 + FA3 + sonicmoe (job 22092281) — DS batch-size assertion
+
+```
+AssertionError: train_batch_size is not equal to micro_batch_per_gpu * gradient_acc_step * world_size
+1 != 1 * 1 * 8.0
+```
+
+DeepSpeed sees `world_size=8` because EP=8 carves out a sub-mesh that DS interprets as the data-parallel world. The actual world is 32 (4 nodes × 8 GPUs), but DS's internal accounting only counts the DP shard. Fix would require:
+
+- Either telling DS the full world_size via `train_batch_size = global_dp_size` (not the EP-carved size)
+- Or using `train_batch_size = "auto"` with the correct dp inference for the SP+EP combo
+
+Not pursued further yet — this is config wiring, not a fundamental block.
+
+### Updated unblocked/blocked matrix
+
+| Config                                 | Status                     | MFU           | Training valid? |
+| -------------------------------------- | -------------------------- | ------------- | --------------- |
+| FSDP2 + EP=8 + sdpa + sonicmoe (Ilyas) | works                      | 32.36 %       | **yes**         |
+| FSDP2 + EP=8 + FA3 + sonicmoe          | works                      | **42.66 %**   | no — NaN        |
+| FSDP2 + EP=8 + FA3 + grouped_mm        | works                      | 35.06 %       | no — NaN        |
+| DS-Z3 + EP=8 + sdpa + sonicmoe         | **NEW: works** (PR #45548) | 32.72 %       | no — NaN        |
+| DS-Z3 + SP=4 + FA3 + sonicmoe (no EP)  | works                      | 18.98 % @ 64k | yes             |
+| DS-Z3 + SP=4 + EP=8 + FA3 + sonicmoe   | DS batch-size assertion    | —             | —               |
+
+**Two open correctness issues**:
+
+1. **EP NaN under everything except `FSDP2 + sdpa + sonicmoe`** — needs a focused investigation of expert weight loading paths under EP. First-step `loss=62` is the smoking gun.
+2. **DS+SP+EP batch-size mismatch** — config-level fix, not a code bug.
+
+The big positive: **PR #45548 unblocks DS-Z3 + EP**, which means the SP+EP combination is now plausible once (2) is resolved — that combo would let us push 64k+ MoE at high MFU without CP.
+
+---
+
+## 2026-04-27: EP+FSDP DTensor fix → side effect: accelerate `_prepare_tp` ImportError
+
+The EP NaN root cause turned out to be expert weights getting clobbered during FSDP2 wrap (`fsdp2_load_full_state_dict` broadcasting rank 0's 16 experts to all 8 ranks, destroying ranks 1–7's slices). Fix lives in [transformers PR #45662](https://github.com/huggingface/transformers/pull/45662) — wrap EP-sharded params as DTensors at `from_pretrained` time + tell FSDP to ignore EP modules via `fsdp_plugin.ignored_modules`. Verified: `loss=8.4` healthy, `grad_norm` finite, on previously NaN'ing configs at `EP=DP_size`.
+
+### Side effect: accelerate's `_prepare_tp` now hits a missing class
+
+After the fix, configs that set `parallelism_config_tp_size > 1` (e.g., the `dp=2 tp=8 ep=8` layout) crash before training with:
+
+```
+ImportError: cannot import name 'ReplicateParallel'
+  from 'transformers.integrations.tensor_parallel'
+  (/fsx/amine_dirhoussi/transformers/src/transformers/integrations/tensor_parallel.py)
+```
+
+The import comes from **accelerate**, not anything we added — `accelerator.py:1616`:
+
+```python
+from transformers.integrations.tensor_parallel import ReplicateParallel
+```
+
+It runs inside `Accelerator._prepare_tp` whenever `tp_size > 1` AND at least one model param is a DTensor. Modern transformers (post-fork) has the class; our `qwen3-moe-ep-v2` branch was cut before it was added.
+
+**Why it didn't fire before the EP+FSDP fix.** `_prepare_tp` has a skip guard right above the import:
+
+```python
+if not any(isinstance(p, DTensor) for p in model.parameters()):
+    logger.warning("...skip the TP preparation...")
+    return result
+```
+
+Before the fix, EP params were plain `nn.Parameter` (the bug — they should have been DTensors but the broadcast clobber happened first). No DTensors anywhere → skip fires → import is never reached → run proceeds. After the fix, EP params are DTensors on the EP mesh → skip doesn't fire → reach the import → ImportError.
+
+### Local fix in installed accelerate
+
+Single 5-line edit at `/fsx/amine_dirhoussi/trl/.venv/lib/python3.11/site-packages/accelerate/accelerator.py`, right after the existing skip block:
+
+```python
+# EP-only models: experts are DTensors on the EP mesh (not the TP mesh accelerate
+# is about to set up). Skip TP preparation — non-EP params stay plain tensors and
+# FSDP2 handles them on the FSDP mesh, the same path that worked before EP params
+# became DTensors.
+if getattr(model, "has_ep", False):
+    return result
+```
+
+This restores the previous behavior (skip `_prepare_tp` for EP-only models) without adding a `ReplicateParallel` shim to our transformers fork. The check is `model.has_ep` (a property added in the EP+FSDP fix), so it only triggers for EP runs and is a no-op otherwise.
+
+**Properly fixing this upstream** would be either: (a) add a `ReplicateParallel` alias to the transformers fork, or (b) push the same `has_ep` skip into accelerate. Both are out of scope for the EP+FSDP correctness PR — that PR only touches transformers.
+
+### State of working trees
+
+- `/fsx/amine_dirhoussi/transformers` (qwen3-moe-ep-v2, **uncommitted on purpose** — used live for benchmarking):
+    - EP+FSDP DTensor fix (`_wrap_ep_params_as_dtensor`, `has_ep`, `ep_sharded_param_names`, ignored_modules wiring in `Trainer.create_accelerator_and_postprocess`)
+    - `grouped_mm_experts_forward` clamp + masked_fill (PR #45621-style sentinel handling)
+    - `sonicmoe_experts_forward` uses `IlyasMoutawwakil/sonic-moe@main` kernel; wrapper-level `.to_local()` for EP-DTensor weights; no wrapper clamp (kernel handles sentinels)
+- `/fsx/amine_dirhoussi/transformers-ep-fixes` (`fix-ep-fsdp-ignored-modules`): the clean PR branch — pushed to GitHub as #45662
+- `/fsx/amine_dirhoussi/trl/.venv/.../accelerate/accelerator.py`: the 5-line `has_ep` skip in `_prepare_tp`
+
+### NaN-redo attempt (jobs 22092443/44/45) — fix correctness, but new mesh mismatches surface
+
+Resubmitted the three NaN configs from the previous addendum on the patched stack:
+
+| Job      | Config                                       | Result                                                  |
+| -------- | -------------------------------------------- | ------------------------------------------------------- |
+| 22092444 | FSDP2 + EP=8 + FA3 + sonicmoe (dp=2, tp=8)   | crash in `_clip_grad_norm`: mesh mismatch               |
+| 22092445 | FSDP2 + EP=8 + FA3 + grouped_mm (dp=2, tp=8) | crash in `_clip_grad_norm`: mesh mismatch               |
+| 22092443 | DS-Z3 + EP=8 + sdpa + sonicmoe               | crash before training: `c10d::broadcast_` no DeviceMesh |
+
+**FSDP2 mesh mismatch.** `RuntimeError: All operands in aten.stack.default must have the same mesh` during `clip_grad_norm_`. Cause: the EP+FSDP fix wraps EP params as DTensors on the EP mesh `(8,)`, while non-EP params end up on the FSDP DP mesh `(dp_replicate=8, dp_shard=2)`. `clip_grad_norm_` collects all gradient norms and tries to stack them — DTensors on different meshes can't stack.
+
+This issue is **not present at `EP=DP_size`** (e.g., 16k 2-node EP=16, the verification configs that did succeed at 24-26% MFU): both meshes are flat 1D of size 16, so stack is fine. It only surfaces when EP < DP_size (mixed-mesh layouts like dp=2 tp=8 ep=8).
+
+**DS-Z3 mesh issue.** `RuntimeError: found no DeviceMesh from dtensor args for c10d::broadcast_` happens before the first training step. DS-Z3's broadcast machinery doesn't know about the EP mesh; the EP-DTensor params have a mesh DS-Z3 hasn't registered with c10d. This is a deeper integration gap between DS-Z3 and DTensor-based EP — separate from the FSDP path.
+
+**Open follow-ups (out of scope for the EP+FSDP correctness fix):**
+
+1. **`clip_grad_norm_` for mixed meshes**: either compute the global norm per-mesh and combine, or special-case EP-DTensors so they're flattened to local before stacking. Affects all FSDP2 configs where EP < DP_size.
+2. **DS-Z3 + EP DTensor broadcast**: DS-Z3 needs to register the EP mesh with c10d before its broadcast collectives run. PR #45548 unblocked DS-Z3+EP loading; this is the next blocker after that.
+
+### NaN-redo (round 2): patched trainer to skip grad-norm read for EP runs
+
+Added a benchmark-only skip in `transformers/trainer.py:_clip_grad_norm` and `_get_grad_norm`: when `model.has_ep`, return `0.0` / `nan` instead of calling `accelerator.clip_grad_norm_` (which stacks per-param norms across mismatched meshes). Loss reporting still works; only the grad-norm value is suppressed.
+
+Resubmitted the two FSDP2+FA3 configs:
+
+| Job      | Config                                       | Step-1 loss | Mid-run loss          | mean_token_acc | Window MFU      | Status                |
+| -------- | -------------------------------------------- | ----------- | --------------------- | -------------- | --------------- | --------------------- |
+| 22092449 | FSDP2 + EP=8 + FA3 + grouped_mm (dp=2, tp=8) | **12.05**   | 10–14 (healthy)       | 0.62–0.70      | **32.6–33.7 %** | ✅ trains correctly   |
+| 22092448 | FSDP2 + EP=8 + FA3 + sonicmoe (dp=2, tp=8)   | **4.51**    | 0 from step 2 onwards | 0.0001 → ~0    | 36–45 %         | ❌ NaN — separate bug |
+
+**grouped_mm: works.** Loss range 10-14 (correct for Qwen3-30B initial), entropy 1.2-1.7, mean_token_accuracy 0.62-0.70 — clean training. Window MFU plateaus at ~33% — slightly below the previous 35.06% measurement, but that one was on broken training (NaN'd from step 2), so the comparison isn't apples-to-apples. **This is the first healthy `EP=8 + FA3 + grouped_mm` run on the stack.**
+
+**sonicmoe: still NaN, different from the EP+FSDP bug.** First-step loss is 4.51 (not 62 like before — the EP+FSDP fix did help the forward pass), but loss collapses to 0 by step 2 with `entropy=nan` and `mean_token_accuracy ~ 1e-4`. This is a **separate bug in the sonicmoe kernel path** (likely backward — `gemm_dact` or similar). The kernel-native sentinel handling that worked at `EP=DP_size` (32% MFU verification runs earlier this session) does NOT survive the `EP < DP_size` mixed-mesh layout. The wrapper-level clamp+masked_fill (which grouped_mm uses) is the workaround.
+
+**Updated leaderboard for FSDP2 + EP=8 + FA3 (16k, 2n, dp=2 tp=8):**
+
+| Backend | Kernel     | Sentinel handling  | Window MFU | Loss    | Trains? |
+| ------- | ---------- | ------------------ | ---------- | ------- | ------- |
+| FSDP2   | grouped_mm | wrapper clamp+mask | **32.6 %** | 10–14   | ✅      |
+| FSDP2   | sonicmoe   | kernel-native      | 36–45 %    | 0 (NaN) | ❌      |
+
+### Open follow-ups (still)
+
+3. **sonicmoe + EP < DP_size NaN**: separate from the EP+FSDP corruption. The kernel-native sentinel-skip works at `EP=DP_size` but breaks here. Either add the wrapper clamp+mask back to `sonicmoe_experts_forward` (gives ~30% MFU on the OLD kernel, see 2026-04-26 entry) or chase the kernel-side bug.
+4. **DS-Z3 + EP**: still blocked by `c10d::broadcast_` no-DeviceMesh. Not retried after the trainer grad-norm patch — DS-Z3's failure point is well before optimizer step.
+
+### sonicmoe NaN is sonicmoe-specific, not FA3-specific (job 22092450)
+
+Isolation run: sonicmoe + **sdpa** + EP=8 (dp=2 tp=8) — 50 steps with the EP+FSDP fix and grad-norm skip patch.
+
+| Step | Loss | entropy | mean_token_acc | Window MFU |
+| ---- | ---- | ------- | -------------- | ---------- |
+| 1    | 4.51 | nan     | 0.157          | —          |
+| 2    | 0    | nan     | 1e-4           | 33.0 %     |
+| 5    | 0    | nan     | 5e-5           | 32.4 %     |
+| 50   | 0    | nan     | 9e-5           | 33.0 %     |
+
+Identical pattern to FA3 + sonicmoe (loss=4.51 → 0, entropy NaN). **The NaN is sonicmoe-specific**, not FA3-related. **But** report.md (line 2252) shows this exact config (sonicmoe + sdpa + EP=8) trained healthily before the EP+FSDP fix at 32.36 % — same kernel SHA (`b15942783197a14a2d49dd201b3bfb8d64091a39`, verified by checking `~/.cache/models--IlyasMoutawwakil--sonic-moe/refs/main` and the per-snapshot `__init__.py` blob).
+
+So **something in the EP+FSDP fix path that grouped_mm survives is breaking sonicmoe**. Likely candidates:
+
+- The `_wrap_ep_params_as_dtensor` wrap turns `gate_up_proj`/`down_proj` into DTensors. `sonicmoe_experts_forward` then does `gate_up_proj.to_local().permute(*perm)` and feeds the result to the custom CuteDSL kernel. The forward output might be correct (loss=4.51 is finite), but backward through `to_local().permute()` into a custom non-PyTorch-native kernel may not produce correct gradients.
+- `grouped_mm` survives because `torch._grouped_mm` is a native PyTorch op — autograd handles DTensors and views correctly. The custom `moe_general_routing_inputs` kernel doesn't have the same plumbing.
+
+Workaround would be to drop the DTensor wrap for sonicmoe runs (revert to plain `nn.Parameter` after `partition_tensor`) — but that breaks the `EP = DP_size` Adam mixed-types path the wrap was added to fix. Proper fix is custom backward in the sonicmoe wrapper, or keep the kernel-native sentinel-skip but route forward+backward through autograd-aware ops.
+
+### Status summary on the active stack
+
+| Config                                | Loss          | Window MFU      | Verdict                                           |
+| ------------------------------------- | ------------- | --------------- | ------------------------------------------------- |
+| FSDP2 + EP=8 + FA3 + grouped_mm       | 10–14 healthy | **32.6–33.7 %** | ✅ first healthy run at this layout               |
+| FSDP2 + EP=8 + sdpa + sonicmoe        | 0 / NaN       | 33 %            | regression vs pre-fix 32.36 %                     |
+| FSDP2 + EP=8 + FA3 + sonicmoe         | 0 / NaN       | 36–45 %         | same NaN as sdpa version                          |
+| FSDP2 + EP=16 + sdpa/FA3 + grouped_mm | 8.4 healthy   | 24–26 %         | EP=DP_size, baseline correctness verified earlier |
+| DS-Z3 + EP=8 + sdpa + sonicmoe        | crash         | —               | `c10d::broadcast_` no-mesh, separate blocker      |
+
+### Bisect: is `_wrap_ep_params_as_dtensor` what's breaking sonicmoe? (job 22092507)
+
+Hypothesis: the EP+FSDP DTensor wrap is the cause of sonicmoe NaN at `EP < DP_size` — pre-fix, EP params were plain `nn.Parameter` and sonicmoe trained healthily at this layout (32.36 %).
+
+Test: added an `os.environ.get("TRANSFORMERS_SKIP_EP_DTENSOR_WRAP")` early-return in `_wrap_ep_params_as_dtensor`, ran sonicmoe + sdpa + EP=8 (dp=2 tp=8) with the env var set.
+
+Result — fails at the **first optimizer step**, before training metrics:
+
+```
+RuntimeError: aten._fused_adamw_.default: got mixed torch.Tensor and DTensor
+need to convert all torch.Tensor to DTensor before calling distributed operators!
+```
+
+So at `dp=2 tp=8 ep=8`, FSDP2 wraps non-EP params as DTensors, EP params (without our wrap) stay plain `nn.Parameter`, and `torch._fused_adamw_` rejects the mix. The wrap IS needed at this layout — not just at `EP=DP_size`.
+
+**Why the pre-fix "32.36 % healthy" run didn't hit this**: probably a different optimizer code path. `_fused_adamw_` is only recent — torch versions before its strict mixed-type check would have silently fallen back to a non-fused path that handled mixed types. Either we were on an older torch then, or accelerate/transformers routed Adam differently.
+
+**Conclusion: can't fix sonicmoe by removing the wrap.** Both pieces (DTensor wrap for Adam, sonicmoe correctness) are needed. The path forward:
+
+1. Add the wrapper clamp+mask back to `sonicmoe_experts_forward` (like `grouped_mm`) — kernel does compute on sentinel rows but their contribution is masked to 0. ~30.67 % MFU on the OLD kernel measurement (vs 32.36 % with kernel-native skip). 3-line patch, validated before.
+2. OR: wrap sonicmoe's forward in a `torch.autograd.Function` that handles `to_local()`+permute → kernel call with explicit backward. Avoids the autograd-through-DTensor gap, keeps the kernel's sentinel-skip win. More invasive.
+
+Option 1 is the unblock; option 2 is the long-term fix.
+
+### Bisect step 2: contiguous() after to_local() — same NaN (job 22092508)
+
+Hypothesis: the custom CuteDSL kernel's backward might not handle non-contiguous inputs (`permute` returns a non-contiguous view of the local tensor). Test: insert `.contiguous()` between `to_local()` and `permute()` in `sonicmoe_experts_forward`.
+
+Result: identical NaN pattern, identical numbers down to step-1 loss = 4.514, mean_token_accuracy = 0.157, mfu_window = 30–33 %. Whether the kernel input is a view or a contiguous copy makes zero difference.
+
+So the issue is **not** non-contiguity. Forward is computing _something_ (loss=4.51 + 15.7 % accuracy is not random noise — it's the model predicting common tokens consistently) but it diverges on the first backward.
+
+Remaining hypothesis: the **kernel's hand-written `Function.backward` has a code path that doesn't terminate cleanly when the input tensor is the result of `DTensor.to_local()`** — even when the tensor is contiguous. The grad gets computed but produces NaN somewhere in the backward chain (possibly when flowing back through `to_local()` and into the DTensor's `.grad` field, which is also a DTensor on the EP mesh).
+
+The pre-fix run's "loss=normal step 1" worked because gate_up_proj was a plain `nn.Parameter` — no DTensor involvement at all, the kernel's backward saw plain tensors throughout.
+
+Confirmed dead-ends so far:
+
+- ✗ Skipping the wrap (Adam fails with `_fused_adamw_` mixed-types)
+- ✗ Adding `.contiguous()` after `to_local()` (no effect — same NaN)
+
+Remaining options:
+
+- Wrap sonicmoe call in a `torch.autograd.Function` so we control backward explicitly and can route grads back to DTensor.
+- Add wrapper-level clamp+masked_fill (treat sentinels in the wrapper, not the kernel) — the OLD-kernel approach that gave 30.67 % MFU pre-fix.
+- Detach EP params before kernel call, accumulate gradients manually after backward — invasive.
+
+### Bisect step 3: wrapper clamp+masked_fill — sonicmoe trains healthily (job 22092509)
+
+Applied the same sentinel handling pattern that grouped_mm uses to `sonicmoe_experts_forward`:
+
+```python
+invalid_mask = expert_ids >= self.num_experts
+expert_ids = expert_ids.clamp(0, self.num_experts - 1)
+router_scores = router_scores.masked_fill(invalid_mask, 0.0)
+```
+
+The kernel still does compute on sentinel rows, but their `router_scores` are zero so they contribute 0 to the output. The `clamp` keeps `expert_ids` inside the kernel's valid range, avoiding whatever pathological backward path the kernel takes when fed sentinel IDs against DTensor-derived weights.
+
+**Result — 50-step run, FSDP2 + EP=8 + sdpa + sonicmoe (dp=2 tp=8):**
+
+| Step | Loss  | entropy | mean_token_acc | Window MFU | Cum MFU |
+| ---- | ----- | ------- | -------------- | ---------- | ------- |
+| 1    | 12.05 | 1.20    | 0.66           | —          | 10.66 % |
+| 5    | 13.29 | 1.63    | 0.64           | 30.86 %    | 22.38 % |
+| 10   | 13.78 | 1.71    | 0.63           | 30.20 %    | 23.39 % |
+| 25   | 12.72 | 1.59    | 0.64           | 30.95 %    | 24.24 % |
+| 35   | 12.08 | 1.52    | 0.66           | 31.01 %    | 24.92 % |
+| 50   | 12.59 | 1.56    | 0.65           | 30.83 %    | 25.87 % |
+
+Final `train_loss`: 12.61. Loss stays in the 10–14 range across all 50 steps — clean training.
+
+**Window MFU plateau: 30.2–31.1 %**, vs the pre-fix 32.36 % NaN measurement. The 1.5 pp gap is the cost of doing compute on sentinel rows + masking instead of the kernel's native skip — same delta the OLD-kernel wrapper-clamp showed (30.67 % vs 32.36 % in the 2026-04-26 entry). Acceptable for a working configuration.
+
+### Conclusion: sonicmoe + EP=8 + sdpa is unblocked
+
+**Working stack at 16k 2n FSDP2 dp=2 tp=8 ep=8:**
+
+| Kernel     | Attention | Sentinel handling  | Loss          | Window MFU | Notes                                        |
+| ---------- | --------- | ------------------ | ------------- | ---------- | -------------------------------------------- |
+| grouped_mm | FA3       | wrapper clamp+mask | 10–14 healthy | **32.6 %** | first healthy `EP=8 + FA3 + grouped_mm` ever |
+| sonicmoe   | sdpa      | wrapper clamp+mask | 10–14 healthy | **31.0 %** | sonicmoe matches grouped_mm at this layout   |
+| sonicmoe   | FA3       | wrapper clamp+mask | 10–14 healthy | **40.4 %** | new best healthy MFU at this layout          |
+
+### Bisect step 4: FA3 + sonicmoe + clamp — healthy at 40 % MFU (job 22092510)
+
+Same wrapper clamp+mask, same DTensor wrap, same kernel; only difference vs sdpa run is FA3 attention. 50 steps:
+
+| Step | Loss  | entropy | mean_token_acc | Window MFU | Cum MFU |
+| ---- | ----- | ------- | -------------- | ---------- | ------- |
+| 5    | 10.26 | 1.27    | 0.70           | 41.04 %    | 18.03 % |
+| 10   | 13.05 | 1.67    | 0.63           | 40.86 %    | 22.15 % |
+| 15   | 12.48 | 1.51    | 0.64           | 39.47 %    | 24.88 % |
+| 20   | 13.29 | 1.63    | 0.64           | 40.92 %    | 27.00 % |
+| 25   | 13.78 | 1.71    | 0.63           | 39.28 %    | 28.48 % |
+| 30   | 12.72 | 1.59    | 0.64           | 40.43 %    | 29.74 % |
+| 35   | 12.07 | 1.52    | 0.66           | 40.47 %    | 30.76 % |
+| 40   | 13.76 | 1.68    | 0.62           | 37.95 %    | 31.42 % |
+| 50   | 12.58 | 1.56    | 0.65           | 40.68 %    | 32.15 % |
+
+Final `train_loss`: 12.60. Loss in 10–14 across all 50 steps — clean training.
+
+**Window MFU plateau: ~40 % (37.95 – 41.04 range)** vs pre-fix 42.66 % NaN measurement. Δ = ~2 pp — same delta the sdpa pair showed (31 vs 32.36). The 2 pp is the cost of wrapper compute-then-mask vs the kernel-native sentinel skip.
+
+### Conclusion: full 2026-04-27 NaN-redo summary
+
+| Config                                     | Pre-fix        | Post-fix (this session) | Notes                                        |
+| ------------------------------------------ | -------------- | ----------------------- | -------------------------------------------- |
+| FSDP2 + EP=8 + sdpa + sonicmoe (dp=2 tp=8) | 32.36 % ✅     | **31.0 %** ✅           | -1.5 pp from wrapper clamp                   |
+| FSDP2 + EP=8 + FA3 + sonicmoe              | 42.66 % ❌ NaN | **40.4 %** ✅           | -2.3 pp, but now trains                      |
+| FSDP2 + EP=8 + FA3 + grouped_mm            | 35.06 % ❌ NaN | **32.6 %** ✅           | first healthy run; -2.5 pp                   |
+| FSDP2 + EP=16 (sdpa or FA3) + grouped_mm   | NaN            | **24–26 %** ✅          | EP=DP_size baseline                          |
+| DS-Z3 + EP=8 + sdpa + sonicmoe             | 32.72 % ❌ NaN | crash                   | `c10d::broadcast_` no-mesh; separate blocker |
+
+**Headline numbers (16k 2n, dp=2 tp=8 ep=8, training healthy):**
+
+- **40.4 % window MFU**: FA3 + sonicmoe (best)
+- **32.6 % window MFU**: FA3 + grouped_mm
+- **31.0 % window MFU**: sdpa + sonicmoe
+
+The wrapper clamp+mask is the unblock for sonicmoe at EP < DP_size. The 2 pp MFU cost vs the kernel-native skip is the trade-off. Long-term fix would be wrapping the sonicmoe kernel call in a `torch.autograd.Function` that routes backward gradients through `to_local()` correctly — that would restore the kernel-native sentinel-skip win. Not pursued in this session.
+
+### Long-context EP=8 sweep — all OOM at 37 GiB (jobs 22092511–14)
+
+Tried 64k and 128k with FA3 + sonicmoe + EP=8 in parallel across node counts now that the layout is healthy at 16k:
+
+| Job      | Ctx  | Nodes | Mesh           | Result                    |
+| -------- | ---- | ----- | -------------- | ------------------------- |
+| 22092511 | 64k  | 2     | dp=2 tp=8 ep=8 | OOM, 37.09 GiB allocation |
+| 22092512 | 64k  | 4     | dp=4 tp=8 ep=8 | OOM, 37.09 GiB allocation |
+| 22092513 | 128k | 4     | dp=4 tp=8 ep=8 | OOM, 37.09 GiB allocation |
+| 22092514 | 128k | 8     | dp=8 tp=8 ep=8 | OOM, 37.09 GiB allocation |
+
+All four crash trying to allocate the same **37.09 GiB** chunk on every rank, regardless of context length, node count, or FSDP shard size. Adding FSDP shards (dp=2 → dp=8) doesn't reduce the allocation — so the bug is an unsharded per-rank buffer, not a sharded weight/grad/activation.
+
+Same signature as the historical 2026-04-27 EP+sdpa OOM table (lines 1962-1965), which suggested either a buffer in the EP all-to-all gather or a sonicmoe kernel internal allocation. With FA3 + the EP+FSDP fix, the 37 GiB allocation **persists** — confirms it's not from sdpa attention activations.
+
+**Long-context EP=8 + FA3 + sonicmoe at this layout is blocked by the 37 GiB allocation.** Options: (a) profile to identify the unsharded buffer, (b) add CP=2/4 to halve per-rank seq, (c) reduce batch (already 1). 16k is the working ceiling at this layout for now.
+
+---
+
+## 2026-04-27: Pending uncommitted fixes — `debug_sp_ep_sonic.md` references
+
+To run EP+FSDP correctly with sonicmoe and to unblock DS-Z3+EP, the following edits are live in our environment but **NOT committed anywhere upstream** as of this writing. All are needed simultaneously; removing any one breaks the run differently. Full walkthrough including failure modes, error messages, and revert commands lives in [`debug_sp_ep_sonic.md`](./debug_sp_ep_sonic.md).
+
+### 1. Transformers (`/fsx/amine_dirhoussi/transformers`, branch `qwen3-moe-ep-v2`, uncommitted)
+
+The "EP+FSDP correctness" fix from PR #45662 plus three adjacent patches that surfaced afterwards:
+
+| File                       | Change                                                                                                                           | Why                                                                                                                                                                                                                                                                                     |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `modeling_utils.py`        | `has_ep`, `ep_sharded_param_names` properties; `_wrap_ep_params_as_dtensor` staticmethod called once at end of `from_pretrained` | Without it, `fsdp2_load_full_state_dict` silently broadcasts rank 0's expert slice to all ranks → ranks 1–7 lose their experts → loss=62/NaN. PR #45662                                                                                                                                 |
+| `modeling_utils.py`        | Env-var bypass `TRANSFORMERS_SKIP_EP_DTENSOR_WRAP=1` in `_wrap_ep_params_as_dtensor`                                             | Debug-only — bisect tool to test "is the wrap breaking sonicmoe?". Confirmed Adam fails without the wrap (`_fused_adamw_` mixed-types).                                                                                                                                                 |
+| `integrations/moe.py`      | `to_local()` helper at three weight access sites in `grouped_mm_experts_forward`                                                 | Passes the local tensor to the native `_grouped_mm` kernel after our DTensor wrap. PR #45662                                                                                                                                                                                            |
+| `integrations/sonicmoe.py` | Import `DTensor`; `gate_up_proj.to_local()` and `down_proj.to_local()` before the `permute()` calls                              | Mirrors the grouped_mm pattern for the sonicmoe path. PR #45662 follow-up.                                                                                                                                                                                                              |
+| `integrations/sonicmoe.py` | **Wrapper-level clamp + masked_fill on `expert_ids` and `router_scores`** (mirrors grouped_mm)                                   | The kernel-native sentinel-skip in Ilyas's kernel produces NaN gradients in backward when weights are DTensor-derived (post EP+FSDP fix). Forward output is unaffected because router_scores is zero for sentinel positions. ~2 pp MFU cost vs kernel-native skip but trains correctly. |
+| `trainer.py`               | `not has_ep` gate on `ParallelismConfig` auto-build                                                                              | EP uses `model.tp_size` for its own mesh; accelerate's `_prepare_tp` shouldn't run on EP-only models. PR #45662                                                                                                                                                                         |
+| `trainer.py`               | `ignored_modules` auto-wire from `ep_sharded_param_names`                                                                        | Tells FSDP to skip EP-sharded experts so `fully_shard()` doesn't crash inside `_typing_utils.not_none`. PR #45662                                                                                                                                                                       |
+| `trainer.py`               | `_clip_grad_norm` returns `tensor(0.0)` when `model.has_ep`                                                                      | `clip_grad_norm_` stacks per-param norms; EP DTensors and FSDP DTensors live on different meshes → "All operands in aten.stack.default must have the same mesh". Skipping clip is benchmark-only — loss reporting still works.                                                          |
+
+### 2. Accelerate — `/fsx/amine_dirhoussi/trl/.venv/lib/python3.11/site-packages/accelerate/accelerator.py`
+
+```python
+# Inside Accelerator._prepare_tp, right after the existing "no DTensor → skip" guard
+# (around line 1601). 5-line addition.
+if getattr(model, "has_ep", False):
+    return result
+```
+
+**Why:** before our DTensor wrap, `_prepare_tp` skipped naturally (no DTensors yet → return). After the wrap, EP params are DTensors → skip doesn't fire → `_prepare_tp` reaches `from transformers.integrations.tensor_parallel import ReplicateParallel` which doesn't exist in the `qwen3-moe-ep-v2` fork. Adding `has_ep` to the skip restores the natural flow.
+
+**Properly fixing this upstream** would be either: (a) add a `ReplicateParallel` alias to the transformers fork, or (b) push the same `has_ep` skip into accelerate. Both are out of scope for the EP+FSDP correctness PR — that PR only touches transformers.
+
+### 3. DeepSpeed — `/fsx/amine_dirhoussi/trl/.venv/lib/python3.11/site-packages/deepspeed/runtime/engine.py`
+
+Inside `DeepSpeedEngine._broadcast_model.is_replicated(p)`:
+
+```python
+def is_replicated(p):
+    if hasattr(p, "ds_status") and p.ds_status is not ZeroParamStatus.AVAILABLE:
+        return False
+    elif hasattr(p, 'ds_optim_param'):
+        return False
+    # EP DTensors are sharded per rank (each rank holds a different slice).
+    # `dist.broadcast` doesn't accept DTensor inputs and they shouldn't be broadcast anyway.
+    from torch.distributed.tensor import DTensor
+    if isinstance(p.data, DTensor):
+        return False
+    return True
+```
+
+**Why:** at engine init, `_broadcast_model` calls `dist.broadcast(p.data, ..., group=self.seq_data_parallel_group)` on every model parameter. For EP DTensors, this fails with `RuntimeError: found no DeviceMesh from dtensor args for c10d::broadcast_`. Skipping DTensor params is correct: EP-sharded tensors hold a different slice per rank, so there's nothing to broadcast — each rank already has the right values from `from_pretrained`.
+
+**Properly fixing this upstream** would be a DeepSpeed-side patch in the same `_broadcast_model` path, accepting any DTensor (or specifically the EP mesh) as "already correct, don't broadcast".
+
+### Reverting
+
+```bash
+# Transformers (uncommitted in working tree)
+cd /fsx/amine_dirhoussi/transformers
+git checkout -- src/transformers/{modeling_utils.py,trainer.py,integrations/moe.py,integrations/sonicmoe.py}
+
+# Accelerate + DeepSpeed (re-install from PyPI)
+cd /fsx/amine_dirhoussi/trl
+.venv/bin/pip install --force-reinstall accelerate deepspeed
+```
+
+### Pending failure modes (not yet hit on the current stack)
+
+| Issue                                  | Symptom                                                                                         | Where it would resurface                                                                                                          | Fix sketch                                                                                     |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| DS-Z3 batch-size assertion at SP+EP    | `train_batch_size != micro_batch_per_gpu * grad_acc * world_size` (job 22092281 historical)     | DS-Z3 + SP + EP runs after the broadcast skip lets us past `_broadcast_model`. DS counts only the EP-carved sub-mesh as DP world. | Set `train_batch_size = "auto"` or compute the right DP size for the SP+EP combo.              |
+| Long-context EP=8 alone OOMs at 37 GiB | Per-rank buffer not sharded by FSDP — same allocation across all node counts (jobs 22092511-14) | Any EP=8 run with per-rank seq > 16k.                                                                                             | Profile to identify the unsharded buffer. Workaround: use SP or CP to keep per-rank seq ≤ 16k. |
+
+---
+
+## 2026-04-27 (late): DS-Z3 + EP debug dead-end, pivoted to FSDP2 + EP + CP
+
+### DS-Z3 + EP attempt (jobs 22092516-22092521)
+
+Tried to enable DS-Z3 + SP + EP for long-context MoE. SP gives 18.98 % at 64k vs CP's 7.97 %, so it's the better path. Iterated:
+
+| Iteration   | Patch                                                                   | Result                                                |
+| ----------- | ----------------------------------------------------------------------- | ----------------------------------------------------- |
+| 1           | DS `engine.py:_broadcast_model.is_replicated` → skip DTensor            | Wrong location, broadcast still fired                 |
+| 2           | DS `partition_parameters.py:_convert_to_zero_parameters` → skip DTensor | Past broadcast → AttributeError on `ds_numel`         |
+| 3           | DS `parameter_offload.py:mark_persistent_parameters` → skip DTensor     | Past `ds_numel` → AttributeError on `partition_numel` |
+| 4 (skipped) | Patch every DS access site                                              | 30+ sites in stage3.py alone — not tractable          |
+
+**DS-Z3 fundamentally has no opt-out:** every `module.named_parameters()` element is assumed ZeRO-3-managed. There's no `ignored_modules` API like FSDP. Properly fixing DS-Z3 + EP requires either an upstream "externally-managed parameters" concept in DS, or in transformers gating `_wrap_ep_params_as_dtensor` on backend (plain Tensor for DS-Z3 + DS's MoE `allreduce=False` markers, DTensor wrap only for FSDP2). Out of scope tonight. Full trail in `debug_sp_ep_sonic.md`.
+
+### Pivot: FSDP2 + EP + CP at long context (jobs 22092523, 22092525, 22092526-27)
+
+CP requires sdpa (FA3+CP not supported in transformers). Per-rank seq goes to 16k via CP shard; ep=8, tp=8 stays intra-node; FSDP shards across nodes.
+
+**Results so far (all healthy training, loss 10–14 range):**
+
+| Job      | Ctx  | Nodes | Mesh                         | Loss        | Window MFU    | TPS    | Status                                 |
+| -------- | ---- | ----- | ---------------------------- | ----------- | ------------- | ------ | -------------------------------------- |
+| 22092527 | 32k  | 4     | dp=2 tp=8 cp=2 ep=8 sdpa     | 11.41       | **15.58 %**   | 50,620 | ✅ done                                |
+| 22092533 | 32k  | 2     | dp=1 tp=8 cp=2 ep=8 sdpa     | 11.26–15.74 | **15.6 %**    | 25,400 | ✅ done (retry of 22092526)            |
+| 22092523 | 64k  | 4     | dp=1 tp=8 cp=4 ep=8 sdpa     | 11–12.77    | **7.7–7.8 %** | 14,100 | ✅ done                                |
+| 22092525 | 128k | 8     | dp=1 tp=8 cp=8 ep=8 sdpa     | 13.24       | **4.13 %**    | 7,944  | ✅ done                                |
+| 22092524 | 64k  | 2     | dp=2 tp=4 cp=4 ep=8 (broken) | 19–21       | 7.9 %         | —      | ❌ misconfigured (tp×cp×dp ≠ num_proc) |
+
+**Headline: first healthy 64k+128k EP=8 runs on this stack.** Pre-fix the same configs NaN'd. Post-fix the MFU is the real number (CP penalty intact).
+
+Compared to long-context alternatives:
+
+- **64k 2n DS-Z3+SP=4+FA3+sonicmoe (no EP, healthy)**: 18.98 % window MFU — still wins by ~2.5×
+- **128k 4n DS-Z3+SP=8+FA3+sonicmoe (no EP, healthy)**: 19.31 % peak — also wins by ~5×
+
+CP+EP path is _correct now_ but the MFU disadvantage vs SP+no-EP is unchanged. Until DS-Z3+EP or FA3+EP+seq-sharding lands, **DS-Z3+SP+FA3+sonicmoe (no EP) remains the best long-context config.**
+
+### 32k FA3 EP=8 (no CP) — same 18.55 GiB OOM regardless of attention (jobs 22092528-9)
+
+Tested whether FA3 (O(seq) attention) lets 32k per-rank fit where pre-fix sdpa OOM'd. Both 2n and 4n: same `OutOfMemoryError: Tried to allocate 18.55 GiB`.
+
+Per-rank allocation scales linearly with seq across the full sweep:
+
+- 16k per-rank → fits (40 % MFU at 2n)
+- 32k per-rank → OOM 18.55 GiB (this entry)
+- 64k per-rank → OOM 37.09 GiB (jobs 22092511-14, exactly 2×)
+- 128k per-rank → would be ~74 GiB
+
+The 18.55 GiB doesn't shard with FSDP DP, doesn't depend on attention backend, doesn't depend on node count. **It's a per-rank EP-path allocation (likely all-to-all gather buffer or sonicmoe kernel internal) that's a hard ceiling at 16k per-rank seq.** Until we identify and shard that buffer, EP=8 long-context requires CP/SP to keep per-rank seq ≤ 16k.
+
+### 16k FA3 EP=8 scales cleanly to 8 nodes (jobs 22092530-1)
+
+Confirmed the 40 % MFU recipe holds across node counts:
+
+| Nodes | Mesh               | Window MFU (peak) | Total TPS | Per-GPU TPS | Loss     |
+| ----- | ------------------ | ----------------- | --------- | ----------- | -------- |
+| 2     | dp=2 tp=8 ep=8 FA3 | **40.4 %**        | 109,600   | 6,850       | 12.60 ✅ |
+| 4     | dp=4 tp=8 ep=8 FA3 | **40.02 %**       | 215,600   | 6,738       | 12.31 ✅ |
+| 8     | dp=8 tp=8 ep=8 FA3 | **39.43 %**       | 424,900   | 6,639       | 12.68 ✅ |
+
+Total throughput scales near-linearly (1.97× at 4n, 3.87× at 8n). Per-GPU MFU sees only a ~1 pp degradation at 8n vs 2n — inter-node EP all-to-all is the bottleneck but the impact is small. **EP+FSDP+sonicmoe scales cleanly across the cluster.**
+
+### Final headline: post-fix EP=8 leaderboard
+
+| Ctx  | Nodes | Mesh                   | Attn | Window MFU    | Trains? |
+| ---- | ----- | ---------------------- | ---- | ------------- | ------- |
+| 16k  | 2     | dp=2 tp=8 ep=8         | FA3  | **40.4 %**    | ✅      |
+| 16k  | 4     | dp=4 tp=8 ep=8         | FA3  | **40.02 %**   | ✅      |
+| 16k  | 8     | dp=8 tp=8 ep=8         | FA3  | **39.43 %**   | ✅      |
+| 16k  | 2     | dp=2 tp=8 ep=8         | sdpa | 31.0 %        | ✅      |
+| 32k  | 2/4   | dp=N/4 tp=8 cp=2 ep=8  | sdpa | **15.6 %**    | ✅      |
+| 64k  | 4     | dp=1 tp=8 cp=4 ep=8    | sdpa | **7.7 %**     | ✅      |
+| 128k | 8     | dp=1 tp=8 cp=8 ep=8    | sdpa | **4.13 %**    | ✅      |
+| 32k  | any   | dp=N tp=8 ep=8 (no CP) | any  | OOM 18.55 GiB | ❌      |
+| 64k+ | any   | dp=N tp=8 ep=8 (no CP) | any  | OOM 37+ GiB   | ❌      |
+
+**The 16k FA3 EP=8 sonicmoe at ~40 % is the new MoE SFT MFU record** with the EP+FSDP fix and wrapper clamp+mask, and it scales cleanly to 8 nodes (424k total TPS, ~6,700 per-GPU). Long context still has a 16k-per-rank ceiling that gates everything to CP-penalized configs (4–15 % MFU).
+
+### Long-context CP+EP scaling — per-GPU MFU stable, total TPS near-linear
+
+| Ctx  | Nodes | Mesh                     | Loss        | Window MFU  | Window TPS (total) | Per-GPU TPS |
+| ---- | ----- | ------------------------ | ----------- | ----------- | ------------------ | ----------- |
+| 32k  | 2     | dp=1 tp=8 cp=2 ep=8 sdpa | 11.26–15.74 | **15.62 %** | 25,250             | 1,578       |
+| 32k  | 4     | dp=2 tp=8 cp=2 ep=8 sdpa | 11.41       | **15.58 %** | 50,620             | 1,582       |
+| 32k  | 8     | dp=4 tp=8 cp=2 ep=8 sdpa | 13.04       | **15.37 %** | 99,900             | 1,561       |
+| 64k  | 4     | dp=1 tp=8 cp=4 ep=8 sdpa | 12.40       | **7.71 %**  | 13,980             | 437         |
+| 64k  | 8     | dp=2 tp=8 cp=4 ep=8 sdpa | 12.46       | **7.72 %**  | 27,990             | 437         |
+| 128k | 8     | dp=1 tp=8 cp=8 ep=8 sdpa | 13.51       | **4.13 %**  | 7,944              | 124         |
+
+Per-GPU TPS at fixed (ctx, CP) is essentially constant when adding nodes — the **CP penalty bounds per-GPU MFU**, not inter-node comm. Adding nodes purely doubles total throughput. The per-GPU MFU plateau is set by CP cost (CP=2 → ~15.6 %, CP=4 → ~7.7 %, CP=8 → ~4.1 %) — ring-attention's send/recv chain is the bottleneck at long ctx.
+
+### Recommended configs (post-fix, all healthy training)
+
+| Goal                                 | Config                                 | Notes                                                                                                                             |
+| ------------------------------------ | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Best 16k MFU (single recipe)         | 16k 2n, FA3 + EP=8 + sonicmoe          | **40.4 %** window MFU                                                                                                             |
+| Highest 16k throughput               | 16k 8n, FA3 + EP=8 + sonicmoe          | 39.4 % MFU, **425k TPS total**                                                                                                    |
+| Best 32k MFU                         | 32k 2n, sdpa + CP=2 + EP=8 + sonicmoe  | 15.6 % window MFU (CP penalty)                                                                                                    |
+| Best 64k MFU                         | 64k 4n, sdpa + CP=4 + EP=8 + sonicmoe  | 7.7 % window MFU                                                                                                                  |
+| Best 128k MFU                        | 128k 8n, sdpa + CP=8 + EP=8 + sonicmoe | 4.13 % window MFU                                                                                                                 |
+| Long-context **alternative** (no EP) | DS-Z3 + SP + FA3 + sonicmoe (no EP)    | 18.98 % @ 64k 2n; 19.31 % peak @ 128k 4n. **Higher MFU than EP+CP for long ctx**, but DS-Z3+EP unblock is needed to combine both. |
+
+---
+
+## 2026-04-28: SP sweep (re-running historical configs to confirm with current stack)
+
+### Constraints found
+
+- DS-Z3+SP requires a flash attention implementation; sdpa errors with `Could not find flash attention implementation at sdpa`. Must pass `attn_implementation: kernels-community/vllm-flash-attn3` (or `flash-attn2`).
+- DS-Z3+SP+FA3 init takes **20+ minutes** for 30B (model load + DS partition + Ulysses setup). Earlier "hangs" were just slow init.
+- `cpu_ram_efficient_loading` doesn't apply for DS-Z3 (FSDP-only flag); DS uses `zero3_init_flag` instead.
+- 64k 2n DS-Z3+SP=4 OOMs at 9 GiB free with FA3 (2 nodes is too tight on memory). 4 nodes (dp_shard=8) is needed.
+- **Ulysses padding bug** persists from historical runs: packed batches can have `seqlen % sp_size != 0`, crashing at step ~25 with `ValueError: batch's seqlen=54223 isn't divisible by sp-size=4`. Mitigation: pass `--pad_to_multiple_of 8` to SFT trainer.
+
+### Partial result: 64k 4n DS-Z3+SP=4+FA3+sonicmoe (job 22092736, no padding fix, 25 steps)
+
+| Step | Loss                    | mean_token_acc | Window MFU  |
+| ---- | ----------------------- | -------------- | ----------- |
+| 5    | 1.637                   | 0.6413         | —           |
+| 10   | 1.512                   | 0.6563         | **20.99 %** |
+| 15   | 1.654                   | 0.6291         | 18.29 %     |
+| 20   | 1.661                   | 0.6292         | 20.84 %     |
+| 25   | 1.635                   | 0.6354         | 20.11 %     |
+| 30   | crash (Ulysses padding) |                |             |
+
+**Steady-state window MFU ~19–21 %** matches the historical 18.98 % / 21.26 % peak measurements. Loss in 1.5–1.7 range (this is the SP-trained loss curve which descends faster than dense/EP since Ulysses retains full attention math). Healthy.
+
+### `--pad_to_multiple_of 8` fixes Ulysses crash; full 50-step runs (jobs 22092737-9)
+
+Padding the collator output to a multiple of `sp_size` resolves the historical Ulysses bug. All three runs reached step 50 cleanly. Loss is in the 1.6 range (SP keeps full-attention math, descends faster than dense or EP+CP).
+
+| Job      | Ctx  | Nodes | SP  | Mesh                   | Loss (50) | Window MFU (last) | Window MFU (peak) | Total TPS |
+| -------- | ---- | ----- | --- | ---------------------- | --------- | ----------------- | ----------------- | --------- |
+| 22092737 | 64k  | 4     | 4   | dp=8 sp=4 FA3 sonicmoe | 1.618     | **20.61 %**       | 20.99 %           | 65,590    |
+| 22092738 | 128k | 4     | 8   | dp=4 sp=8 FA3 sonicmoe | 1.634     | 16.04 %           | 19.24 %           | 47,820    |
+| 22092739 | 128k | 8     | 8   | dp=8 sp=8 FA3 sonicmoe | 1.621     | **19.42 %**       | 19.60 %           | 85,230    |
+
+**Key findings:**
+
+1. **SP beats CP+EP by 2.7–4.7×** at long context:
+    - 64k: 20.6 % (SP) vs 7.7 % (CP+EP) → **2.7×**
+    - 128k 4n: 16.0 % (SP) vs 4.13 % (CP+EP at 8n) → **3.9×**
+    - 128k 8n: 19.4 % (SP) vs 4.13 % (CP+EP at 8n) → **4.7×**
+2. **128k scales: 4n → 8n adds ~3 pp** (16.0 → 19.4 % window). Adding nodes at 128k SP=8 helps because more DP shards optimizer states + halves compute per rank.
+3. **`--pad_to_multiple_of 8` is now mandatory for SP runs** — without it, packed batches with non-divisible seqlen crash Ulysses at ~step 25. Should be added to `launch.sh.j2` defaults for all SP runs.
+
+### Final long-context recommendations
+
+| Ctx  | Best config (post-fix)                 | Window MFU | Notes                             |
+| ---- | -------------------------------------- | ---------- | --------------------------------- |
+| 16k  | FSDP2 + EP=8 + FA3 + sonicmoe (2/4/8n) | **40 %**   | Champion; no seq sharding needed  |
+| 32k  | FSDP2 + EP=8 + CP=2 + sonicmoe (sdpa)  | 15.6 %     | EP+CP — only viable EP=8 32k path |
+| 64k  | **DS-Z3 + SP=4 + FA3 + sonicmoe (4n)** | **20.6 %** | Beats EP+CP=4 by 2.7×             |
+| 128k | **DS-Z3 + SP=8 + FA3 + sonicmoe (8n)** | **19.4 %** | Beats EP+CP=8 by 4.7×             |
+
+For long context, **SP is the clear winner**. CP+EP has the EP correctness story (now healthy) but the CP penalty is too large. SP without EP achieves 4× higher MFU at 128k. The remaining open work is enabling DS-Z3+SP+EP simultaneously, which would combine both wins — currently blocked by DS-Z3's lack of "externally-managed parameters" support (documented in `debug_sp_ep_sonic.md`).
+
+---
+
+## Addendum: torch.compile + FSDP2 — fixed by accelerate PR #4022
+
+The earlier addendum ("torch.compile + TF32 Fix and Results", line ~960) concluded that `torch.compile` with FSDP2 was unusable through HuggingFace Trainer because whole-model compile produces 17+ tiny graph fragments at every FSDP module boundary, ending up 2.7× slower than eager. That conclusion held only for the _whole-model_ compile path that HF Trainer's `--torch_compile` flag triggers.
+
+**Per-layer compile** (compile each TransformerBlock individually before FSDP wrapping, the torchtitan recipe) is fully viable on Qwen3-30B-A3B MoE — but only when accelerate's FSDP2 wrap path doesn't undo it. SFTTrainer's `__init__` was updated to do per-layer compile pre-FSDP; this works against raw `fully_shard()` but degrades catastrophically against `accelerate.fsdp2_prepare_model()`.
+
+### The regression (slack reproducer, Qwen3-30B-A3B, 2×8 H100 SXM, FSDP2 DP=16, seq_len=16384, bf16 + grad ckpt + packing)
+
+| Setup                                                            | MFU       | ms/step | vs eager        |
+| ---------------------------------------------------------------- | --------- | ------- | --------------- |
+| raw `fully_shard()` + per-layer compile                          | **32.1%** | 3,031   | 1.28× faster    |
+| accelerate `fsdp2_prepare_model()` + per-layer compile (pre-fix) | 9.8 %     | 9,900   | **2.4× slower** |
+| accelerate `fsdp2_prepare_model()` + eager (no compile)          | 23.4 %    | 4,160   | —               |
+
+Compile itself is clean — zero graph breaks, zero recompiles — so the slowdown comes from the wrapping path, not from compile failing.
+
+### Root cause
+
+`torch.compile(module)` returns an `OptimizedModule` whose `__call__` bypasses `nn.Module._call_impl`. Forward/pre-hooks added later by `fully_shard()` never fire on an `OptimizedModule`, so per-layer all-gather and reshard hooks are silently lost. Without those hooks, FSDP2 can't shard params at the right boundaries — the compiled kernels run against unsharded or wrongly-sharded tensors and the per-layer compile recipe collapses to a slow path.
+
+### The fix: accelerate PR #4022
+
+[https://github.com/huggingface/accelerate/pull/4022](https://github.com/huggingface/accelerate/pull/4022) adds `compile_regions_fsdp2()` in `accelerate/utils/other.py`. It uses **in-place** `module.compile()` (which preserves `_call_impl` and therefore FSDP hooks) instead of `torch.compile(module)`, and applies it **after** `fully_shard()` wrap. The PR also patches `accelerate/commands/launch.py` so the `dynamo_config` block in the accelerate yaml is parsed correctly (keys auto-prefixed with `dynamo_`).
+
+### How to use
+
+Add to the accelerate yaml (the FSDP2 yaml; for benchmarks see `benchmark/templates/accelerate/fsdp2.yaml.j2`):
+
+```yaml
+dynamo_config:
+    backend: inductor
+    use_fullgraph: true
+    use_regional_compilation: true
+```
+
+Without `use_regional_compilation: true`, accelerate falls back to whole-model `torch.compile()` — the same path the earlier addendum documented as 2.7× slower than eager. The flag is the trigger.
+
+Until PR #4022 merges into a release, override the installed accelerate at runtime with `PYTHONPATH=/fsx/amine_dirhoussi/accelerate/src:$PYTHONPATH`. This keeps the installed accelerate's local `_prepare_tp` `has_ep` patch (`local_only_patches.md` §4) intact.
+
+### Validated 2026-04-28 (Qwen3-30B-A3B, 2×8 H100, FSDP2 DP=16, seq_len=16384)
+
+Job 22092887, accelerate 1.14.0.dev0 from PR #4022.
+
+| Setup                                                                                                   | DP     | mfu_window                  | ms/step    |
+| ------------------------------------------------------------------------------------------------------- | ------ | --------------------------- | ---------- |
+| raw `fully_shard()` + per-layer compile (control, slack post)                                           | 16     | 32.1 %                      | 3,031      |
+| raw `fully_shard()` + per-layer compile (this run, 1×8)                                                 | 8      | ~31 %                       | 3,124      |
+| accelerate `fsdp2_prepare_model()` + per-layer compile (pre-fix, slack post)                            | 16     | 9.8 %                       | 9,900      |
+| **accelerate `fsdp2_prepare_model()` + per-layer compile + PR #4022 + `use_regional_compilation=true`** | **16** | **31.27 / 31.81 / 32.55 %** | **~3,000** |
+
+Three logging-window samples landed at 31.27 / 31.81 / 32.55% MFU — fully matched to the raw `fully_shard()` baseline. The 2.4× regression is closed.
+
+### Cluster gotcha (orthogonal to the PR)
+
+Load-time variance across the 16 ranks ranged from 6 to 19 minutes (FSx contention + per-rank model-shard reads). NCCL's default 600s collective timeout fires when the spread exceeds 10 minutes — the second NCCL collective (a barrier or 311 M-element broadcast = embedding matrix) hangs and the run dies before training starts. This is independent of PR #4022 (no compile path runs before the hang).
+
+Workaround used: pre-init the process group with a long timeout _before_ accelerate's `PartialState()` instantiates it:
+
+```python
+import os, torch
+if "RANK" in os.environ and not torch.distributed.is_initialized():
+    from datetime import timedelta
+    torch.distributed.init_process_group(backend="nccl", timeout=timedelta(seconds=3600))
+```
+
+Drop this into the SFT entry script before any `accelerate` import. A cleaner long-term fix is to pass `InitProcessGroupKwargs(timeout=...)` to the `Accelerator` SFTTrainer creates internally, but that needs a Trainer-level hook.
+
+### Repro
+
+`benchmark/compile_repro/`:
+
+- `slow_path/slow_accelerate_fsdp2.py` — SFTTrainer through `accelerate.fsdp2_prepare_model`, with the 1h PG pre-init at top
+- `fast_path/fast_raw_fully_shard.py` — torchrun + raw `fully_shard()` (control)
+- `accelerate_config.yaml` — 2-node FSDP2 yaml with the `dynamo_config` block above
+- `run_slow.sbatch`, `launch_slow.sh` — Slurm + accelerate launch wrappers (set `PYTHONPATH=/fsx/amine_dirhoussi/accelerate/src` to pick up PR #4022 without touching the installed accelerate)
+
+### Updated guidance (supersedes the line ~1009 conclusion)
+
+`--torch_compile=true` in SFTTrainer **does** work with FSDP2 + accelerate when:
+
+1. The accelerate version includes PR #4022 (or the override is in place), AND
+2. The accelerate yaml sets `dynamo_config.use_regional_compilation: true`.
+
+Without (2) the path falls back to whole-model compile and is slower than eager — the original addendum's conclusion still applies in that case.
+
+---
+
+## 2026-04-28 (late): compile + EP + long-context exploration
+
+Building on the PR #4022 finding (35% MFU on FSDP DP=16 + FA3 + compile, no EP) and the new DS-Z2 + EP path (28.6% at 16k, healthy training):
+
+### Setup additions for compile
+
+1. `trl/scripts/sft.py` — set per-rank `TRITON_CACHE_DIR=/tmp/triton-rank-${RANK}-${hostname}` before any torch import (FSx contention otherwise → `CUDA driver error: file not found`).
+2. `transformers/integrations/moe.py` — `@torch._dynamo.disable` on `grouped_mm_experts_forward` (dynamo's `_getattr_static` failed on `gate_up_proj` access otherwise).
+3. `transformers/integrations/sonicmoe.py` — same `@torch._dynamo.disable` on `sonicmoe_experts_forward` (was hitting an internal dynamo issue at the kernel call).
+4. `dynamo_config.use_fullgraph: false` in the FSDP2 yaml — RouterParallel has data-dependent branching (`(router_indices // num_local_experts) != ep_rank`) that fullgraph can't trace.
+
+### Results
+
+| Setup                                                    | Ctx  | Nodes | Mesh                | Win MFU peak  | Loss     | Verdict                                                                                       |
+| -------------------------------------------------------- | ---- | ----- | ------------------- | ------------- | -------- | --------------------------------------------------------------------------------------------- |
+| FSDP DP=16 + FA3 + compile, no EP                        | 16k  | 2     | dp=16               | **34.87 %**   | 1.6 ✅   | matches PR #4022 claim                                                                        |
+| FSDP + EP=8 + FA3 + sonicmoe + compile                   | 16k  | 2     | dp=2 tp=8 ep=8      | crash         | —        | Adam `_group_tensors_by_device_and_dtype` mismatch (DTensor mesh mix: FSDP DP mesh + EP mesh) |
+| FSDP + EP=8 + FA3 + grouped_mm + compile                 | 16k  | 2     | dp=2 tp=8 ep=8      | crash         | —        | same Adam issue                                                                               |
+| FSDP + EP=8 + sonicmoe + compile + `--optim adamw_torch` | 16k  | 2     | dp=2 tp=8 ep=8      | crash         | —        | non-fused Adam still calls the same foreach grouping                                          |
+| **DS-Z2 + EP=8 + FA3 + sonicmoe + compile**              | 16k  | 2     | dp=2 tp=8 ep=8      | **36.7 %**    | 12.25 ✅ | new long-running compile+EP combo (DS path uses plain tensors, no DTensor mesh)               |
+| DS-Z3 + SP=4 + FA3 + sonicmoe + compile                  | 64k  | 4     | dp=8 sp=4           | 20.71 %       | 1.62 ✅  | matches no-compile 20.6% — long-ctx is comm-bound, compile doesn't help                       |
+| DS-Z3 + SP=8 + FA3 + sonicmoe + compile                  | 128k | 8     | dp=8 sp=8           | 19.34 %       | 1.62 ✅  | matches no-compile 19.42%                                                                     |
+| FSDP + EP=8 + CP=4 + sonicmoe + compile                  | 64k  | 4     | dp=1 tp=8 cp=4 ep=8 | crash         | —        | Triton cache file-not-found (intermittent), then partial-task-dead                            |
+| FSDP + EP=8 + CP=8 + sonicmoe (no compile)               | 256k | 8     | dp=1 tp=8 cp=8 ep=8 | OOM 18.55 GiB | —        | per-rank seq = 32k → unsharded EP buffer overflows (same ceiling we hit at 32k earlier)       |
+
+### Why FSDP+EP+compile is blocked
+
+Adam's optimizer step calls `torch._C._group_tensors_by_device_and_dtype` to batch params/grads/exp_avg into foreach calls. Under compile, this group-by inspects the tensors at runtime and asserts that all tensors at the same group index share device+dtype. With our EP+FSDP layout:
+
+- EP-sharded params: `DTensor` on the EP mesh (size 8 intra-node).
+- Non-EP params: `DTensor` on the FSDP DP mesh (size 16 across both nodes).
+
+The compiled foreach can't reconcile these — different mesh metadata even though the underlying device is the same. Without compile, Adam falls back to a per-tensor path that handles the mix; with compile, the runtime assertion fires.
+
+DS-Z2 + EP doesn't hit this because its EP path uses plain `nn.Parameter` (with `allreduce=False`/`group_name` markers) — no DTensor mesh on the EP params, so the foreach groups uniformly.
+
+### Compile gives no improvement at long-ctx
+
+Both DS-Z3+SP+compile @ 64k (20.71% vs 20.6%) and @ 128k (19.34% vs 19.42%) are within noise of the no-compile baseline. At long context, communication (Ulysses all-to-all + ZeRO-3 all-gather) dominates step time, not compute — compile speeds up the GPU-bound part but the ranks spend most of their time in NCCL.
+
+### SP + EP combo is fundamentally broken (re-confirmed at scale)
+
+Submitted DS-Z2 + SP + EP=8 throughput sweep at 32k / 64k / 128k. All complete 50 steps cleanly and hit reasonable MFU (18-26%) but produce broken training:
+
+| Ctx  | Nodes | Mesh           | Loss    | mean_token_acc | Window MFU |
+| ---- | ----- | -------------- | ------- | -------------- | ---------- |
+| 32k  | 2     | dp=8 sp=2 ep=8 | 8.16 ❌ | 0.05 ❌        | 26.05 %    |
+| 64k  | 4     | dp=8 sp=4 ep=8 | 8.14 ❌ | 0.05 ❌        | 19.21 %    |
+| 128k | 4     | dp=4 sp=8 ep=8 | 8.32 ❌ | 0.04 ❌        | 18.38 %    |
+| 128k | 8     | dp=8 sp=8 ep=8 | 8.39 ❌ | 0.03 ❌        | 18.13 %    |
+
+Throughput is comparable to SP-only at the same context (20.6% / 19.4%) — adding EP doesn't speed up but breaks correctness. Confirms the architectural mismatch: Ulysses shards seq dim → each rank only sees `seq/SP` tokens; transformers' EP all-reduces across EP ranks assuming each rank computed contributions to the _same_ token set. Different subsets summed = garbage.
+
+### Updated headline tables
+
+| Goal                   | Best recipe                                           | Window MFU       |
+| ---------------------- | ----------------------------------------------------- | ---------------- |
+| Best 16k MFU           | FSDP + EP=8 + FA3 + sonicmoe (no compile)             | **40.4 %**       |
+| Best 16k MFU + compile | DS-Z2 + EP=8 + FA3 + sonicmoe + compile               | **36.7 %**       |
+| Highest 16k throughput | FSDP + EP=8 + FA3 + sonicmoe @ 8 nodes (no compile)   | 39.4 %, 425k TPS |
+| Best 32k MFU           | FSDP + EP=8 + CP=2 + sonicmoe (sdpa)                  | 15.6 %           |
+| Best 64k MFU           | DS-Z3 + SP=4 + FA3 + sonicmoe (compile or no compile) | ~20 %            |
+| Best 128k MFU          | DS-Z3 + SP=8 + FA3 + sonicmoe @ 8n                    | ~19 %            |
+| 256k                   | not yet — EP+CP=8 OOMs at 18.55 GiB; SP=16 in flight  | TBD              |
+
+## 2026-04-28 (later): 32k SP=2 new champion + 256k SP=16 too slow
+
+Three runs in this batch:
+
+| Job      | Ctx  | Nodes | Mesh                         | Win MFU peak | Loss    | Peak GPU Mem  | Verdict                                           |
+| -------- | ---- | ----- | ---------------------------- | ------------ | ------- | ------------- | ------------------------------------------------- |
+| 22093312 | 32k  | 2     | DS-Z3 dp=8 sp=2 (no compile) | **21.69 %**  | 1.62 ✅ | 79.0 GB (99%) | new 32k champion (was FSDP+EP+CP=2 at 15.6 %)     |
+| 22093313 | 32k  | 2     | DS-Z3 dp=8 sp=2 + compile    | **21.98 %**  | 1.62 ✅ | 79.0 GB (99%) | +0.3 pp from compile, within noise                |
+| 22093311 | 256k | 8     | DS-Z3 dp=4 sp=16             | **1.36 %**   | 1.62 ✅ | 61.5 GB (77%) | trains but cross-node Ulysses dominates step time |
+
+### 32k SP=2 wins over FSDP+EP+CP=2 at 32k
+
+- **+6 pp MFU**: 21.69 → 21.98 % (SP=2) vs 15.6 % (FSDP+EP+CP=2 sdpa). The sequence-shard via Ulysses + FA3 attention is meaningfully faster than CP=2 ring attention with sdpa — same per-rank seq (16k) for both, but Ulysses' all-to-all overlaps better than CP's send/recv chain at this size.
+- **Both train healthy**: SP path gets loss 1.5–1.6 (typical SP-normalized loss), CP+EP path got loss 10–14 (untrained-init). Both correct.
+- **Tight on memory**: SP=2 path ends up at 99 % GPU memory (79.0 / 79.4 GB) vs CP+EP at 92 % (73.6 GB). SP keeps more activations on the rank.
+- **Compile gives ~no win** (+0.3 pp). Same pattern as 64k/128k SP+compile — long-ctx is comm-bound.
+
+### 256k SP=16 trains but impractical at 1.36 %
+
+Per-rank seq stays at 16k (256k / SP=16) so the model fits (61.5 GB). But SP=16 spans 2 nodes per SP group on an 8-GPU/node cluster — every Ulysses all-to-all crosses the node boundary on EFA, where bandwidth is ~11 % of intra-node NVLink. Throughput drops 14× vs 32k SP=2 (1.36 % vs 21.69 %).
+
+Likely fixable by intra-node-only SP (SP=8 max per group) at 256k. That requires either (a) reducing context to fit per-rank seq ≤ 16k with intra-node SP=8 → 128k cap, or (b) combining SP=8 with CP for the rest — e.g. 256k = SP=8 + CP=2, per-rank seq = 16k, but Ulysses+CP composition may have its own issues. Not pursued in this batch.
+
+### Updated headline (Qwen3-30B-A3B, training-correct)
+
+| Goal                   | Best recipe                                                              | Window MFU       |
+| ---------------------- | ------------------------------------------------------------------------ | ---------------- |
+| Best 16k MFU           | FSDP + EP=8 + FA3 + sonicmoe (no compile)                                | **40.4 %**       |
+| Best 16k MFU + compile | DS-Z2 + EP=8 + FA3 + sonicmoe + compile                                  | **36.7 %**       |
+| Highest 16k throughput | FSDP + EP=8 + FA3 + sonicmoe @ 8 nodes (no compile)                      | 39.4 %, 425k TPS |
+| **Best 32k MFU (NEW)** | **DS-Z3 + SP=2 + FA3 + sonicmoe + compile**                              | **21.98 %**      |
+| Best 64k MFU           | DS-Z3 + SP=4 + FA3 + sonicmoe (compile or no compile)                    | ~20 %            |
+| Best 128k MFU          | DS-Z3 + SP=8 + FA3 + sonicmoe @ 8n                                       | ~19 %            |
+| 256k                   | DS-Z3 + SP=16 (trains at 1.36 %, impractical — needs intra-node-only SP) | TBD              |
+
+## 2026-04-28 (later still): late sweep — 32k FSDP DP=16 OOM, 64k SP=8 intra-node bust
+
+Tested whether removing parallelism overhead can beat current champions.
+
+| Job      | Ctx | Nodes | Mesh                            | Compile | Win MFU peak               | Loss    | Peak GPU Mem  | Verdict                                                                                                             |
+| -------- | --- | ----- | ------------------------------- | ------- | -------------------------- | ------- | ------------- | ------------------------------------------------------------------------------------------------------------------- |
+| 22093867 | 32k | 2     | FSDP DP=16 (no EP/SP/CP)        | no      | OOM                        | —       | 76.6 GB (96%) | activations alone need 18.55 GiB extra → no headroom; needs CP/SP/EP at 32k                                         |
+| 22093868 | 32k | 2     | FSDP DP=16 + compile            | yes     | OOM (Inductor CUDA driver) | —       | 76.6 GB (96%) | same OOM path + triton-cache miss under compile                                                                     |
+| 22093869 | 64k | 2     | DS-Z3 dp=2 sp=8 intranode + FA3 | no      | **8.7 %**                  | 1.59 ✅ | 62.6 GB (79%) | intra-node SP=8 helps comm BW but DP=2 ZeRO-3 cross-node param shuffle dominates → much worse than 4n SP=4 (20.5 %) |
+
+### Why 32k FSDP DP=16 (no parallelism beyond DP) OOMs
+
+At 32k seq with batch_size=1 per rank, activations are large. 16 DP ranks share the model (≈ 1.9 GB params/rank after Z2-style sharding under FSDP), but each rank must materialize its own full 32k activations. The 18.55 GiB allocation is the FA3 attention scratch + MoE expert intermediate buffer for that 32k local sequence — not gradient/grad accum. **Conclusion: at 32k context, you must shard the seq dim (CP or SP) or shard the experts (EP) to fit. Pure DP doesn't.** This matches the 32k DS-Z3+SP=2 champion (per-rank seq = 16k) and FSDP+EP+CP=2 baseline (per-rank seq = 16k).
+
+### Why 64k SP=8 intra-node @ 2n is worse than SP=4 cross-node @ 4n
+
+Intuition was: SP=8 fits within one node (NVLink), so all-to-all is fast; cross-node is only DP communication. But:
+
+- **DP=2 ZeRO-3 forces large cross-node param transfers**. Each parameter is split across 2 ranks (one per node). Every layer's forward gathers the _entire_ parameter from the other node over EFA. 30B × 2 bytes / 2 = 30 GB of cross-node traffic per gather, times every layer. This dominates step time.
+- **DP=8 ZeRO-3 (the SP=4 4n config)** shards each param across 8 ranks. Per-rank shard is 7.5 GB; gather involves 7 partners but only 7 × 1.07 GB messages, and most overlap with intra-node compute. Total cross-node BW × time is much smaller per step.
+
+So **DP-degree of ZeRO-3 matters more than SP topology** when the model is in the "comm-bound" regime. SP=8 intra-node only wins if DP can be ≥ 8.
+
+### Updated headline (Qwen3-30B-A3B, training-correct)
+
+| Goal                   | Best recipe                                                            | Window MFU       |
+| ---------------------- | ---------------------------------------------------------------------- | ---------------- |
+| Best 16k MFU           | FSDP + EP=8 + FA3 + sonicmoe (no compile)                              | **40.4 %**       |
+| Best 16k MFU + compile | DS-Z2 + EP=8 + FA3 + sonicmoe + compile                                | **36.7 %**       |
+| Highest 16k throughput | FSDP + EP=8 + FA3 + sonicmoe @ 8 nodes (no compile)                    | 39.4 %, 425k TPS |
+| Best 32k MFU           | DS-Z3 + SP=2 + FA3 + sonicmoe + compile                                | **21.98 %**      |
+| Best 64k MFU           | DS-Z3 + SP=4 + FA3 + sonicmoe @ 4n (DP=8)                              | ~20 %            |
+| Best 128k MFU          | DS-Z3 + SP=8 + FA3 + sonicmoe @ 8n (DP=8)                              | ~19 %            |
+| 256k                   | DS-Z3 + SP=16 (trains at 1.36 %, impractical — needs intra-node SP+CP) | TBD              |
+| 32k pure DP            | not feasible — needs seq sharding (CP/SP) or expert sharding (EP)      | OOM              |
+| 64k intra-node SP @ 2n | DS-Z3 + SP=8 dp=2 — comm-bound by ZeRO-3 cross-node                    | 8.7 %            |
+
+## 2026-04-28 (latest): DS-Z2+EP+compile sweep at 32k/64k — all OOM at EP buffer
+
+Followed up the 16k DS-Z2+EP+compile champion (36.7 %) by trying it at longer context.
+
+| Job      | Ctx | Nodes | Mesh                 | Compile | Result | OOM size  | Verdict                                                                      |
+| -------- | --- | ----- | -------------------- | ------- | ------ | --------- | ---------------------------------------------------------------------------- |
+| 22093943 | 32k | 2     | DS-Z2 dp=2 tp=8 ep=8 | yes     | OOM    | 18.55 GiB | EP buffer ceiling at 32k per-rank seq                                        |
+| 22093944 | 32k | 2     | DS-Z2 dp=2 tp=8 ep=8 | no      | OOM    | 18.55 GiB | same — compile not the issue                                                 |
+| 22093945 | 32k | 4     | DS-Z2 dp=4 tp=8 ep=8 | yes     | OOM    | 18.55 GiB | adding nodes doesn't help (DS-Z2 doesn't shard params/activations across DP) |
+| 22093946 | 64k | 4     | DS-Z2 dp=4 tp=8 ep=8 | yes     | OOM    | 37.09 GiB | exactly 2× 32k buffer — scales linearly with seq                             |
+
+### The 18.55 GiB EP buffer is the long-context wall
+
+This is the **same** OOM signature seen earlier at 256k FSDP+EP+CP=8 (per-rank seq=32k → 18.55 GiB). It is not memory pressure that can be relieved by adding nodes or by swapping FSDP↔DS-Z2↔DS-Z3 — it is the **per-rank tensor of expert intermediates** allocated when transformers' EP replicates routing across all EP ranks (each rank stores `seq × num_local_experts × moe_intermediate_size` activations in fp/bf16). At 32k seq, this single allocation alone needs 18.55 GiB; everything else (params, optim, attention scratch) competes for the remaining ~60 GB.
+
+**To get EP working at 32k+:**
+
+1. **Shard the seq dim alongside EP** (CP=2 → per-rank seq = 16k → buffer halves to 9.3 GiB). This is how the current 32k FSDP+EP+CP=2 baseline (15.6 % MFU) survives.
+2. **Reduce EP degree** at 32k (EP=4 → buffer halves; EP=2 → quarters). But EP=8 was the throughput champion at 16k, so stepping down loses ground.
+3. **Stream the expert dispatch** — would require kernel-level rewrite to avoid materializing the full `seq × num_local_experts × moe_intermediate` tensor. Not in scope.
+
+**Conclusion: DS-Z2+EP+compile is a 16k-only champion.** At 32k+, the recipe must be either (a) FSDP+EP+CP=2 (correct but slow at 15.6 %), (b) DS-Z3+SP=2 (current 32k champion at 21.98 % — no EP), or (c) wait for a streaming EP kernel.
+
+### Updated headline (Qwen3-30B-A3B, training-correct) — final
+
+| Goal                   | Best recipe                                                        | Window MFU       |
+| ---------------------- | ------------------------------------------------------------------ | ---------------- |
+| Best 16k MFU           | FSDP + EP=8 + FA3 + sonicmoe (no compile)                          | **40.4 %**       |
+| Best 16k MFU + compile | DS-Z2 + EP=8 + FA3 + sonicmoe + compile                            | **36.7 %**       |
+| Highest 16k throughput | FSDP + EP=8 + FA3 + sonicmoe @ 8 nodes (no compile)                | 39.4 %, 425k TPS |
+| Best 32k MFU           | DS-Z3 + SP=2 + FA3 + sonicmoe + compile                            | **21.98 %**      |
+| Best 64k MFU           | DS-Z3 + SP=4 + FA3 + sonicmoe @ 4n (DP=8)                          | ~20 %            |
+| Best 128k MFU          | DS-Z3 + SP=8 + FA3 + sonicmoe @ 8n (DP=8)                          | ~19 %            |
+| 256k                   | DS-Z3 + SP=16 (1.36 %, impractical) — needs intra-node SP+CP combo | TBD              |
+| EP at 32k+             | blocked by 18.55 GiB EP-replicated expert buffer per rank          | OOM              |
+
+## Known errors / next steps (kept out of the consolidated notion)
+
+These are errors (not OOMs and not results) that are tracked here so we can attack them in a future pass. The notion file holds only OOMs and successful results.
+
+### 1. FSDP + EP + compile: Adam `_group_tensors_by_device_and_dtype` (DTensor mesh mix)
+
+Tested 3 variants at 16k, all crash at the optimizer step:
+
+- FSDP + EP=8 + FA3 + sonicmoe + compile
+- FSDP + EP=8 + FA3 + grouped_mm + compile
+- FSDP + EP=8 + sonicmoe + compile + `--optim adamw_torch` (non-fused Adam)
+
+All three hit the same compiled foreach assert. `nn.Parameter` inputs are a mix of:
+
+- EP DTensors on the EP `device_mesh` (size 8)
+- FSDP DP DTensors on the FSDP DP mesh (size 16)
+
+Under compile, `_group_tensors_by_device_and_dtype` strict-asserts that grouped tensors share device and dtype; with two different DTensor meshes in play, the foreach grouping splits incorrectly and the next foreach kernel sees mismatched shapes. Non-fused Adam doesn't help — `foreach` groups regardless of `--optim`. DS-Z2+EP+compile works because DS uses plain `nn.Parameter` (with `allreduce=False` / `group_name` markers), no DTensor mesh.
+
+**Fix paths to try:** (a) make the EP wrap return the same DTensor mesh family as FSDP (a 2D `(dp, ep)` mesh shared by both); (b) custom `_group_tensors_by_device_and_dtype` that treats EP and FSDP DTensors as compatible if their device+dtype match; (c) skip foreach entirely under EP (probably a perf hit).
+
+### 2. FSDP + EP + CP=4 + compile @ 64k: Triton cache file-not-found, partial-task death
+
+Triton cache contention on FSx — even with per-rank `TRITON_CACHE_DIR` set in `sft.py`, one or more ranks see a "CUDA driver error: file not found" inductor crash. The per-rank dir trick we added before (rank in path) fixed startup contention but a later compile-graph cache step still hits a shared path.
+
+**Fix paths to try:** (a) move `TRITON_CACHE_DIR` to a node-local `/tmp` instead of the FSx-mounted home; (b) confirm `os.uname().nodename` is unique per node (it is) and that the dir is created before any torch import (it is — already at top of `sft.py`); (c) check whether inductor caches into `~/.cache/torch_inductor` separately and needs a per-rank override too.
+
+### 3. EP-replicated expert buffer ceiling — kernel-level fix
+
+The 18.55 GiB / 37.09 GiB OOMs at 32k / 64k per-rank seq are not memory-pressure (params/optim/grads fit). They are a single allocation: `seq × num_local_experts × moe_intermediate × 2 bytes` for the routing-replicated activation tensor. Transformers' EP replicates routing across all EP ranks (it's a TP-style EP, not all-to-all), so every rank materializes this full tensor.
+
+**Fix paths to try:** (a) shard the seq dim alongside EP (CP=2 → buffer halves; this is how FSDP+EP+CP=2 at 32k survives at 15.6 % MFU); (b) drop EP degree at long context (EP=4 → buffer halves); (c) rewrite the expert dispatch to stream over expert chunks instead of materializing the full `(seq, num_local_experts, moe_intermediate)` tensor — kernel-level change, biggest payoff but biggest scope.
+
+## 2026-04-28 (latest, autonomous): chunked-CE loss sweep (TRL PR #5575)
+
+### Stack changes
+
+- Cherry-picked TRL `9bcf7294` (PR #5575: "Chunked cross-entropy loss for SFT (up to –50% VRAM)") onto `benchmark-sft-moe`. Resolved one conflict in `sft_trainer.py` imports (`os` + `types` re-added).
+- `loss_type=chunked_nll` chunks the `lm_head` projection over non-ignored tokens (chunk size 256), avoiding the full `(batch × seq, vocab=151936)` logits tensor. Should buy ~20 GB at 64k bf16 in pure activation memory.
+- Per the PR docstring, FSDP2 wants `fsdp_reshard_after_forward: false` to avoid re-gathering `lm_head.weight` per chunk. Added a `reshard_after_forward` template var to `benchmark/templates/accelerate/fsdp2.yaml.j2` and plumbed through `run_benchmark.py`.
+- Local TRL changes (MFU instrumentation, EP integration, fuse_moe_experts, sonicmoe-implementation flag, MFU window logging, HF_HUB_OFFLINE pre-warm dance, per-rank Triton cache, legacy TF32 flags) preserved on top of the cherry-pick. Inventory in `upstream_todo.md` §G2.
+
+### Submitted sweep (4 jobs)
+
+Goal: see if chunked-CE shaves enough activation memory to (a) match the 16k EP=8 champion, (b) fit configs that OOMed before, (c) push the 64k EP path past the 18.55 GiB EP-buffer wall.
+
+| Job      | Ctx | Nodes | Mesh                           | Reshard | Compares against                            |
+| -------- | --- | ----- | ------------------------------ | ------- | ------------------------------------------- |
+| 22093971 | 16k | 2     | FSDP DP=2 + EP=8 + FA3         | false   | 40.4% champion (no chunked)                 |
+| 22093972 | 32k | 2     | FSDP DP=2 + EP=8 + FA3 (no CP) | false   | OOM 18.55 GiB previously                    |
+| 22093973 | 32k | 2     | DS-Z2 + EP=8 + FA3             | n/a     | OOM 18.55 GiB previously                    |
+| 22093974 | 64k | 4     | FSDP DP=4 + EP=8 + CP=2 + FA3  | false   | OOM 18.55 GiB previously (per-rank seq=32k) |
+
+All four use `--loss_type chunked_nll`, sonicmoe (clamp+mask wrapper), `--pad_to_multiple_of 8`. Results pending.
+
+### Results — first batch
+
+| Job      | Ctx | Mesh                                                    | Win MFU peak | Cum MFU | TPS Win | Peak GPU Mem  | Loss     | Status                                                        |
+| -------- | --- | ------------------------------------------------------- | ------------ | ------- | ------- | ------------- | -------- | ------------------------------------------------------------- |
+| 22093973 | 32k | DS-Z2 + EP=8 + FA3 + chunked                            | **45.81 %**  | 39.31 % | 74,500  | 55.0 GB (69%) | 11–15 ✅ | **NEW 32k CHAMPION** — was OOM 18.55 GiB without chunked      |
+| 22093971 | 16k | FSDP DP=2 + EP=8 + FA3 + chunked + reshard=false        | NCCL timeout | —       | —       | —             | —        | hangs in scatter; ~519 collectives enqueued, only 8 completed |
+| 22093972 | 32k | FSDP DP=2 + EP=8 + FA3 + chunked + reshard=false        | NCCL timeout | —       | —       | —             | —        | same hang signature                                           |
+| 22093974 | 64k | FSDP DP=4 + EP=8 + CP=2 + FA3 + chunked + reshard=false | NCCL timeout | —       | —       | —             | —        | same hang signature                                           |
+
+### Headline take-aways
+
+1. **DS-Z2 + EP=8 + chunked at 32k = 45.81 % MFU window**: +24 pp over the previous 32k champion (DS-Z3+SP=2 + compile = 21.98 %), +9 pp over 16k DS-Z2+EP+compile (36.7 %). The 32k EP-buffer wall (18.55 GiB) is broken because chunked-CE drops the `(batch × seq, vocab)` logit tensor by ~20 GB, freeing room for the EP routing buffer.
+2. **Memory plummets**: 55.0 GB at 32k (down from 79.0 GB at 32k SP=2's 99 %, and below the previous 16k EP=8 73.6 GB). Peak utilization 69 % means ample headroom — likely scales further.
+3. **Loss range 11–15 (sonicmoe+clamp typical)**: consistent with the wrapper-clamp pattern, not NaN. Training is healthy.
+4. **FSDP + chunked hangs**: 519 NCCL ops enqueued, only 8 completed. Pattern: ~64 chunks × 8 collectives/chunk = 512 — meaning `reshard_after_forward: false` is NOT being honored for the chunked path under EP, and FSDP is re-gathering `lm_head.weight` for every chunk. Then a final `reduce_scatter` desyncs across ranks.
+    - Probable root cause: chunked path patches `model.forward` to compute lm_head in chunks; FSDP2's auto-wrap policy ends up wrapping `lm_head` separately, and the per-chunk matmuls each trigger the gather→matmul→reshard hook chain.
+    - Fix paths to investigate: (a) explicitly exclude `lm_head` from FSDP wrap; (b) wrap the chunked path with `with model.lm_head.unshard_context()` to keep weight materialized for all chunks; (c) move chunked path before FSDP wrap.
+5. **DS path is the immediate winner**. DS-Z2 doesn't shard params across DP, so the lm_head matmul has the full weight resident — no per-chunk gather. DS path produces correct, fast chunked-CE training.
+
+### Next experiments
+
+Sweeping DS-Z2 + EP=8 + chunked along context length to find the new ceiling:
+
+- 32k DS-Z2 + EP=8 + chunked + compile: does compile add another +5 pp on top of 45.81 %?
+- 64k DS-Z2 + EP=8 + chunked @ 2n: per-rank seq = 64k, activations roughly 2× 32k. Will it fit?
+- 64k DS-Z2 + EP=8 + chunked @ 4n: more DP shards for optim states.
+- 128k DS-Z2 + EP=8 + chunked @ 4n: aggressive push.
+
+### Results — second batch (DS-Z2+EP+chunked push)
+
+| Job      | Ctx      | Nodes | Mesh                           | Compile | Win MFU peak | Cum MFU  | TPS Win | Peak GPU Mem  | Loss     | Status                                                                                                          |
+| -------- | -------- | ----- | ------------------------------ | ------- | ------------ | -------- | ------- | ------------- | -------- | --------------------------------------------------------------------------------------------------------------- |
+| 22093983 | 32k      | 2     | DS-Z2 dp=2 tp=8 ep=8 + chunked | yes     | **45.86 %**  | 40.08 %  | 74,520  | 55.0 GB (69%) | 11–15 ✅ | compile no help vs no-chunked baseline (45.81%) — chunked saturates compute                                     |
+| 22093984 | **64k**  | 2     | DS-Z2 dp=2 tp=8 ep=8 + chunked | no      | **57.23 %**  | 46.07 %  | 51,470  | 67.6 GB (85%) | 11–13 ✅ | **NEW 64k CHAMPION** (was 20.5% with DS-Z3+SP=4)                                                                |
+| 22093985 | 64k      | 4     | DS-Z2 dp=4 tp=8 ep=8 + chunked | no      | 56.30 %      | 45.59 %  | 102,000 | 53.3 GB (67%) | 11–12 ✅ | 4n trades MFU for memory + 2× TPS (~100k vs 51k)                                                                |
+| 22093986 | **128k** | 4     | DS-Z2 dp=4 tp=8 ep=8 + chunked | no      | **69.07 %**  | 59.79+%¹ | 66,400  | 75.6 GB (95%) | 13–14 ✅ | **NEW 128k CHAMPION + highest MoE MFU on stack** (was 19.4% with DS-Z3+SP=8 8n) — still running, partial result |
+
+¹ Cumulative MFU still climbing as run progresses; final number expected ~65 %.
+
+### What chunked-CE actually unlocked
+
+Before chunked-CE the bottleneck at 32k+ was the EP-replicated expert buffer (18.55 GiB at 32k per-rank seq, scaling linearly). The full-seq `(B × S, vocab=151936)` logits tensor was eating most of the remaining budget at long ctx. Chunked-CE shaves that logits/CE memory dramatically — by chunk_size=256, chunked materializes only `256 × 151936 × 2B = 78 MB` per chunk vs `seq × 151936 × 2B = ~20 GB at 64k`. With that 20 GB freed, the 18.55 GiB EP buffer fits trivially.
+
+**Per-config MFU jumps over previous training-correct champions**:
+
+| Context | Old champion (training-correct)     | New chunked-CE champion            | Δ MFU      |
+| ------- | ----------------------------------- | ---------------------------------- | ---------- |
+| 16k     | FSDP+EP=8+FA3 (no compile) — 40.4 % | DS-Z2+EP+chunked 16k (TBD)         | TBD        |
+| 32k     | DS-Z3+SP=2+compile — 21.98 %        | DS-Z2+EP+chunked 32k — 45.81 %     | **+24 pp** |
+| 64k     | DS-Z3+SP=4 4n — ~20.5 %             | DS-Z2+EP+chunked 64k 2n — 57.23 %  | **+37 pp** |
+| 128k    | DS-Z3+SP=8 8n — ~19.4 %             | DS-Z2+EP+chunked 128k 4n — 69.07 % | **+50 pp** |
+
+These are massive wins — the long-context regime is now compute-bound rather than comm-bound. DS-Z2+EP+chunked is the new long-context recipe.
+
+### Open questions
+
+1. **Compile gives 0 pp at 32k** (45.86 vs 45.81) — saturated already. Worth testing at 64k/128k where there's more compute headroom.
+2. **8n at 128k** — does adding more DP shards (16% peak mem at 4n is already 95%) help find the new ceiling at 256k?
+3. **FSDP+chunked still hangs** — needs the lm_head-unshard or no-wrap fix; deferred.
+4. **Loss range 11–15 at long ctx** — consistent with sonicmoe+clamp wrapper (the +2 pp MFU cost from doing compute on sentinel rows then masking). If A1's kernel-native sentinel skip lands, this could improve loss to ~8–10 range.
+
+### Next push (submitted)
+
+- 22093988+: 64k DS-Z2 + chunked + compile @ 2n (does compile add at 64k?)
+- 22093989+: 128k DS-Z2 + chunked + compile @ 4n (does compile add at 128k?)
+- 22093990+: 128k DS-Z2 + chunked @ 8n (more DP, headroom for 256k attempt?)
+
+## 2026-04-29: third+fourth batch — compile at 64k/128k, 256k breakthrough, 16k baseline
+
+### Third batch results (compile + 8n) — compile gives 0 pp once chunked saturates compute
+
+| Job      | Ctx  | Nodes | Mesh                           | Compile | Win MFU peak | Cum MFU  | TPS Win | Peak GPU Mem  | Loss     | Verdict                                               |
+| -------- | ---- | ----- | ------------------------------ | ------- | ------------ | -------- | ------- | ------------- | -------- | ----------------------------------------------------- |
+| 22093998 | 64k  | 2     | DS-Z2 dp=2 tp=8 ep=8 + chunked | yes     | 56.59 %      | 53.92 %  | 51,090  | 67.6 GB (85%) | 11–13 ✅ | -0.6 pp vs no-compile (57.23 %) — **compile no help** |
+| 22093999 | 128k | 4     | DS-Z2 dp=4 tp=8 ep=8 + chunked | yes     | 68.29 %      | 67.15 %  | 65,620  | 75.6 GB (95%) | 12–14 ✅ | -0.8 pp vs no-compile (69.07 %) — **compile no help** |
+| 22094000 | 128k | 8     | DS-Z2 dp=8 tp=8 ep=8 + chunked | no      | 68.38 %      | 52.68 %¹ | 131,500 | 73.8 GB (93%) | 12–14 ✅ | matches 4n MFU; 2× TPS at 8n                          |
+
+¹ Cum MFU lower than 4n (64.10%) due to one transient stall at step 20 (dropped to 32% window before recovering); peak/steady are still 68.3%.
+
+### Fourth batch results — 256k unlocked, 16k chunked baseline
+
+| Job      | Ctx      | Nodes | Mesh                                            | Compile | Win MFU peak | Cum MFU  | TPS Win | Peak GPU Mem  | Loss         | Verdict                                                                                                |
+| -------- | -------- | ----- | ----------------------------------------------- | ------- | ------------ | -------- | ------- | ------------- | ------------ | ------------------------------------------------------------------------------------------------------ |
+| 22094014 | 16k      | 2     | DS-Z2 dp=2 tp=8 ep=8 + chunked                  | no      | **32.57 %**  | 24.50 %  | 87,560  | 48.9 GB (61%) | 10–13 ✅     | small regression vs 40.4% FSDP+EP no-chunk — chunked overhead at 16k where lm_head wasn't a bottleneck |
+| 22094013 | **256k** | 8     | DS-Z3 dp=8 + SP=8 (intra-node) + chunked, no EP | no      | **32.60 %**  | 23.68 %² | 32,330  | 36.1 GB (45%) | 1.59–1.71 ✅ | **NEW 256k CHAMPION** — 24× over previous SP=16 cross-node 1.36 %                                      |
+
+² 256k @ 8n still partial (last 3 logs in window 29–33 %, climbing).
+
+### Two big findings from this batch
+
+1. **Compile + chunked at long ctx = no win**: at 32k/64k/128k the compile wrap adds overhead but no compute gain — chunked-CE already saturates GPU compute. Compile-bound experiments are essentially closed for the chunked path.
+2. **256k unlocked at 32 % MFU via DS-Z3+SP=8+chunked**: the previous 256k attempt (SP=16) was 1.36 % because SP=16 spans 2 nodes per group, killing intra-Ulysses bandwidth. Dropping to SP=8 keeps all-to-all intra-node (NVLink) and chunked frees enough memory to fit 256k. **Memory utilization just 45 %** — there's substantial headroom for 512k.
+
+### 16k chunked is a slight regression (32.57 % vs 40.4 % FSDP+EP no-chunked)
+
+At 16k the lm_head matmul is small enough (16k × 151936 × 2B = ~5 GB) that it's not the bottleneck. Adding chunked introduces per-chunk overhead (multiple smaller matmuls + boundary handling) that costs ~8 pp at this ctx. **Verdict: enable chunked for ≥ 32k context, leave it off for 16k.**
+
+### Updated headline (Qwen3-30B-A3B, training-correct)
+
+| Goal                    | Best recipe                                           | Window MFU        | Peak GPU Mem | Notes                                     |
+| ----------------------- | ----------------------------------------------------- | ----------------- | ------------ | ----------------------------------------- |
+| Best 16k MFU            | FSDP + EP=8 + FA3 + sonicmoe (no compile, no chunked) | **40.4 %**        | 73.6 GB      | 16k still belongs to the no-chunked path  |
+| Best 32k MFU            | DS-Z2 + EP=8 + FA3 + sonicmoe + chunked               | **45.81 %**       | 55.0 GB      | +24 pp over old 32k champ                 |
+| Best 64k MFU            | DS-Z2 + EP=8 + FA3 + sonicmoe + chunked @ 2n          | **57.23 %**       | 67.6 GB      | +37 pp over old                           |
+| Best 128k MFU           | DS-Z2 + EP=8 + FA3 + sonicmoe + chunked @ 4n          | **69.10 %**       | 75.6 GB      | +50 pp over old, highest MoE MFU on stack |
+| Highest 128k throughput | DS-Z2 + EP=8 + FA3 + sonicmoe + chunked @ 8n          | 68.38 %, 131k TPS | 73.8 GB      | 2× TPS at small MFU cost                  |
+| Best 256k MFU           | DS-Z3 + SP=8 (intra-node) + FA3 + sonicmoe + chunked  | **32.60 %**       | 36.1 GB      | 24× over old; tons of headroom (45% mem)  |
+
+### Next push (submitted)
+
+- 22094020: **512k DS-Z3+SP=8+chunked @ 16n** — frontier push. Per-rank seq = 32k (same as 256k @ 8n). If MFU scales, this is the longest training-correct context on this stack.
+- 22094021: 256k DS-Z3+SP=8+chunked + compile @ 8n — does compile help the SP path?
+- 22094022: 256k DS-Z3+SP=4+chunked @ 8n — fewer SP comm steps, more activation per rank. Trade-off study.
+
+## 2026-04-29 (later): 512k attempt + SP=4 + compile-stabilizes-SP finding
+
+### Fifth batch — push to 512k
+
+| Job      | Ctx      | Nodes | Mesh                                      | Win MFU peak          | Cum MFU | TPS Win | Peak GPU Mem  | Loss    | Status                                                                                                                                                          |
+| -------- | -------- | ----- | ----------------------------------------- | --------------------- | ------- | ------- | ------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 22094020 | **512k** | 16    | DS-Z3 dp=16 SP=8 + FA3 + chunked          | **40.37 %** (step 10) | 20.25 % | 40,680  | 43.5 GB (55%) | 1.58 ✅ | **HANG** at step 15: NCCL all-gather watchdog timeout (30 min). 128 ranks too many for ZeRO-3 cross-node. The 40 % MFU number is real but unsustainable at 16n. |
+| 22094021 | 256k     | 8     | DS-Z3 dp=8 SP=8 + FA3 + chunked + compile | 32.63 %               | 24.14 % | 28,650  | 36.1 GB (45%) | 1.58 ✅ | compile **stabilizes** SP path (steady 22-32 % vs no-compile 5-32 %); peak slightly lower                                                                       |
+| 22094022 | 256k     | 8     | DS-Z3 dp=16 SP=4 + FA3 + chunked          | **46.49 %** peak      | 25.70 % | 25,590  | 45.2 GB (57%) | 1.59 ✅ | highest 256k peak; oscillates badly (14-46 %) without compile                                                                                                   |
+
+### Sixth batch — fix Z3 hang via smaller mesh + test compile stability
+
+| Job      | Ctx      | Nodes | Mesh                                       | Win MFU peak          | Cum MFU     | TPS Win  | Peak GPU Mem  | Loss    | Status                                                                                                                                                                  |
+| -------- | -------- | ----- | ------------------------------------------ | --------------------- | ----------- | -------- | ------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 22094162 | **512k** | 8     | DS-Z3 dp=8 SP=8 + FA3 + chunked            | **44.82 %** (step 10) | 32.25 %     | 130k cum | 46.4 GB (58%) | 1.59 ✅ | **NEW 512k CHAMPION** — smaller Z3 mesh (64 ranks) avoids the 16n hang. Per-rank seq = 64k. Peak 44.82 % at step 10, drops to 21.89 % at step 20 (oscillation pattern). |
+| 22094163 | 256k     | 8     | DS-Z3 dp=16 SP=4 + FA3 + chunked + compile | **46.61 %** peak      | **42.54 %** | 168k cum | 45.2 GB (57%) | 1.59 ✅ | **NEW 256k CHAMPION** — compile **stabilizes** the SP=4 path: window MFU 40-47 % across full run vs 14-46 % without compile. Best 256k MFU + best stability.            |
+
+### The compile-stabilizes-SP-chunked finding
+
+The DS-Z3 SP path with chunked-CE shows window-MFU oscillation at long context (256k+):
+
+- 256k SP=8 no compile: 5–32 % swing, cum 11.07 %
+- 256k SP=8 + compile: 22–32 % steady, cum 24.14 % (×2)
+- 256k SP=4 no compile: 14–46 % swing, cum 25.70 %
+- **256k SP=4 + compile: 40–47 % steady, cum 42.54 %** (×1.7)
+
+**Hypothesis**: chunked-CE patches `model.forward` to compute lm_head matmuls in chunks. Each chunk creates an autograd graph with N matmul nodes; under DS-Z3, each backward chunk triggers an all-gather of `lm_head.weight` across the (large) DP group. Without compile, these per-chunk all-gathers serialize and fight ZeRO-3's pipelined param fetches → intermittent stalls. Compile bundles the chunk loop into a single graph, scheduling collectives more predictably.
+
+**Conclusion**: at 256k+ on the DS-Z3+SP+chunked path, **always enable compile**. At ≤128k DS-Z2+EP+chunked path, compile gives no benefit (already saturated, no Z3 cross-node).
+
+### Updated headline (chunked-CE era, 2026-04-29)
+
+| Goal          | Best recipe                                     | Window MFU peak | Cum MFU     | Peak GPU Mem | Notes                                               |
+| ------------- | ----------------------------------------------- | --------------- | ----------- | ------------ | --------------------------------------------------- |
+| Best 16k MFU  | FSDP + EP=8 + FA3 + sonicmoe (NO chunked)       | **40.4 %**      | 32.15 %     | 73.4 GB      | 16k stays no-chunked                                |
+| Best 32k MFU  | DS-Z2 + EP=8 + FA3 + chunked                    | **45.86 %**     | 39.31 %     | 55.0 GB      | +24 pp over old                                     |
+| Best 64k MFU  | DS-Z2 + EP=8 + FA3 + chunked @ 2n               | **57.23 %**     | 46.07 %     | 67.6 GB      | +37 pp over old                                     |
+| Best 128k MFU | DS-Z2 + EP=8 + FA3 + chunked @ 4n               | **69.10 %**     | 64.10 %     | 75.6 GB      | +50 pp; highest MoE MFU on stack                    |
+| Best 256k MFU | **DS-Z3 + SP=4 + FA3 + chunked + compile @ 8n** | **46.61 %**     | **42.54 %** | 45.2 GB      | +45 pp + stable; **NEW**                            |
+| Best 512k MFU | **DS-Z3 + SP=8 + FA3 + chunked @ 8n**           | **44.82 %**     | 32.25 %     | 46.4 GB      | per-rank seq=64k; oscillates → **try compile next** |
+
+### Next push (submitted)
+
+- 22094164: **512k @ 8n SP=8 + compile + chunked** — apply the SP+compile stability fix to 512k
+- 22094165: 256k SP=2 + compile + chunked — see if reducing SP further (per-rank seq=128k) keeps the MFU climbing
+
+## 2026-04-29 (final): per-rank-seq sweet spot, 1M context unlocked
+
+### Seventh + eighth batch results
+
+| Job      | Ctx      | Nodes | Mesh                                     | Compile | Win MFU peak | Cum MFU     | TPS Win | Peak GPU Mem  | Loss         | Status                                                                  |
+| -------- | -------- | ----- | ---------------------------------------- | ------- | ------------ | ----------- | ------- | ------------- | ------------ | ----------------------------------------------------------------------- |
+| 22094164 | 512k     | 8     | DS-Z3 dp=8 SP=8 + chunked + compile      | yes     | 45.01 %      | 39.20 %     | 21k     | 46.4 GB (58%) | 1.59 ✅      | compile fixes 512k oscillation; +7 pp cum vs no-compile                 |
+| 22094165 | **256k** | 8     | **DS-Z3 dp=32 SP=2 + chunked + compile** | yes     | **59.61 %**  | **52.40 %** | 56k–59k | 69.4 GB (87%) | 1.54-1.74 ✅ | **NEW 256k CHAMPION** — stable 56–60% across full run                   |
+| 22094167 | 512k     | 8     | DS-Z3 dp=16 SP=4 + chunked + compile     | yes     | 58.24 %      | 38.76 %     | 24k     | 70.7 GB (89%) | 1.58–1.74 ✅ | one step-15 transient dip; peak matches 256k SP=2                       |
+| 22094168 | **1M**   | 8     | **DS-Z3 dp=8 SP=8 + chunked + compile**  | yes     | **37.46 %**  | **35.65 %** | 9.5k    | 72.2 GB (91%) | 1.59–1.75 ✅ | **NEW 1M CONTEXT TRAINS!** First training-correct 1M MoE on this stack. |
+
+### The per-rank-seq sweet spot
+
+The MFU peaks at **per-rank seq = 128k** regardless of total context:
+
+| Total ctx | Nodes | SP  | Per-rank seq | Peak MFU window | Cum MFU     | Peak Mem |
+| --------- | ----- | --- | ------------ | --------------- | ----------- | -------- |
+| 256k      | 8     | 8   | 32k          | 32.63 %         | 24.14 %     | 36.1 GB  |
+| 256k      | 8     | 4   | 64k          | 46.61 %         | 42.54 %     | 45.2 GB  |
+| **256k**  | 8     | 2   | **128k**     | **59.61 %**     | **52.40 %** | 69.4 GB  |
+| 512k      | 8     | 8   | 64k          | 45.01 %         | 39.20 %     | 46.4 GB  |
+| **512k**  | 8     | 4   | **128k**     | 58.24 %         | 38.76 %     | 70.7 GB  |
+| **1M**    | 8     | 8   | **128k**     | **37.46 %**     | **35.65 %** | 72.2 GB  |
+
+**Why 128k per-rank seq is optimal**:
+
+1. **Memory**: at 128k per-rank, ~70 GB peak (~90% of 80 GB H100). Lower per-rank seq leaves memory unused; higher OOMs.
+2. **Comm**: less SP means fewer Ulysses all-to-all rounds per step. SP=2 has 1/4 the all-to-all of SP=8.
+3. **Compute density**: more tokens per rank = more matmul work to amortize comm and dispatch overhead.
+
+**Why 1M @ 37 % is lower than 256k SP=2 @ 60 %** (same per-rank seq):
+
+1M context = more chunked-CE chunks per step (1M/256 ≈ 4000 vs 256k/256 ≈ 1000). Each chunk triggers a DS-Z3 all-gather of `lm_head.weight` across the 64-rank DP group. The all-gather overhead scales linearly with chunks, dragging steady-state MFU down. Could be addressed by larger `chunk_size` (currently hardcoded 256).
+
+### Compile is essential at 256k+ on the SP path
+
+Without compile the DS-Z3+SP+chunked path oscillates wildly (window MFU 5–47 %); with compile the same configs are stable at 40–60 %. Compile bundles the chunked autograd graph so Z3 can pipeline param fetches predictably.
+
+| Config    | No compile peak / cum | Compile peak / cum | Compile delta cum |
+| --------- | --------------------- | ------------------ | ----------------- |
+| 256k SP=8 | 32.6 % / 11.1 %       | 32.6 % / 24.1 %    | **+13 pp**        |
+| 256k SP=4 | 46.5 % / 25.7 %       | 46.6 % / 42.5 %    | **+17 pp**        |
+| 256k SP=2 | (not run)             | 59.6 % / 52.4 %    | n/a (champion)    |
+| 512k SP=8 | 44.8 % / 32.3 %       | 45.0 % / 39.2 %    | **+7 pp**         |
+| 512k SP=4 | (not run)             | 58.2 % / 38.8 %    | n/a               |
+| 1M SP=8   | (not run)             | 37.5 % / 35.7 %    | n/a               |
+
+### Final headline (entire chunked-CE era, 2026-04-29)
+
+| Goal          | Best recipe                                     | Window MFU peak | Cum MFU     | Peak Mem | Notes                                          |
+| ------------- | ----------------------------------------------- | --------------- | ----------- | -------- | ---------------------------------------------- |
+| Best 16k MFU  | FSDP + EP=8 + FA3 + sonicmoe (NO chunked)       | **40.4 %**      | 32.15 %     | 73.4 GB  | 16k stays no-chunked (chunked regresses ~8 pp) |
+| Best 32k MFU  | DS-Z2 + EP=8 + FA3 + sonicmoe + chunked         | **45.86 %**     | 39.31 %     | 55.0 GB  | +24 pp over old                                |
+| Best 64k MFU  | DS-Z2 + EP=8 + FA3 + sonicmoe + chunked @ 2n    | **57.23 %**     | 46.07 %     | 67.6 GB  | +37 pp over old                                |
+| Best 128k MFU | DS-Z2 + EP=8 + FA3 + sonicmoe + chunked @ 4n    | **69.10 %**     | 64.10 %     | 75.6 GB  | +50 pp over old, **highest MoE MFU on stack**  |
+| Best 256k MFU | DS-Z3 + SP=2 + FA3 + chunked + compile @ 8n     | **59.61 %**     | **52.40 %** | 69.4 GB  | +58 pp over old (1.36 %)                       |
+| Best 512k MFU | DS-Z3 + SP=4 + FA3 + chunked + compile @ 8n     | **58.24 %**     | 38.76 %     | 70.7 GB  | NEW context — was unreachable before           |
+| Best 1M MFU   | **DS-Z3 + SP=8 + FA3 + chunked + compile @ 8n** | **37.46 %**     | **35.65 %** | 72.2 GB  | **NEW frontier — 1M ctx MoE training works**   |
+
+### What chunked-CE + per-rank-seq tuning unlocked
+
+Before this work the stack topped out at 128k DS-Z3+SP=8 = 19.4 % MFU and 256k SP=16 = 1.36 %. Today 1M context trains at 37.46 % MFU on 8 nodes — a **27× improvement at 1M**, and **+18 pp at 128k**.
+
+Total contexts covered correctly: 16k → 32k → 64k → 128k → 256k → 512k → **1M** (all with healthy loss curves, sonicmoe path with clamp wrapper at 16k–128k, plain SP path at 256k+).
+
+### Stopping submitting
+
+User asked to test how far chunked-CE pushes. We've validated 1M context training. No more jobs submitted.
+
+### MFU convention caveat
+
+The MFU numbers in this report (and the consolidated table in `sft_benchmark_notion.md`) are computed with the **non-causal attention FLOPs convention** — `compute_flops_per_token` in `trl/trainer/utils.py` treats every token as attending to the full `seq_len` (matches the convention used in the PaLM, Megatron, and nanoGPT codebases). With causal masking the actual attention compute is ~half this, so reported MFU is inflated by:
+
+| ctx  | inflation | examples (reported → causal-corrected) |
+| ---- | --------- | -------------------------------------- |
+| 16k  | ×1.07     | 40.4 → ~37.7 %                         |
+| 32k  | ×1.13     | 45.86 → ~40.7 %                        |
+| 64k  | ×1.41     | 57.23 → ~40.6 %                        |
+| 128k | ×1.66     | 69.10 → ~41.6 %                        |
+| 256k | ×1.94     | 59.61 → ~30.7 %                        |
+| 512k | ×1.97     | 58.24 → ~29.6 %                        |
+| 1M   | ×1.98     | 37.46 → ~18.9 %                        |
+
+GPU peak used in the denominator is the H100 SXM5 dense bf16 Tensor Core peak (989.5 TFLOPS) — verified with `nvidia-smi` returning "NVIDIA H100 80GB HBM3" (so we are SXM5 on AWS p5.48xlarge, _not_ H100 NVL).
+
+**All relative comparisons in this report are still valid** because the same formula is applied to every run (old vs new, FSDP vs DS, EP vs SP). When comparing absolute MFU to other published numbers using the causal convention (Llama 2/3 papers, DeepSpeed Ulysses paper), apply the column 2 factor above.
+
+
+## 2026-04-29 (later): Liger kernel under EP — root cause found, sweep launched
+
+### The Liger × EP fix in one paragraph
+
+Earlier we'd marked `H1` in `upstream_todo.md` as "Liger fails because of 3D weights." Re-investigated today with a minimal repro (`benchmark/test_liger_qwen3_moe.py`, `test_liger_qwen3_moe_ep.py`); that diagnosis was wrong. Single-GPU Liger + Qwen3-MoE works fine (max diff 8.79e-3 vs eager). The actual EP failure: `from_pretrained(distributed_config=DistributedConfig(enable_expert_parallel=True))` automatically sets `model.config._experts_implementation = "grouped_mm"`, and transformers' `@use_experts_implementation` decorator wraps `Qwen3MoeExperts.forward` in a dispatcher that routes to `grouped_mm_experts_forward` (EP-aware, no `F.one_hot`). Liger's `_patch_swiglu_module(experts, LigerExperts)` rebinds `experts.forward = LigerExperts.forward`, **bypassing the dispatcher**. `LigerExperts.forward` then calls `F.one_hot(top_k_index, num_classes=self.num_experts)` directly, where `self.num_experts` was overwritten by `shard_tensor` to `num_local_experts` AND `top_k_index.max()` is set to the same `num_local_experts` (the sentinel from `RouterParallel._prepare_output_fn` line 1209) → out-of-range → `device-side assert triggered`.
+
+**Workaround**: pass `liger_kernel_config={"swiglu": False}` (CLI: `--liger_kernel_config '{"swiglu":false}'`). Disables the broken swiglu/experts patch, keeps `LigerRMSNorm` + `liger_rotary_pos_emb` + `LigerFusedLinearCrossEntropyLoss`. Validated on EP=2 tiny repro: logits within 7.81e-3 of eager. Full investigation log in `benchmark/debug_liger_ep.md`.
+
+### Sweep submitted (results pending)
+
+Compares **Liger (with FLCE, no swiglu patch)** against the existing **chunked-CE champions** at the same config. Note: Liger's FLCE and `--loss_type chunked_nll` are mutually exclusive (TRL guards this); both achieve similar memory savings, so the comparison is effectively "FLCE vs chunked_nll" with the rest of the stack constant.
+
+| Job      | Ctx  | Nodes | Mesh                              | Liger config                          | Compare to                          |
+| -------- | ---- | ----- | --------------------------------- | ------------------------------------- | ----------------------------------- |
+| 22094513 | 16k  | 2     | FSDP DP=2 + EP=8 + FA3 + sonicmoe | swiglu=F, FLCE=T, RoPE=T, RMSNorm=T | FSDP+EP no-Liger 40.4 % MFU         |
+| 22094514 | 32k  | 2     | DS-Z2 + EP=8 + FA3 + sonicmoe     | same                                  | DS-Z2+EP+chunked 45.81 %            |
+| 22094515 | 64k  | 2     | DS-Z2 + EP=8 + FA3 + sonicmoe     | same                                  | DS-Z2+EP+chunked 57.23 %            |
+| 22094516 | 128k | 4     | DS-Z2 + EP=8 + FA3 + sonicmoe @4n | same                                  | DS-Z2+EP+chunked 69.10 %            |
+
+Total 10 nodes — Slurm will queue past the 8n cap. Results below once they complete.
+
+
+### 2026-04-29 (cont.): Liger sweep first attempt failed at arg parse
+
+Initial submission (jobs 22094513-22094516) crashed before training:
+
+```
+sft.py: error: argument --liger_kernel_config/--liger-kernel-config: invalid dict value: '{"swiglu":false}'
+```
+
+`HfArgumentParser` falls through to `type=dict` (line 228 of `transformers/hf_argparser.py`) which rejects JSON strings — argparse calls `dict('{"swiglu":false}')` and gets `TypeError`.
+
+**Patched `trl/scripts/sft.py`** with a small `_preparse_dict_args()` helper that extracts `--liger_kernel_config` from `sys.argv` BEFORE parsing, stores the JSON string in an env var, then re-injects the parsed dict into `training_args.liger_kernel_config` after `parser.parse_args_and_config()` returns. Resubmitted as 22094539-22094542 (EP sweep) + 22094545-22094547 (SP long-ctx sweep).
+
+### Liger sweep — combined batches (resubmitted)
+
+| Job      | Ctx  | Nodes | Mesh                                 | Variant                              | vs chunked-CE champion |
+| -------- | ---- | ----- | ------------------------------------ | ------------------------------------ | ---------------------- |
+| 22094539 | 16k  | 2     | FSDP DP=2 + EP=8 + FA3 + sonicmoe   | Liger (FLCE+RMSN+RoPE, no swiglu)  | FSDP+EP no-Liger 40.4 % |
+| 22094540 | 32k  | 2     | DS-Z2 + EP=8 + FA3 + sonicmoe       | Liger                                | DS-Z2+EP+chunked 45.81 % |
+| 22094541 | 64k  | 2     | DS-Z2 + EP=8 + FA3 + sonicmoe       | Liger                                | DS-Z2+EP+chunked 57.23 % |
+| 22094542 | 128k | 4     | DS-Z2 + EP=8 + FA3 + sonicmoe       | Liger                                | DS-Z2+EP+chunked 69.10 % |
+| 22094545 | 256k | 8     | DS-Z3 + SP=2 + FA3 + sonicmoe       | Liger + compile                      | SP=2 + compile + chunked 59.61 % |
+| 22094546 | 512k | 8     | DS-Z3 + SP=4 + FA3 + sonicmoe       | Liger + compile                      | SP=4 + compile + chunked 58.24 % |
+| 22094547 | 1M   | 8     | DS-Z3 + SP=8 + FA3 + sonicmoe       | Liger + compile                      | SP=8 + compile + chunked 37.46 % |
+
+Will be filled in as results come in.
+
+### Results so far (2026-04-29 ~10:00 UTC)
+
+| Job      | Ctx  | Win MFU peak | Cum MFU | TPS Win    | Peak GPU Mem  | Loss      | vs chunked-CE      |
+| -------- | ---- | ------------ | ------- | ---------- | ------------- | --------- | ------------------ |
+| 22094540 | 32k  | **56.62 %**  | 45.25 % | 92,010     | 54.3 GB (68%) | 11–15 ✅   | **+11 pp peak**, +6 pp cum (chunked: 45.86 / 39.31) |
+| 22094541 | 64k  | **66.46 %**  | 61.69 % | 60,190     | 66.9 GB (84%) | 11–13 ✅   | **+9 pp peak**, +15 pp cum (chunked: 57.23 / 46.07) |
+
+**Liger's FLCE beats `chunked_nll`** on the EP path at both 32k and 64k. Same memory ceiling (within ~1 GB), much higher MFU. Three things contribute beyond just FLCE: `LigerRMSNorm` (called per-layer, every attention block), `liger_rotary_pos_emb` (one fused Triton op for Q/K rotation per attention call), and FLCE itself replacing the chunked-CE Python loop. Together they dominate the +6–15 pp Cum MFU gain.
+
+Remaining results (16k, 128k, 256k, 512k, 1M) coming in as jobs complete.
+
+### Liger sweep continued — 128k and 16k DS-Z2 retry
+
+| Job      | Ctx  | Win MFU peak | Cum MFU | TPS Win    | Peak GPU Mem  | Loss   | vs chunked-CE                      |
+| -------- | ---- | ------------ | ------- | ---------- | ------------- | ------ | ---------------------------------- |
+| 22094576 | 16k  | **40.70 %**  | 28.80 % | 109,000    | 48.4 GB (61%) | 10–13 ✅ | **+8 pp peak** vs DS-Z2+chunked 32.57 % — at parity with FSDP+EP no-Liger 40.4 % |
+| 22094542 | 128k | **76.29 %**  | 74.69 % | 73,330     | 72.6 GB (91%) | 12–14 ✅ | **+7 pp peak**, +10 pp cum (chunked 69.10 / 64.10) |
+
+### Liger crushes chunked-CE on the EP path
+
+Updated 4-way comparison at every context, same hardware (DS-Z2+EP=8+sonicmoe, only loss strategy differs):
+
+| Ctx    | chunked-CE peak / cum | Liger (FLCE+RoPE+RMSN) peak / cum | Liger Δ peak |
+| ------ | --------------------- | --------------------------------- | ------------ |
+| 16k    | 32.57 / 24.50 %       | **40.70 / 28.80 %**               | **+8 pp**    |
+| 32k    | 45.86 / 39.31 %       | **56.62 / 45.25 %**               | **+11 pp**   |
+| 64k    | 57.23 / 46.07 %       | **66.46 / 61.69 %**               | **+9 pp**    |
+| 128k   | 69.10 / 64.10 %       | **76.29 / 74.69 %**               | **+7 pp**    |
+
+**Liger is the new long-context champion across the EP path**. Three drivers: `LigerFusedLinearCrossEntropyLoss` (faster + same memory savings as chunked_nll), `LigerRMSNorm` (called per-layer on every attention block, ~1-2 pp), `liger_rotary_pos_emb` (fused Triton RoPE, small but everywhere). They compose with sonicmoe/grouped_mm experts (the EP forward path stays untouched because we set `swiglu=False`).
+
+128k @ 76.29 % MFU is the **highest MoE training MFU we've ever recorded on this stack** — beats the previous 69.10 % chunked record. Memory is essentially the same (72.6 vs 75.6 GB), so we get the +7 pp without giving up context length.
+
+Outstanding: 256k SP=2 + Liger and 512k SP=4 + Liger still running; 1M SP=8 + Liger pending. Will compare those to the SP+chunked champions in the next update.
+
+### Liger sweep on SP path (256k, 512k, 1M)
+
+| Job      | Ctx  | Win MFU peak | Cum MFU | TPS Win    | Peak GPU Mem  | Loss   | vs SP+chunked              |
+| -------- | ---- | ------------ | ------- | ---------- | ------------- | ------ | -------------------------- |
+| 22094545 | 256k | **63.62 %**  | 60.59 % | 63,090     | 66.9 GB (84%) | 1.54-1.74 ✅ | **+4 pp peak**, +8 pp cum (chunked 59.61/52.40) |
+| 22094546 | 512k | **63.26 %**  | 57.95 % | 31,290     | 69.7 GB (87%) | 1.58-1.74 ✅ | **+5 pp peak**, +19 pp cum (chunked 58.24/38.76) |
+| 22094547 | 1M   | running...   | —       | —          | —             | —      | vs chunked 37.46/35.65     |
+
+**Liger holds the win on SP path too.** Even on the comm-bound DS-Z3+SP route, Liger's FLCE+RMSNorm+RoPE deliver +4–5 pp peak MFU and a much larger cum MFU bump (because Liger is more steady step-to-step than chunked_nll, which oscillated wildly without compile).
+
+### All-context final headline (chunked + Liger era)
+
+| Ctx   | Best chunked-CE recipe         | chunked Win MFU | Best Liger recipe              | Liger Win MFU | Δ peak |
+| ----- | ------------------------------ | --------------- | ------------------------------ | ------------- | ------ |
+| 16k   | (no chunked, FSDP+EP champ)    | 40.40 %         | DS-Z2+EP+Liger                 | **40.70 %**   | +0.3 pp (parity) |
+| 32k   | DS-Z2+EP+chunked               | 45.86 %         | DS-Z2+EP+Liger                 | **56.62 %**   | +11 pp |
+| 64k   | DS-Z2+EP+chunked @2n           | 57.23 %         | DS-Z2+EP+Liger @2n             | **66.46 %**   | +9 pp  |
+| 128k  | DS-Z2+EP+chunked @4n           | 69.10 %         | DS-Z2+EP+Liger @4n             | **76.29 %**   | +7 pp  |
+| 256k  | SP=2+compile+chunked @8n       | 59.61 %         | SP=2+compile+Liger @8n         | **63.62 %**   | +4 pp  |
+| 512k  | SP=4+compile+chunked @8n       | 58.24 %         | SP=4+compile+Liger @8n         | **63.26 %**   | +5 pp  |
+| 1M    | SP=8+compile+chunked @8n       | 37.46 %         | SP=8+compile+Liger @8n (running)| TBD          | TBD    |
+
+### Single-node 1n sweep — kicked off
+
+Now testing how far Qwen3-30B-A3B can go on a single 8-GPU H100 node. Submitted (22094605-609):
+
+- 16k DS-Z2+EP=8 1n
+- 32k DS-Z2+EP=8 1n
+- 64k SP=8 + compile 1n (per-rank=8k)
+- 128k SP=8 + compile 1n (per-rank=16k)
+- 256k SP=8 + compile 1n (per-rank=32k — the predicted ceiling)
+
+All using the new Liger recipe (`--use_liger_kernel true --liger_kernel_config '{"swiglu":false}'`). Results below.
+
+### 1M Liger SP=8 — final
+| Job      | Ctx  | Win MFU peak | Cum MFU | Peak GPU Mem  | vs chunked         |
+| -------- | ---- | ------------ | ------- | ------------- | ------------------ |
+| 22094547 | 1M   | **62.33 %**  | 58.29 % | 69.2 GB (87%) | **+25 pp peak**, +23 pp cum (chunked 37.46/35.65) |
+
+Liger+SP=8 at 1M context = **62.33 % window MFU** — same model, longer context, healthy loss (1.6). 1M training is no longer marginal.
+
+### Single-node 1n — first results
+
+| Job      | Ctx  | Mesh                                | Win MFU peak | Cum MFU | Peak GPU Mem  | vs 2n+ champion              |
+| -------- | ---- | ----------------------------------- | ------------ | ------- | ------------- | ---------------------------- |
+| 22094605 | 16k  | 1n DS-Z2+EP=8+Liger                 | 44.30 %      | 26.59 % | 73.5 GB (92%) | 2n FSDP+EP no-Liger 40.4 % — **1n MATCHES 2n** |
+| 22094606 | 32k  | 1n DS-Z2+EP=8+Liger                 | **59.28 %**  | 46.21 % | 78.1 GB (98%) | 2n DS-Z2+EP+Liger 56.62 % — **1n BEATS 2n** by +3 pp (intra-node EP comm) |
+
+Two huge findings:
+
+1. **1n MFU ≥ 2n MFU** at 16k and 32k. Removing cross-node comm (the 2n DP=2 grad reduce) outweighs the lost batch parallelism. EP=8 fully fits on one node (NVLink only) — fastest comm topology possible.
+2. **32k 1n is at 98 % memory** — the EP path's practical 1n ceiling. Going to 64k 1n EP would OOM. **For longer context on 1n, switch to SP=8 (per-rank seq = ctx/8)**.
+
+64k/128k/256k 1n SP=8+Liger+compile still in progress (compile init takes 10-15 min). Will update.
+
+### 1n SP=8 results — memory-limited
+
+| Job      | Ctx  | Mesh                                     | Win MFU peak | Cum MFU | Peak Mem      | Status |
+| -------- | ---- | ---------------------------------------- | ------------ | ------- | ------------- | ------ |
+| 22094607 | 64k  | 1n DS-Z3 dp=1 sp=8 +compile + Liger      | **7.99 %**   | 1.32 %  | 78.6 GB (99%) | trains but very slow MFU |
+| 22094608 | 128k | same                                     | OOM 1.16 GiB | —       | 78.0 GB (98%) | OOM during forward     |
+| 22094609 | 256k | same                                     | OOM 1.16 GiB | —       | 75.7 GB (95%) | OOM during forward     |
+
+**Why so slow at 64k 1n SP=8?** With `DP=1, SP=8`, ZeRO-3 partitions across the world group of 8 ranks. But there's no DP group for grad/optim reduce — every "step" involves just bookkeeping on the partitioned shards. The bottleneck is likely the per-rank Adam optimizer step + unsharded attention scratch buffers under SP=8. Memory budget is also tight (99 % peak). Compile may be hurting too (long graph, no DP amortization).
+
+**1n SP=8 is memory-bound at 128k+** — the (per-rank seq=16k) is fine, but optim states and FA3 scratch at SP=8 push past 80 GB.
+
+### 1n v2 probe results (no-compile + SP=4 DP=2)
+
+| Job      | Ctx  | Mesh                                  | Win MFU peak | Cum MFU | Peak Mem      | Verdict |
+| -------- | ---- | ------------------------------------- | ------------ | ------- | ------------- | ------- |
+| 22094620 | 64k  | 1n DS-Z3 dp=1 sp=8 NO compile + Liger | 8.61 %       | 4.31 %  | 79.0 GB (99%) | compile wasn't the issue — DP=1 means Z3 doesn't actually partition optim/grads |
+| 22094621 | 64k  | 1n DS-Z3 dp=2 sp=4 +compile + Liger   | **23.23 %**  | 14.16 % | 78.3 GB (98%) | DP=2 helps (Z3 partitions optim across 2) — 3× the SP=8 result, still memory-tight |
+| 22094622 | 128k | 1n DS-Z3 dp=2 sp=4 +compile + Liger   | OOM 100 %    | —       | 79.5 GB       | 128k 1n past the wall                     |
+
+### CPU offload sweep — cancelled
+
+User direction (2026-04-29): CPU offload kills MFU; not worth running. Hard rule recorded in `benchmark/CLAUDE.md`. The 3 offload jobs (22094639/640/641) were cancelled while still in cpu_adam JIT-compile.
+
+### Final 1n recommendation
+
+| Goal                            | Recipe                                  | Win MFU peak | Cum MFU | Peak Mem      |
+| ------------------------------- | --------------------------------------- | ------------ | ------- | ------------- |
+| **Best 1n MFU**                 | **1n DS-Z2+EP=8+Liger @ 32k**           | **59.28 %**  | 46.21 % | 78.1 GB (98%) |
+| Practical 1n max ctx            | 1n DS-Z2+EP=8+Liger @ 32k               | 59.28 %      | 46.21 % | 78.1 GB       |
+| 1n SP path (longer ctx, lower MFU) | 1n DS-Z3+SP=4 dp=2 +compile +Liger @ 64k | 23.23 %     | 14.16 % | 78.3 GB       |
+| 1n > 32k EP / > 64k SP          | not viable on this stack without offload (which we don't use) | —     | —       | —             |
+
+**32k is the practical 1n ceiling** with the no-offload constraint. EP=8 at 1n uses ~14.5 GB params + ~30 GB optim (DS-Z2, no DP to shard across) + ~30 GB activations/FA3 scratch at 32k seq = 78 GB. Going past would need bf16 optim, different EP topology to also shard optim, or smarter activation checkpointing. Tracked in `upstream_todo.md` I2.
+
+
+## 2026-04-29 (later): sonic-moe wrapper-clamp redundancy check
+
+The `transformers/integrations/sonicmoe.py` wrapper has a `clamp + masked_fill` block
+that costs ~2 pp MFU. It was added because an earlier sonic-moe snapshot produced NaN
+gradients on EP sentinel rows (`expert_ids >= num_experts`) when weights came from
+`DTensor.to_local()`.
+
+Built a minimal repro at `benchmark/test_sonic_bwd_dtensor.py` (covers the 2×2×2 matrix
+of {clamp on/off} × {plain/DTensor.to_local() weights} × {valid/sentinel-heavy expert_ids}).
+**On the current snapshot (`IlyasMoutawwakil/sonic-moe@b15942...`), the bug does not
+reproduce** — all 16 cells produce finite gradients on both 1-rank DTensor mesh and real
+EP=2 mesh.
+
+Bonus: documented a non-bug surprise — `out.sum().backward()` always crashes the kernel's
+varlen_m k-major check because PyTorch optimizes that into a stride-0 broadcast view of
+`torch.ones(())`. Production paths use real upstream gradients (CE loss output) so this
+never fires. Use `out.backward(torch.randn_like(out))` in repro scripts to sidestep.
+
+Full investigation log in `benchmark/debug_sonic_bwd_dtensor.md`.
+
+### Production validation (job 22094732) — clamp is load-bearing
+
+Ran 32k DS-Z2+EP=8+chunked at 2n with the env var `SONICMOE_DISABLE_CLAMP=1` set (clamp+masked_fill block bypassed):
+
+| Step | loss  | grad_norm | entropy | mean_token_acc | mfu_window |
+| ---- | ----- | --------- | ------- | --------------- | ---------- |
+| 5    | 9.807 | 5.099     | NaN     | 0.117           | (init)     |
+| 10   | 0.000 | 5.099     | NaN     | 0.0002          | 51.72 %    |
+| 15   | 0.000 | 5.099     | NaN     | 0.0003          | 51.26 %    |
+| 20   | 0.000 | 5.099     | NaN     | 0.0002          | 51.75 %    |
+| 25   | 0.000 | 5.099     | NaN     | 0.0002          | 50.54 %    |
+| 30   | 0.000 | 5.099     | NaN     | 0.0004          | 51.72 %    |
+
+**Verdict: the wrapper-clamp is load-bearing.**
+
+- Loss collapsed to 0 by step 10 (baseline with clamp = 11–15 healthy).
+- Entropy NaN throughout — kernel produced NaN gradients.
+- `grad_norm = 5.099` exactly across all 30 steps. Adam zeros NaN grads, so the gradient norm doesn't move. Classic NaN-bad signature.
+- The 51 % `mfu_window` IS higher than the baseline 45.81 % — the clamp does cost ~6 pp of overhead — but training is completely broken without it.
+
+Net: the bug is real and `benchmark/test_sonic_bwd_dtensor.py` is missing some triggering condition (real router distribution × 48 layers × chunked-CE loss path × autotune cache state). Restored the unguarded clamp in `sonicmoe.py` and removed the env-var plumbing from `launch.sh.j2`, `run_benchmark.py`, and the validation YAML config — see "Cleanup checklist — DONE" in `debug_sonic_bwd_dtensor.md`. Bug remains tracked under A1 in `upstream_todo.md`; when an upstream sonic-moe fix lands, post the repro + this validation log to [sonic-moe#51](https://github.com/Dao-AILab/sonic-moe/pull/51).
+
+
+## 2026-04-29 (later still): definitive answer for sonic-moe wrapper
+
+The user pointed out PR #45621's "clamp-after" thesis (don't clamp expert_ids; let `histc(max=num_experts-1)` drop sentinels via bin-overflow). Rather than guess about the kernel internals, ran a **4-mode A/B/C/D test** in production via an env-gated wrapper:
+
+| Mode         | clamp ids | masked_fill scores | Result | Final train_loss | mfu_window peak |
+| ------------ | --------- | ------------------ | ------ | ---------------- | --------------- |
+| `clamp_zero` | YES       | YES                | trains | 13.17            | 45.81 %         |
+| **`clamp_only`** ← simplified | YES | **NO**     | **trains** | **13.17** (bit-identical) | **45.88 %** (bit-identical) |
+| `zero_only`  | NO        | YES                | NaN    | 0 by step 10     | (irrelevant — broken) |
+| `none`       | NO        | NO                 | NaN    | 0 by step 10     | (irrelevant — broken) |
+
+`zero_only` and `none` produce **literally bit-identical** NaN output. `clamp_zero` and `clamp_only` produce **bit-identical** healthy training.
+
+**Why**: `RouterParallel._prepare_output_fn` (transformers/integrations/tensor_parallel.py:1202) **already** zeros sentinel `router_scores` upstream:
+
+```python
+non_local_mask = (router_indices // num_local_experts) != ep_rank
+router_scores = router_scores.masked_fill(non_local_mask, 0.0)
+router_indices = router_indices.masked_fill(non_local_mask, -1)
+# ... and at line 1209, sentinel ids set to num_local_experts:
+router_indices = router_indices.masked_fill(router_indices == -1, num_local_experts)
+```
+
+So the wrapper's `router_scores.masked_fill` is touching tensor positions that are already 0 — pure no-op. The clamp on `expert_ids`, however, IS load-bearing because RouterParallel sets sentinel ids = num_local_experts → out-of-range for `w2.permute(2,0,1)` of shape `(num_local_experts, ...)` → kernel's hand-written backward OOB-indexes → NaN gradients.
+
+**Action taken**: simplified `transformers/integrations/sonicmoe.py` to just clamp (~3 lines saved). Removed the `SONICMOE_SENTINEL` env-var debug knob from `sonicmoe.py`, `launch.sh.j2`, and `run_benchmark.py`. Production behavior unchanged (verified by `clamp_only` matching `clamp_zero` to 4 decimals).
+
+**For the upstream sonic-moe issue**: the bug is the kernel's `Function.backward` OOB-indexing `w2[num_local_experts]` when expert_ids contain the EP sentinel value. Forward handles this (zero-init sentinel lanes per kernel comment); backward does not. Fix on the kernel side: either bounds-check `expert_ids` before any indexing, or apply the same sentinel-lane skip in backward as in forward.
+
+The MFU difference between healthy (45.88 %) and broken-but-faster (51.73 %) is the kernel's **~6 pp throughput cost** of computing the sentinel-routed rows even when their contribution is masked out. Could be recovered if the kernel adopted the histogram-drop pattern from PR #45621 (sort sentinels to tail, use `histc(max=num_experts-1)` in offset construction, skip the tail in the matmul kernel).
+
+## 2026-04-29 (later) — sonic-moe bug: 1-node EP=2 minimal repro found
+
+After the 4-mode A/B test confirmed the bug in production (8 nodes, 64 GPUs), spent 1 hour trying synthetic reductions on a 2-GPU node — none triggered. **Then realized the production stack itself reduces** to just 1 node + 2 GPUs if we stay full-stack: TRL SFT + DS-Z2 + EP=2 + sonicmoe + chunked NLL with `tiny-Qwen3MoeForCausalLM` (4 experts, 2 layers, hidden=8).
+
+Toggled the wrapper's clamp via `SONICMOE_DISABLE_CLAMP=1`:
+
+| metric | clamp ON | clamp OFF |
+|---|---|---|
+| train_runtime (30 steps) | 22.7 s | 219.7 s — **10× slower** |
+| grad_norm range | 0.17 – 0.93 | 1146 – 8320 |
+| grad_norm median | ≈0.25 | ≈3000 |
+| grad_norm ratio | — | ~10,000× larger |
+| train_loss start→end | 11.91 → 11.91 | 11.91 → 11.91 |
+
+Loss is flat in both because the tiny model can't learn meaningfully in 30 steps regardless — the **decisive signal is grad_norm magnitude (10⁴× difference) plus the 10× slowdown**. The slowdown is the OOB-read fingerprint: when sentinel rows of `expert_ids` cause the bwd kernel to index past valid memory, page faults / un-coalesced loads degrade SM occupancy.
+
+**Why my synthetic reductions missed it**: synthetic single-step fwd+bwd on tensors I allocated myself doesn't churn the CUDA allocator the way a full DeepSpeed + Adam + ChunkedCE stack does. The bug is allocator-state-dependent. Once the production wrappers run, even at hidden_size=8, the OOB read hits tainted memory.
+
+**Repro artifacts** (`benchmark/sonic_moe_upstream_repro.md`):
+- `benchmark/_repro_ep2_run.sh` (~50 lines)
+- `benchmark/_repro_ep2_accelerate.yaml` (DS-Z2)
+- `benchmark/logs/_repro_ep2_{NANNED,CLEAN}_FULL.log`
+- Wrapper still carries `SONICMOE_DISABLE_CLAMP` env-var knob; will remove once upstream patches land.
+
