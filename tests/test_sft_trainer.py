@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import gc
 import json
 import pathlib
@@ -19,6 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+import torch.nn.functional as F
 import transformers
 from accelerate.utils.memory import release_memory
 from datasets import load_dataset
@@ -29,7 +31,12 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, dft_loss
+from trl.trainer.sft_trainer import (
+    DataCollatorForLanguageModeling,
+    _chunked_cross_entropy_loss,
+    _patch_chunked_ce_lm_head,
+    dft_loss,
+)
 
 from .testing_utils import (
     TrlTestCase,
@@ -469,6 +476,30 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    def test_train_chunked_nll_loss(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="chunked_nll", report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
     def test_train_moe_model_with_aux_loss(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -597,7 +628,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -663,7 +694,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             else:  # We expect the peft parameters to be different
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -700,7 +731,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -737,7 +768,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -777,7 +808,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -820,7 +851,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -1660,6 +1691,13 @@ class TestSFTTrainer(TrlTestCase):
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
         ],
     )
     @require_vision
@@ -1876,7 +1914,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n.startswith("model.visual"):
-                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is updated"
+                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
             else:
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
@@ -1906,7 +1944,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if "base_model" in n:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "prompt_encoder" in n:  # We expect the peft parameters to be different
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
             else:
@@ -1962,7 +2000,7 @@ class TestSFTTrainer(TrlTestCase):
                 param = param.float()
 
             if "lora" not in n:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "lora" in n:  # We expect the peft parameters to be different
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
             else:
@@ -1992,7 +2030,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if "base_model" in n:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
             elif "prompt_encoder" in n:  # We expect the peft parameters to be different
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
             else:
@@ -2298,3 +2336,295 @@ class TestSFTTrainerSlow(TrlTestCase):
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
         release_memory(trainer.model, trainer)
+
+
+_CHUNKED_CE_MODEL_IDS = [
+    "trl-internal-testing/tiny-CohereForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Gemma2ForCausalLM",
+    "trl-internal-testing/tiny-GemmaForCausalLM",
+    "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+    "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.1",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    "trl-internal-testing/tiny-Phi3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+]
+
+
+class TestChunkedCrossEntropyLoss:
+    B, S, H, V = 2, 8, 4, 16
+    CHUNK_SIZE = 3  # deliberately small to force multiple chunks and a partial final chunk
+
+    def _inputs(self, seed=0, ignore_positions=None, requires_grad=False):
+        torch.manual_seed(seed)
+        hidden = torch.randn(self.B, self.S, self.H, dtype=torch.float32, requires_grad=requires_grad)
+        weight = torch.randn(self.V, self.H, dtype=torch.float32, requires_grad=requires_grad)
+        labels = torch.randint(0, self.V, (self.B, self.S))
+        if ignore_positions is not None:
+            labels[:, ignore_positions] = -100
+        return hidden, weight, labels
+
+    @staticmethod
+    def _reference(hidden, weight, labels, num_items_in_batch=None):
+        shift_h = hidden[..., :-1, :].reshape(-1, hidden.size(-1))
+        shift_l = labels[..., 1:].reshape(-1)
+        logits = shift_h.float() @ weight.float().t()
+        if num_items_in_batch is None:
+            loss = F.cross_entropy(logits, shift_l, ignore_index=-100, reduction="mean")
+        else:
+            loss = F.cross_entropy(logits, shift_l, ignore_index=-100, reduction="sum")
+            loss = loss / num_items_in_batch
+        valid = shift_l != -100
+        if valid.any():
+            log_p = F.log_softmax(logits, dim=-1)
+            preds = logits.argmax(dim=-1)
+            accuracy = (preds[valid] == shift_l[valid]).float().mean()
+            entropy = -(log_p.exp() * log_p).sum(dim=-1)[valid].mean()
+        else:
+            accuracy = torch.zeros((), dtype=torch.float32)
+            entropy = torch.zeros((), dtype=torch.float32)
+        return loss, accuracy, entropy
+
+    def test_forward_matches_cross_entropy(self):
+        """With no ignored tokens, chunked loss equals standard mean cross-entropy."""
+        hidden, weight, labels = self._inputs()
+        n_valid = (labels[..., 1:] != -100).sum()
+        loss_c, correct_c, ent_sum_c = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels)
+        loss_r, acc_r, ent_r = self._reference(hidden, weight, labels)
+        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(correct_c / n_valid, acc_r, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(ent_sum_c / n_valid, ent_r, atol=1e-5, rtol=1e-5)
+
+    def test_forward_ignore_index(self):
+        """Ignored labels are excluded from loss, accuracy and entropy (matches F.cross_entropy)."""
+        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
+        n_valid = (labels[..., 1:] != -100).sum()
+        loss_c, correct_c, ent_sum_c = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels)
+        loss_r, acc_r, ent_r = self._reference(hidden, weight, labels)
+        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(correct_c / n_valid, acc_r, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(ent_sum_c / n_valid, ent_r, atol=1e-5, rtol=1e-5)
+
+    def test_num_items_in_batch_reduction(self):
+        """When num_items_in_batch is provided, loss is sum / num_items_in_batch."""
+        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
+        num_items = 5  # arbitrary global denominator, != local valid count
+        loss_c, *_ = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels, num_items_in_batch=num_items)
+        loss_r, *_ = self._reference(hidden, weight, labels, num_items_in_batch=num_items)
+        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
+
+    def test_num_items_in_batch_tensor(self):
+        """A tensor `num_items_in_batch` is accepted and produces the same result as the int form."""
+        hidden, weight, labels = self._inputs()
+        num_items_tensor = torch.tensor(7, dtype=torch.float32)
+        loss_t, *_ = _chunked_cross_entropy_loss(
+            hidden, weight, self.CHUNK_SIZE, labels, num_items_in_batch=num_items_tensor
+        )
+        loss_i, *_ = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels, num_items_in_batch=7)
+        torch.testing.assert_close(loss_t, loss_i, atol=1e-6, rtol=1e-6)
+
+    def test_backward_matches_reference(self):
+        """Gradients on hidden_states and lm_head weight match the standard CE path."""
+        hidden_c, weight_c, labels = self._inputs(ignore_positions=slice(0, 3), requires_grad=True)
+        hidden_r = hidden_c.detach().clone().requires_grad_(True)
+        weight_r = weight_c.detach().clone().requires_grad_(True)
+
+        loss_c, *_ = _chunked_cross_entropy_loss(hidden_c, weight_c, self.CHUNK_SIZE, labels)
+        loss_c.backward()
+
+        loss_r, *_ = self._reference(hidden_r, weight_r, labels)
+        loss_r.backward()
+
+        torch.testing.assert_close(hidden_c.grad, hidden_r.grad, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(weight_c.grad, weight_r.grad, atol=1e-5, rtol=1e-5)
+
+    def test_all_ignored_returns_zero(self):
+        """If every label is ignored, loss/correct/entropy_sum are all zero and backward still works.
+
+        Every trainable parameter of the chunked path (hidden_states, lm_head_weight, and lm_head_bias when present)
+        must receive a gradient — otherwise DDP / FSDP synchronization hangs or errors at the all-reduce step.
+        """
+        hidden, weight, labels = self._inputs(requires_grad=True)
+        bias = torch.zeros(self.V, dtype=torch.float32, requires_grad=True)
+        labels[:] = -100
+        loss, correct, ent_sum = _chunked_cross_entropy_loss(
+            hidden, weight, self.CHUNK_SIZE, labels, lm_head_bias=bias
+        )
+        assert loss.item() == 0.0
+        assert correct.item() == 0.0
+        assert ent_sum.item() == 0.0
+        assert not torch.isnan(loss)
+        # Backward must succeed even when n_valid == 0 (can happen with completion-only loss
+        # + truncation where a whole micro-batch is masked).
+        loss.backward()
+        assert hidden.grad is not None and hidden.grad.abs().sum().item() == 0.0
+        assert weight.grad is not None and weight.grad.abs().sum().item() == 0.0
+        assert bias.grad is not None and bias.grad.abs().sum().item() == 0.0
+
+    def test_shift_labels_matches_labels(self):
+        """`shift_labels` path (CP/SP) must match the default `labels` path after external shifting."""
+        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
+        loss_l, correct_l, ent_l = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels)
+        # Mimic what transformers does under CP/SP: pad labels with -100, then shift.
+        shift_labels = F.pad(labels, (0, 1), value=-100)[..., 1:].contiguous()
+        loss_s, correct_s, ent_s = _chunked_cross_entropy_loss(
+            hidden, weight, self.CHUNK_SIZE, shift_labels=shift_labels
+        )
+        torch.testing.assert_close(loss_s, loss_l, atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(correct_s, correct_l, atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(ent_s, ent_l, atol=1e-6, rtol=1e-6)
+
+    def test_requires_labels_or_shift_labels(self):
+        """Must provide at least one of `labels` or `shift_labels`."""
+        hidden, weight, _ = self._inputs()
+        with pytest.raises(ValueError, match="At least one"):
+            _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE)
+
+    def test_shift_labels_wins_when_both_provided(self):
+        """When both `labels` and `shift_labels` are provided (Ulysses / CP / SP path), `shift_labels` wins."""
+        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
+        shift_labels = F.pad(labels, (0, 1), value=-100)[..., 1:].contiguous()
+        # Chunked result with both passed in must match the shift_labels-only path.
+        loss_both, *_ = _chunked_cross_entropy_loss(
+            hidden, weight, self.CHUNK_SIZE, labels=labels, shift_labels=shift_labels
+        )
+        loss_shift, *_ = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, shift_labels=shift_labels)
+        torch.testing.assert_close(loss_both, loss_shift, atol=1e-6, rtol=1e-6)
+
+    def test_lm_head_bias(self):
+        """When `lm_head_bias` is provided, chunked loss matches `F.linear(h, w, b)` followed by CE."""
+        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
+        torch.manual_seed(1)
+        bias = torch.randn(self.V, dtype=torch.float32)
+
+        loss_c, *_ = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels, lm_head_bias=bias)
+
+        # Reference: full F.linear with bias, then CE over non-ignored shifted positions.
+        logits_ref = F.linear(hidden[..., :-1, :], weight, bias).reshape(-1, self.V)
+        labels_ref = labels[..., 1:].reshape(-1)
+        valid = labels_ref != -100
+        loss_r = F.cross_entropy(logits_ref[valid], labels_ref[valid], reduction="mean")
+        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
+
+
+@require_torch_accelerator
+class TestPatchChunkedCELMHead:
+    """Patched `forward` must be numerically equivalent to the standard HF causal-LM loss path."""
+
+    CHUNK_SIZE = 5  # small, to exercise the chunk loop
+
+    def _setup(self, model_id):
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32).to(torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
+
+        B, S = 2, 16
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100  # prompt-like mask
+        num_items = int((labels[..., 1:] != -100).sum())
+        return ref_model, chunked_model, input_ids, labels, num_items
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_CE_MODEL_IDS)
+    def test_forward_matches_reference(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        assert out.logits is None
+        assert out.num_correct_tokens is not None and out.num_correct_tokens.item() >= 0
+        assert out.entropy_sum is not None and out.entropy_sum.item() >= 0.0
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+        ],
+    )
+    def test_forward_matches_reference_with_aux_loss(self, model_id):
+        """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
+        to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            model_id, torch_dtype=torch.float32, output_router_logits=True
+        ).to(torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
+
+        B, S = 2, 16
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_CE_MODEL_IDS)
+    def test_backward_matches_reference(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        ref_out.loss.backward()
+
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        out.loss.backward()
+
+        # lm_head gradient
+        torch.testing.assert_close(
+            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
+        )
+        # Base decoder gradients
+        for name, ref_param in ref_model.model.named_parameters():
+            if ref_param.grad is None:
+                continue
+            chunked_param = chunked_model.model.get_parameter(name)
+            torch.testing.assert_close(
+                chunked_param.grad, ref_param.grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+            )
+
+    def test_forward_without_labels_uses_original_path(self):
+        """With labels=None the patched forward returns real logits (for generation / eval)."""
+        _, chunked_model, input_ids, _, _ = self._setup("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+        with torch.no_grad():
+            out = chunked_model(input_ids=input_ids)
+        assert out.logits is not None
+        assert out.logits.shape[-1] == chunked_model.config.vocab_size
+
+    def test_forward_without_labels_matches_reference(self):
+        """labels=None logits must match the unpatched model, including per-model post-processing
+        (`final_logit_softcapping`, `logit_scale`, ...). This is what makes `.generate()` safe to call on a patched
+        model."""
+        ref_model, chunked_model, input_ids, *_ = self._setup("trl-internal-testing/tiny-CohereForCausalLM")
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids)
+            out = chunked_model(input_ids=input_ids)
+        torch.testing.assert_close(out.logits, ref_out.logits, atol=1e-5, rtol=1e-5)
