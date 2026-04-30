@@ -180,7 +180,7 @@ def _build(name: str, method: str, dataset: str, attn: str = "eager", **override
         "seed": str(SEED),
         "data_seed": str(SEED),
         "full_determinism": "True",
-        "bf16": False,
+        "bf16": "False",
     }
     args.update({k: str(v) for k, v in overrides.items()})
     return CorrectnessConfig(name=name, method=method, args=args)
