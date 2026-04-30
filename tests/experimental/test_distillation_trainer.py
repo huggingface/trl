@@ -24,9 +24,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.distillation import DistillationConfig, DistillationTrainer
 from trl.experimental.distillation.distillation_trainer import (
-    _RepeatBatchDataLoader,
     _add_tail_bucket,
     _jsd_divergence,
+    _RepeatBatchDataLoader,
     build_teacher_request_inputs,
 )
 
