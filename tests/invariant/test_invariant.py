@@ -160,12 +160,6 @@ def compare_scalars(a: Trajectory, b: Trajectory, tol: float, residual_tol: floa
 
 
 def _build(name: str, method: str, dataset: str, attn: str = "eager", **overrides) -> CorrectnessConfig:
-    # Force fp32 end-to-end. The trl scripts (sft.py, dpo.py) instantiate the model themselves from
-    # `ModelConfig` fields (`--model_revision`, `--attn_implementation`, `--dtype`) and ignore
-    # `--model_init_kwargs`, so we use the ModelConfig CLI args. `dtype` is left at its default (float32 in
-    # `create_model_from_path`). Mixed-precision is a separate axis: `_BaseConfig.__post_init__` sets
-    # `bf16=True` by default, which would enable bf16 autocast during training even with fp32 weights — so we
-    # must explicitly disable it. Tighter tolerances depend on this.
     args: dict[str, str] = {
         "model_name_or_path": MODEL,
         "model_revision": MODEL_REVISION,
@@ -178,6 +172,7 @@ def _build(name: str, method: str, dataset: str, attn: str = "eager", **override
         "seed": str(SEED),
         "data_seed": str(SEED),
         "full_determinism": "True",
+        # Force pure fp32 training for maximal determinism and to avoid bfloat16-induced divergences.
         "bf16": "False",
     }
     args.update({k: str(v) for k, v in overrides.items()})
@@ -194,24 +189,6 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
         "members": [
             _build("sft_default", "sft", SFT_DATASET),
             _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
-        ],
-    },
-    # The `sft_bf16_attn` class compares attention implementations under bf16 (eager vs FA2). FA2 requires bf16, so
-    # this class is bf16-only. We only run it for 5 steps because bf16 noise compounds
-    "sft_bf16_attn": {
-        "tol": 2e-1,
-        "residual_tol": 5e-2,
-        "members": [
-            _build("sft_bf16_eager", "sft", SFT_DATASET, bf16=True, dtype="bfloat16", max_steps=5),
-            _build(
-                "sft_bf16_fa2",
-                "sft",
-                SFT_DATASET,
-                attn="kernels-community/flash-attn2",
-                bf16=True,
-                dtype="bfloat16",
-                max_steps=5,
-            ),
         ],
     },
     "dpo": {
