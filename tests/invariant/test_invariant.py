@@ -187,9 +187,6 @@ def _build(name: str, method: str, dataset: str, attn: str = "eager", **override
 # Equivalence classes: each maps to a `members` list and a tolerance pair. The first member is the canonical
 # config — it owns the class's reference snapshot and is the only one re-recorded under `--update-references`.
 # Every other member is asserted to match that snapshot.
-# The `sft_bf16` class exists specifically to cover FA2: the kernels-community/flash-attn2 op only supports
-# fp16/bf16, so it can't share a class with the fp32 baseline. bf16 reduction noise is ~10³× larger than fp32,
-# hence the much looser tolerances.
 EQUIVALENCE_CLASSES: dict[str, dict] = {
     "sft": {
         "tol": 2e-2,
@@ -199,12 +196,14 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
             _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
         ],
     },
-    "sft_bf16": {
-        "tol": 5e-1,
-        "residual_tol": 1e-1,
+    # The `sft_bf16_attn` class compares attention implementations under bf16 (eager vs FA2). FA2 requires bf16, so
+    # this class is bf16-only. We only run it for 5 steps because bf16 noise compounds
+    "sft_bf16_attn": {
+        "tol": 2e-1,
+        "residual_tol": 5e-2,
         "members": [
-            _build("sft_bf16_eager", "sft", SFT_DATASET, bf16=True),
-            _build("sft_bf16_fa2", "sft", SFT_DATASET, attn="kernels-community/flash-attn2", bf16=True),
+            _build("sft_bf16_eager", "sft", SFT_DATASET, bf16=True, max_steps=5),
+            _build("sft_bf16_fa2", "sft", SFT_DATASET, attn="kernels-community/flash-attn2", bf16=True, max_steps=5),
         ],
     },
     "dpo": {
