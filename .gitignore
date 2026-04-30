@@ -147,6 +147,25 @@ wandb/
 # uv
 uv.lock
 
+# benchmark artifacts (logs, traces, generated launchers, run outputs)
+benchmark/logs/
+benchmark/profiler_logs/
+benchmark/generated/
+benchmark/wandb_export/
+benchmark/compile_repro/
+benchmark/results*.csv
+benchmark/automodel_bench.csv
+benchmark/_sonic_capture_*.pt
+benchmark/*.png
+
+# unrelated to benchmark-sft-moe branch
+examples/scripts/grpo_immediate_eos.py
+examples/scripts/async_grpo_immediate_eos.py
+
+# claude local state
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+
 # AI agent generated artifacts
 /.agents/skills
 /.claude/skills
