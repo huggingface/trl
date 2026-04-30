@@ -164,8 +164,10 @@ def compare_scalars(a: Trajectory, b: Trajectory, tol: float = TOL, residual_tol
 
 
 def _build(name: str, method: str, dataset: str, attn: str = "eager", **overrides) -> CorrectnessConfig:
-    # `dtype` is left unset on purpose: trl's `create_model_from_path` already defaults to float32 when not
-    # explicitly passed (overriding the model config's `bfloat16`).
+    # Force fp32 end-to-end. `model_init_kwargs.dtype` is left unset because trl's `create_model_from_path`
+    # already defaults to float32 (overriding the model config's `bfloat16`). But mixed-precision is a separate
+    # axis: `_BaseConfig.__post_init__` sets `bf16=True` by default, which would enable bf16 autocast during
+    # training even with fp32 weights — so we must explicitly disable it. Tighter tolerances depend on this.
     model_init_kwargs = json.dumps({"revision": MODEL_REVISION, "attn_implementation": attn})
     args: dict[str, str] = {
         "model_name_or_path": MODEL,
@@ -178,6 +180,7 @@ def _build(name: str, method: str, dataset: str, attn: str = "eager", **override
         "seed": str(SEED),
         "data_seed": str(SEED),
         "full_determinism": "True",
+        "bf16": False,
     }
     args.update({k: str(v) for k, v in overrides.items()})
     return CorrectnessConfig(name=name, method=method, args=args)
