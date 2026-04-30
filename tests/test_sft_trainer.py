@@ -1836,6 +1836,7 @@ class TestSFTTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
@@ -1893,6 +1894,7 @@ class TestSFTTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
@@ -1940,6 +1942,7 @@ class TestSFTTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
