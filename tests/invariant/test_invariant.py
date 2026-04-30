@@ -59,7 +59,7 @@ def env_snapshot() -> dict:
 class StepRecord:
     step: int
     loss: float
-    grad_norm: float | None
+    grad_norm: float
 
 
 @dataclass
@@ -134,16 +134,12 @@ def compare_scalars(a: Trajectory, b: Trajectory, tol: float = TOL, residual_tol
     for field in ("loss", "grad_norm"):
         sa = [getattr(s, field) for s in a.steps]
         sb = [getattr(s, field) for s in b.steps]
-        if any(x is None for x in sa) or any(x is None for x in sb):
-            if sa != sb:
-                errors.append(f"{field}: one series has None, the other does not")
-            continue
-
         diffs = [x - y for x, y in zip(sa, sb, strict=False)]
         max_abs = max(abs(d) for d in diffs)
         if max_abs > tol:
             i = max(range(len(diffs)), key=lambda k: abs(diffs[k]))
-            errors.append(f"{field}: max |Δ|={max_abs:.3e} at step {i} (a={sa[i]:.6e}, b={sb[i]:.6e}, tol={tol:.1e})")
+            step = a.steps[i].step
+            errors.append(f"{field}: max |Δ|={max_abs:.3e} at step {step} (a={sa[i]:.6e}, b={sb[i]:.6e}, tol={tol:.1e})")
 
         mean = sum(diffs) / len(diffs)
         if abs(mean) > residual_tol:
