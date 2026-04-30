@@ -15,6 +15,7 @@
 import json
 import platform
 import subprocess
+import sys
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -23,8 +24,6 @@ import accelerate
 import pytest
 import torch
 import transformers
-
-import trl
 
 
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
@@ -44,12 +43,27 @@ TOL = 5e-3
 RESIDUAL_TOL = 1e-3
 
 
+def _trl_commit() -> str:
+    """Return the current trl commit SHA (with `-dirty` suffix if the working tree has uncommitted changes).
+
+    Assumes the suite is run from a `pip install -e .` checkout — the only intended setup.
+    """
+    cwd = Path(__file__).parent
+    sha = subprocess.run(
+        ["git", "-C", str(cwd), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    dirty = subprocess.run(
+        ["git", "-C", str(cwd), "status", "--porcelain"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    return f"{sha}-dirty" if dirty else sha
+
+
 def env_snapshot() -> dict:
     return {
         "accelerate": accelerate.__version__,
         "torch": torch.__version__,
         "transformers": transformers.__version__,
-        "trl": trl.__version__,
+        "trl": _trl_commit(),
         "python": platform.python_version(),
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
     }
@@ -211,7 +225,19 @@ if __name__ == "__main__":
         choices=list(EQUIVALENCE_CLASSES),
         help="Equivalence class(es) to record. Default: all.",
     )
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Allow recording from a dirty working tree (snapshot will pin an irreproducible state).",
+    )
     cli_args = parser.parse_args()
+
+    if _trl_commit().endswith("-dirty") and not cli_args.allow_dirty:
+        sys.exit(
+            "Refusing to record from a dirty working tree: the snapshot would pin a state that can't be "
+            "reproduced from a commit SHA. Commit your changes first, or pass --allow-dirty to override."
+        )
+
     classes = cli_args.klass or list(EQUIVALENCE_CLASSES)
     for klass in classes:
         canonical = EQUIVALENCE_CLASSES[klass][0]
