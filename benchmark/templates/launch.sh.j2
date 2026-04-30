@@ -18,6 +18,8 @@ accelerate launch \
   --max_length {{ context_length }} \
   --per_device_train_batch_size {{ per_device_train_batch_size | default(1) }} \
   --gradient_checkpointing true \
+  --bf16 true \
+  --dtype bfloat16 \
   --attn_implementation {{ attn_implementation | default('sdpa') }} \
 {%- if use_reentrant_gc %}
   --gradient_checkpointing_kwargs '{"use_reentrant": true}' \
@@ -28,6 +30,8 @@ accelerate launch \
   --logging_steps {{ logging_steps | default(5) }} \
   --include_num_input_tokens_seen true \
   --output_dir {{ output_dir }} \
-  --report_to wandb \
+  --report_to trackio \
+  --project {{ trackio_project | default('trl-sft-benchmark') }} \
+  --run_name {{ run_name }} \
   --save_strategy no \
   {{ extra_args | default('') }}

@@ -54,6 +54,12 @@ def build_run_id(config: dict, run: dict) -> str:
         parts.append("compile")
     if "use_liger_kernel" in extra:
         parts.append("liger")
+    if "experts_implementation" in extra:
+        tokens = extra.split()
+        for i, t in enumerate(tokens):
+            if t == "--experts_implementation" and i + 1 < len(tokens):
+                parts.append(tokens[i + 1])
+                break
     return "_".join(parts)
 
 
@@ -75,10 +81,18 @@ def render_accelerate_config(env: Environment, run: dict, config: dict) -> str:
         "cpu_ram_efficient_loading": run.get(
             "cpu_ram_efficient_loading", config.get("cpu_ram_efficient_loading", True)
         ),
+        **(
+            {"reshard_after_forward": run.get("reshard_after_forward", config.get("reshard_after_forward"))}
+            if run.get("reshard_after_forward", config.get("reshard_after_forward")) is not None
+            else {}
+        ),
         "sp_attn_implementation": "flash_attention_3"
         if "flash-attn3" in run.get("attn_implementation", config.get("attn_implementation", ""))
         or "flash_attention_3" in run.get("attn_implementation", config.get("attn_implementation", ""))
         else "flash_attention_2",
+        "zero_stage": run.get("zero_stage", config.get("zero_stage", 3)),
+        "use_regional_compilation": run.get("use_regional_compilation", config.get("use_regional_compilation", False)),
+        "use_fullgraph": run.get("use_fullgraph", config.get("use_fullgraph", False)),
     }
 
     # Compute DP shard/replicate sizes for parallelism_config
@@ -120,7 +134,10 @@ def render_launch_script(env: Environment, run: dict, config: dict, run_id: str,
         logging_steps=run.get("logging_steps", 5),
         use_reentrant_gc=use_reentrant_gc,
         attn_implementation=run.get("attn_implementation", config.get("attn_implementation", "sdpa")),
+        run_name=run_id,
+        trackio_project=config.get("trackio_project", config.get("wandb_project", "trl-sft-benchmark")),
         extra_args=run.get("extra_args", config.get("extra_args", "")),
+        use_regional_compilation=run.get("use_regional_compilation", config.get("use_regional_compilation", False)),
     )
 
 
