@@ -82,7 +82,6 @@ class CorrectnessConfig:
         return out
 
 
-
 def run(config: CorrectnessConfig) -> Trajectory:
     """Invoke the trl CLI as a subprocess; parse its trainer_state.json into a Trajectory."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -139,7 +138,9 @@ def compare_scalars(a: Trajectory, b: Trajectory, tol: float = TOL, residual_tol
         if max_abs > tol:
             i = max(range(len(diffs)), key=lambda k: abs(diffs[k]))
             step = a.steps[i].step
-            errors.append(f"{field}: max |Δ|={max_abs:.3e} at step {step} (a={sa[i]:.6e}, b={sb[i]:.6e}, tol={tol:.1e})")
+            errors.append(
+                f"{field}: max |Δ|={max_abs:.3e} at step {step} (a={sa[i]:.6e}, b={sb[i]:.6e}, tol={tol:.1e})"
+            )
 
         mean = sum(diffs) / len(diffs)
         if abs(mean) > residual_tol:
@@ -214,8 +215,8 @@ if __name__ == "__main__":
     classes = cli_args.klass or list(EQUIVALENCE_CLASSES)
     for klass in classes:
         canonical = EQUIVALENCE_CLASSES[klass][0]
-        print(f"recording '{klass}' from canonical config '{canonical.name}'")
+        print(f"recording '{klass}' from canonical config '{canonical.name}'")  # noqa: T201
         trajectory = run(canonical)
         ref_path = REFERENCES_DIR / f"{klass}.json"
         save(trajectory, ref_path)
-        print(f"  → {ref_path}")
+        print(f"  → {ref_path}")  # noqa: T201
