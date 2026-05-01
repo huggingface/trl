@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from packaging.version import Version
 
 
-LIGER_KERNEL_MIN_VERSION = "0.7.0"
+LIGER_KERNEL_MIN_VERSION = "0.8.0"
 PACKAGE_DISTRIBUTION_MAPPING = importlib.metadata.packages_distributions()
 
 
