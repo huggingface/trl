@@ -277,9 +277,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize(
-        "use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)]
-    )
+    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
     @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"])
     def test_training_loss_types(self, loss_type, use_liger_kernel):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1192,9 +1190,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         release_memory(trainer.model, trainer)
 
-    @pytest.mark.parametrize(
-        "use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)]
-    )
+    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
     def test_training_with_bias_correction_kl(self, use_liger_kernel):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
@@ -1695,9 +1691,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize(
-        "use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)]
-    )
+    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
     def test_training_delta_clipping(self, use_liger_kernel):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
