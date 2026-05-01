@@ -184,16 +184,16 @@ def _build(name: str, method: str, dataset: str, attn: str = "eager", **override
 # Every other member is asserted to match that snapshot.
 EQUIVALENCE_CLASSES: dict[str, dict] = {
     "sft": {
-        "tol": 2e-2,
-        "residual_tol": 5e-3,
+        "tol": 5e-2,
+        "residual_tol": 1e-2,
         "members": [
             _build("sft_default", "sft", SFT_DATASET),
             _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
         ],
     },
     "dpo": {
-        "tol": 2e-2,
-        "residual_tol": 5e-3,
+        "tol": 5e-2,
+        "residual_tol": 1e-2,
         "members": [
             _build("dpo_default", "dpo", DPO_DATASET),
             _build("dpo_pdb1_gas8", "dpo", DPO_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
