@@ -94,6 +94,9 @@ vlm = [
 math_verify = [
     "math-verify>=0.5.2",
 ]
+openreward = [
+    "openreward>=0.1.109",
+]
 dev = [
     # bco
     "scikit-learn",
