@@ -1158,6 +1158,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         targets: torch.Tensor,  # [N]
         temperature: float,
         chunk_size: int,
+        final_logit_softcapping: float | None,
         logit_scale: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         device = last_hidden.device
@@ -1184,6 +1185,11 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             torch.mm(last_hidden, w_chunk.t(), out=mm_buf[:, :C])
             logits_chunk = logits_buf[:, :C]
             logits_chunk.copy_(mm_buf[:, :C])
+
+            # Apply softcapping BEFORE temperature
+            if final_logit_softcapping is not None:
+                logits_chunk.div_(final_logit_softcapping).tanh_().mul_(final_logit_softcapping)
+
             logits_chunk.mul_(inv_t)  # [N, C]
 
             # Online logsumexp update
@@ -1210,6 +1216,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         ctx.temperature = temperature
         ctx.chunk_size = chunk_size
         ctx.logit_scale = logit_scale
+        ctx.final_logit_softcapping = final_logit_softcapping
 
         return logprobs, entropy
 
@@ -1219,6 +1226,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         temperature: float = ctx.temperature
         chunk_size: int = ctx.chunk_size
         logit_scale: float = ctx.logit_scale
+        final_logit_softcapping: float = ctx.final_logit_softcapping
         inv_t = logit_scale / temperature
 
         N, _ = hidden.shape
@@ -1243,6 +1251,12 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
             logits_chunk = logits_buf[:, :C]
             logits_chunk.copy_(mm_buf[:, :C])
+
+            if final_logit_softcapping is not None:
+                scaled = logits_chunk / final_logit_softcapping
+                tanh_scaled = torch.tanh(scaled)
+                logits_chunk.copy_(tanh_scaled * final_logit_softcapping)
+
             logits_chunk.mul_(inv_t)  # [N, C]
             probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
 
@@ -1253,6 +1267,11 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             local_idx = torch.clamp(labels - start, 0, end - start - 1)
             # If label in chunk add g to grad else it stays the same
             grad_logits[row_idx, local_idx] += g * in_chunk_cond
+
+            if final_logit_softcapping is not None:
+                d_softcap = 1 - tanh_scaled.pow(2)
+                grad_logits.mul_(d_softcap)
+
             grad_logits = grad_logits * inv_t
 
             grad_hidden.add_(grad_logits @ w_chunk.float())
@@ -1262,11 +1281,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
 
 
 def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: float) -> None:
-    if getattr(model.config, "final_logit_softcapping", None) is not None:
-        raise NotImplementedError(
-            "The model uses `final_logit_softcapping` which is not yet supported. Please open an issue if you "
-            "want your model to be supported."
-        )
+    final_logit_softcapping =  getattr(model.config, "final_logit_softcapping", None)
 
     def _chunked_forward(
         self: torch.nn.Module,
@@ -1301,7 +1316,7 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
             targets_flat = targets_flat[valid_mask]  # [N_valid]
 
         logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
-            hidden_flat, self.lm_head.weight, targets_flat, temperature, chunk_size, logit_scale
+            hidden_flat, self.lm_head.weight, targets_flat, temperature, chunk_size, final_logit_softcapping, logit_scale
         )
 
         if valid_mask is not None:
