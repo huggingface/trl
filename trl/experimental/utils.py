@@ -164,44 +164,44 @@ class DataCollatorForChatML:
         prompts_input_ids: list[list[int]] = []
         prompt_attention_mask: list[list[int]] = []
         labels: list[list[int]] = []
-        # Per-token UTF-8 byte offsets into the rendered chat-template message,
-        # used downstream by GOLD/ULD cross-tokenizer alignment (see TRL #4393).
+        # Per-token UTF-8 byte offsets, completion-relative: prompt and pre-tokenized
+        # positions are (0, 0); completion tokens carry offsets into the assistant
+        # content's bytes. Used by GOLD/ULD cross-tokenizer alignment (TRL #4393).
         byte_offsets: list[list[tuple[int, int]]] = []
 
         backend = self.tokenizer.backend_tokenizer
 
-        # First pass: render chat templates and collect formatted messages so we can
-        # batch-encode them in a single Rust call.
+        # First pass: render chat templates. For examples that already have input_ids,
+        # `formatted_message` stays None and the encoding slot stays None too.
         formatted_prompts: list[str] = []
-        formatted_messages: list[str | None] = []  # None for pre-tokenized examples
+        formatted_messages: list[str | None] = []
         for example in examples:
-            formatted_prompt = example.get(self.prompt_key)
-            if formatted_prompt is None:
-                formatted_prompt = self.tokenizer.apply_chat_template(
+            formatted_prompts.append(
+                example.get(self.prompt_key)
+                or self.tokenizer.apply_chat_template(
                     example[self.messages_key][:-1], add_generation_prompt=True, tokenize=False
                 )
-            formatted_prompts.append(formatted_prompt)
-            if "input_ids" in example:
-                formatted_messages.append(None)
-            else:
-                formatted_messages.append(
-                    self.tokenizer.apply_chat_template(
-                        example[self.messages_key], add_generation_prompt=False, tokenize=False
-                    )
+            )
+            formatted_messages.append(
+                None
+                if "input_ids" in example
+                else self.tokenizer.apply_chat_template(
+                    example[self.messages_key], add_generation_prompt=False, tokenize=False
                 )
+            )
 
+        # Single Rust call for all non-pre-tokenized samples.
         to_encode = [m for m in formatted_messages if m is not None]
-        encodings = (
-            iter(backend.encode_batch_byte_offsets(to_encode, add_special_tokens=False)) if to_encode else iter(())
-        )
+        encs_compact = backend.encode_batch_byte_offsets(to_encode, add_special_tokens=False) if to_encode else []
+        encodings: list[Any] = []
+        encs_iter = iter(encs_compact)
+        for fm in formatted_messages:
+            encodings.append(next(encs_iter) if fm is not None else None)
 
-        for example, formatted_prompt, formatted_message in zip(
-            examples, formatted_prompts, formatted_messages, strict=True
-        ):
-            if formatted_message is not None:
-                encoding = next(encodings)
+        for example, formatted_prompt, encoding in zip(examples, formatted_prompts, encodings, strict=True):
+            if encoding is not None:
                 full_ids = list(encoding.ids)
-                full_offs = [tuple(o) for o in encoding.offsets]
+                full_offs = list(encoding.offsets)
 
                 prompt_byte_len = len(formatted_prompt.encode("utf-8"))
                 completion_start = next(
@@ -216,21 +216,23 @@ class DataCollatorForChatML:
                     keep_slice = slice(completion_start - prompt_keep, completion_start + completion_keep)
                     sample_ids = full_ids[keep_slice]
                     sample_offs = full_offs[keep_slice]
-                    prompt_ids = sample_ids[:prompt_keep]
+                    current_prompt_len = prompt_keep
                 else:
                     sample_ids = full_ids
                     sample_offs = full_offs
-                    prompt_ids = full_ids[:completion_start]
+                    current_prompt_len = completion_start
 
-                input_ids.append(sample_ids)
-                attention_mask.append([1] * len(sample_ids))
-                byte_offsets.append(sample_offs)
-                current_prompt_ids = prompt_ids
+                # Shift completion-region offsets to be relative to the assistant content's
+                # first byte (= the end of formatted_prompt); zero out prompt offsets.
+                completion_offs = [
+                    (s - prompt_byte_len, e - prompt_byte_len) for s, e in sample_offs[current_prompt_len:]
+                ]
+                sample_offs = [(0, 0)] * current_prompt_len + completion_offs
+
+                current_prompt_ids = sample_ids[:current_prompt_len]
             else:
                 sample_ids = example["input_ids"]
-                input_ids.append(sample_ids)
-                attention_mask.append(example.get("attention_mask", [1] * len(sample_ids)))
-                byte_offsets.append([(0, 0)] * len(sample_ids))
+                sample_offs = [(0, 0)] * len(sample_ids)
                 current_prompt_ids = self.tokenizer(
                     formatted_prompt,
                     truncation=True,
@@ -240,6 +242,9 @@ class DataCollatorForChatML:
                     add_special_tokens=False,
                 )["input_ids"]
 
+            input_ids.append(sample_ids)
+            attention_mask.append(example.get("attention_mask", [1] * len(sample_ids)))
+            byte_offsets.append(sample_offs)
             prompts_input_ids.append(current_prompt_ids)
             prompt_attention_mask.append([1] * len(current_prompt_ids))
 

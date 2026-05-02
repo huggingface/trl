@@ -21,7 +21,7 @@ from transformers import AutoTokenizer
 
 from trl.experimental.gold import gold_trainer as gold_trainer_module
 from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, build_teacher_inputs_from_texts
-from trl.experimental.utils import DataCollatorForChatML
+from trl.experimental.utils import DataCollatorForChatML, pad_byte_offsets
 
 
 @pytest.fixture(scope="module")
@@ -76,14 +76,11 @@ def _teacher_inputs_from_collator(student_tok, teacher_tok, batch):
 
 def _assert_alignment_covers_completion(loss_fn, batch, teacher_input_ids, teacher_labels, teacher_byte_offsets):
     """Assert byte-offset alignment groups cover every answer-region position."""
-    student_byte_offsets = batch["byte_offsets"]
     for idx in range(batch["input_ids"].shape[0]):
-        s_positions = (batch["labels"][idx] != -100).nonzero(as_tuple=True)[0].tolist()
-        t_positions = (teacher_labels[idx] != -100).nonzero(as_tuple=True)[0].tolist()
-        s_start, s_size = s_positions[0], len(s_positions)
-        t_start, t_size = t_positions[0], len(t_positions)
-        s_answer = loss_fn._slice_and_anchor(student_byte_offsets[idx], s_start, s_size)
-        t_answer = loss_fn._slice_and_anchor(teacher_byte_offsets[idx], t_start, t_size)
+        s_positions = (batch["labels"][idx] != -100).nonzero(as_tuple=True)[0]
+        t_positions = (teacher_labels[idx] != -100).nonzero(as_tuple=True)[0]
+        s_answer = batch["byte_offsets"][idx, s_positions[0] : s_positions[-1] + 1].tolist()
+        t_answer = teacher_byte_offsets[idx, t_positions[0] : t_positions[-1] + 1].tolist()
         student_groups, teacher_groups = loss_fn._align_by_byte_offsets(s_answer, t_answer)
         assert student_groups and teacher_groups
         assert sorted(k for group in student_groups for k in group) == list(range(len(s_answer)))
@@ -301,10 +298,6 @@ def pad_tokens(ids, pad_id, target_length):
 
 def pad_labels(labels, target_length):
     return labels + [-100] * (target_length - len(labels))
-
-
-def pad_byte_offsets(offsets, target_length):
-    return offsets + [(0, 0)] * (target_length - len(offsets))
 
 
 def test_process_completions_to_buffer_left_pads_prompt_ids():
@@ -813,7 +806,6 @@ def test_uldloss_handles_llama_student_qwen_teacher_sequence(llama_tokenizer, qw
 
     student_ids, student_labels, student_offsets = encode_prompt_completion(llama_tokenizer, prompt, completion)
     teacher_ids, teacher_labels, teacher_offsets = encode_prompt_completion(qwen_tokenizer, prompt, completion)
-    teacher_answer_offsets = [o for o, lab in zip(teacher_offsets, teacher_labels, strict=True) if lab != -100]
 
     pad_id_student = llama_tokenizer.pad_token_id
     pad_id_teacher = qwen_tokenizer.pad_token_id
@@ -823,13 +815,13 @@ def test_uldloss_handles_llama_student_qwen_teacher_sequence(llama_tokenizer, qw
     teacher_ids = pad_tokens(teacher_ids, pad_id_teacher, max_length)
     student_labels = pad_labels(student_labels, max_length)
     teacher_labels = pad_labels(teacher_labels, max_length)
-    student_offsets = pad_byte_offsets(student_offsets, max_length)
+    student_byte_offsets = pad_byte_offsets(student_offsets, max_length, padding_side="right").unsqueeze(0)
+    teacher_byte_offsets = pad_byte_offsets(teacher_offsets, max_length, padding_side="right").unsqueeze(0)
 
     student_input_ids = torch.tensor([student_ids])
     teacher_input_ids = torch.tensor([teacher_ids])
     student_labels = torch.tensor([student_labels])
     teacher_labels = torch.tensor([teacher_labels])
-    student_byte_offsets = torch.tensor([student_offsets], dtype=torch.long)
 
     student_vocab = len(llama_tokenizer)
     teacher_vocab = len(qwen_tokenizer)
@@ -845,7 +837,7 @@ def test_uldloss_handles_llama_student_qwen_teacher_sequence(llama_tokenizer, qw
         student_input_ids=student_input_ids,
         teacher_input_ids=teacher_input_ids,
         student_byte_offsets=student_byte_offsets,
-        teacher_byte_offsets=[teacher_answer_offsets],
+        teacher_byte_offsets=teacher_byte_offsets,
     )
 
     assert torch.isfinite(loss)
@@ -867,7 +859,6 @@ def test_uldloss_handles_smollm_student_qwen_teacher_sequence(smollm_tokenizer, 
 
     student_ids, student_labels, student_offsets = encode_prompt_completion(smollm_tokenizer, prompt, completion)
     teacher_ids, teacher_labels, teacher_offsets = encode_prompt_completion(qwen_tokenizer, prompt, completion)
-    teacher_answer_offsets = [o for o, lab in zip(teacher_offsets, teacher_labels, strict=True) if lab != -100]
 
     pad_id_student = smollm_tokenizer.pad_token_id
     pad_id_teacher = qwen_tokenizer.pad_token_id
@@ -877,13 +868,13 @@ def test_uldloss_handles_smollm_student_qwen_teacher_sequence(smollm_tokenizer, 
     teacher_ids = pad_tokens(teacher_ids, pad_id_teacher, max_length)
     student_labels = pad_labels(student_labels, max_length)
     teacher_labels = pad_labels(teacher_labels, max_length)
-    student_offsets = pad_byte_offsets(student_offsets, max_length)
+    student_byte_offsets = pad_byte_offsets(student_offsets, max_length, padding_side="right").unsqueeze(0)
+    teacher_byte_offsets = pad_byte_offsets(teacher_offsets, max_length, padding_side="right").unsqueeze(0)
 
     student_input_ids = torch.tensor([student_ids])
     teacher_input_ids = torch.tensor([teacher_ids])
     student_labels = torch.tensor([student_labels])
     teacher_labels = torch.tensor([teacher_labels])
-    student_byte_offsets = torch.tensor([student_offsets], dtype=torch.long)
 
     student_vocab = len(smollm_tokenizer)
     teacher_vocab = len(qwen_tokenizer)
@@ -899,7 +890,7 @@ def test_uldloss_handles_smollm_student_qwen_teacher_sequence(smollm_tokenizer, 
         student_input_ids=student_input_ids,
         teacher_input_ids=teacher_input_ids,
         student_byte_offsets=student_byte_offsets,
-        teacher_byte_offsets=[teacher_answer_offsets],
+        teacher_byte_offsets=teacher_byte_offsets,
     )
 
     assert torch.isfinite(loss)
@@ -931,7 +922,6 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
 
     student_ids, student_labels, student_offsets = encode_prompt_completion(llama_tokenizer, prompt, completion)
     teacher_ids, teacher_labels, teacher_offsets = encode_prompt_completion(qwen_tokenizer, prompt, completion)
-    teacher_answer_offsets = [o for o, lab in zip(teacher_offsets, teacher_labels, strict=True) if lab != -100]
 
     pad_id_student = llama_tokenizer.pad_token_id
     pad_id_teacher = qwen_tokenizer.pad_token_id
@@ -941,13 +931,13 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
     teacher_ids = pad_tokens(teacher_ids, pad_id_teacher, max_length)
     student_labels = pad_labels(student_labels, max_length)
     teacher_labels = pad_labels(teacher_labels, max_length)
-    student_offsets = pad_byte_offsets(student_offsets, max_length)
+    student_byte_offsets = pad_byte_offsets(student_offsets, max_length, padding_side="right").unsqueeze(0)
+    teacher_byte_offsets = pad_byte_offsets(teacher_offsets, max_length, padding_side="right").unsqueeze(0)
 
     student_input_ids = torch.tensor([student_ids])
     teacher_input_ids = torch.tensor([teacher_ids])
     student_labels = torch.tensor([student_labels])
     teacher_labels = torch.tensor([teacher_labels])
-    student_byte_offsets = torch.tensor([student_offsets], dtype=torch.long)
 
     student_vocab = len(llama_tokenizer)
     teacher_vocab = len(qwen_tokenizer)
@@ -963,7 +953,7 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
         student_input_ids=student_input_ids,
         teacher_input_ids=teacher_input_ids,
         student_byte_offsets=student_byte_offsets,
-        teacher_byte_offsets=[teacher_answer_offsets],
+        teacher_byte_offsets=teacher_byte_offsets,
     )
 
     assert torch.isfinite(loss)

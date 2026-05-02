@@ -434,8 +434,11 @@ class ULDLoss(nn.Module):
                         "build_teacher_inputs_from_texts both emit these; ensure compute_loss is "
                         "forwarding them."
                     )
-                s_answer = self._slice_and_anchor(student_byte_offsets[i], student_start, student_size)
-                t_answer = self._slice_and_anchor(teacher_byte_offsets[i], teacher_start, teacher_size)
+                # Both sides are completion-relative already (collator shifts student offsets,
+                # teacher offsets are emitted relative to completion_text), so plain slicing
+                # gives a shared byte coordinate system for alignment.
+                s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
+                t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
                 student_alignment_groups, teacher_alignment_groups = self._align_by_byte_offsets(s_answer, t_answer)
 
                 # Merge student probabilities using student alignment groups
@@ -480,19 +483,6 @@ class ULDLoss(nn.Module):
 
         distillation_loss = torch.stack(distillation_losses).mean()
         return self.distillation_weight * distillation_loss
-
-    @staticmethod
-    def _slice_and_anchor(byte_offsets, start, size):
-        """Slice ``byte_offsets[start:start+size]`` to the answer region and shift so the
-        first entry's start is 0, putting both teacher and student in the same byte coordinate system (= bytes within
-        the completion text)."""
-        slc = byte_offsets[start : start + size]
-        if isinstance(slc, torch.Tensor):
-            slc = slc.tolist()
-        if not slc:
-            return []
-        anchor = slc[0][0]
-        return [(s - anchor, e - anchor) for s, e in slc]
 
     @staticmethod
     def _align_by_byte_offsets(s_offsets, t_offsets):
