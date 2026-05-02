@@ -174,7 +174,7 @@ def build_teacher_inputs_from_texts(
     backend = tokenizer.backend_tokenizer
 
     prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
-    completion_encs = [backend.encode_byte_offsets(text, add_special_tokens=False) for text in completion_texts]
+    completion_encs = backend.encode_batch_byte_offsets(completion_texts, add_special_tokens=False)
 
     sequences: list[torch.Tensor] = []
     attention_masks: list[torch.Tensor] = []

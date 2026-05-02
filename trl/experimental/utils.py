@@ -170,19 +170,36 @@ class DataCollatorForChatML:
 
         backend = self.tokenizer.backend_tokenizer
 
+        # First pass: render chat templates and collect formatted messages so we can
+        # batch-encode them in a single Rust call.
+        formatted_prompts: list[str] = []
+        formatted_messages: list[str | None] = []  # None for pre-tokenized examples
         for example in examples:
-            formatted_prompt = example.get(self.prompt_key, None)
+            formatted_prompt = example.get(self.prompt_key)
             if formatted_prompt is None:
-                prompt = example[self.messages_key][:-1]
                 formatted_prompt = self.tokenizer.apply_chat_template(
-                    prompt, add_generation_prompt=True, tokenize=False
+                    example[self.messages_key][:-1], add_generation_prompt=True, tokenize=False
+                )
+            formatted_prompts.append(formatted_prompt)
+            if "input_ids" in example:
+                formatted_messages.append(None)
+            else:
+                formatted_messages.append(
+                    self.tokenizer.apply_chat_template(
+                        example[self.messages_key], add_generation_prompt=False, tokenize=False
+                    )
                 )
 
-            if "input_ids" not in example:
-                formatted_message = self.tokenizer.apply_chat_template(
-                    example[self.messages_key], add_generation_prompt=False, tokenize=False
-                )
-                encoding = backend.encode_byte_offsets(formatted_message, add_special_tokens=False)
+        to_encode = [m for m in formatted_messages if m is not None]
+        encodings = (
+            iter(backend.encode_batch_byte_offsets(to_encode, add_special_tokens=False)) if to_encode else iter(())
+        )
+
+        for example, formatted_prompt, formatted_message in zip(
+            examples, formatted_prompts, formatted_messages, strict=True
+        ):
+            if formatted_message is not None:
+                encoding = next(encodings)
                 full_ids = list(encoding.ids)
                 full_offs = [tuple(o) for o in encoding.offsets]
 
