@@ -1186,7 +1186,6 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             logits_chunk = logits_buf[:, :C]
             logits_chunk.copy_(mm_buf[:, :C])
 
-            # Apply softcapping BEFORE temperature
             if final_logit_softcapping is not None:
                 logits_chunk.div_(final_logit_softcapping).tanh_().mul_(final_logit_softcapping)
 
@@ -1253,8 +1252,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             logits_chunk.copy_(mm_buf[:, :C])
 
             if final_logit_softcapping is not None:
-                scaled = logits_chunk / final_logit_softcapping
-                tanh_scaled = torch.tanh(scaled)
+                tanh_scaled = torch.tanh(logits_chunk / final_logit_softcapping)
                 logits_chunk.copy_(tanh_scaled * final_logit_softcapping)
 
             logits_chunk.mul_(inv_t)  # [N, C]
@@ -1269,8 +1267,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             grad_logits[row_idx, local_idx] += g * in_chunk_cond
 
             if final_logit_softcapping is not None:
-                d_softcap = 1 - tanh_scaled.pow(2)
-                grad_logits.mul_(d_softcap)
+                grad_logits.mul_(1 - tanh_scaled.pow(2))
 
             grad_logits = grad_logits * inv_t
 
