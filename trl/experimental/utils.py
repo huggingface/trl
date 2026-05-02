@@ -208,15 +208,14 @@ class DataCollatorForChatML:
                     (idx for idx, (start, _) in enumerate(full_offs) if start >= prompt_byte_len),
                     len(full_ids),
                 )
-                # Truncate from the prompt side first (keep all completion tokens that fit, then
-                # squeeze in as much prompt as remains). Apply the same slice to ids and offsets.
+                # Truncate from the front: keep the last max_length tokens. This drops
+                # the oldest prompt context first; once the prompt is exhausted, it begins
+                # dropping early completion tokens. We never drop from the END (the
+                # model's recent context).
                 if self.max_length is not None and len(full_ids) > self.max_length:
-                    completion_keep = min(len(full_ids) - completion_start, self.max_length)
-                    prompt_keep = self.max_length - completion_keep
-                    keep_slice = slice(completion_start - prompt_keep, completion_start + completion_keep)
-                    sample_ids = full_ids[keep_slice]
-                    sample_offs = full_offs[keep_slice]
-                    current_prompt_len = prompt_keep
+                    sample_ids = full_ids[-self.max_length :]
+                    sample_offs = full_offs[-self.max_length :]
+                    current_prompt_len = max(0, completion_start - (len(full_ids) - self.max_length))
                 else:
                     sample_ids = full_ids
                     sample_offs = full_offs

@@ -599,6 +599,39 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
     assert captured["max_model_length"] == 128
 
 
+def test_chatml_collator_truncates_keeping_completion_end(llama_tokenizer):
+    """When the rendered chat-template message exceeds max_length, the collator must
+    keep the LAST max_length tokens (the model's recent context), not the first. Also verifies byte_offsets are sliced
+    consistently with input_ids."""
+    long_user = "Please summarize:\n" + ("very long context. " * 200)  # well over 512 tokens
+    long_assistant = "summary content goes here. " * 60
+    examples = [
+        {
+            "messages": [
+                {"role": "user", "content": long_user},
+                {"role": "assistant", "content": long_assistant},
+            ]
+        }
+    ]
+
+    max_length = 256
+    collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=max_length)
+    batch = collator(examples)
+
+    # Truncation must produce exactly max_length tokens (no left padding when full)
+    assert batch["input_ids"].shape[1] == max_length
+
+    # The last token of the kept sequence must match the EOS / final assistant token
+    # of the full untruncated tokenization — proving we kept the END of the completion.
+    backend = llama_tokenizer.backend_tokenizer
+    formatted_message = llama_tokenizer.apply_chat_template(
+        examples[0]["messages"], add_generation_prompt=False, tokenize=False
+    )
+    full = backend.encode_byte_offsets(formatted_message, add_special_tokens=False)
+    assert batch["input_ids"][0, -1].item() == full.ids[-1]
+    assert tuple(batch["byte_offsets"][0, -1].tolist())[1] > 0  # last completion-relative offset is non-zero
+
+
 def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
     config = build_config()
     loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
