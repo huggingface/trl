@@ -76,6 +76,35 @@ if is_rich_available():
     from rich.text import Text
 
 
+def _byte_offsets_for_ids(tokenizer, token_ids):
+    """
+    Return UTF-8 byte offsets for each id in `token_ids` by decoding the sequence
+    once and re-encoding through the fast tokenizer's Rust backend with
+    `encode_byte_offsets`. Requires a fast tokenizer and `tokenizers` >= 0.23.2
+    (the version that introduced `encode_byte_offsets`).
+    """
+    backend = getattr(tokenizer, "backend_tokenizer", None)
+    if backend is None:
+        raise RuntimeError(
+            f"GOLD/ULD alignment requires a fast tokenizer (got {type(tokenizer).__name__}). "
+            "Pass `use_fast=True` to AutoTokenizer.from_pretrained."
+        )
+    if not hasattr(backend, "encode_byte_offsets"):
+        raise RuntimeError(
+            "GOLD/ULD alignment requires `tokenizers >= 0.23.2` for `encode_byte_offsets`. "
+            "Upgrade with `pip install -U tokenizers`."
+        )
+    text = tokenizer.decode(token_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
+    encoding = backend.encode_byte_offsets(text, add_special_tokens=False)
+    if len(encoding.ids) != len(token_ids):
+        raise RuntimeError(
+            "Round-trip decode→encode did not preserve token count "
+            f"(got {len(encoding.ids)} re-encoded vs {len(token_ids)} original); "
+            "byte-offset alignment cannot be safely indexed back into the original ids."
+        )
+    return encoding.offsets
+
+
 def print_prompt_completions_sample_uld(
     prompts: list[str],
     completions: list[str],
@@ -422,7 +451,11 @@ class ULDLoss(nn.Module):
 
     def _build_alignment_groups_from_ids(self, student_token_ids, teacher_token_ids):
         """
-        Build alignment groups using a greedy substring-equality algorithm on decoded token pieces.
+        Build alignment groups by re-encoding each side's decoded text with
+        byte-level offsets, then walking both offset arrays. Byte offsets
+        unambiguously index split multi-byte UTF-8 characters (char offsets
+        collapse them onto the same character index, breaking alignment).
+        See https://github.com/huggingface/trl/issues/4393.
 
         Args:
             student_token_ids: List[int]
@@ -431,89 +464,37 @@ class ULDLoss(nn.Module):
         Returns:
             Tuple[List[List[int]], List[List[int]]]: student and teacher alignment groups
         """
+        s_offsets = _byte_offsets_for_ids(self.student_tokenizer, student_token_ids)
+        t_offsets = _byte_offsets_for_ids(self.teacher_tokenizer, teacher_token_ids)
+        return self._align_by_byte_offsets(s_offsets, t_offsets)
 
-        def to_canonical_pieces(tok, ids):
-            pieces = []
-            prev = ""
-            for k in range(len(ids)):
-                # IMPORTANT: Do NOT skip special tokens - we need to align them too
-                cur = tok.decode(ids[: k + 1], skip_special_tokens=False, clean_up_tokenization_spaces=False)
-                # Extract the incremental addition (may include spaces/ZWJ/etc.)
-                pieces.append(cur[len(prev) :])
-                prev = cur
-            return pieces
-
-        s_pieces = to_canonical_pieces(self.student_tokenizer, student_token_ids)
-        t_pieces = to_canonical_pieces(self.teacher_tokenizer, teacher_token_ids)
-
+    @staticmethod
+    def _align_by_byte_offsets(s_offsets, t_offsets):
+        """
+        Walk both byte-offset arrays, advancing the side whose current token ends
+        earlier in source bytes. A group closes whenever both sides reach the same
+        byte boundary — exactly the points where the two tokenizers agree on a split.
+        """
+        s_groups, t_groups = [], []
         i = j = 0
-        s_buf = t_buf = ""
-        s_group = []
-        t_group = []
-        s_groups = []
-        t_groups = []
-
-        def flush():
-            if s_group and t_group:
-                s_groups.append(s_group.copy())
-                t_groups.append(t_group.copy())
-
-        # Greedily accumulate pieces until substrings match, then flush
-        while i < len(s_pieces) or j < len(t_pieces):
-            if s_buf == t_buf and s_buf != "":
-                flush()
-                s_buf = t_buf = ""
-                s_group = []
-                t_group = []
-                continue
-
-            if s_buf == "" and i < len(s_pieces):
-                s_buf += s_pieces[i]
-                s_group.append(i)
-                i += 1
-                continue
-            if t_buf == "" and j < len(t_pieces):
-                t_buf += t_pieces[j]
-                t_group.append(j)
-                j += 1
-                continue
-
-            if len(s_buf) <= len(t_buf):
-                if i < len(s_pieces):
-                    s_buf += s_pieces[i]
-                    s_group.append(i)
+        n_t, n_s = len(t_offsets), len(s_offsets)
+        while i < n_t and j < n_s:
+            i0, j0 = i, j
+            while i < n_t and j < n_s:
+                t_end, s_end = t_offsets[i][1], s_offsets[j][1]
+                if t_end == s_end:
                     i += 1
-                elif j < len(t_pieces):
-                    t_buf += t_pieces[j]
-                    t_group.append(j)
                     j += 1
-            else:
-                if j < len(t_pieces):
-                    t_buf += t_pieces[j]
-                    t_group.append(j)
-                    j += 1
-                elif i < len(s_pieces):
-                    s_buf += s_pieces[i]
-                    s_group.append(i)
+                    break
+                elif t_end < s_end:
                     i += 1
-
-        # Flush any remainder if both sides accumulated something
-        if s_buf == t_buf and s_group and t_group:
-            flush()
-        elif s_group or t_group:
-            # Handle remaining unmatched tokens by forcing a flush
-            # This ensures both sides have the same number of alignment groups
-            if s_group or t_group:
-                # Ensure both groups have content (even if empty list)
-                if not s_group:
-                    s_group = []
-                if not t_group:
-                    t_group = []
-                # Force flush even if buffers don't match
-                if s_group or t_group:
-                    s_groups.append(s_group.copy() if s_group else [])
-                    t_groups.append(t_group.copy() if t_group else [])
-
+                else:
+                    j += 1
+            t_groups.append(list(range(i0, i)))
+            s_groups.append(list(range(j0, j)))
+        if i < n_t or j < n_s:
+            t_groups.append(list(range(i, n_t)))
+            s_groups.append(list(range(j, n_s)))
         return s_groups, t_groups
 
     def _merge_probabilities_with_alignment_groups(self, probs, alignment_groups, token_ids=None):
