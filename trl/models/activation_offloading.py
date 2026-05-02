@@ -303,6 +303,10 @@ class OffloadActivations(saved_tensors_hooks):
                     cpu_tensor = cpu_storage
                 else:
                     # No broadcast - use normal contiguous copy
+                    if not activation.is_contiguous():
+                        activation = activation.contiguous()
+                        original_stride = activation.stride()
+                        original_storage_offset = activation.storage_offset()
                     cpu_tensor = torch.empty_like(activation, pin_memory=self.use_pin_memory, device="cpu")
                     cpu_tensor.copy_(activation, non_blocking=True)
 
