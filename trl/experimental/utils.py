@@ -128,6 +128,17 @@ class DPODataCollatorWithPadding:
         return padded_batch
 
 
+def pad_byte_offsets(offsets: list[tuple[int, int]], target_length: int, padding_side: str) -> torch.Tensor:
+    """Build a ``[target_length, 2]`` long tensor from ``(start, end)`` byte-offset tuples,
+    padding with ``(0, 0)`` on the requested side."""
+    offs = torch.tensor(offsets, dtype=torch.long).reshape(-1, 2)
+    pad_len = target_length - offs.size(0)
+    if pad_len <= 0:
+        return offs
+    pad_block = torch.zeros(pad_len, 2, dtype=torch.long)
+    return torch.cat([pad_block, offs], dim=0) if padding_side == "left" else torch.cat([offs, pad_block], dim=0)
+
+
 @dataclass
 class DataCollatorForChatML:
     """
@@ -148,19 +159,16 @@ class DataCollatorForChatML:
             self.max_length = min(self.tokenizer.model_max_length, 1024)
 
     def __call__(self, examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
-        input_ids = []
-        attention_mask = []
-        prompts_input_ids = []
-        prompt_attention_mask = []
-        labels = []
-        # Per-token UTF-8 byte offsets into the rendered chat-template message. Used
-        # downstream by GOLD/ULD cross-tokenizer alignment (see TRL #4393).
-        # `None` indicates offsets aren't available for that sample (pre-tokenized
-        # input was supplied or the tokenizer doesn't expose `encode_byte_offsets`).
-        byte_offsets: list[list[tuple[int, int]] | None] = []
+        input_ids: list[list[int]] = []
+        attention_mask: list[list[int]] = []
+        prompts_input_ids: list[list[int]] = []
+        prompt_attention_mask: list[list[int]] = []
+        labels: list[list[int]] = []
+        # Per-token UTF-8 byte offsets into the rendered chat-template message,
+        # used downstream by GOLD/ULD cross-tokenizer alignment (see TRL #4393).
+        byte_offsets: list[list[tuple[int, int]]] = []
 
-        backend = getattr(self.tokenizer, "backend_tokenizer", None)
-        backend_supports_byte_offsets = backend is not None and hasattr(backend, "encode_byte_offsets")
+        backend = self.tokenizer.backend_tokenizer
 
         for example in examples:
             formatted_prompt = example.get(self.prompt_key, None)
@@ -171,137 +179,82 @@ class DataCollatorForChatML:
                 )
 
             if "input_ids" not in example:
-                message = example[self.messages_key]
                 formatted_message = self.tokenizer.apply_chat_template(
-                    message, add_generation_prompt=False, tokenize=False
+                    example[self.messages_key], add_generation_prompt=False, tokenize=False
                 )
+                encoding = backend.encode_byte_offsets(formatted_message, add_special_tokens=False)
+                full_ids = list(encoding.ids)
+                full_offs = [tuple(o) for o in encoding.offsets]
 
-                if backend_supports_byte_offsets:
-                    encoding = backend.encode_byte_offsets(formatted_message, add_special_tokens=False)
-                    message_input_ids_full = list(encoding.ids)
-                    byte_offsets_full = list(encoding.offsets)
-                    prompt_byte_len = len(formatted_prompt.encode("utf-8"))
-                    completion_start_idx_full = next(
-                        (idx for idx, (start, _) in enumerate(byte_offsets_full) if start >= prompt_byte_len),
-                        len(message_input_ids_full),
-                    )
+                prompt_byte_len = len(formatted_prompt.encode("utf-8"))
+                completion_start = next(
+                    (idx for idx, (start, _) in enumerate(full_offs) if start >= prompt_byte_len),
+                    len(full_ids),
+                )
+                # Truncate from the prompt side first (keep all completion tokens that fit, then
+                # squeeze in as much prompt as remains). Apply the same slice to ids and offsets.
+                if self.max_length is not None and len(full_ids) > self.max_length:
+                    completion_keep = min(len(full_ids) - completion_start, self.max_length)
+                    prompt_keep = self.max_length - completion_keep
+                    keep_slice = slice(completion_start - prompt_keep, completion_start + completion_keep)
+                    sample_ids = full_ids[keep_slice]
+                    sample_offs = full_offs[keep_slice]
+                    prompt_ids = sample_ids[:prompt_keep]
                 else:
-                    tokenized_message = self.tokenizer(
-                        formatted_message,
-                        truncation=False,
-                        padding=False,
-                        return_tensors=None,
-                        add_special_tokens=False,
-                        return_offsets_mapping=True,
-                    )
-                    message_input_ids_full = tokenized_message["input_ids"]
-                    byte_offsets_full = None
-                    char_offsets = tokenized_message.get("offset_mapping")
-                    if char_offsets is not None:
-                        prompt_char_len = len(formatted_prompt)
-                        completion_start_idx_full = next(
-                            (idx for idx, (start, _) in enumerate(char_offsets) if start >= prompt_char_len),
-                            len(message_input_ids_full),
-                        )
-                    else:
-                        tokenized_prompt_full = self.tokenizer(
-                            formatted_prompt,
-                            truncation=False,
-                            padding=False,
-                            return_tensors=None,
-                            add_special_tokens=False,
-                        )
-                        completion_start_idx_full = len(tokenized_prompt_full["input_ids"])
+                    sample_ids = full_ids
+                    sample_offs = full_offs
+                    prompt_ids = full_ids[:completion_start]
 
-                prompt_tokens_full = message_input_ids_full[:completion_start_idx_full]
-                completion_input_ids_full = message_input_ids_full[completion_start_idx_full:]
-                if byte_offsets_full is not None:
-                    prompt_offsets_full = byte_offsets_full[:completion_start_idx_full]
-                    completion_offsets_full = byte_offsets_full[completion_start_idx_full:]
-
-                if self.max_length is not None and len(message_input_ids_full) > self.max_length:
-                    completion_ids = completion_input_ids_full
-                    completion_offs = completion_offsets_full if byte_offsets_full is not None else None
-                    if len(completion_ids) >= self.max_length:
-                        completion_ids = completion_ids[-self.max_length :]
-                        if completion_offs is not None:
-                            completion_offs = completion_offs[-self.max_length :]
-                        prompt_ids = []
-                        prompt_offs = []
-                    else:
-                        max_prompt_tokens = self.max_length - len(completion_ids)
-                        prompt_ids = prompt_tokens_full[-max_prompt_tokens:] if max_prompt_tokens > 0 else []
-                        if byte_offsets_full is not None:
-                            prompt_offs = prompt_offsets_full[-max_prompt_tokens:] if max_prompt_tokens > 0 else []
-                        else:
-                            prompt_offs = None
-                    message_input_ids = prompt_ids + completion_ids
-                    sample_offsets = (
-                        list(prompt_offs) + list(completion_offs) if byte_offsets_full is not None else None
-                    )
-                else:
-                    message_input_ids = message_input_ids_full
-                    prompt_ids = prompt_tokens_full
-                    sample_offsets = byte_offsets_full
-
-                input_ids.append(message_input_ids)
-                attention_mask.append([1] * len(message_input_ids))
-                byte_offsets.append(sample_offsets)
+                input_ids.append(sample_ids)
+                attention_mask.append([1] * len(sample_ids))
+                byte_offsets.append(sample_offs)
                 current_prompt_ids = prompt_ids
             else:
-                message_input_ids = example["input_ids"]
-                input_ids.append(message_input_ids)
-                if "attention_mask" in example:
-                    attention_mask.append(example["attention_mask"])
-                else:
-                    attention_mask.append([1] * len(message_input_ids))
-                byte_offsets.append(None)
-
-                tokenized_prompt = self.tokenizer(
+                sample_ids = example["input_ids"]
+                input_ids.append(sample_ids)
+                attention_mask.append(example.get("attention_mask", [1] * len(sample_ids)))
+                byte_offsets.append([(0, 0)] * len(sample_ids))
+                current_prompt_ids = self.tokenizer(
                     formatted_prompt,
                     truncation=True,
-                    max_length=len(message_input_ids),
+                    max_length=len(sample_ids),
                     padding=False,
                     return_tensors=None,
                     add_special_tokens=False,
-                )
-                current_prompt_ids = tokenized_prompt["input_ids"]
+                )["input_ids"]
 
             prompts_input_ids.append(current_prompt_ids)
             prompt_attention_mask.append([1] * len(current_prompt_ids))
 
-            label = [self.ignore_index] * len(input_ids[-1])
-            completion_start_idx = len(current_prompt_ids)
-            label[completion_start_idx:] = input_ids[-1][completion_start_idx:]
+            label = [self.ignore_index] * len(sample_ids)
+            label[len(current_prompt_ids) :] = sample_ids[len(current_prompt_ids) :]
             labels.append(label)
 
         # convert to list of tensors and pad
-        input_ids = [torch.tensor(ids, dtype=torch.long) for ids in input_ids]
-        attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in attention_mask]
-        labels = [torch.tensor(label, dtype=torch.long) for label in labels]
-        input_ids = pad(input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
-        attention_mask = pad(attention_mask, padding_side="left", padding_value=0)
-        labels = pad(labels, padding_side="left", padding_value=self.ignore_index)
+        input_ids = pad(
+            [torch.tensor(x, dtype=torch.long) for x in input_ids],
+            padding_side="left",
+            padding_value=self.tokenizer.pad_token_id,
+        )
+        attention_mask = pad(
+            [torch.tensor(x, dtype=torch.long) for x in attention_mask], padding_side="left", padding_value=0
+        )
+        labels = pad(
+            [torch.tensor(x, dtype=torch.long) for x in labels], padding_side="left", padding_value=self.ignore_index
+        )
+        prompts_input_ids = pad(
+            [torch.tensor(x, dtype=torch.long) for x in prompts_input_ids],
+            padding_side="left",
+            padding_value=self.tokenizer.pad_token_id,
+        )
+        prompt_attention_mask = pad(
+            [torch.tensor(x, dtype=torch.long) for x in prompt_attention_mask], padding_side="left", padding_value=0
+        )
 
-        prompts_input_ids = [torch.tensor(ids, dtype=torch.long) for ids in prompts_input_ids]
-        prompt_attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in prompt_attention_mask]
-        prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
-        prompt_attention_mask = pad(prompt_attention_mask, padding_side="left", padding_value=0)
-
-        # Pad byte offsets with (0, 0) for padding positions; left-padding to match input_ids.
-        # Tensor shape: [batch, seq, 2]. Samples without offsets get all-zero rows.
         target_len = input_ids.size(1)
-        offsets_tensors = []
-        for sample_offsets in byte_offsets:
-            if sample_offsets is None:
-                offsets_tensors.append(torch.zeros(target_len, 2, dtype=torch.long))
-                continue
-            offs = torch.tensor(sample_offsets, dtype=torch.long)
-            pad_len = target_len - offs.size(0)
-            if pad_len > 0:
-                offs = torch.cat([torch.zeros(pad_len, 2, dtype=torch.long), offs], dim=0)
-            offsets_tensors.append(offs)
-        byte_offsets_tensor = torch.stack(offsets_tensors, dim=0)
+        byte_offsets_tensor = torch.stack(
+            [pad_byte_offsets(offs, target_len, padding_side="left") for offs in byte_offsets], dim=0
+        )
 
         return {
             "input_ids": input_ids,

@@ -78,25 +78,16 @@ def _assert_alignment_covers_completion(loss_fn, batch, teacher_input_ids, teach
     """Assert byte-offset alignment groups cover every answer-region position."""
     student_byte_offsets = batch["byte_offsets"]
     for idx in range(batch["input_ids"].shape[0]):
-        student_labels_full = batch["labels"][idx]
-        student_answer_positions = (student_labels_full != -100).nonzero(as_tuple=True)[0].tolist()
-        student_answer_offsets = [tuple(student_byte_offsets[idx, k].tolist()) for k in student_answer_positions]
-        # Anchor at the first answer-region byte so we share a coordinate system with teacher.
-        if student_answer_offsets:
-            anchor = student_answer_offsets[0][0]
-            student_answer_offsets = [(s - anchor, e - anchor) for s, e in student_answer_offsets]
-
-        teacher_answer_size = int((teacher_labels[idx] != -100).sum().item())
-        teacher_answer_offsets = teacher_byte_offsets[idx][:teacher_answer_size]
-
-        student_groups, teacher_groups = loss_fn._align_by_byte_offsets(student_answer_offsets, teacher_answer_offsets)
-
-        n_student = len(student_answer_offsets)
-        n_teacher = len(teacher_answer_offsets)
-        assert student_groups, "Student alignment groups must not be empty"
-        assert teacher_groups, "Teacher alignment groups must not be empty"
-        assert sorted(k for group in student_groups for k in group) == list(range(n_student))
-        assert sorted(k for group in teacher_groups for k in group) == list(range(n_teacher))
+        s_positions = (batch["labels"][idx] != -100).nonzero(as_tuple=True)[0].tolist()
+        t_positions = (teacher_labels[idx] != -100).nonzero(as_tuple=True)[0].tolist()
+        s_start, s_size = s_positions[0], len(s_positions)
+        t_start, t_size = t_positions[0], len(t_positions)
+        s_answer = loss_fn._slice_and_anchor(student_byte_offsets[idx], s_start, s_size)
+        t_answer = loss_fn._slice_and_anchor(teacher_byte_offsets[idx], t_start, t_size)
+        student_groups, teacher_groups = loss_fn._align_by_byte_offsets(s_answer, t_answer)
+        assert student_groups and teacher_groups
+        assert sorted(k for group in student_groups for k in group) == list(range(len(s_answer)))
+        assert sorted(k for group in teacher_groups for k in group) == list(range(len(t_answer)))
 
 
 @pytest.mark.slow

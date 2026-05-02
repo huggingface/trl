@@ -55,7 +55,7 @@ from ...trainer.utils import (
     pad,
     split_tensor_dict,
 )
-from ..utils import DataCollatorForChatML, empty_cache, truncate_dataset
+from ..utils import DataCollatorForChatML, empty_cache, pad_byte_offsets, truncate_dataset
 from .gold_config import GOLDConfig
 
 
@@ -74,18 +74,6 @@ if is_rich_available():
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
-
-
-def _normalize_answer_byte_offsets(answer_offsets):
-    """
-    Translate a list of ``(start, end)`` byte offsets so the first entry's start is 0. The offsets returned by the data
-    collator are relative to the full rendered chat-template message; alignment compares offsets in the answer-region's
-    own byte coordinate system, so we anchor at the first answer-region token's start.
-    """
-    if not answer_offsets:
-        return []
-    anchor = answer_offsets[0][0]
-    return [(s - anchor, e - anchor) for s, e in answer_offsets]
 
 
 def print_prompt_completions_sample_uld(
@@ -171,67 +159,55 @@ def build_teacher_inputs_from_texts(
     tokenizer: PreTrainedTokenizerBase,
     prompt_texts: list[str],
     completion_texts: list[str],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, list[list[tuple[int, int]]]]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, torch.Tensor]:
     """Tokenize teacher prompts/completions and produce tensors ready for GOLD loss.
 
-    Returns a 5-tuple ``(input_ids, labels, attention_mask, prompt_length, completion_byte_offsets)``.
-    ``completion_byte_offsets`` is one list per sample of ``(start, end)`` UTF-8 byte offsets relative to the
-    corresponding ``completion_text``, with a final ``(content_len, content_len)`` entry for the appended EOS so
-    positions line up with the answer-region tokens.
+    Returns ``(input_ids, labels, attention_mask, prompt_length, byte_offsets)``. ``byte_offsets`` is a ``[batch, seq,
+    2]`` tensor of UTF-8 byte ``(start, end)`` for each token: prompt and padding positions are filled with ``(0, 0)``;
+    completion tokens carry offsets relative to the corresponding ``completion_text``; the appended EOS gets
+    ``(content_len, content_len)``. Requires a fast tokenizer with ``backend_tokenizer.encode_byte_offsets``
+    (tokenizers >= 0.23.2).
     """
 
     pad_token_id = tokenizer.pad_token_id
     eos_token_id = tokenizer.eos_token_id
-
-    backend = getattr(tokenizer, "backend_tokenizer", None)
-    use_byte_offsets = backend is not None and hasattr(backend, "encode_byte_offsets")
+    backend = tokenizer.backend_tokenizer
 
     prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
-    if use_byte_offsets:
-        completion_encs = [backend.encode_byte_offsets(text, add_special_tokens=False) for text in completion_texts]
-        completion_token_ids = [list(enc.ids) for enc in completion_encs]
-        completion_offsets = [list(enc.offsets) for enc in completion_encs]
-    else:
-        completion_token_ids = tokenizer(completion_texts, add_special_tokens=False)["input_ids"]
-        completion_offsets = [None] * len(completion_token_ids)
+    completion_encs = [backend.encode_byte_offsets(text, add_special_tokens=False) for text in completion_texts]
 
     sequences: list[torch.Tensor] = []
     attention_masks: list[torch.Tensor] = []
     labels_list: list[torch.Tensor] = []
+    offsets_list: list[list[tuple[int, int]]] = []
     prompt_lengths: list[int] = []
-    completion_byte_offsets: list[list[tuple[int, int]]] = []
 
-    for prompt_ids, completion_ids, comp_offs, completion_text in zip(
-        prompt_token_ids, completion_token_ids, completion_offsets, completion_texts, strict=True
-    ):
+    for prompt_ids, enc, completion_text in zip(prompt_token_ids, completion_encs, completion_texts, strict=True):
         # Remove trailing EOS from prompt so completions can extend cleanly
         if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
             prompt_ids = prompt_ids[:-1]
 
+        completion_ids = list(enc.ids)
+        completion_offs = [tuple(o) for o in enc.offsets]
+        content_len = len(completion_text.encode("utf-8"))
+
         prompt_lengths.append(len(prompt_ids))
-        sequence = list(prompt_ids)
-        sequence.extend(completion_ids)
+        sequence = list(prompt_ids) + completion_ids
+        offsets = [(0, 0)] * len(prompt_ids) + completion_offs
         if eos_token_id is not None:
             sequence.append(eos_token_id)
+            offsets.append((content_len, content_len))
 
         seq_tensor = torch.tensor(sequence, dtype=torch.long)
         sequences.append(seq_tensor)
         attention_masks.append(torch.ones_like(seq_tensor))
+        offsets_list.append(offsets)
 
         labels = seq_tensor.clone()
         labels[: len(prompt_ids)] = -100
         if pad_token_id is not None:
             labels[labels == pad_token_id] = -100
         labels_list.append(labels)
-
-        if comp_offs is not None:
-            content_len = len(completion_text.encode("utf-8"))
-            sample_offsets = list(comp_offs)
-            if eos_token_id is not None:
-                sample_offsets.append((content_len, content_len))
-            completion_byte_offsets.append(sample_offsets)
-        else:
-            completion_byte_offsets.append([])
 
     teacher_input_ids = pad(
         sequences,
@@ -252,6 +228,11 @@ def build_teacher_inputs_from_texts(
                 last_idx = valid.nonzero(as_tuple=True)[0][-1]
                 teacher_attention_mask[row, last_idx + 1 :] = False
 
+    target_len = teacher_input_ids.size(1)
+    teacher_byte_offsets = torch.stack(
+        [pad_byte_offsets(offs, target_len, padding_side="right") for offs in offsets_list],
+        dim=0,
+    )
     teacher_prompt_length = max(prompt_lengths) if prompt_lengths else 0
 
     return (
@@ -259,7 +240,7 @@ def build_teacher_inputs_from_texts(
         teacher_labels,
         teacher_attention_mask,
         teacher_prompt_length,
-        completion_byte_offsets,
+        teacher_byte_offsets,
     )
 
 
@@ -448,26 +429,13 @@ class ULDLoss(nn.Module):
             if self.use_extended_uld:
                 if student_byte_offsets is None or teacher_byte_offsets is None:
                     raise RuntimeError(
-                        "ULDLoss with use_extended_uld=True requires student_byte_offsets "
-                        "and teacher_byte_offsets. The data collator (DataCollatorForChatML) "
-                        "and build_teacher_inputs_from_texts both emit these now; ensure "
-                        "compute_loss is forwarding them."
+                        "ULDLoss with use_extended_uld=True requires student_byte_offsets and "
+                        "teacher_byte_offsets. DataCollatorForChatML and "
+                        "build_teacher_inputs_from_texts both emit these; ensure compute_loss is "
+                        "forwarding them."
                     )
-                s_off_full = student_byte_offsets[i]
-                if isinstance(s_off_full, torch.Tensor):
-                    s_off_full = s_off_full.tolist()
-                s_answer = [tuple(s_off_full[k]) for k in range(student_start, student_start + student_size)]
-                # Translate student offsets to be relative to the start of the answer
-                # region so they share a coordinate system with the teacher's
-                # completion-relative offsets.
-                s_answer = _normalize_answer_byte_offsets(s_answer)
-
-                # Teacher offsets are emitted by build_teacher_inputs_from_texts as a
-                # list per sample covering exactly the answer region (completion + EOS),
-                # so we index from 0, not from teacher_start.
-                t_answer_full = teacher_byte_offsets[i]
-                t_answer = [tuple(t_answer_full[k]) for k in range(min(teacher_size, len(t_answer_full)))]
-
+                s_answer = self._slice_and_anchor(student_byte_offsets[i], student_start, student_size)
+                t_answer = self._slice_and_anchor(teacher_byte_offsets[i], teacher_start, teacher_size)
                 student_alignment_groups, teacher_alignment_groups = self._align_by_byte_offsets(s_answer, t_answer)
 
                 # Merge student probabilities using student alignment groups
@@ -512,6 +480,19 @@ class ULDLoss(nn.Module):
 
         distillation_loss = torch.stack(distillation_losses).mean()
         return self.distillation_weight * distillation_loss
+
+    @staticmethod
+    def _slice_and_anchor(byte_offsets, start, size):
+        """Slice ``byte_offsets[start:start+size]`` to the answer region and shift so the
+        first entry's start is 0, putting both teacher and student in the same byte coordinate system (= bytes within
+        the completion text)."""
+        slc = byte_offsets[start : start + size]
+        if isinstance(slc, torch.Tensor):
+            slc = slc.tolist()
+        if not slc:
+            return []
+        anchor = slc[0][0]
+        return [(s - anchor, e - anchor) for s, e in slc]
 
     @staticmethod
     def _align_by_byte_offsets(s_offsets, t_offsets):
