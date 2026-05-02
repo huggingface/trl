@@ -1277,7 +1277,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             grad_hidden.add_(grad_logits @ w_chunk.float())
             grad_weight[start:end].add_(grad_logits.t() @ hidden.float())
 
-        return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None
+        return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None, None
 
 
 def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: float) -> None:
