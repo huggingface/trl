@@ -1278,7 +1278,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
 
 
 def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: float) -> None:
-    final_logit_softcapping =  getattr(model.config, "final_logit_softcapping", None)
+    final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
 
     def _chunked_forward(
         self: torch.nn.Module,
@@ -1313,7 +1313,13 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
             targets_flat = targets_flat[valid_mask]  # [N_valid]
 
         logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
-            hidden_flat, self.lm_head.weight, targets_flat, temperature, chunk_size, final_logit_softcapping, logit_scale
+            hidden_flat,
+            self.lm_head.weight,
+            targets_flat,
+            temperature,
+            chunk_size,
+            final_logit_softcapping,
+            logit_scale,
         )
 
         if valid_mask is not None:
