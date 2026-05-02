@@ -153,6 +153,14 @@ class DataCollatorForChatML:
         prompts_input_ids = []
         prompt_attention_mask = []
         labels = []
+        # Per-token UTF-8 byte offsets into the rendered chat-template message. Used
+        # downstream by GOLD/ULD cross-tokenizer alignment (see TRL #4393).
+        # `None` indicates offsets aren't available for that sample (pre-tokenized
+        # input was supplied or the tokenizer doesn't expose `encode_byte_offsets`).
+        byte_offsets: list[list[tuple[int, int]] | None] = []
+
+        backend = getattr(self.tokenizer, "backend_tokenizer", None)
+        backend_supports_byte_offsets = backend is not None and hasattr(backend, "encode_byte_offsets")
 
         for example in examples:
             formatted_prompt = example.get(self.prompt_key, None)
@@ -168,51 +176,77 @@ class DataCollatorForChatML:
                     message, add_generation_prompt=False, tokenize=False
                 )
 
-                tokenized_message = self.tokenizer(
-                    formatted_message,
-                    truncation=False,
-                    padding=False,
-                    return_tensors=None,
-                    add_special_tokens=False,
-                    return_offsets_mapping=True,
-                )
-                message_input_ids_full = tokenized_message["input_ids"]
-                offsets = tokenized_message.get("offset_mapping")
-
-                if offsets is not None:
-                    prompt_char_len = len(formatted_prompt)
+                if backend_supports_byte_offsets:
+                    encoding = backend.encode_byte_offsets(formatted_message, add_special_tokens=False)
+                    message_input_ids_full = list(encoding.ids)
+                    byte_offsets_full = list(encoding.offsets)
+                    prompt_byte_len = len(formatted_prompt.encode("utf-8"))
                     completion_start_idx_full = next(
-                        (idx for idx, (start, _) in enumerate(offsets) if start >= prompt_char_len),
+                        (idx for idx, (start, _) in enumerate(byte_offsets_full) if start >= prompt_byte_len),
                         len(message_input_ids_full),
                     )
                 else:
-                    tokenized_prompt_full = self.tokenizer(
-                        formatted_prompt,
+                    tokenized_message = self.tokenizer(
+                        formatted_message,
                         truncation=False,
                         padding=False,
                         return_tensors=None,
                         add_special_tokens=False,
+                        return_offsets_mapping=True,
                     )
-                    completion_start_idx_full = len(tokenized_prompt_full["input_ids"])
+                    message_input_ids_full = tokenized_message["input_ids"]
+                    byte_offsets_full = None
+                    char_offsets = tokenized_message.get("offset_mapping")
+                    if char_offsets is not None:
+                        prompt_char_len = len(formatted_prompt)
+                        completion_start_idx_full = next(
+                            (idx for idx, (start, _) in enumerate(char_offsets) if start >= prompt_char_len),
+                            len(message_input_ids_full),
+                        )
+                    else:
+                        tokenized_prompt_full = self.tokenizer(
+                            formatted_prompt,
+                            truncation=False,
+                            padding=False,
+                            return_tensors=None,
+                            add_special_tokens=False,
+                        )
+                        completion_start_idx_full = len(tokenized_prompt_full["input_ids"])
 
                 prompt_tokens_full = message_input_ids_full[:completion_start_idx_full]
                 completion_input_ids_full = message_input_ids_full[completion_start_idx_full:]
+                if byte_offsets_full is not None:
+                    prompt_offsets_full = byte_offsets_full[:completion_start_idx_full]
+                    completion_offsets_full = byte_offsets_full[completion_start_idx_full:]
 
                 if self.max_length is not None and len(message_input_ids_full) > self.max_length:
                     completion_ids = completion_input_ids_full
+                    completion_offs = completion_offsets_full if byte_offsets_full is not None else None
                     if len(completion_ids) >= self.max_length:
                         completion_ids = completion_ids[-self.max_length :]
+                        if completion_offs is not None:
+                            completion_offs = completion_offs[-self.max_length :]
                         prompt_ids = []
+                        prompt_offs = []
                     else:
                         max_prompt_tokens = self.max_length - len(completion_ids)
                         prompt_ids = prompt_tokens_full[-max_prompt_tokens:] if max_prompt_tokens > 0 else []
+                        if byte_offsets_full is not None:
+                            prompt_offs = prompt_offsets_full[-max_prompt_tokens:] if max_prompt_tokens > 0 else []
+                        else:
+                            prompt_offs = None
                     message_input_ids = prompt_ids + completion_ids
+                    sample_offsets = (
+                        list(prompt_offs) + list(completion_offs) if byte_offsets_full is not None else None
+                    )
                 else:
                     message_input_ids = message_input_ids_full
                     prompt_ids = prompt_tokens_full
+                    sample_offsets = byte_offsets_full
 
                 input_ids.append(message_input_ids)
                 attention_mask.append([1] * len(message_input_ids))
+                byte_offsets.append(sample_offsets)
                 current_prompt_ids = prompt_ids
             else:
                 message_input_ids = example["input_ids"]
@@ -221,6 +255,7 @@ class DataCollatorForChatML:
                     attention_mask.append(example["attention_mask"])
                 else:
                     attention_mask.append([1] * len(message_input_ids))
+                byte_offsets.append(None)
 
                 tokenized_prompt = self.tokenizer(
                     formatted_prompt,
@@ -253,12 +288,28 @@ class DataCollatorForChatML:
         prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
         prompt_attention_mask = pad(prompt_attention_mask, padding_side="left", padding_value=0)
 
+        # Pad byte offsets with (0, 0) for padding positions; left-padding to match input_ids.
+        # Tensor shape: [batch, seq, 2]. Samples without offsets get all-zero rows.
+        target_len = input_ids.size(1)
+        offsets_tensors = []
+        for sample_offsets in byte_offsets:
+            if sample_offsets is None:
+                offsets_tensors.append(torch.zeros(target_len, 2, dtype=torch.long))
+                continue
+            offs = torch.tensor(sample_offsets, dtype=torch.long)
+            pad_len = target_len - offs.size(0)
+            if pad_len > 0:
+                offs = torch.cat([torch.zeros(pad_len, 2, dtype=torch.long), offs], dim=0)
+            offsets_tensors.append(offs)
+        byte_offsets_tensor = torch.stack(offsets_tensors, dim=0)
+
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
             "prompts": prompts_input_ids,
             "prompt_attention_mask": prompt_attention_mask,
+            "byte_offsets": byte_offsets_tensor,
         }
 
 
