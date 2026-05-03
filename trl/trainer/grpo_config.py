@@ -256,6 +256,17 @@ class GRPOConfig(_BaseConfig):
             - `"vespo"`: Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth,
               asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in
               the [VESPO paper](https://huggingface.co/papers/2602.10693).
+            - `"tpo"`: Target Policy Optimization loss. Builds a target distribution over each prompt's sampled
+              completions from the rollout policy probabilities and normalized rewards, then fits the current policy
+              to that target with cross-entropy.
+        tpo_target_temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature used to build the Target Policy Optimization target distribution when `loss_type="tpo"`.
+            Lower values make the target more concentrated on high-scoring completions.
+        tpo_length_normalize_logps (`bool`, *optional*, defaults to `True`):
+            Whether to length-normalize sequence log-probabilities (per-token mean instead of sum) when building
+            the TPO target and computing the TPO loss. Recommended for real-length generations, because raw sum
+            sequence-logps vary over orders of magnitude across a group and make the old-policy term dominate the
+            target. Set to `False` to reproduce the paper's literal `p_i^old` formulation.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -738,7 +749,28 @@ class GRPOConfig(_BaseConfig):
             "paper](https://huggingface.co/papers/2602.05261)."
             "'vespo': Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth, "
             "asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in "
-            "the [VESPO paper](https://huggingface.co/papers/2602.10693)."
+            "the [VESPO paper](https://huggingface.co/papers/2602.10693). "
+            "'tpo': Target Policy Optimization loss. Builds a target distribution over each prompt's sampled "
+            "completions from rollout policy probabilities and normalized rewards, then fits the current policy to "
+            "that target with cross-entropy."
+        },
+    )
+    tpo_target_temperature: float = field(
+        default=1.0,
+        metadata={
+            "help": "Temperature used to build the Target Policy Optimization target distribution when "
+            "`loss_type='tpo'`. Lower values make the target more concentrated on high-scoring completions."
+        },
+    )
+    tpo_length_normalize_logps: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to length-normalize sequence log-probabilities (use per-token mean instead of sum) "
+            "when building the TPO target distribution and computing the TPO loss. Without this, sequences of "
+            "different lengths have log-probabilities spanning orders of magnitude, causing the old-policy term "
+            "in `q_i ∝ p_i^old * exp(u_i / eta)` to dominate and collapse the target to ~one-hot on the "
+            "highest-old-logp completion. Set to `False` to reproduce the paper's literal sequence-probability "
+            "formulation."
         },
     )
     mask_truncated_completions: bool = field(
@@ -943,3 +975,34 @@ class GRPOConfig(_BaseConfig):
 
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
+
+        if self.tpo_target_temperature <= 0.0:
+            raise ValueError(
+                f"tpo_target_temperature must be greater than 0.0. You provided {self.tpo_target_temperature}."
+            )
+
+        if self.loss_type == "tpo":
+            if self.use_liger_kernel:
+                raise ValueError("Liger kernel does not support the TPO loss yet.")
+            # TPO's target distribution is normalized per prompt group, so each optimization step must contain a whole
+            # number of groups. That holds whenever the per-step batch (generation_batch_size // steps_per_generation)
+            # is divisible by num_generations.
+            per_step_batch = self.generation_batch_size // self.steps_per_generation
+            if per_step_batch % self.num_generations != 0:
+                raise ValueError(
+                    f"TPO requires each optimization step to contain whole prompt groups. With "
+                    f"steps_per_generation={self.steps_per_generation} and num_generations={self.num_generations}, "
+                    f"the per-step batch of {per_step_batch} is not divisible by num_generations. Increase "
+                    f"per_device_train_batch_size or reduce steps_per_generation."
+                )
+            if (
+                num_processes > 1
+                and self.steps_per_generation > 1
+                and self.per_device_train_batch_size % self.num_generations != 0
+            ):
+                raise ValueError(
+                    f"TPO with distributed multi-step generation requires each rank's per-step batch to contain "
+                    f"whole prompt groups. With per_device_train_batch_size={self.per_device_train_batch_size} and "
+                    f"num_generations={self.num_generations}, the per-rank batch is not divisible by "
+                    f"num_generations. Increase per_device_train_batch_size or reduce steps_per_generation."
+                )

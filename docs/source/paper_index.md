@@ -668,6 +668,30 @@ trainer.train()
 
 The official code [sail-sg/Stable-RL](https://github.com/sail-sg/Stable-RL)
 
+### Target Policy Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2604.06159
+
+Target Policy Optimization (TPO) builds a target distribution over each prompt's sampled completions using rollout
+policy probabilities and normalized rewards, then trains the policy to match that target with sequence-level
+cross-entropy. To use TPO in TRL, use [`TargetPOTrainer`] or set `loss_type="tpo"` in [`GRPOConfig`]. The Python
+class is named `TargetPO` to avoid collision with the experimental Triple Preference Optimization trainer that
+shares the same acronym.
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+training_args = GRPOConfig(
+    loss_type="tpo",
+    tpo_target_temperature=1.0,
+)
+
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
+)
+```
+
 ## Direct Policy Optimization
 
 Papers relating to the [`DPOTrainer`]

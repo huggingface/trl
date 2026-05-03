@@ -72,7 +72,7 @@ from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generatio
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
-from .grpo_config import GRPOConfig
+from .target_po_config import TargetPOConfig
 from .utils import (
     RepeatSampler,
     create_model_from_path,
@@ -100,7 +100,377 @@ if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
 
 if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
+    from liger_kernel.chunked_loss.fused_linear_ppo import LigerFusedLinearPPOBase
+
+
+    class LigerFusedLinearTargetPOFunction(torch.autograd.Function):
+        @staticmethod
+        def _get_process_info():
+            if torch.distributed.is_available() and torch.distributed.is_initialized():
+                return torch.distributed.get_rank(), torch.distributed.get_world_size()
+            return 0, 1
+
+        @staticmethod
+        def _gather_tensor(tensor: torch.Tensor) -> torch.Tensor:
+            if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+                return tensor
+            gathered = [torch.empty_like(tensor) for _ in range(torch.distributed.get_world_size())]
+            torch.distributed.all_gather(gathered, tensor)
+            return torch.stack(gathered) if tensor.dim() == 0 else torch.cat(gathered, dim=0)
+
+        @staticmethod
+        def _chunk_logps_and_entropies(
+            input_chunk, weight, selected_token_ids_chunk, bias, temperature, compute_entropy
+        ):
+            log_probs, _ = LigerFusedLinearPPOBase.chunk_forward(
+                input_chunk, weight, bias=bias, temperature=temperature
+            )
+            per_token_logps = log_probs.gather(dim=-1, index=selected_token_ids_chunk.unsqueeze(-1)).squeeze(-1)
+            entropies = -(log_probs.exp() * log_probs).sum(dim=-1) if compute_entropy else None
+            return per_token_logps, entropies
+
+        @staticmethod
+        def _compute_surrogate_loss(
+            input_chunk,
+            weight,
+            selected_token_ids_chunk,
+            attention_mask_chunk,
+            tpo_per_token_grads_chunk,
+            bias,
+            ref_per_token_logps_chunk,
+            old_per_token_logps_chunk,
+            beta,
+            kl_normalizer,
+            use_bias_correction_kl,
+            temperature,
+        ):
+            per_token_logps, _ = LigerFusedLinearTargetPOFunction._chunk_logps_and_entropies(
+                input_chunk, weight, selected_token_ids_chunk, bias, temperature, compute_entropy=False
+            )
+            loss = (per_token_logps * tpo_per_token_grads_chunk).sum()
+
+            if beta != 0.0:
+                if ref_per_token_logps_chunk is None:
+                    raise RuntimeError("TargetPO Liger loss requires `ref_per_token_logps` when beta is non-zero.")
+                ref_per_token_logps_chunk = ref_per_token_logps_chunk.float()
+                old_per_token_logps_chunk = (
+                    per_token_logps.detach()
+                    if old_per_token_logps_chunk is None
+                    else old_per_token_logps_chunk.float()
+                )
+                per_token_kl = (
+                    torch.exp(ref_per_token_logps_chunk - per_token_logps)
+                    - (ref_per_token_logps_chunk - per_token_logps)
+                    - 1
+                )
+                if use_bias_correction_kl:
+                    per_token_kl = per_token_kl * torch.exp(per_token_logps - old_per_token_logps_chunk)
+                loss = loss + beta * (per_token_kl * attention_mask_chunk).sum() / kl_normalizer
+
+            return loss
+
+        @staticmethod
+        def forward(
+            ctx,
+            _input,
+            weight,
+            selected_token_ids,
+            attention_mask,
+            tpo_targets,
+            tpo_valid_mask,
+            bias=None,
+            ref_per_token_logps=None,
+            old_per_token_logps=None,
+            beta=0.0,
+            num_generations=1,
+            tpo_length_normalize_logps=True,
+            use_bias_correction_kl=False,
+            normalizer=1.0,
+            temperature=1.0,
+            chunk_size=1,
+        ):
+            chunk_size = max(1, int(chunk_size))
+            chunks = max(1, math.ceil(_input.shape[0] / chunk_size))
+            input_chunks = torch.chunk(_input, chunks=chunks, dim=0)
+            selected_token_ids_chunks = torch.chunk(selected_token_ids, chunks=chunks, dim=0)
+            attention_mask_chunks = torch.chunk(attention_mask, chunks=chunks, dim=0)
+            ref_per_token_logps_chunks = (
+                torch.chunk(ref_per_token_logps, chunks=chunks, dim=0)
+                if ref_per_token_logps is not None
+                else [None] * chunks
+            )
+            old_per_token_logps_chunks = (
+                torch.chunk(old_per_token_logps, chunks=chunks, dim=0)
+                if old_per_token_logps is not None
+                else [None] * chunks
+            )
+
+            per_token_logps_chunks = []
+            entropy_sum = torch.zeros((), device=_input.device, dtype=torch.float32)
+            with torch.no_grad():
+                for input_chunk, selected_token_ids_chunk, attention_mask_chunk in zip(
+                    input_chunks, selected_token_ids_chunks, attention_mask_chunks, strict=True
+                ):
+                    per_token_logps_chunk, entropies_chunk = (
+                        LigerFusedLinearTargetPOFunction._chunk_logps_and_entropies(
+                            input_chunk, weight, selected_token_ids_chunk, bias, temperature, compute_entropy=True
+                        )
+                    )
+                    loss_mask_chunk = attention_mask_chunk.to(per_token_logps_chunk.dtype)
+                    per_token_logps_chunks.append(per_token_logps_chunk.float())
+                    entropy_sum.add_((entropies_chunk * loss_mask_chunk).sum())
+
+                per_token_logps = torch.cat(per_token_logps_chunks, dim=0)
+                loss_mask = attention_mask.to(per_token_logps.dtype)
+                tpo_targets = torch.where(tpo_valid_mask, tpo_targets, torch.zeros_like(tpo_targets))
+                tpo_targets = tpo_targets.to(per_token_logps.dtype)
+
+                sequence_lengths = loss_mask.sum(dim=-1).clamp(min=1.0)
+                sequence_logps = (per_token_logps * loss_mask).sum(dim=-1)
+                if tpo_length_normalize_logps:
+                    sequence_logps = sequence_logps / sequence_lengths
+
+                rank, world_size = LigerFusedLinearTargetPOFunction._get_process_info()
+                all_sequence_logps = LigerFusedLinearTargetPOFunction._gather_tensor(sequence_logps)
+                all_tpo_targets = LigerFusedLinearTargetPOFunction._gather_tensor(tpo_targets)
+                all_tpo_valid_mask = LigerFusedLinearTargetPOFunction._gather_tensor(tpo_valid_mask)
+                all_sequence_logps = all_sequence_logps.masked_fill(
+                    ~all_tpo_valid_mask, torch.finfo(all_sequence_logps.dtype).min
+                )
+
+                all_logps = torch.log_softmax(all_sequence_logps.view(-1, num_generations), dim=1).view(-1)
+                process_slice = slice(rank * sequence_logps.size(0), (rank + 1) * sequence_logps.size(0))
+                logps = all_logps[process_slice]
+                loss_scale = num_generations / tpo_targets.numel()
+                tpo_loss = -(tpo_targets * logps).sum() * loss_scale
+
+                all_probs = torch.softmax(all_sequence_logps.view(-1, num_generations), dim=1)
+                target_groups = all_tpo_targets.view(-1, num_generations)
+                target_group_sums = target_groups.sum(dim=1, keepdim=True)
+                all_sequence_grads = (all_probs * target_group_sums - target_groups) * loss_scale
+                sequence_grads = all_sequence_grads.view(-1)[process_slice]
+                if tpo_length_normalize_logps:
+                    tpo_per_token_grads = sequence_grads.unsqueeze(1) * loss_mask / sequence_lengths.unsqueeze(1)
+                else:
+                    tpo_per_token_grads = sequence_grads.unsqueeze(1) * loss_mask
+                tpo_per_token_grads = tpo_per_token_grads / normalizer
+
+                kl_normalizer = loss_mask.sum()
+                kl_normalizer = LigerFusedLinearTargetPOFunction._gather_tensor(kl_normalizer).sum() / world_size
+                kl_normalizer = kl_normalizer.clamp(min=1.0)
+
+                kl_loss = torch.zeros((), device=_input.device, dtype=torch.float32)
+                if beta != 0.0:
+                    if ref_per_token_logps is None:
+                        raise RuntimeError("TargetPO Liger loss requires `ref_per_token_logps` when beta is non-zero.")
+                    old_per_token_logps_for_kl = (
+                        per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps.float()
+                    )
+                    per_token_kl = (
+                        torch.exp(ref_per_token_logps.float() - per_token_logps)
+                        - (ref_per_token_logps.float() - per_token_logps)
+                        - 1
+                    )
+                    if use_bias_correction_kl:
+                        per_token_kl = per_token_kl * torch.exp(per_token_logps - old_per_token_logps_for_kl)
+                    kl_loss = (per_token_kl * loss_mask).sum() / kl_normalizer
+
+                loss = tpo_loss / normalizer + beta * kl_loss / normalizer
+                mean_entropy = entropy_sum / loss_mask.sum().clamp(min=1.0)
+
+            tpo_per_token_grad_chunks = torch.chunk(tpo_per_token_grads, chunks=chunks, dim=0)
+            grad_weight = torch.zeros_like(weight)
+            grad_inputs = []
+            grad_bias = torch.zeros_like(bias) if bias is not None else None
+
+            for (
+                input_chunk,
+                selected_token_ids_chunk,
+                attention_mask_chunk,
+                tpo_per_token_grads_chunk,
+                ref_per_token_logps_chunk,
+                old_per_token_logps_chunk,
+            ) in zip(
+                input_chunks,
+                selected_token_ids_chunks,
+                attention_mask_chunks,
+                tpo_per_token_grad_chunks,
+                ref_per_token_logps_chunks,
+                old_per_token_logps_chunks,
+                strict=True,
+            ):
+                loss_mask_chunk = attention_mask_chunk.to(tpo_per_token_grads_chunk.dtype)
+                if bias is not None:
+
+                    def compute_surrogate(
+                        input_chunk,
+                        weight,
+                        bias,
+                        selected_token_ids_chunk,
+                        loss_mask_chunk,
+                        tpo_per_token_grads_chunk,
+                        ref_per_token_logps_chunk,
+                        old_per_token_logps_chunk,
+                    ):
+                        return LigerFusedLinearTargetPOFunction._compute_surrogate_loss(
+                            input_chunk,
+                            weight,
+                            selected_token_ids_chunk,
+                            loss_mask_chunk,
+                            tpo_per_token_grads_chunk,
+                            bias,
+                            ref_per_token_logps_chunk,
+                            old_per_token_logps_chunk,
+                            beta / normalizer,
+                            kl_normalizer,
+                            use_bias_correction_kl,
+                            temperature,
+                        )
+
+                    chunk_grad_input, chunk_grad_weight, chunk_grad_bias = torch.func.grad(
+                        compute_surrogate, argnums=(0, 1, 2)
+                    )(
+                        input_chunk,
+                        weight,
+                        bias,
+                        selected_token_ids_chunk,
+                        loss_mask_chunk,
+                        tpo_per_token_grads_chunk,
+                        ref_per_token_logps_chunk,
+                        old_per_token_logps_chunk,
+                    )
+                    grad_bias.add_(chunk_grad_bias)
+                else:
+
+                    def compute_surrogate(
+                        input_chunk,
+                        weight,
+                        selected_token_ids_chunk,
+                        loss_mask_chunk,
+                        tpo_per_token_grads_chunk,
+                        ref_per_token_logps_chunk,
+                        old_per_token_logps_chunk,
+                    ):
+                        return LigerFusedLinearTargetPOFunction._compute_surrogate_loss(
+                            input_chunk,
+                            weight,
+                            selected_token_ids_chunk,
+                            loss_mask_chunk,
+                            tpo_per_token_grads_chunk,
+                            None,
+                            ref_per_token_logps_chunk,
+                            old_per_token_logps_chunk,
+                            beta / normalizer,
+                            kl_normalizer,
+                            use_bias_correction_kl,
+                            temperature,
+                        )
+
+                    chunk_grad_input, chunk_grad_weight = torch.func.grad(compute_surrogate, argnums=(0, 1))(
+                        input_chunk,
+                        weight,
+                        selected_token_ids_chunk,
+                        loss_mask_chunk,
+                        tpo_per_token_grads_chunk,
+                        ref_per_token_logps_chunk,
+                        old_per_token_logps_chunk,
+                    )
+
+                grad_inputs.append(chunk_grad_input)
+                grad_weight.add_(chunk_grad_weight)
+
+            grad_input = torch.cat(grad_inputs, dim=0)
+            if bias is not None:
+                ctx.save_for_backward(grad_input, grad_weight, grad_bias)
+            else:
+                ctx.save_for_backward(grad_input, grad_weight)
+            ctx.has_bias = bias is not None
+            return loss, kl_loss, mean_entropy
+
+        @staticmethod
+        def backward(ctx, grad_output, *grad_metrics):
+            if ctx.has_bias:
+                grad_input, grad_weight, grad_bias = ctx.saved_tensors
+            else:
+                grad_input, grad_weight = ctx.saved_tensors
+                grad_bias = None
+
+            grad_input = grad_input * grad_output
+            grad_weight = grad_weight * grad_output
+            if grad_bias is not None:
+                grad_bias = grad_bias * grad_output
+
+            return (
+                grad_input,
+                grad_weight,
+                None,  # selected_token_ids
+                None,  # attention_mask
+                None,  # tpo_targets
+                None,  # tpo_valid_mask
+                grad_bias,
+                None,  # ref_per_token_logps
+                None,  # old_per_token_logps
+                None,  # beta
+                None,  # num_generations
+                None,  # tpo_length_normalize_logps
+                None,  # use_bias_correction_kl
+                None,  # normalizer
+                None,  # temperature
+                None,  # chunk_size
+            )
+
+
+    class LigerFusedLinearTargetPOLoss(nn.Module):
+        def __init__(
+            self,
+            beta: float = 0.0,
+            num_generations: int = 1,
+            tpo_length_normalize_logps: bool = True,
+            use_bias_correction_kl: bool = False,
+            temperature: float = 1.0,
+            chunk_size: int = 1,
+        ):
+            super().__init__()
+            self.beta = beta
+            self.num_generations = num_generations
+            self.tpo_length_normalize_logps = tpo_length_normalize_logps
+            self.use_bias_correction_kl = use_bias_correction_kl
+            self.temperature = temperature
+            self.chunk_size = chunk_size
+
+        def forward(
+            self,
+            _input,
+            lin_weight,
+            selected_token_ids,
+            attention_mask,
+            tpo_targets,
+            tpo_valid_mask=None,
+            bias=None,
+            ref_per_token_logps=None,
+            old_per_token_logps=None,
+            normalizer=1.0,
+        ):
+            if tpo_valid_mask is None:
+                tpo_valid_mask = torch.ones_like(tpo_targets, dtype=torch.bool)
+            return LigerFusedLinearTargetPOFunction.apply(
+                _input,
+                lin_weight,
+                selected_token_ids,
+                attention_mask,
+                tpo_targets,
+                tpo_valid_mask,
+                bias,
+                ref_per_token_logps,
+                old_per_token_logps,
+                self.beta,
+                self.num_generations,
+                self.tpo_length_normalize_logps,
+                self.use_bias_correction_kl,
+                normalizer,
+                self.temperature,
+                self.chunk_size,
+            )
 
 
 if is_wandb_available():
@@ -121,7 +491,7 @@ RewardFunc = str | PreTrainedModel | Callable[..., list[float | None]]
 # What we call a rollout function is a callable that takes prompts (list) and the trainer instance as parameters and
 # returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs"
 # fields. Any extra fields (per-completion) are forwarded to the reward functions.
-RolloutFunc = Callable[[list[str], "GRPOTrainer"], dict[str, Any]]
+RolloutFunc = Callable[[list[str], "TargetPOTrainer"], dict[str, Any]]
 
 
 class _SupportsReset(Protocol):
@@ -131,22 +501,21 @@ class _SupportsReset(Protocol):
 EnvironmentFactory = Callable[[], _SupportsReset]
 
 
-class GRPOTrainer(_BaseTrainer):
+class TargetPOTrainer(_BaseTrainer):
     """
-    Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
-    paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language
-    Models](https://huggingface.co/papers/2402.03300).
+    Trainer for the Target Policy Optimization (TargetPO) method, from the paper [Target Policy
+    Optimization](https://huggingface.co/papers/2604.06159).
 
     Example:
 
     ```python
-    from trl import GRPOTrainer
+    from trl import TargetPOTrainer
     from trl.rewards import accuracy_reward
     from datasets import load_dataset
 
     dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-    trainer = GRPOTrainer(
+    trainer = TargetPOTrainer(
         model="Qwen/Qwen2.5-0.5B-Instruct",
         reward_funcs=accuracy_reward,
         train_dataset=dataset,
@@ -190,7 +559,7 @@ class GRPOTrainer(_BaseTrainer):
                   reward function's signature.
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
-        args ([`GRPOConfig`], *optional*):
+        args ([`TargetPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
@@ -253,18 +622,18 @@ class GRPOTrainer(_BaseTrainer):
             without prior notice.
     """
 
-    _tag_names = ["trl", "grpo"]
-    _name = "GRPO"
+    _tag_names = ["trl", "tpo"]
+    _name = "TargetPO"
     _paper = {
-        "title": "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
-        "id": "2402.03300",
+        "title": "Target Policy Optimization",
+        "id": "2604.06159",
         # docstyle-ignore
         "citation": textwrap.dedent("""\
-            @article{shao2024deepseekmath,
-                title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
-                author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
-                year         = 2024,
-                eprint       = {arXiv:2402.03300},
+            @misc{kaddour2026targetpolicyoptimization,
+                title        = {{Target Policy Optimization}},
+                author       = {Jean Kaddour},
+                year         = 2026,
+                eprint       = {arXiv:2604.06159},
             }"""),
     }
 
@@ -272,7 +641,7 @@ class GRPOTrainer(_BaseTrainer):
         self,
         model: "str | PreTrainedModel | PeftModel",
         reward_funcs: RewardFunc | list[RewardFunc],
-        args: GRPOConfig | None = None,
+        args: TargetPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
@@ -288,7 +657,7 @@ class GRPOTrainer(_BaseTrainer):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
-            args = GRPOConfig(f"{model_name}-GRPO")
+            args = TargetPOConfig(f"{model_name}-TargetPO")
 
         # Model
         if isinstance(model, str):
@@ -300,7 +669,7 @@ class GRPOTrainer(_BaseTrainer):
         else:
             if args.model_init_kwargs is not None:
                 logger.warning(
-                    "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
+                    "You passed `model_init_kwargs` to the `TargetPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
 
@@ -320,16 +689,13 @@ class GRPOTrainer(_BaseTrainer):
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
-            self._tokenizer = processing_class.tokenizer
+            tokenizer = processing_class.tokenizer
             self._is_vlm = True
         elif isinstance(processing_class, PreTrainedTokenizerBase):
-            self._tokenizer = processing_class
+            tokenizer = processing_class
             self._is_vlm = False
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
-
-        if self._tokenizer.pad_token is None:
-            self._tokenizer.pad_token = self._tokenizer.eos_token
 
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
         # when tool responses inject images into the completion (see _generate forward_kwargs block).
@@ -337,36 +703,26 @@ class GRPOTrainer(_BaseTrainer):
         self._video_pad_token_id = None
         if self._is_vlm:
             for candidate in ("<|image_pad|>", "<|image|>"):
-                tid = self._tokenizer.convert_tokens_to_ids(candidate)
-                if tid != self._tokenizer.unk_token_id:
+                tid = tokenizer.convert_tokens_to_ids(candidate)
+                if tid != tokenizer.unk_token_id:
                     self._image_pad_token_id = tid
                     break
-            tid = self._tokenizer.convert_tokens_to_ids("<|video_pad|>")
-            if tid != self._tokenizer.unk_token_id:
+            tid = tokenizer.convert_tokens_to_ids("<|video_pad|>")
+            if tid != tokenizer.unk_token_id:
                 self._video_pad_token_id = tid
 
-        # PEFT
-        if peft_config is not None:
-            if not is_peft_available():
-                raise ImportError(
-                    "You passed `peft_config` but the `peft` library is not installed. "
-                    "Install it with `pip install trl[peft]`."
-                )
-            if not isinstance(peft_config, PeftConfig):
-                raise TypeError(
-                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
-                    f"got {type(peft_config).__name__}."
-                )
-            if is_peft_model(model):
-                raise ValueError(
-                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
-                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
-                    "with the new `peft_config` to the trainer."
-                )
-            # Create PEFT model
-            model = get_peft_model(model, peft_config)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        self.pad_token_id = tokenizer.pad_token_id
+        self.eos_token_id = tokenizer.eos_token_id
 
-        elif is_peft_model(model) and args.beta != 0.0:
+        if is_peft_available() and is_peft_model(model) and peft_config is not None:
+            raise ValueError(
+                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                "with the new `peft_config` to the trainer."
+            )
+        if is_peft_available() and is_peft_model(model) and args.beta != 0.0:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during GRPO training.
             model.add_adapter("ref", model.peft_config["default"])
@@ -376,9 +732,13 @@ class GRPOTrainer(_BaseTrainer):
                     ref_param = model.get_parameter(ref_name)
                     ref_param.data.copy_(param.data)
 
+        # Create PEFT model
+        if peft_config is not None:
+            model = get_peft_model(model, peft_config)
+
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_model(model) and args.gradient_checkpointing:
+        if is_peft_available() and is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -470,20 +830,20 @@ class GRPOTrainer(_BaseTrainer):
         if tools:
             if not Version(transformers.__version__) >= Version("5.0.0"):
                 raise ImportError(
-                    "Using tools with GRPOTrainer requires transformers version 5.0.0 or higher. Please upgrade "
+                    "Using tools with TargetPOTrainer requires transformers version 5.0.0 or higher. Please upgrade "
                     "transformers with `pip install --upgrade transformers` to use this feature."
                 )
         if environment_factory:
             if not Version(transformers.__version__) >= Version("5.2.0"):
                 raise ImportError(
-                    "Using `environment_factory` with GRPOTrainer requires transformers version 5.2.0 or higher. "
+                    "Using `environment_factory` with TargetPOTrainer requires transformers version 5.2.0 or higher. "
                     "Please install transformers from the main branch with `pip install "
                     "git+https://github.com/huggingface/transformers.git@main` to use this feature."
                 )
         if tools or environment_factory:
             if not is_jmespath_available():
                 raise ImportError(
-                    "Using tools with GRPOTrainer requires the jmespath library for response parsing. Please install "
+                    "Using tools with TargetPOTrainer requires the jmespath library for response parsing. Please install "
                     "it with `pip install jmespath` to use this feature."
                 )
             if not supports_tool_calling(processing_class):
@@ -528,7 +888,7 @@ class GRPOTrainer(_BaseTrainer):
 
         if self._has_async_funcs:
             self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
-                name="GRPOTrainer-AsyncLoop"
+                name="TargetPOTrainer-AsyncLoop"
             )
             # wait until the event loop is running in the daemon thread
             self.async_loop_ready_event.wait()
@@ -538,7 +898,8 @@ class GRPOTrainer(_BaseTrainer):
         # While waiting for broader adoption, we provide this utility function to manually set the response schema for
         # known chat templates. `response_schema` lives on the (inner) tokenizer, since `parse_response` is a tokenizer
         # method that reads `self.response_schema`.
-        if self.tools and getattr(self._tokenizer, "response_schema", None) is None:
+        tokenizer = processing_class.tokenizer if self._is_vlm else processing_class
+        if self.tools and getattr(tokenizer, "response_schema", None) is None:
             processing_class = add_response_schema(processing_class)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
@@ -603,7 +964,7 @@ class GRPOTrainer(_BaseTrainer):
         ):
             # See https://github.com/huggingface/trl/issues/3213
             raise NotImplementedError(
-                "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
+                "Iterable datasets are not yet supported in TargetPOTrainer. Please use a standard dataset instead."
             )
 
         if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
@@ -715,20 +1076,17 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
-                    "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
+                    "Liger is required to use `use_liger_kernel` as the TargetPO loss. Run `pip install liger-kernel`."
                 )
             # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
             self._forward_redirection = _ForwardRedirection()
 
-            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
+            self.liger_tpo_loss = LigerFusedLinearTargetPOLoss(
                 beta=self.beta,
-                epsilon_low=self.epsilon_low,
-                epsilon_high=self.epsilon_high,
                 temperature=self.temperature,
-                use_ref_model=self.beta != 0.0,
-                loss_type=self.loss_type,
-                max_completion_length=self.max_completion_length,
-                importance_sampling_level=self.importance_sampling_level,
+                num_generations=self.num_generations,
+                tpo_length_normalize_logps=self.tpo_length_normalize_logps,
+                use_bias_correction_kl=args.use_bias_correction_kl,
             )
 
         # Initialize the metrics
@@ -796,9 +1154,9 @@ class GRPOTrainer(_BaseTrainer):
             generation_kwargs = {
                 "max_new_tokens": self.max_completion_length,
                 "do_sample": True,
-                "pad_token_id": self._tokenizer.pad_token_id,
-                "bos_token_id": self._tokenizer.bos_token_id,
-                "eos_token_id": self._tokenizer.eos_token_id,
+                "pad_token_id": tokenizer.pad_token_id,
+                "bos_token_id": tokenizer.bos_token_id,
+                "eos_token_id": tokenizer.eos_token_id,
                 "temperature": self.temperature,
                 "top_p": self.top_p,
                 "top_k": self.top_k,
@@ -832,13 +1190,13 @@ class GRPOTrainer(_BaseTrainer):
             if self.beta == 0.0:
                 raise ValueError(
                     "You passed `sync_ref_model=True` while `beta=0.0`, which means the reference model is not used "
-                    "during training. Consequently, GRPOTrainer does not create a `ref_model` instance, and there is "
+                    "during training. Consequently, TargetPOTrainer does not create a `ref_model` instance, and there is "
                     "nothing to synchronize. Please set `sync_ref_model=False`, or set `beta` to a non-zero value."
                 )
             if is_peft_model(model):
                 raise NotImplementedError(
                     "You passed `sync_ref_model=True` while using a PEFT model, which is currently not supported. "
-                    "With PEFT, GRPOTrainer does not keep a separate reference model in memory; instead, it recovers "
+                    "With PEFT, TargetPOTrainer does not keep a separate reference model in memory; instead, it recovers "
                     "reference behavior by temporarily disabling the adapter. As a result, there is no standalone "
                     "`ref_model` instance to synchronize. Use `sync_ref_model=False`, or opt for full fine-tuning if "
                     "you need a synced reference model. If you need `sync_ref_model` to work with PEFT, please open a "
@@ -884,7 +1242,7 @@ class GRPOTrainer(_BaseTrainer):
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
-        # and "attention_mask"). In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't
+        # and "attention_mask"). In TargetPOTrainer, we preprocess data, so using the model's signature columns doesn't
         # work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
             self._signature_columns = ["prompt", "image", "images"]
@@ -1382,7 +1740,7 @@ class GRPOTrainer(_BaseTrainer):
         else:
             # Regular generation path: left-pad token IDs into tensors
             prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
-            padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
+            padded_ids = pad(prompt_tensors, padding_value=self.pad_token_id, padding_side="left")
             attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
             generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
             # For VLMs, include multimodal fields as tensors (pixel_values, image_grid_thw, etc.)
@@ -1415,7 +1773,7 @@ class GRPOTrainer(_BaseTrainer):
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
             # Mask everything after the first EOS token
-            is_eos = completion_ids == self._tokenizer.eos_token_id
+            is_eos = completion_ids == self.eos_token_id
             eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -1471,7 +1829,7 @@ class GRPOTrainer(_BaseTrainer):
         # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
         # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
         # <turn|>) skip this trimming.
-        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self._tokenizer.eos_token_id]
+        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self.eos_token_id]
         if eos_positions:
             prefix_ids = prefix_ids[: eos_positions[-1] + 1]
 
@@ -1670,7 +2028,9 @@ class GRPOTrainer(_BaseTrainer):
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
             # Decode post-tool completions.
-            post_tool_completions = [parse_response(self._tokenizer, ids) if ids else {} for ids in post_tool_ids]
+            post_tool_completions = [
+                parse_response(self.processing_class, ids) if ids else {} for ids in post_tool_ids
+            ]
 
             # Add post-tool completions to the existing completions
             for idx in range(len(idxs_with_tool)):
@@ -1720,12 +2080,13 @@ class GRPOTrainer(_BaseTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
+            tokenizer = self.processing_class.tokenizer if self._is_vlm else self.processing_class
             if (
                 Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
-                and hasattr(self._tokenizer, "response_schema")  # attribute not set by default for now
-                and self._tokenizer.response_schema is not None  # only works if the tokenizer has a schema
+                and hasattr(tokenizer, "response_schema")  # attribute not set by default for now
+                and tokenizer.response_schema is not None  # only works if the tokenizer has a schema
             ):
-                completions = [[parse_response(self._tokenizer, ids)] for ids in completion_ids]
+                completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
@@ -1779,7 +2140,7 @@ class GRPOTrainer(_BaseTrainer):
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
         # Identify sequences that terminated with EOS and log their lengths
-        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        eos_and_pad = [self.eos_token_id, self.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
@@ -1877,7 +2238,7 @@ class GRPOTrainer(_BaseTrainer):
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
         prompt_ids = pad(
             prompt_ids,
-            padding_value=self._tokenizer.pad_token_id,
+            padding_value=self.pad_token_id,
             padding_side="left",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -1888,7 +2249,7 @@ class GRPOTrainer(_BaseTrainer):
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         completion_ids = pad(
             completion_ids,
-            padding_value=self._tokenizer.pad_token_id,
+            padding_value=self.pad_token_id,
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -1915,7 +2276,7 @@ class GRPOTrainer(_BaseTrainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions for attention and loss masking
         if self.mask_truncated_completions:
-            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+            eos_and_pad = [self.eos_token_id, self.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
@@ -2355,37 +2716,36 @@ class GRPOTrainer(_BaseTrainer):
 
         # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
         loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
-        # Compute loss and metrics using liger grpo loss
-        loss, metrics = self.liger_grpo_loss(
+        mode = "train" if self.model.training else "eval"
+        normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+        self.liger_tpo_loss.num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+
+        # Compute loss and metrics using liger TargetPO loss
+        loss, mean_kl, mean_entropy = self.liger_tpo_loss(
             _input=last_hidden_state,
             lin_weight=unwrapped_model.lm_head.weight,
             selected_token_ids=completion_ids,
             # The attention_mask parameter in liger loss is actually used as a loss mask (not model attention)
             attention_mask=loss_mask,
-            advantages=inputs["advantages"],
+            tpo_targets=inputs["tpo_targets"],
+            tpo_valid_mask=inputs.get("tpo_valid_mask"),
             bias=unwrapped_model.lm_head.bias,
             old_per_token_logps=inputs.get("old_per_token_logps"),
             ref_per_token_logps=inputs.get("ref_per_token_logps"),
-            vllm_is_ratio=inputs.get("importance_sampling_ratio"),
+            normalizer=normalizer,
         )
-        # Extract metrics from the liger_grpo_loss output
-        # KL divergence is the first metric when beta is non-zero
-        mean_kl = metrics[0] if self.beta != 0.0 else None
-        clip_ratio = metrics[-1]
 
-        mode = "train" if self.model.training else "eval"
         if self.beta != 0.0:
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).mean().item())
-        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
-        normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
-        return loss / normalizer
+        self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+        return loss
 
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
-            raise ValueError("The GRPOTrainer does not support returning outputs")
+            raise ValueError("The TargetPOTrainer does not support returning outputs")
         if self.use_liger_kernel:
-            # Compute the loss using the liger grpo loss
+            # Compute the loss using the liger TargetPO loss
             unwrapped_model = self.accelerator.unwrap_model(model)
             return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
         else:
@@ -2425,8 +2785,7 @@ class GRPOTrainer(_BaseTrainer):
         Build the Target Policy Optimization target distribution for each prompt group.
 
         The target is q_i ∝ p_i_old * exp(score_i / temperature), where p_i_old is the rollout policy distribution
-        over the sampled completions in a prompt group. Completions with `valid_mask=False` (e.g. all tokens
-        masked out) get zero target probability and don't contribute to the group softmax.
+        over the sampled completions in a prompt group.
         """
         if temperature <= 0.0:
             raise ValueError(f"temperature must be greater than 0.0. You provided {temperature}.")

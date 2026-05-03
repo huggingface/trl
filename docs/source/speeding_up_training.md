@@ -169,6 +169,15 @@ training_args = GRPOConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>
+<hfoption id="TargetPO">
+
+```python
+from trl import TargetPOConfig
+
+training_args = TargetPOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
 <hfoption id="KTO">
 
 ```python

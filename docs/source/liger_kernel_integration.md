@@ -14,6 +14,7 @@ Liger Kernel is supported in the following TRL trainers:
 - **SFT** (Supervised Fine-Tuning)
 - **DPO** (Direct Preference Optimization)
 - **GRPO** (Group Relative Policy Optimization)
+- **TargetPO** (Target Policy Optimization)
 - **KTO** (Kahneman-Tversky Optimization)
 - **GKD** (Generalized Knowledge Distillation)
 
@@ -52,6 +53,15 @@ training_args = DPOConfig(..., use_liger_kernel=True)
 from trl import GRPOConfig
 
 training_args = GRPOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="TargetPO">
+
+```python
+from trl import TargetPOConfig
+
+training_args = TargetPOConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>

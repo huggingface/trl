@@ -38,6 +38,8 @@ _import_structure = {
     "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
+    "target_po_config": ["TargetPOConfig"],
+    "target_po_trainer": ["TargetPOTrainer"],
     "utils": [
         "disable_dropout_in_model",
         "ensure_master_addr_port",
@@ -69,6 +71,8 @@ if TYPE_CHECKING:
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
+    from .target_po_config import TargetPOConfig
+    from .target_po_trainer import TargetPOTrainer
     from .utils import (
         disable_dropout_in_model,
         ensure_master_addr_port,
