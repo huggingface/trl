@@ -166,10 +166,12 @@ known-first-party = ["trl"]
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "low_priority: marks tests as low priority (deselect with '-m \"not low_priority\"')"
+    "low_priority: marks tests as low priority (deselect with '-m \"not low_priority\"')",
+    "invariant: training-invariant checks (run with '-m invariant')",
 ]
 norecursedirs = [
     "tests/experimental",
+    "tests/invariant",
 ]
 filterwarnings = [
     # SWIG deprecations from SWIG-generated C/C++ extensions: sentencepiece
