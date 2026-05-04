@@ -14,10 +14,9 @@
 
 """User-facing spec object for the OpenReward × TRL integration.
 
-The user constructs **one** ``OpenRewardSpec`` (a thin specification
-holding the env target + a few options) and reads three properties off
-of it — ``.train_dataset``, ``.environment_factory``, ``.reward_funcs``
-— each of which plugs directly into the matching ``GRPOTrainer`` kwarg:
+The user constructs **one** ``OpenRewardSpec`` (a thin specification holding the env target + a few options) and reads
+three properties off of it — ``.train_dataset``, ``.environment_factory``, ``.reward_funcs`` — each of which plugs
+directly into the matching ``GRPOTrainer`` kwarg:
 
 ```python
 from trl import GRPOConfig, GRPOTrainer
@@ -35,8 +34,7 @@ trainer = GRPOTrainer(
 trainer.train()
 ```
 
-Backed by the official ``openreward`` SDK (lazy-imported); install with
-``pip install trl[openreward]``.
+Backed by the official ``openreward`` SDK (lazy-imported); install with ``pip install trl[openreward]``.
 """
 
 from __future__ import annotations
@@ -61,9 +59,8 @@ def _to_spec(task) -> dict[str, Any]:
 def _outcome_only_reward_func(environments, **_):
     """Default reward function: last non-null reward in each rollout's trajectory.
 
-    Suitable for sparse-outcome envs (e.g. SETA, where only
-    `submit_solution` returns a non-null reward). Override by passing a
-    different callable to ``reward_funcs=``.
+    Suitable for sparse-outcome envs (e.g. SETA, where only `submit_solution` returns a non-null reward). Override by
+    passing a different callable to ``reward_funcs=``.
     """
     return [env.reward for env in environments]
 
@@ -73,29 +70,25 @@ class OpenRewardSpec:
 
     Args:
         target (`str`):
-            Either an openreward.ai catalog name (`"Eigent/SETA"`) or a
-            URL pointing at any ORS server (`"https://you-seta.hf.space"`,
-            `"http://localhost:8080"`). Auto-detected by the presence of
-            `://` in the string.
+            Either an openreward.ai catalog name (`"Eigent/SETA"`) or a URL pointing at any ORS server
+            (`"https://you-seta.hf.space"`, `"http://localhost:8080"`). Auto-detected by the presence of `://` in the
+            string.
         num_tasks (`int`, *optional*):
-            Cap on the number of tasks pulled into the dataset. ``None``
-            uses every task the env exposes.
+            Cap on the number of tasks pulled into the dataset. ``None`` uses every task the env exposes.
         split (`str`, *optional*, defaults to `"train"`):
             Which split's task list to draw from.
         indices (`list[int]`, *optional*):
-            Specific task indices to train on. Mutually exclusive with
-            ``num_tasks``. Useful for debugging or curriculum subsets.
+            Specific task indices to train on. Mutually exclusive with ``num_tasks``. Useful for debugging or
+            curriculum subsets.
         api_key (`str`, *optional*):
-            ``OPENREWARD_API_KEY`` override. Only used when ``target`` is
-            a catalog name.
+            ``OPENREWARD_API_KEY`` override. Only used when ``target`` is a catalog name.
         secrets (`dict[str, str]`, *optional*):
             Per-session secrets forwarded to ``env.session(secrets=)``.
         env_name (`str`, *optional*):
             Override for the env name to look up on the server. Rarely needed.
         include_metadata (`bool`, *optional*, defaults to `True`):
-            Fold per-task metadata (`difficulty`, `category`, `tags`,
-            ...) into the dataset rows so reward funcs can read them
-            via TRL's ``inputs`` argument.
+            Fold per-task metadata (`difficulty`, `category`, `tags`, ...) into the dataset rows so reward funcs can
+            read them via TRL's ``inputs`` argument.
     """
 
     def __init__(
@@ -129,8 +122,7 @@ class OpenRewardSpec:
     def train_dataset(self):
         """A `datasets.Dataset` derived from the env's task list.
 
-        Plugs directly into TRL's ``train_dataset=`` slot. Built lazily
-        on first access. Has at minimum:
+        Plugs directly into TRL's ``train_dataset=`` slot. Built lazily on first access. Has at minimum:
           - `prompt`: empty user message (TRL appends the env's prompt).
           - `task_index`: int passed to the adapter's `reset()`.
           - per-task metadata columns (when `include_metadata=True`).
@@ -181,11 +173,9 @@ class OpenRewardSpec:
     def environment_factory(self) -> Callable[[], _RolloutEnvironment]:
         """Zero-arg callable that returns a fresh ``_RolloutEnvironment``.
 
-        Plugs directly into TRL's ``environment_factory=`` slot. TRL
-        calls this once per rollout at trainer construction time, so
-        each rollout has an isolated ORS session. Reuses the spec's
-        already-discovered SDK env + tool specs to skip per-env HTTP
-        at trainer init.
+        Plugs directly into TRL's ``environment_factory=`` slot. TRL calls this once per rollout at trainer
+        construction time, so each rollout has an isolated ORS session. Reuses the spec's already-discovered SDK env +
+        tool specs to skip per-env HTTP at trainer init.
         """
         # Pre-fetch tool specs once at the spec level.
         env = self._sdk_env
@@ -218,8 +208,8 @@ class OpenRewardSpec:
     def reward_funcs(self) -> Callable[..., list[float]]:
         """Default outcome-only reward function (last non-null reward per rollout).
 
-        Plugs directly into TRL's ``reward_funcs=`` slot. Stable identity
-        — module-level function, picklable for multi-process workers.
+        Plugs directly into TRL's ``reward_funcs=`` slot. Stable identity — module-level function, picklable for
+        multi-process workers.
         """
         return _outcome_only_reward_func
 

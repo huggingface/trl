@@ -14,11 +14,9 @@
 
 """TRL `environment_factory` adapter for any ORS-compliant server.
 
-Wraps the official ``openreward`` SDK so platform quirks (X-Secrets
-encoding, ephemeral session for discovery, sticky-routing subdomain,
-SSE chunk reassembly, ping keepalive, …) are handled by code that
-ships with the spec. Our job is only to expose the SDK's per-rollout
-session as a TRL-compatible class with dynamically-bound tool methods.
+Wraps the official ``openreward`` SDK so platform quirks (X-Secrets encoding, ephemeral session for discovery,
+sticky-routing subdomain, SSE chunk reassembly, ping keepalive, …) are handled by code that ships with the spec. Our
+job is only to expose the SDK's per-rollout session as a TRL-compatible class with dynamically-bound tool methods.
 
 Install: ``pip install trl[openreward]``.
 """
@@ -79,10 +77,9 @@ _PY_TYPE_FROM_VALUE: dict[type, str] = {
 def _resolve_param_type(pdef: dict[str, Any]) -> str:
     """Pick the best Python type name for one JSON-Schema property.
 
-    Handles primitive ``"type"``, Pydantic's ``anyOf``/``oneOf`` form
-    for ``Optional[T]``, and falls back to the type of ``default``.
-    Critical because transformers' tool-schema generator uses our
-    Python annotations to build the schema the model sees.
+    Handles primitive ``"type"``, Pydantic's ``anyOf``/``oneOf`` form for ``Optional[T]``, and falls back to the type
+    of ``default``. Critical because transformers' tool-schema generator uses our Python annotations to build the
+    schema the model sees.
     """
     t = pdef.get("type")
     if isinstance(t, str) and t in _JSON_TYPE_TO_PY:
@@ -106,34 +103,28 @@ def _resolve_param_type(pdef: dict[str, Any]) -> str:
 class _RolloutEnvironment:
     """Per-rollout TRL adapter backed by the ``openreward`` SDK.
 
-    **Internal class.** Users don't construct this directly; they create
-    an :class:`OpenRewardSpec` and pass ``spec.environment_factory`` to
-    ``GRPOTrainer``. TRL's trainer then constructs one instance of this
-    per rollout slot.
+    **Internal class.** Users don't construct this directly; they create an :class:`OpenRewardSpec` and pass
+    ``spec.environment_factory`` to ``GRPOTrainer``. TRL's trainer then constructs one instance of this per rollout
+    slot.
 
-    The tool surface is built once at construction by reading the env's
-    tools and binding one Python method per ORS tool — so swapping the
-    URL or env name is the only thing needed to train against a
-    different environment.
+    The tool surface is built once at construction by reading the env's tools and binding one Python method per ORS
+    tool — so swapping the URL or env name is the only thing needed to train against a different environment.
 
     Args:
         name (`str`, *optional*):
-            openreward.ai catalog name (e.g. ``"Eigent/SETA"``).
-            Mutually exclusive with `base_url`. Requires
+            openreward.ai catalog name (e.g. ``"Eigent/SETA"``). Mutually exclusive with `base_url`. Requires
             ``OPENREWARD_API_KEY`` (env var or `api_key=`).
         base_url (`str`, *optional*):
-            Direct URL of an ORS server (HF Space, local Docker, etc.).
-            Mutually exclusive with `name`.
+            Direct URL of an ORS server (HF Space, local Docker, etc.). Mutually exclusive with `name`.
         env_name (`str`, *optional*):
-            Name to look up on the server. Defaults to the canonical
-            name parsed from `name`/`base_url`.
+            Name to look up on the server. Defaults to the canonical name parsed from `name`/`base_url`.
         split (`str`, *optional*, defaults to `"train"`):
             Split passed to ``env.session(split=, index=)``.
         api_key (`str`, *optional*):
             Override for ``OPENREWARD_API_KEY``. Only used with `name=`.
         secrets (`dict[str, str]`, *optional*):
-            Per-session secrets. Forwarded to ``env.session(secrets=)``;
-            the SDK encodes them and adds platform-domain entries.
+            Per-session secrets. Forwarded to ``env.session(secrets=)``; the SDK encodes them and adds platform-domain
+            entries.
         timeout (`float`, *optional*):
             Reserved for future use. The SDK manages its own timeouts.
 
@@ -219,9 +210,8 @@ class _RolloutEnvironment:
     ) -> str:
         """Open a fresh ORS session for this rollout.
 
-        Closes any prior session, starts a new one via the SDK's
-        ``env.session(...)`` context manager, fetches the prompt, and
-        returns its text (which TRL appends to the user message).
+        Closes any prior session, starts a new one via the SDK's ``env.session(...)`` context manager, fetches the
+        prompt, and returns its text (which TRL appends to the user message).
         """
         self._teardown_session()
         self.reward = 0.0
@@ -306,9 +296,8 @@ class _RolloutEnvironment:
 def _bind_tool_method(cls: type, spec: dict[str, Any]) -> None:
     """Generate a typed Python method for one ORS tool spec.
 
-    Signature comes from the JSON Schema; docstring is Google-style so
-    ``transformers.utils.get_json_schema`` (used by vLLM) can produce
-    a correct tool schema for the model.
+    Signature comes from the JSON Schema; docstring is Google-style so ``transformers.utils.get_json_schema`` (used by
+    vLLM) can produce a correct tool schema for the model.
     """
     tool_name = spec["name"]
     if hasattr(cls, tool_name) and callable(getattr(cls, tool_name)):

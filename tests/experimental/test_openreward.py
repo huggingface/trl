@@ -14,14 +14,12 @@
 
 """Tests for `trl.experimental.openreward`.
 
-A class-scoped fixture spawns ``_openreward_echo_env.py`` as a uvicorn
-subprocess on a free port and points the openreward SDK at it via the
-``OPENREWARD_API_URL`` / ``OPENREWARD_SESSION_URL`` overrides. Tests then
-exercise the adapter end-to-end against real HTTP — no mocks, no network.
+A class-scoped fixture spawns ``_openreward_echo_env.py`` as a uvicorn subprocess on a free port and points the
+openreward SDK at it via the ``OPENREWARD_API_URL`` / ``OPENREWARD_SESSION_URL`` overrides. Tests then exercise the
+adapter end-to-end against real HTTP — no mocks, no network.
 
-The same env definition is published at
-``trl-internal-testing/openreward-echo-env`` if you want to point at the
-hosted Space directly.
+The same env definition is published at ``trl-internal-testing/openreward-echo-env`` if you want to point at the hosted
+Space directly.
 """
 
 import os

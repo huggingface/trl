@@ -14,14 +14,12 @@
 
 """Spawn target for `tests/experimental/test_openreward.py`.
 
-Implements a minimal, deterministic Open Reward Standard environment so the
-adapter can be exercised end-to-end without hitting the network. The same
-definition is also published as a Hugging Face Space at
+Implements a minimal, deterministic Open Reward Standard environment so the adapter can be exercised end-to-end without
+hitting the network. The same definition is also published as a Hugging Face Space at
 `trl-internal-testing/openreward-echo-env` for the optional integration test.
 
-The model is given a target string and must call `echo(text=...)` with
-exactly that string. Reward is `1.0` on match, `0.0` otherwise; the episode
-finishes on a correct echo.
+The model is given a target string and must call `echo(text=...)` with exactly that string. Reward is `1.0` on match,
+`0.0` otherwise; the episode finishes on a correct echo.
 """
 
 from openreward.environments import (
