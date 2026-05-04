@@ -67,6 +67,35 @@ SDPO-specific hook:
 
 - `on_teacher_context_built`: fired after SDPO constructs the teacher-conditioned inputs. The payload includes `teacher_input_ids`, `teacher_attention_mask`, `completion_mask`, and `self_distillation_mask`.
 
+## Example script
+
+Use [`trl/experimental/sdpo/sdpo.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/sdpo/sdpo.py) to launch SDPO training from the command line. The script supports verifiable math rewards, environment feedback via `--feedback_column`, and PEFT/LoRA via the standard `ModelConfig` flags.
+
+```bash
+python trl/experimental/sdpo/sdpo.py \
+    --model_name_or_path Qwen/Qwen2.5-Math-1.5B-Instruct \
+    --dataset_name openai/gsm8k \
+    --dataset_config main \
+    --output_dir outputs/sdpo-qwen35-2b-gsm8k \
+    --learning_rate 5e-5 \
+    --dtype bfloat16 \
+    --bf16 true \
+    --max_completion_length 128 \
+    --use_peft \
+    --lora_target_modules q_proj k_proj v_proj o_proj gate_proj up_proj down_proj \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 2 \
+    --num_generations 8 \
+    --generation_batch_size 32 \
+    --distillation_alpha 1.0 \
+    --full_logit_distillation false \
+    --sdpo_policy_loss_mode hybrid \
+    --report_to none \
+    --eval_strategy steps \
+    --eval_steps 1000 \
+    --save_strategy no
+```
+
 ## SDPOConfig
 
 [[autodoc]] experimental.sdpo.SDPOConfig

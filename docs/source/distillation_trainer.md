@@ -107,6 +107,39 @@ When using fully on-policy distillation (`lmbda=1.0`), the assistant turn can be
 {"messages": [{"role": "user", "content": "What color is the sky?"}]}
 ```
 
+## Example script
+
+Use [`trl/experimental/distillation/distillation.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/distillation/distillation.py) to launch distillation training from the command line. The script supports full training, mixed on/off-policy, and LoRA via the standard `ModelConfig` flags.
+
+```bash
+# Full training (off-policy only, lmbda=0):
+python trl/experimental/distillation/distillation.py \
+    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --learning_rate 2e-5 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 8 \
+    --lmbda 0.0 \
+    --output_dir distilled-model \
+    --num_train_epochs 1
+```
+
+```bash
+# Mixed on/off-policy (lmbda=0.5):
+python trl/experimental/distillation/distillation.py \
+    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --learning_rate 2e-5 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 8 \
+    --lmbda 0.5 \
+    --beta 0.5 \
+    --output_dir distilled-model \
+    --num_train_epochs 1
+```
+
 ## DistillationTrainer
 
 [[autodoc]] experimental.distillation.DistillationTrainer

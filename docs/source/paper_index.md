@@ -1422,6 +1422,44 @@ training_args = CPOConfig(
 )
 ```
 
+## Triple Preference Optimization
+
+Papers relating to the [`experimental.tpo.TPOTrainer`]
+
+### Triple Preference Optimization: Achieving Better Alignment using a Single Step Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2405.16681
+
+Introduces Triple Preference Optimization (TPO), a preference learning method that aligns an LLM with three responses per prompt — a gold (`reference`) completion, a preferred (`chosen`) completion and a dispreferred (`rejected`) completion — in a single optimization step. TPO combines a contrastive objective on the (chosen, rejected) pair with a supervised NLL term on the gold response, removing the need for a separate SFT stage and the reference model used in DPO. Used in TRL via [`experimental.tpo.TPOTrainer`]. To reproduce the paper's setting (Llama-3-Base, 5K), use this configuration:
+
+```python
+from trl.experimental.tpo import TPOConfig
+
+training_args = TPOConfig(
+    loss_type="sigmoid",  # contrastive loss between chosen and rejected (Section 3 of the paper)
+    tpo_alpha=1.0,  # weight of the NLL term on the gold response (Section 3 of the paper)
+    beta=0.01,  # β temperature (Table 6 of the paper)
+    learning_rate=5e-7,  # Table 6 of the paper
+    num_train_epochs=1,
+    max_length=1024,
+)
+```
+
+To use the TPO-L variant (length-normalized log-probabilities with a target reward margin γ), set `loss_type="tpo-l"` and `tpo_l_gamma`:
+
+```python
+from trl.experimental.tpo import TPOConfig
+
+training_args = TPOConfig(
+    loss_type="tpo-l",  # length-normalized variant (Section 3 of the paper)
+    tpo_alpha=1.0,
+    beta=0.01,
+    tpo_l_gamma=0.5,  # γ target reward margin (Table 6 of the paper, Llama-3-Base 5K)
+    learning_rate=5e-7,
+    num_train_epochs=1,
+)
+```
+
 ## Nash Learning from Human Feedback
 
 Papers relating to the [`experimental.nash_md.NashMDTrainer`]
@@ -1726,6 +1764,37 @@ Expected dataset columns:
 - `privileged_context` containing only the extra teacher-only information
 
 For more details, see the [SDFT Trainer documentation](sdft_trainer).
+
+### Embarrassingly Simple Self-Distillation Improves Code Generation
+
+**📜 Paper**: https://huggingface.co/papers/2604.01193
+
+Simple Self-Distillation (SSD) improves code generation by sampling completions from the model at a training-time temperature and truncation configuration, then fine-tuning on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or reinforcement learning is needed. SSD reshapes token distributions in a context-dependent way: suppressing distractor tails at "lock" positions (where syntax leaves little ambiguity) while preserving diversity at "fork" positions (where multiple valid continuations exist).
+
+```python
+from trl.experimental.ssd import SSDConfig, SSDTrainer
+
+training_args = SSDConfig(
+    temperature=0.6,                       # Training-time sampling temperature (T_train)
+    top_k=20,                              # Training-time top-k truncation
+    top_p=0.95,                            # Training-time top-p truncation
+    max_completion_length=65536,
+    learning_rate=5e-6,
+)
+
+trainer = SSDTrainer(
+    model="Qwen/Qwen3-4B-Instruct",
+    args=training_args,
+    train_dataset=...,
+)
+trainer.train()
+```
+
+Expected dataset columns:
+
+- `prompt`
+
+For more details, see the [SSD Trainer documentation](ssd_trainer).
 
 ## Distributed Training
 

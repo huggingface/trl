@@ -113,9 +113,3 @@ class DPPOConfig(GRPOConfig):
 
         if self.off_policy_mask_threshold is not None:
             raise ValueError("off_policy_mask_threshold is not supported for DPPO")
-
-        if self.use_transformers_paged:
-            raise ValueError(
-                "DPPO requires sampled token logprobs from the generation backend. "
-                "Transformers paged (`use_transformers_paged=True`) does not support logprob extraction."
-            )

@@ -76,10 +76,6 @@ class OnlineDPOConfig(_BaseConfig):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
             tokens.
-        use_transformers_paged (`bool`, *optional*, defaults to `False`):
-            Whether to use the `transformers` paged implementation for generation. If set to `True`, the `transformers`
-            paged implementation will be used for generation instead of the default padded implementation. This
-            parameter is only effective when `use_vllm` is set to `False`.
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
         generation_kwargs (`dict[str, Any]`, *optional*):
@@ -226,14 +222,6 @@ class OnlineDPOConfig(_BaseConfig):
             "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
             "generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that "
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
-        },
-    )
-    use_transformers_paged: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
-            "`transformers` paged implementation will be used for generation instead of the default padded "
-            "implementation. This parameter is only effective when `use_vllm` is set to `False`."
         },
     )
     cache_implementation: str | None = field(
