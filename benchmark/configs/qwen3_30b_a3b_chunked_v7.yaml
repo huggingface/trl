@@ -1,0 +1,41 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+# Seventh batch — apply the compile-stabilizes-SP+chunked finding:
+# - 512k @ 8n SP=8 + compile: should stabilize the final-step dip (44.82% peak → 21.89% final without compile)
+# - 256k SP=2 + chunked + compile: less SP comm, see if MFU keeps climbing as we reduce SP
+
+runs:
+  # 512k SP=8 + compile (stability fix)
+  - context_length: 524288
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 8
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 20
+    logging_steps: 5
+
+  # 256k SP=2 + compile (less SP comm)
+  - context_length: 262144
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 2
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 30
+    logging_steps: 5

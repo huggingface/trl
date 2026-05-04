@@ -1,0 +1,52 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+use_regional_compilation: true
+
+# Compile sweep: control (no EP), then EP + grouped_mm (no sonicmoe).
+# 22092947/22092984/22092995/22093006 hit dynamo or optimizer issues with EP+sonicmoe+compile.
+
+runs:
+  # Control: FSDP DP=16 + compile (PR #4022 baseline gave 31-32%)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: ""
+    max_steps: 50
+    logging_steps: 5
+
+  # FSDP + EP=8 + grouped_mm + compile (no sonicmoe)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8
+    max_steps: 50
+    logging_steps: 5
+
+  # FSDP + EP=8 + sonicmoe + compile (current broken — for completeness)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5

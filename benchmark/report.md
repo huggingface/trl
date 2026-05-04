@@ -4898,8 +4898,9 @@ W3 (22107785, 30B 128k 8n DS-Z3 EP=64 Liger sonicmoe, `--warmup_steps 10 --max_g
 | 5 | 1.903 | **2.42e+06** | 0.611 | 71.62% |
 | 10 | 1.714 | **2.318e+06** | 0.643 | 80.53% |
 | 15 | **2.119** ↑ | **4.53e+06** ↑ | 0.570 ↓ | 80.98% |
+| 20 | **4.069** ↑↑ | **8.588e+06** ↑↑ | 0.412 ↓↓ | 81.00% |
 
-By step 15, loss is climbing back, gradient norm doubled, and accuracy is dropping. The clip+warmup is delaying — not preventing — destabilization. Pre-clip gradient norm stays at **2.3M–4.5M**. This confirms the user's pushback that the clip is masking a real distributed-setup bug, not curing it.
+By step 20, both loss and gradient norm have **doubled twice in a row** while accuracy collapses. The clip+warmup is failing to contain the divergence — pre-clip gradient grows geometrically. This **definitively** confirms the user's pushback: clipping is masking, not curing, a real distributed-setup bug.
 
 **Investigation pass on possible inflation sources** (no fix yet):
 

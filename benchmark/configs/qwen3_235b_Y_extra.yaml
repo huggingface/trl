@@ -1,0 +1,50 @@
+model_name_or_path: Qwen/Qwen3-235B-A22B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# Y series — additional 235B coverage (overnight 2026-05-03)
+runs:
+  # Y1 — 32k 4n FSDP2 + EP=32 (accessible 4-node datapoint, 4 experts/rank)
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 32 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5
+
+  # Y2 — 32k 8n FSDP2 + EP=64 + COMPILE (compile delta vs B2v2's 76.86 %)
+  - context_length: 32768
+    nodes: 8
+    backend: fsdp2
+    dp: 64
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 64
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --enable_expert_parallel --expert_parallel_size 64 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5
+
+  # Y3 — 64k 8n FSDP2 + EP=64 + CP=2 (push 64k at 8n via CP halving per-rank seq)
+  - context_length: 65536
+    nodes: 8
+    backend: fsdp2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 64
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 64 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5

@@ -1,0 +1,18 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+runs:
+  # 16k EP=4 retry — Triton cache should be warm now from prior run
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 4
+    tp: 4
+    pp: 1
+    cp: 1
+    ep: 4
+    extra_args: --enable_expert_parallel --expert_parallel_size 4 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5

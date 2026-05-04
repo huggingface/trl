@@ -1,0 +1,23 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# Test E 2026-05-02: same shape as Test D but with --seed 99 instead of default 42.
+# If hang still at step 16, bug is step-counter-driven (trainer internal state).
+# If hang at different step, bug is data-driven (specific batch triggers it).
+runs:
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 1 --loss_type chunked_nll --seed 99
+    max_steps: 50
+    logging_steps: 1

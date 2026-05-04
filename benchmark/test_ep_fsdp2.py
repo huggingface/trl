@@ -1,4 +1,4 @@
-# ruff: noqa: T201
+# ruff: noqa
 """
 Test FSDP2 + Expert Parallelism with fused Qwen3 MoE.
 

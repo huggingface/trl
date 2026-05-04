@@ -1,3 +1,4 @@
+# ruff: noqa
 """
 EP repro: Liger + Qwen3-MoE with transformers Expert Parallelism.
 

@@ -1,0 +1,24 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# W3: H5 fix test — same shape as W2 but with LR warmup + tighter grad clip.
+# W2 confirmed gradient norm = 2.7M at step 0 → embed/attn weights become NaN at step 2.
+# Hypothesis: lr warmup makes step-0 effective lr ~0 → no NaN drift.
+runs:
+  - context_length: 131072
+    nodes: 8
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 64
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 64
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    h5_mode: nan_check
+    extra_args: --enable_expert_parallel --expert_parallel_size 64 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}' --warmup_steps 10 --max_grad_norm 0.5
+    max_steps: 30
+    logging_steps: 5

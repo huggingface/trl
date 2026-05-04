@@ -1,4 +1,4 @@
-# ruff: noqa: T201
+# ruff: noqa
 """Ground truth test - no EP, no TP, just regular model loading."""
 
 import torch

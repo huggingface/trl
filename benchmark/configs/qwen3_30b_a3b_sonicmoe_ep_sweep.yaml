@@ -1,0 +1,70 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+runs:
+  # 16k EP=2 — 2D mesh dp=8 tp=2
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 8
+    tp: 2
+    pp: 1
+    cp: 1
+    ep: 2
+    extra_args: --enable_expert_parallel --expert_parallel_size 2 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5
+
+  # 16k EP=4 — 2D mesh dp=4 tp=4
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 4
+    tp: 4
+    pp: 1
+    cp: 1
+    ep: 4
+    extra_args: --enable_expert_parallel --expert_parallel_size 4 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5
+
+  # 16k EP=8 — 2D mesh dp=2 tp=8 (matches our prior run, swap kernel)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5
+
+  # 32k EP=8 + CP=1 — push memory; might OOM, that's information too
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5
+
+  # 64k EP=8 + CP=2 — split sequence across CP
+  - context_length: 65536
+    nodes: 2
+    backend: fsdp2
+    dp: 1
+    tp: 8
+    pp: 1
+    cp: 2
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5

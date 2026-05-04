@@ -1,0 +1,55 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# Re-validate the historical champions now that the PR #45621 kernel-side fix lets us drop
+# the wrapper-side clamp in sonicmoe + simplify grouped_mm to 2 masked_fills (job 22099323
+# already proved sonicmoe + EP=8 + sdpa hits +1.1 pp avg vs the 32.36 % clamp baseline).
+# Each row below was a documented champion in sft_benchmark_notion.md.
+
+runs:
+  # 1) 16k 2n FSDP2 + EP=8 + FA3 + sonicmoe — historical 40.4 % win MFU
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5
+
+  # 2) 32k 2n DS-Z2 + EP=8 + FA3 + sonicmoe + chunked_nll — historical 45.86 % win MFU
+  - context_length: 32768
+    nodes: 2
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 50
+    logging_steps: 5
+
+  # 3) 32k 2n DS-Z2 + EP=8 + FA3 + sonicmoe + Liger — historical 56.62 % win MFU
+  - context_length: 32768
+    nodes: 2
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+    logging_steps: 5

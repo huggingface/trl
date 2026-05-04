@@ -1,4 +1,4 @@
-# ruff: noqa: T201
+# ruff: noqa
 """Test to check the shapes flowing through RouterParallel and expert forward."""
 
 import os

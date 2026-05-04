@@ -1,0 +1,24 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# W1: re-run R4 (30B 128k 8n DS-Z2+EP=64+Liger) — original was 95.39% mfu_window peak with
+# loss=0. With H5 verified non-reproducible (E1 baseline healthy at C1 shape), check if R4
+# also converges with healthy loss now. If yes → this is the new headline.
+runs:
+  - context_length: 131072
+    nodes: 8
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 64
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 64
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    h5_mode: full
+    extra_args: --enable_expert_parallel --expert_parallel_size 64 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5

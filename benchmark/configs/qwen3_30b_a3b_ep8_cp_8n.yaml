@@ -1,0 +1,34 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+
+# 32k & 64k at 8 nodes — does more DP improve MFU? Layouts keep ep=8 tp=8 intra-node,
+# CP shards seq dim, dp_shard scales with extra nodes.
+
+runs:
+  # 32k 8n CP=2: per-rank 16k, dp_shard=4
+  - context_length: 32768
+    nodes: 8
+    backend: fsdp2
+    dp: 4
+    tp: 8
+    pp: 1
+    cp: 2
+    ep: 8
+    max_steps: 50
+    logging_steps: 5
+
+  # 64k 8n CP=4: per-rank 16k, dp_shard=2
+  - context_length: 65536
+    nodes: 8
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 4
+    ep: 8
+    max_steps: 50
+    logging_steps: 5

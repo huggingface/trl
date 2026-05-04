@@ -1,4 +1,4 @@
-# ruff: noqa: T201
+# ruff: noqa
 """Test: DeepSpeed comm.is_initialized vs torch.distributed.is_initialized."""
 
 import os

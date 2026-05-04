@@ -1,0 +1,187 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# Post-EP-DataLoader-fix sweep (2026-05-02). All previously-blocked EP-multi-node configs now
+# work with the SFTTrainer._get_dataloader override. Re-measure existing champions with the
+# post-#45621 no-clamp kernel + Liger + sonicmoe stack to find the new MFU records.
+runs:
+  # === TIER 1 — re-measure champions with no-clamp kernel ===
+
+  # R1 — 128k 4n DS-Z2 + EP=32 + FA3 + sonic + Liger (HEADLINE — possible new ATR record, was 76.29% with clamp)
+  - context_length: 131072
+    nodes: 4
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 32 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+
+  # R2 — 64k 2n DS-Z2 + EP=16 + FA3 + sonic + Liger (was 66.46% with clamp)
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 16
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 16 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+
+  # R3 — 64k 4n DS-Z2 + EP=32 + FA3 + sonic + Liger (interpolated 64.5%, no measured baseline)
+  - context_length: 65536
+    nodes: 4
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 32 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+
+  # R4 — 128k 8n DS-Z2 + EP=64 + FA3 + sonic + Liger (no prior measurement)
+  - context_length: 131072
+    nodes: 8
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 64
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 64
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 64 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+
+  # R5 — 256k 8n DS-Z3 + SP=2 + sonic + Liger + compile (was 63.62% with clamp)
+  - context_length: 262144
+    nodes: 8
+    backend: deepspeed_zero3
+    zero_stage: 3
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 2
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+
+  # R6 — 1M 8n DS-Z3 + SP=8 + sonic + Liger + compile (was 62.33% with clamp)
+  - context_length: 1048576
+    nodes: 8
+    backend: deepspeed_zero3
+    zero_stage: 3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 8
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+
+  # === TIER 2 — ablations at the record (skip A1; equivalent to Q3 in q1_to_q10 idx 2) ===
+
+  # A2 — 128k 4n DS-Z2 + EP=32 + sonic + Liger (drop FA3 → sdpa)
+  - context_length: 131072
+    nodes: 4
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+    attn_implementation: "sdpa"
+    extra_args: --enable_expert_parallel --expert_parallel_size 32 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+
+  # A3 — 128k 4n DS-Z2 + EP=32 + FA3 + Liger (drop sonic → grouped_mm)
+  - context_length: 131072
+    nodes: 4
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 32 --experts_implementation grouped_mm --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+
+  # === TIER 3 — coverage gaps ===
+
+  # C1 — 32k 4n DS-Z2 + EP=32 + FA3 + sonic + Liger (gap fill — Liger 32k only at 1n/2n)
+  - context_length: 32768
+    nodes: 4
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 32 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+
+  # C2 — 32k 8n DS-Z2 + EP=64 + FA3 + sonic + Liger (gap fill — 8n 32k unmeasured)
+  - context_length: 32768
+    nodes: 8
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 64
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 64
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 64 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+
+  # C3 — 64k 1n DS-Z2 + EP=8 + FA3 + sonic + Liger (gap fill — 64k 1n unmeasured; may OOM, accept)
+  - context_length: 65536
+    nodes: 1
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+
+  # C4 — 16k 8n DS-Z2 + EP=64 + FA3 + sonic + Liger (gap fill — 16k 8n unmeasured)
+  - context_length: 16384
+    nodes: 8
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 64
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 64
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 64 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50

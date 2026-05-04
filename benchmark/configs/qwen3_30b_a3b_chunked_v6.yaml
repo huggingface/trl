@@ -1,0 +1,41 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+# Sixth batch — work around the Z3 cross-node all-gather hang at 128 ranks.
+# - 512k DS-Z3+SP=8+chunked @ 8n: smaller Z3 mesh (64 ranks). Per-rank seq = 64k.
+#   At 256k @ 8n peak was 36 GB; doubling per-rank seq → expect ~50-55 GB. Fits.
+# - 256k SP=4 + chunked + compile: does compile stabilize SP=4 like it did SP=8?
+
+runs:
+  # 512k @ 8n SP=8 (smaller Z3 mesh, per-rank seq = 64k)
+  - context_length: 524288
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 8
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 20
+    logging_steps: 5
+
+  # 256k SP=4 + compile (stability test)
+  - context_length: 262144
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 30
+    logging_steps: 5

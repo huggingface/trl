@@ -1,4 +1,4 @@
-# ruff: noqa: T201
+# ruff: noqa
 """
 Full SP+EP test mimicking the accelerate DeepSpeed path.
 Key insight: deepspeed.zero.Init() conflicts with EP's distribute_model().

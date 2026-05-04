@@ -1,0 +1,51 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+extra_args: --enable_expert_parallel
+# Fix requires cpu_ram_efficient_loading=False (else FSDP's model.to("meta") destroys EP data)
+cpu_ram_efficient_loading: false
+
+# Re-runs of the EP configs from "Final EP Results" in report.md (had bad loss=62/NaN before
+# the EP+FSDP DTensor fix in transformers PR #45662). Goal: verify loss is healthy and that
+# MFU numbers match (or improve on) the previously reported figures.
+
+runs:
+  # 2 nodes, 16k — EP=16 (was 2.79% MFU)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 16
+
+  # 2 nodes, 32k — EP=16, CP=2 (was 4.77% MFU — peak)
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 16
+
+  # 4 nodes, 16k — EP=32 (was 2.71% MFU)
+  - context_length: 16384
+    nodes: 4
+    backend: fsdp2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+
+  # 4 nodes, 32k — EP=32, CP=2 (was 4.24% MFU)
+  - context_length: 32768
+    nodes: 4
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 2
+    ep: 32

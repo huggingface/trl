@@ -1,0 +1,41 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# H5 verification — same shape as D1 (= C1, was loss=0 originally) with two control modes:
+# E1: no sync, no logging (h5_mode=baseline) → if loss=0 reproduces, confirms baseline is broken
+# E2: sync only via H5_FORCE_SYNC=1 (h5_mode=sync_only) → if healthy, confirms .item() is the fix
+runs:
+  # E1 — baseline (no instrumentation, no sync)
+  - context_length: 32768
+    nodes: 4
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    h5_mode: baseline
+    extra_args: --enable_expert_parallel --expert_parallel_size 32 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 15
+    logging_steps: 1
+
+  # E2 — sync only (H5_FORCE_SYNC=1, no heavy logging)
+  - context_length: 32768
+    nodes: 4
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    h5_mode: sync_only
+    extra_args: --enable_expert_parallel --expert_parallel_size 32 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 15
+    logging_steps: 1

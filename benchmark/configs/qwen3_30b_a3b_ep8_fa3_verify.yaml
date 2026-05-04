@@ -1,0 +1,40 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# Re-runs of the two 16k 2-node FA3 configs that hit good MFU but NaN training before
+# the EP+FSDP fix. Goal: verify loss is healthy and MFU number holds.
+#  - FA3 + sonicmoe: 43.1% MFU, 7,181 TPS/GPU (Ilyas)
+#  - FA3 + grouped_mm: 35.2% MFU, 5,903 TPS/GPU
+# Layout: DP=2 across nodes, TP=8 + EP=8 intra-node (intra-node all-to-all).
+
+runs:
+  # FA3 + sonicmoe
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5
+
+  # FA3 + grouped_mm (default)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8
+    max_steps: 50
+    logging_steps: 5

@@ -1,0 +1,49 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8
+
+# Late sweep: 32k DP=16 (no EP/SP) + intra-node SP variants for 64k/256k
+
+runs:
+  # 32k FSDP DP=16 + FA3 (alternative champion at 32k, vs SP=2's 21.98%)
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
+
+  # Same + compile
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    max_steps: 50
+    logging_steps: 5
+
+  # 64k DS-Z3+SP=8 @ 2n (intra-node SP, vs current 64k 4n SP=4 cross-node 20.51%)
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 2
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 8
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5

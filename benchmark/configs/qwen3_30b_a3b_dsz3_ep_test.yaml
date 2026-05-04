@@ -1,0 +1,33 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+runs:
+  # DS-Z3 + EP=8 at 16k — does the historical "hangs at load" still happen?
+  - context_length: 16384
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 5
+    logging_steps: 1
+
+  # If 16k works → DS-Z3 + SP=4 + EP=8 at 64k (combined, sonicmoe)
+  - context_length: 65536
+    nodes: 4
+    backend: deepspeed_zero3
+    dp: 1
+    tp: 8
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 5
+    logging_steps: 1

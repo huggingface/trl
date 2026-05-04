@@ -1,0 +1,48 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+
+# FSDP2 + EP=8 + CP + sonicmoe (sdpa, since FA3+CP is not supported in transformers).
+# CP shards seq dim → per-rank seq stays ≤16k where the layout fits.
+# Pre-fix history: 64k 4n EP=8+CP=4 → 7.97% / NaN, 128k 8n EP=8+CP=8 → 4.24% / NaN.
+# Post-fix expectation: same MFU, healthy training.
+
+runs:
+  # 64k, 4 nodes — CP=4 → per-rank seq 16k
+  - context_length: 65536
+    nodes: 4
+    backend: fsdp2
+    dp: 1
+    tp: 8
+    pp: 1
+    cp: 4
+    ep: 8
+    max_steps: 50
+    logging_steps: 5
+
+  # 64k, 2 nodes — CP=4 → per-rank seq 16k (tighter)
+  - context_length: 65536
+    nodes: 2
+    backend: fsdp2
+    dp: 1
+    tp: 4
+    pp: 1
+    cp: 4
+    ep: 8
+    max_steps: 50
+    logging_steps: 5
+
+  # 128k, 8 nodes — CP=8 → per-rank seq 16k
+  - context_length: 131072
+    nodes: 8
+    backend: fsdp2
+    dp: 1
+    tp: 8
+    pp: 1
+    cp: 8
+    ep: 8
+    max_steps: 50
+    logging_steps: 5

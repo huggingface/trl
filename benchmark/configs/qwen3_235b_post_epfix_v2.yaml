@@ -1,0 +1,67 @@
+model_name_or_path: Qwen/Qwen3-235B-A22B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# v2 235B sweep — flat EP=world_size to maximally shard expert params.
+# v1 (EP=8) OOMed at NCCL init: 16 experts × 94 layers × 1536 × 4096 × 2 bytes = 37 GB/rank
+# just for expert weights, plus 22 GB optim, plus NCCL workspace > 80 GB.
+# Flat EP gives 128/EP_size experts per rank: at EP=64 each rank holds 2 experts (4.7 GB);
+# at EP=128 each rank holds 1 expert (2.3 GB). Comfortable.
+runs:
+  # B1v2 — 16k 16n FSDP2 + EP=128 (flat, 1 expert/rank)
+  - context_length: 16384
+    nodes: 16
+    backend: fsdp2
+    dp: 128
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 128
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 128 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5
+
+  # B2v2 — 32k 8n FSDP2 + EP=64 (flat, 2 experts/rank)
+  - context_length: 32768
+    nodes: 8
+    backend: fsdp2
+    dp: 64
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 64
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 64 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5
+
+  # B3v2 — 32k 16n FSDP2 + EP=128 (flat)
+  - context_length: 32768
+    nodes: 16
+    backend: fsdp2
+    dp: 128
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 128
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 128 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5
+
+  # B4v2 — 64k 16n FSDP2 + EP=128
+  - context_length: 65536
+    nodes: 16
+    backend: fsdp2
+    dp: 128
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 128
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 128 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5

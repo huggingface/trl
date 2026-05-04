@@ -1,0 +1,21 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# 2026-05-01 23:55 — 48k 2n FSDP2 + EP=8 + sonicmoe + chunked_nll.
+# DS-Z2 hangs at this shape. Test if FSDP2 hangs the same way.
+runs:
+  - context_length: 49152
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 1 --loss_type chunked_nll
+    max_steps: 50
+    logging_steps: 5

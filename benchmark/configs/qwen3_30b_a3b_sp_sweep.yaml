@@ -1,0 +1,66 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+extra_args: --experts_implementation sonicmoe
+
+# DS-Z3 + Ulysses SP + FA3 + sonicmoe sweep (no EP). SP shards seq dim with all-to-all
+# attention (Ulysses) — keeps per-rank seq at 16k while scaling context.
+# Historical numbers all canceled or short — running 50-step to get steady-state window MFU.
+
+runs:
+  # 64k 2n SP=4 (DP=4) — historical 18.98% window
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 4
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
+
+  # 64k 4n SP=4 (DP=8) — historical 21.26% peak
+  - context_length: 65536
+    nodes: 4
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
+
+  # 128k 4n SP=8 (DP=4) — historical 19.31% peak, canceled at step 30
+  - context_length: 131072
+    nodes: 4
+    backend: deepspeed_zero3
+    dp: 4
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 8
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
+
+  # 128k 8n SP=8 (DP=8) — new, more nodes
+  - context_length: 131072
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 8
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5

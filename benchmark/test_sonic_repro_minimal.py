@@ -1,3 +1,4 @@
+# ruff: noqa
 """Minimal self-contained repro scaffold for the sonic-moe sentinel/backward bug.
 
 Dependencies: torch, kernels, nvidia-cutlass-dsl. NO transformers, NO distributed.

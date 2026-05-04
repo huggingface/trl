@@ -1,0 +1,23 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# H5 isolation: 30B 32k 16n FSDP2+EP=8 (intra-node EP, 16 EP groups across nodes).
+# Hypothesis: H5 loss-zero trigger is cross-node EP. C2 (30B 32k 8n EP=64) was loss=0
+# (cross-node EP=64). If this run with EP=8 (intra-node) converges with healthy loss → confirms
+# H5 trigger is cross-node-EP-large-activation, NOT just "high EP".
+runs:
+  - context_length: 32768
+    nodes: 16
+    backend: fsdp2
+    dp: 128
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 20
+    logging_steps: 5

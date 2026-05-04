@@ -1,0 +1,25 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# P2 BISECT (2026-05-01 evening) — same shape as P2 (64k 2n EP=8 + sonicmoe + Liger + FA3)
+# but with the wrapper-side clamp re-instated in sonicmoe.py to test the D-works.bug bisect.
+# - Clamp version (this run): expected to succeed (matches clamp-era champion 22099326 / 64k recipe).
+# - If this works, follow up with a no-clamp re-run on a different node set to test the
+#   cluster-instability-this-evening hypothesis.
+runs:
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+    logging_steps: 5

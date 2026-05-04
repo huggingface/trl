@@ -1,0 +1,82 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# Overnight exploration sweep: validated 32-35% compile (no-EP). Stack on EP, then long-ctx.
+
+runs:
+  # 1. FSDP+EP+compile + non-fused Adam (workaround for multi-mesh foreach issue)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --optim adamw_torch
+    use_regional_compilation: true
+    max_steps: 50
+    logging_steps: 5
+
+  # 2. DS-Z3+SP+sonicmoe+compile at 64k 4n (vs no-compile 20.6%)
+  - context_length: 65536
+    nodes: 4
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8
+    use_regional_compilation: true
+    max_steps: 50
+    logging_steps: 5
+
+  # 3. DS-Z3+SP+sonicmoe+compile at 128k 8n (vs no-compile 19.4%)
+  - context_length: 131072
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 8
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8
+    use_regional_compilation: true
+    max_steps: 50
+    logging_steps: 5
+
+  # 4. FSDP+CP+EP+compile at 64k 4n + sdpa (vs no-compile 7.7%)
+  - context_length: 65536
+    nodes: 4
+    backend: fsdp2
+    dp: 1
+    tp: 8
+    pp: 1
+    cp: 4
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --optim adamw_torch
+    use_regional_compilation: true
+    max_steps: 50
+    logging_steps: 5
+
+  # 5. Stretch: 256k context with FSDP+EP+CP=16 (8n) — never tried
+  - context_length: 262144
+    nodes: 8
+    backend: fsdp2
+    dp: 1
+    tp: 8
+    pp: 1
+    cp: 8
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --optim adamw_torch
+    max_steps: 50
+    logging_steps: 5

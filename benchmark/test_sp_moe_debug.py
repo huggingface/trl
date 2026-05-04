@@ -1,4 +1,4 @@
-# ruff: noqa: T201
+# ruff: noqa
 """
 Debug: why does Ulysses SP hang on 30B MoE but work on 4B dense?
 Mimics the accelerate DeepSpeed + SP flow step by step.

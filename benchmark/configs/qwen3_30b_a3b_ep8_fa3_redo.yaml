@@ -1,0 +1,38 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# Re-runs of the FSDP2+FA3 NaN configs (resubmit after local accelerate patch to skip
+# _prepare_tp when model has EP — same effect as the natural skip that fired before
+# EP params became DTensors).
+
+runs:
+  # FSDP2 + EP=8 + FA3 + sonicmoe — was 42.66% window MFU, NaN
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5
+
+  # FSDP2 + EP=8 + FA3 + grouped_mm — was 35.06% window MFU, NaN
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8
+    max_steps: 50
+    logging_steps: 5

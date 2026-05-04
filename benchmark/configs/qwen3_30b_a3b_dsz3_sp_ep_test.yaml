@@ -1,0 +1,38 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+
+# DS-Z3 + SP + EP test: previously blocked by `c10d::broadcast_` no-mesh inside DeepSpeed's
+# `_broadcast_model`. Patched DS engine.py to skip DTensor params (they're EP-sharded, not
+# replicated). If this works, SP+EP gives long-context MoE without CP's MFU penalty.
+
+runs:
+  # 16k smoke test first (quickest to fail-fast if patch is wrong)
+  - context_length: 16384
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 2
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    sp: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
+
+  # 64k SP=4 + EP=8 (the long-ctx target)
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 4
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    sp: 4
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5

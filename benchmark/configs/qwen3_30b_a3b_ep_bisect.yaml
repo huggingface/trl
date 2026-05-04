@@ -1,0 +1,48 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+runs:
+  # Run A: Mirror April 15 WORKING config. tp=1, no parallelism_config in accelerate, EP defaults to world_size.
+  # Expected: loss step 1 ~1.6 (correct training)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 16
+    extra_args: --enable_expert_parallel
+    max_steps: 5
+    logging_steps: 1
+
+  # Run B: Subgroup EP=8 WITHOUT accelerate TP. tp=1 in YAML so no parallelism_config,
+  # but pass --expert_parallel_size 8 so transformers builds a (dp=2, ep=8) sub-mesh internally.
+  # Tests if transformers EP < world breaks alone, or only with accelerate TP.
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8
+    max_steps: 5
+    logging_steps: 1
+
+  # Run C: Current broken pattern (control). tp=8 in YAML triggers parallelism_config + ep_size=8.
+  # Expected: loss step 1 ~37–62 (broken, matches existing data).
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8
+    max_steps: 5
+    logging_steps: 1

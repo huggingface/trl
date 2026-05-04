@@ -1,0 +1,68 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8
+zero_stage: 2
+
+# DS-Z2 + SP + EP=8 sweep at 32k/64k/128k for MFU comparison vs CP+EP and SP-only.
+# Training correctness is BROKEN (Ulysses SP shards seq, transformers EP assumes
+# full per-rank batch — semantic mismatch). Loss=8 not 12, accuracy ~0.05 not 0.65.
+# These numbers are throughput-only references, NOT recommended training configs.
+
+runs:
+  # 32k 2n SP=2 EP=8 — per-rank seq 16k
+  - context_length: 32768
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 2
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
+
+  # 64k 4n SP=4 EP=8 — per-rank seq 16k
+  - context_length: 65536
+    nodes: 4
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
+
+  # 128k 4n SP=8 EP=8 — per-rank seq 16k
+  - context_length: 131072
+    nodes: 4
+    backend: deepspeed_zero3
+    dp: 4
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 8
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5
+
+  # 128k 8n SP=8 EP=8 — per-rank seq 16k
+  - context_length: 131072
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 8
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5

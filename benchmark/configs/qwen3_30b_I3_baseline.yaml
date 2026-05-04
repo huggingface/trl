@@ -1,0 +1,23 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# I3-baseline: small 30B 16k 2n FSDP2+EP=8 with full [LOAD-T] instrumentation.
+# Captures the FSDP wrap timing AT THE 30B SCALE so we can compare against 235B's 4:50 min.
+# If 30B is much faster, the slow part scales with model size (params during fully_shard).
+# If 30B is similarly slow, the slow part is per-module-fully_shard call sync.
+runs:
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 10
+    logging_steps: 5

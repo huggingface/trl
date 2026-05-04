@@ -1,0 +1,54 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# H5 diagnostic: instrument loss.item() PRE-backward to determine if loss=0 is
+# (a) loss kernel actually returning 0, (b) NaN→0 masking, or (c) a reporting bug.
+# H5_DEBUG_DIR env activates the per-step h5_rank<N>.jsonl logging.
+runs:
+  # D1: failing reproducer — 30B 32k 4n DS-Z2+EP=32 + Liger (C1 had loss=0)
+  - context_length: 32768
+    nodes: 4
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 32 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 15
+    logging_steps: 1
+
+  # D2: same shape but chunked_nll instead of Liger (does loss-zero reproduce with chunked?)
+  - context_length: 32768
+    nodes: 4
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 32 --experts_implementation sonicmoe --pad_to_multiple_of 1 --loss_type chunked_nll
+    max_steps: 15
+    logging_steps: 1
+
+  # D3: healthy comparator — 30B 64k 4n EP=32 + Liger (R3 was healthy)
+  - context_length: 65536
+    nodes: 4
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 32
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 32 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 15
+    logging_steps: 1

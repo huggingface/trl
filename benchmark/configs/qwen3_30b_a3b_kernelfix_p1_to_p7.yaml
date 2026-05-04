@@ -1,0 +1,132 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# Kernel-fix-era champion sweep (post 2026-05-01 PR #45621 kernel-side fixes).
+# Re-validates the full long-context tower with sonicmoe NO wrapper clamp.
+# Each priority below has a clamp-era reference and an expected delta.
+
+runs:
+  # P1 — Flip the global SOTA: 128k 4n Liger no-clamp
+  # Clamp baseline: 76.29 % peak (sft_benchmark_notion.md: "all-time MoE MFU record on this stack")
+  # Expected:       ≈ 84 % peak
+  - context_length: 131072
+    nodes: 4
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+    logging_steps: 5
+
+  # P2 — 64k 2n Liger no-clamp (cheap, high-confidence record)
+  # Clamp baseline: 66.46 % peak
+  # Expected:       ≈ 74.5 % peak
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+    logging_steps: 5
+
+  # P3 — 64k 4n Liger no-clamp (scaling pair to P1)
+  # Closest clamp-era: 64k 4n grouped_mm at 56.30 %; no Liger 4n on record.
+  # Expected:           ≈ 70 % peak
+  - context_length: 65536
+    nodes: 4
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+    logging_steps: 5
+
+  # P4 — 256k 8n SP=2 + compile + Liger no-clamp
+  # Clamp baseline: 63.62 % peak
+  # Expected:       ≈ 71 % peak. Per-rank seq = 256k / 2 = 128k (sweet spot).
+  - context_length: 262144
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 32
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 2
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5
+
+  # P5 — 512k 8n SP=4 + compile + Liger no-clamp
+  # Clamp baseline: 63.26 % peak
+  # Expected:       ≈ 71 % peak. Per-rank seq = 512k / 4 = 128k (sweet spot).
+  - context_length: 524288
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5
+
+  # P6 — 1M 8n SP=8 + compile + Liger no-clamp
+  # Clamp baseline: 62.33 % peak
+  # Expected:       ≈ 70 % peak. Per-rank seq = 1M / 8 = 128k (sweet spot).
+  - context_length: 1048576
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 8
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5
+
+  # P7 — 128k 8n DS-Z2 + EP=8 + Liger no-clamp (scaling check on P1)
+  # Clamp baseline: 68.38 % peak
+  # Expected:       ≈ 76 % peak
+  - context_length: 131072
+    nodes: 8
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 64
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+    logging_steps: 5

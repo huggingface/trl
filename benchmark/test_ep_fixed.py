@@ -1,4 +1,4 @@
-# ruff: noqa: T201
+# ruff: noqa
 import os
 
 import torch

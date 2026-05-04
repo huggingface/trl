@@ -1,0 +1,24 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# 2026-05-02 00:30 — 64k 4n EP=8 + SP=4 + chunked_nll + sonicmoe.
+# Per-rank seq = 64k / SP=4 = 16k. Even smaller than the SP=2 attempt (32k).
+# Tests if very small per-rank seq fully avoids the hang.
+runs:
+  - context_length: 65536
+    nodes: 4
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 1
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 50
+    logging_steps: 5

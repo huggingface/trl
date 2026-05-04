@@ -1,4 +1,4 @@
-# ruff: noqa: T201
+# ruff: noqa
 """Compare grouped_mm vs batched_mm with EP to isolate the NaN source."""
 
 import os

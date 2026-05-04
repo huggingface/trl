@@ -1,0 +1,23 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# 2026-05-01 21:23 — 64k 2n EP=8 + **grouped_mm (no sonicmoe)** + Liger.
+# Tests whether sonicmoe is responsible for the EP-multi-node ALLREDUCE-PG-ID-2 hang.
+# Same shape as P2 ×3 but with the MoE expert kernel swapped.
+runs:
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation grouped_mm --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+    logging_steps: 5

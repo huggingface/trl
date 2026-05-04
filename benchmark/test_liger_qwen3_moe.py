@@ -1,3 +1,4 @@
+# ruff: noqa
 """
 Minimal repro: Liger kernel on Qwen3-MoE — single GPU, no EP.
 

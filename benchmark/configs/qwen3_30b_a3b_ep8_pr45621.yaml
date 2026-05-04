@@ -1,0 +1,21 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+extra_args: --enable_expert_parallel --expert_parallel_size 8
+# EP is incompatible with cpu_ram_efficient_loading (upstream_todo C2) — disable explicitly.
+cpu_ram_efficient_loading: false
+
+runs:
+  # 16k FSDP2 + grouped_mm + EP=8 + TP=8 (so accelerate sees the right mesh) + sdpa
+  # Tests PR #45621's claim of ~5x MoE compute speedup at EP=8 (87.5% sentinels skipped)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    max_steps: 50
+    logging_steps: 5

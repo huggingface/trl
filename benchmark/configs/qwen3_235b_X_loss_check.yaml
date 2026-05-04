@@ -1,0 +1,22 @@
+model_name_or_path: Qwen/Qwen3-235B-A22B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# X1: rerun B3v2 shape with chunked_nll instead of Liger to isolate the loss-zero artifact.
+# B3v2 hit mfu_window 86.72% but loss=0 from step 2 (H5 pattern). If chunked_nll converges
+# at the same shape, we've proven Liger is the H5 trigger at multi-node + high-EP for 235B too.
+runs:
+  - context_length: 32768
+    nodes: 16
+    backend: fsdp2
+    dp: 128
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 128
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 128 --experts_implementation sonicmoe --pad_to_multiple_of 1 --loss_type chunked_nll
+    max_steps: 30
+    logging_steps: 5

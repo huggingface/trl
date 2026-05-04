@@ -1,0 +1,56 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+zero_stage: 2
+
+# Third batch — push DS-Z2+EP+chunked further:
+# - 64k + compile: does compile add MFU on top of 57.23% at 64k? (compile gave 0 at 32k — saturated)
+# - 128k + compile: same question at 128k where 69.07% MFU shows compute headroom
+# - 128k @ 8n: more DP shards. 4n was 95% peak — does 8n free enough for 256k?
+# - 256k @ 8n: aggressive — per-rank seq still 256k (no SP/CP), so EP buffer = ~150 GiB. Will OOM, but documents the wall.
+
+runs:
+  # 64k + compile
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 30
+    logging_steps: 5
+
+  # 128k + compile
+  - context_length: 131072
+    nodes: 4
+    backend: deepspeed_zero3
+    dp: 4
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 30
+    logging_steps: 5
+
+  # 128k @ 8n (more DP, less per-rank optim/grad memory)
+  - context_length: 131072
+    nodes: 8
+    backend: deepspeed_zero3
+    dp: 8
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 30
+    logging_steps: 5

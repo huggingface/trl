@@ -1,0 +1,26 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# Test G 2026-05-02: validate the EP-aware DataLoader fix.
+# Same config as Test D (sonicmoe + chunked_nll + 64k 2n EP=8) which hung deterministically
+# at step 16 with seed=42. With the SFTTrainer._get_dataloader override that EP-corrects
+# num_processes / process_index, all 8 ranks of an EP group should see the same micro-batch
+# and the shape-mismatch hang should be gone. Expected: training runs through all 30 steps
+# cleanly. logging_steps=1 to spot any anomaly per step.
+runs:
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 1 --loss_type chunked_nll
+    max_steps: 30
+    logging_steps: 1

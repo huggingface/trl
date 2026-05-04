@@ -1,3 +1,4 @@
+# ruff: noqa
 """Byte-exact replay of the kernel call captured from the broken full-stack repro.
 
 Now also mirrors production's `DTensor.from_local(...).to_local()` autograd hop on

@@ -1,0 +1,25 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# 2026-05-02 00:11 — 64k 2n EP=8 + SP=2 + chunked_nll + sonicmoe.
+# Per-rank seq = 64k / SP=2 = 32k (matches the working 32k 2n EP=8 control).
+# EP all-reduce shape would be (32k, 2048) — same as 22099825 which succeeded.
+# If this works, bug is per-rank-seq-dependent (something about >32k tokens per rank).
+runs:
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 1
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 2
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --loss_type chunked_nll
+    max_steps: 50
+    logging_steps: 5

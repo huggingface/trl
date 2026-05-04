@@ -1,0 +1,24 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# 2026-05-01 21:48 — 64k 1n EP=8 + sonicmoe-no-clamp + chunked_nll (no Liger).
+# Tests whether the EP-multi-node-64k+ ALLREDUCE-PG-ID-2 hang is INTER-NODE specific.
+# At 1n EP=8, all 8 ranks share NVLink within the same node — no inter-node collective.
+# If this works, the bug is in inter-node EP all-reduce specifically.
+runs:
+  - context_length: 65536
+    nodes: 1
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 8
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 1 --loss_type chunked_nll
+    max_steps: 50
+    logging_steps: 5

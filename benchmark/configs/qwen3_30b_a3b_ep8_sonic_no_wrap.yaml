@@ -1,0 +1,22 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+# Test: skip _wrap_ep_params_as_dtensor. If sonicmoe trains here AND Adam doesn't error,
+# the wrap is what's breaking sonicmoe at EP<DP_size — and it may not actually be needed
+# at this layout (the pre-fix 32.36% run had no wrap and worked).
+skip_ep_dtensor_wrap: true
+
+runs:
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5

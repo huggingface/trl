@@ -1,4 +1,4 @@
-# ruff: noqa: T201
+# ruff: noqa
 """
 Test Expert Parallelism for Qwen3 MoE by fusing individual expert weights
 into grouped tensors and patching the forward to use batched matmuls.

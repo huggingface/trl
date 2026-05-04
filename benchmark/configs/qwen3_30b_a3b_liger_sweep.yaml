@@ -1,0 +1,75 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+# Liger kernel sweep with the swiglu=False workaround under EP.
+# Goal: see how Liger (RoPE + RMSNorm + fused_linear_cross_entropy) compares to chunked-CE at the same configs.
+#
+# Key: --liger_kernel_config '{"swiglu": false}' (Liger's default-true swiglu patch
+# bypasses transformers' EP-aware experts dispatcher and crashes — see debug_liger_ep.md).
+#
+# Note: --use_liger_kernel implies Liger's FLCE, which is mutually exclusive with --loss_type=chunked_nll.
+# So this sweep does NOT pass --loss_type chunked_nll. Memory comes from FLCE instead of chunked.
+#
+# Sweep: 16k / 32k / 64k / 128k against the chunked-CE champion at each ctx.
+
+runs:
+  # 16k FSDP+EP=8 + Liger (compare to FSDP+EP=8 no-chunked champion @ 40.4% MFU)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5
+
+  # 32k DS-Z2+EP=8 + Liger (vs chunked-CE 45.81% MFU)
+  - context_length: 32768
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    zero_stage: 2
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5
+
+  # 64k DS-Z2+EP=8 + Liger (vs chunked-CE 57.23% MFU)
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    zero_stage: 2
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5
+
+  # 128k DS-Z2+EP=8 + Liger @ 4n (vs chunked-CE 69.10% MFU)
+  - context_length: 131072
+    nodes: 4
+    backend: deepspeed_zero3
+    dp: 4
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    zero_stage: 2
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 30
+    logging_steps: 5

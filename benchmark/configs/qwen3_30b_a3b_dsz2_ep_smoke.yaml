@@ -1,0 +1,23 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+zero_stage: 2
+
+# DS-Z2 + EP=8 smoke test. ZeRO-2 has full is_moe_param plumbing in stage_1_and_2.py
+# (separate optimizer groups, expert_dp_process_group for grad reduce). Our 3
+# transformers-side patches (allreduce=False/group_name tagging in post_shard_wrap,
+# expert group creation in Trainer) should be enough — no DS patches needed.
+
+runs:
+  - context_length: 16384
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    max_steps: 50
+    logging_steps: 5

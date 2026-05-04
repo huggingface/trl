@@ -1,0 +1,25 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# CLUSTER CONTROL (2026-05-01 21:20) — 32k 2n EP=8 + sonicmoe-with-clamp + Liger.
+# Identical to job 22099326 (which succeeded at 65% peak earlier today) modulo the
+# clamp-vs-no-clamp state of sonicmoe.py — currently clamp is re-instated.
+# If this fails the same way as 64k → cluster is bad.
+# If this succeeds → cluster is fine, the 64k EP=8 hang is shape-dependent.
+runs:
+  - context_length: 32768
+    nodes: 2
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 50
+    logging_steps: 5

@@ -1,0 +1,44 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+runs:
+  # 16k EP=4 — previously failed in backward (gemm_dact cudaErrorAssert), retry with new kernel
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 4
+    tp: 4
+    pp: 1
+    cp: 1
+    ep: 4
+    extra_args: --enable_expert_parallel --expert_parallel_size 4 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5
+
+  # 16k EP=8 — previously failed in backward, retry
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5
+
+  # 32k EP=8 — previously failed in backward, retry
+  - context_length: 32768
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5

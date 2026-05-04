@@ -1,0 +1,35 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+extra_args: --enable_expert_parallel --expert_parallel_size 16 --experts_implementation sonicmoe
+cpu_ram_efficient_loading: false
+
+# Sanity check: sonicmoe + FA3 with EP=16 (matches DP size). The original 43.1% MFU
+# config used EP=8 intra-node + DP=2 across nodes, but EP < DP_size now triggers
+# `clip_grad_norm_` mesh mismatch (separate follow-up). Use EP=16 so both meshes
+# have the same size.
+
+runs:
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 16
+    max_steps: 50
+    logging_steps: 5
+
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 16
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 16
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    max_steps: 50
+    logging_steps: 5

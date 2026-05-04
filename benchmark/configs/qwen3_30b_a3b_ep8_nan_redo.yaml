@@ -1,0 +1,52 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# Re-runs of the three EP=8 NaN configs from report.md (2026-04-27 tail). Goal: with the
+# active /fsx/amine_dirhoussi/transformers (EP+FSDP fix + PR #45621 grouped_mm sentinel-skip
+# + IlyasMoutawwakil/sonic-moe@main kernel), confirm loss is healthy and MFU still holds.
+# Layout matches the original NaN runs: DP=2, TP=8, EP=8 intra-node + 2-node DP.
+
+runs:
+  # FSDP2 + EP=8 + FA3 + sonicmoe — was 42.66% window MFU, NaN
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5
+
+  # FSDP2 + EP=8 + FA3 + grouped_mm — was 35.06% window MFU, NaN
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --enable_expert_parallel --expert_parallel_size 8
+    max_steps: 50
+    logging_steps: 5
+
+  # DS-Z3 + EP=8 + sdpa + sonicmoe — was 32.72% window MFU, NaN
+  - context_length: 16384
+    nodes: 2
+    backend: deepspeed_zero3
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5

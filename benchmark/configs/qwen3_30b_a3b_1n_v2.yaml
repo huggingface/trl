@@ -1,0 +1,58 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+
+# 1n exploration v2:
+# - 64k 1n SP=8 NO compile: was 7.69% with compile, see if compile was the issue
+# - 64k 1n SP=4 + Liger (DP=2): more Z3 sharding, may help memory and speed
+# - 128k 1n SP=4 + Liger (DP=2 partitions optim across 2 ranks)
+# - 1n DS-Z3+SP=2 + Liger to find the SP/MFU sweet spot
+
+runs:
+  # 64k 1n SP=8 NO compile
+  - context_length: 65536
+    nodes: 1
+    backend: deepspeed_zero3
+    dp: 1
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 8
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 20
+    logging_steps: 5
+
+  # 64k 1n SP=4 (DP=2) + compile
+  - context_length: 65536
+    nodes: 1
+    backend: deepspeed_zero3
+    dp: 2
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 20
+    logging_steps: 5
+
+  # 128k 1n SP=4 (DP=2) + compile
+  - context_length: 131072
+    nodes: 1
+    backend: deepspeed_zero3
+    dp: 2
+    tp: 1
+    pp: 1
+    cp: 1
+    sp: 4
+    ep: 1
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    use_regional_compilation: true
+    extra_args: --experts_implementation sonicmoe --pad_to_multiple_of 8 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 20
+    logging_steps: 5

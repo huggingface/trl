@@ -1,0 +1,23 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# Isolate: sonicmoe + EP=8 with sdpa (worked before fix at 32.36%) and FA3 (NaN'd at 42.66%).
+# After EP+FSDP fix + grad-norm skip + accelerate _prepare_tp skip — re-test both.
+# Goal: identify whether sonicmoe NaN is FA3-specific or general at EP < DP_size.
+
+runs:
+  # sonicmoe + sdpa + EP=8 (was 32.36% / healthy on broken-EP)
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 8
+    pp: 1
+    cp: 1
+    ep: 8
+    extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe
+    max_steps: 50
+    logging_steps: 5

@@ -1,0 +1,25 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+cpu_ram_efficient_loading: false
+
+# W2: H5 NaN investigation — re-run R4 (= W1) shape with H5_NAN_CHECK=1.
+# Scans for NaN in params (post-prev-optim, at step entry) and grads (post-backward).
+# Identifies WHICH parameter goes NaN at WHICH step, narrowing the bug location.
+# Short run (8 steps) since we expect NaN at step 1.
+runs:
+  - context_length: 131072
+    nodes: 8
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 64
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 64
+    attn_implementation: "kernels-community/vllm-flash-attn3"
+    h5_mode: nan_check
+    extra_args: --enable_expert_parallel --expert_parallel_size 64 --experts_implementation sonicmoe --pad_to_multiple_of 1 --use_liger_kernel true --liger_kernel_config '{"swiglu":false}'
+    max_steps: 8
+    logging_steps: 1

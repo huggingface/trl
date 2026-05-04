@@ -1,4 +1,4 @@
-# ruff: noqa: T201
+# ruff: noqa
 """
 Test SFT training with fused Qwen3 MoE experts + FSDP2.
 """
