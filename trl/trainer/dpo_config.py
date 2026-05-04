@@ -46,9 +46,6 @@ class DPOConfig(_BaseConfig):
 
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
-        pad_token (`str`, *optional*):
-            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
-            it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left or
             right depending on the `truncation_mode`. If `None`, no truncation is applied.
@@ -120,6 +117,17 @@ class DPOConfig(_BaseConfig):
             τ parameter from the TR-DPO paper, which determines how frequently the current policy is synchronized with
             the reference policy. To use this parameter, you must set `sync_ref_model=True`.
 
+        > Deprecated parameters
+
+        pad_token:
+
+            <Deprecated version="1.1.0">
+
+            Parameter `pad_token` is deprecated and will be removed in version v2.0.0. Set `tokenizer.pad_token`
+            directly and pass it as `processing_class` to the trainer instead.
+
+            </Deprecated>
+
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
     > - `logging_steps`: Defaults to `10` instead of `500`.
@@ -153,13 +161,6 @@ class DPOConfig(_BaseConfig):
     dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
-    )
-    pad_token: str | None = field(
-        default=None,
-        metadata={
-            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
-            "is also `None`, it falls back to `processing_class.eos_token`."
-        },
     )
     max_length: int | None = field(
         default=1024,
@@ -308,6 +309,14 @@ class DPOConfig(_BaseConfig):
         },
     )
 
+    # Deprecated parameters
+    pad_token: str | None = field(
+        default=None,
+        metadata={
+            "help": "Deprecated. Set `tokenizer.pad_token` directly and pass it as `processing_class` to the trainer instead."
+        },
+    )
+
     def __post_init__(self):
         if isinstance(self.loss_type, str):
             self.loss_type = [self.loss_type]
@@ -316,7 +325,13 @@ class DPOConfig(_BaseConfig):
                 "`loss_weights` must have the same length as `loss_type` when combining multiple losses. "
                 f"Got {len(self.loss_weights)} weights for {len(self.loss_type)} loss types."
             )
-
+        if self.pad_token is not None:
+            warnings.warn(
+                "`pad_token` is deprecated and will be removed in v2.0.0. "
+                "Set `tokenizer.pad_token` directly and pass it as `processing_class` to the trainer instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
         if self.truncation_mode == "keep_end":
             warnings.warn(
                 "The `'keep_end'` truncation mode is deprecated and will be removed in v2.0.0. "

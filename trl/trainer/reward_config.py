@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -55,9 +56,6 @@ class RewardConfig(_BaseConfig):
         eos_token (`str`, *optional*):
             Token used to indicate the end of a turn or sequence. If `None`, it defaults to
             `processing_class.eos_token`.
-        pad_token (`str`, *optional*):
-            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
-            it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Samples are filtered out if either chosen or rejected sequence
             exceeds this value. If `None`, no filtering is applied.
@@ -71,6 +69,17 @@ class RewardConfig(_BaseConfig):
             https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
+
+        > Deprecated parameters
+
+        pad_token:
+
+            <Deprecated version="1.1.0">
+
+            Parameter `pad_token` is deprecated and will be removed in version v2.0.0. Set `tokenizer.pad_token`
+            directly and pass it as `processing_class` to the trainer instead.
+
+            </Deprecated>
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -123,13 +132,6 @@ class RewardConfig(_BaseConfig):
             "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
         },
     )
-    pad_token: str | None = field(
-        default=None,
-        metadata={
-            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
-            "is also `None`, it falls back to `processing_class.eos_token`."
-        },
-    )
     max_length: int | None = field(
         default=1024,
         metadata={
@@ -154,3 +156,21 @@ class RewardConfig(_BaseConfig):
         default=False,
         metadata={"help": "Whether to offload the activations to the CPU."},
     )
+
+    # Deprecated parameters
+    pad_token: str | None = field(
+        default=None,
+        metadata={
+            "help": "Deprecated. Set `tokenizer.pad_token` directly and pass it as `processing_class` to the trainer instead."
+        },
+    )
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.pad_token is not None:
+            warnings.warn(
+                "`pad_token` is deprecated and will be removed in v2.0.0. "
+                "Set `tokenizer.pad_token` directly and pass it as `processing_class` to the trainer instead.",
+                FutureWarning,
+                stacklevel=3,
+            )

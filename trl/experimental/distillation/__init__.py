@@ -12,25 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .judges import (
-    AllTrueJudge,
-    BaseBinaryJudge,
-    BaseJudge,
-    BasePairwiseJudge,
-    BaseRankJudge,
-    HfPairwiseJudge,
-    OpenAIPairwiseJudge,
-    PairRMJudge,
-)
+from .distillation_config import DistillationConfig
+from .distillation_trainer import DistillationTrainer
 
 
-__all__ = [
-    "AllTrueJudge",
-    "BaseBinaryJudge",
-    "BaseJudge",
-    "BasePairwiseJudge",
-    "BaseRankJudge",
-    "HfPairwiseJudge",
-    "OpenAIPairwiseJudge",
-    "PairRMJudge",
-]
+__all__ = ["DistillationConfig", "DistillationTrainer"]

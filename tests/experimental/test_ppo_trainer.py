@@ -61,7 +61,8 @@ ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-MistralForCausalLM-0.1",
     "trl-internal-testing/tiny-MistralForCausalLM-0.2",
     "trl-internal-testing/tiny-OPTForCausalLM",
-    "trl-internal-testing/tiny-Phi3ForCausalLM",
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3",
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
 ]
 
@@ -617,7 +618,7 @@ class TestPeftModel(TrlTestCase):
 
         # check all the weights are the same
         for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters(), strict=True):
-            torch.testing.assert_close(p1[1], p2[1]), f"{p1[0]} != {p2[0]}"
+            torch.testing.assert_close(p1[1], p2[1], msg=f"{p1[0]} != {p2[0]}")
 
     def test_load_pretrained_peft(self):
         r"""
@@ -642,7 +643,7 @@ class TestPeftModel(TrlTestCase):
         # check all the weights are the same
         for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters(), strict=True):
             if p1[0] not in ["v_head.summary.weight", "v_head.summary.bias"]:
-                torch.testing.assert_close(p1[1], p2[1]), f"{p1[0]} != {p2[0]}"
+                torch.testing.assert_close(p1[1], p2[1], msg=f"{p1[0]} != {p2[0]}")
 
     def test_continue_training_peft_model(self):
         r"""

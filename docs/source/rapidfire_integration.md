@@ -1,29 +1,23 @@
 # RapidFire AI Integration
 
-RapidFire AI is an open-source experiment execution framework that enables concurrent training of multiple TRL configurations on the same GPU(s) through intelligent chunk-based scheduling.
+RapidFire AI is an open-source experiment execution framework that integrates with TRL to turn "train one configuration at a time" into **real-time, side-by-side comparison of many configurations on the same GPU(s)** — so you can iterate on hyperparameters, LoRA settings, prompt schemes, and ablations **16–24× faster with no extra hardware**.
 
-## Key Features
+Links: [GitHub](https://github.com/RapidFireAI/rapidfireai) · [Docs](https://oss-docs.rapidfire.ai) · [Try in Colab](http://tinyurl.com/rapidfireai-colab)
 
-- **16-24× higher experimentation throughput** compared to sequential training.
-- **Almost no code changes** - drop-in configuration wrappers around TRL's and PEFT's existing configs.
-- **Interactive Control Operations** - real-time control to stop, resume, clone, and modify training runs in flight
-- **Automatic multi-GPU orchestration** with intelligent scheduling
-- **Full compatibility** with transformers, PEFT, SFTTrainer, DPOTrainer, and GRPOTrainer
-- **Full MLflow Integration**: Automatic experiment tracking and visualization
-- **Production-Ready**: Already used in production environments with complete working examples.
+## Why use RapidFire AI with TRL?
 
-### Problem It Solves
+When fine-tuning or post-training with TRL, you typically need to:
 
-When fine-tuning or post-training with TRL, AI developers often need to:
 - Try different hyperparameter configurations
 - Compare different LoRA settings
 - Test different prompt schemes
 - Run ablation studies
 
-
-**Current approach**: Train each config one after another → slow and inefficient process
-
-**With RapidFire AI**: Train all configs in one go even on a single GPU → 16-24× faster process
+| Scenario: comparing N training configs on the same GPU(s) | TRL alone | TRL + RapidFire AI |
+| --- | --- | --- |
+| Training strategy | Run N configs sequentially | Run N configs concurrently |
+| When can you compare configs? | After all runs finish | Live, from the first chunk |
+| Stop losers / clone winners mid-training | No | Yes (Interactive Control Operations) |
 
 ### How It Works
 
@@ -37,20 +31,31 @@ Chunk 3: [Config A] → [Config B] → [Config C] → [Config D]
 ```
 
 This enables:
+
 - Early comparison of configurations on same data subsets incrementally
 - Efficient GPU utilization and minimizing idle times
 - Real-time and automated experiment metrics tracking
 - Dynamic control over runs in flight to incentivize more experimentation
 
+## Key Features
+
+- **16-24× higher experimentation throughput** compared to sequential training.
+- **Almost no code changes** - simple drop-in config APIs that just wrap around existing TRL and PEFT config APIs.
+- **Interactive Control Operations** - real-time control to stop, resume, and clone-modify (with or without warm starting) training runs in flight.
+- **Integration with Fully Sharded Data Parallel (FSDP)** for training large models that do not fit on a single GPU by sharding parameters, gradients, and optimizer states across multiple GPUs.
+- **Full compatibility** with transformers, PEFT, SFTTrainer, DPOTrainer, and GRPOTrainer.
+- **Pluggable experiment tracking**: MLflow (default), TensorBoard, and Trackio, enabled individually or in combination.
+- **Zero-setup Google Colab support**: one-click tutorial notebooks for SFT, DPO, and GRPO on free T4 GPUs.
+- **Production-Ready**: Already used in production environments with complete working examples.
 
 ## Installation
 
 ### Prerequisites
 
 - Python 3.12.x
-- NVIDIA GPU with Compute Capability 7.x or 8.x
+- NVIDIA GPU with Compute Capability 7.x or 8.x (multiple GPUs required for FSDP)
 - CUDA Toolkit 11.8+
-- PyTorch 2.7.1+
+- PyTorch 2.8+
 
 ### pip install
 
@@ -62,7 +67,7 @@ Once installed, authenticate with Hugging Face and initialize RapidFire AI:
 
 ```bash
 # Authenticate with Hugging Face
-huggingface-cli login --token YOUR_TOKEN
+hf auth login --token YOUR_TOKEN
 
 # Workaround for current issue: https://github.com/huggingface/xet-core/issues/527
 pip uninstall -y hf-xet
@@ -74,7 +79,7 @@ rapidfireai init
 rapidfireai start
 ```
 
-The dashboard will be available at `http://0.0.0.0:3000` where you can monitor and control experiments in real-time.
+The dashboard will be available at `http://localhost:8853` where you can monitor and control experiments in real-time.
 
 ## Quick Start: SFT Training with Multiple Configs
 
@@ -172,8 +177,8 @@ When you run this example:
 1. **Config Expansion**: 2 base configurations × 2 PEFT configs = 4 total training runs
 2. **Chunk-based Scheduling**: Training data is divided into chunks, and all 4 configs train concurrently
 3. **GPU Swapping**: Models are swapped in/out of GPU memory based on chunk boundaries
-4. **Real-time Tracking**: All metrics visible in the dashboard at `http://localhost:3000`
-5. **Interactive Control**: Stop, resume, or clone any configuration from the dashboard
+4. **Real-time Tracking**: All metrics visible in the dashboard at `http://localhost:8853`
+5. **Interactive Control**: Stop, resume, or clone-modify any configuration from the dashboard
 
 This delivers **16-24× higher throughput** compared to training each configuration sequentially!
 
@@ -195,7 +200,7 @@ training_args = RFSFTConfig(
 )
 ```
 
-**Example Notebook**: [SFT for Customer Support](https://github.com/RapidFireAI/rapidfireai/blob/main/tutorial_notebooks/rf-tutorial-sft-chatqa-lite.ipynb)
+**Example Notebook**: [SFT for Customer Support](https://github.com/RapidFireAI/rapidfireai/blob/main/tutorial_notebooks/fine-tuning/rf-tutorial-sft-chatqa-lite.ipynb)
 
 ### DPOTrainer
 
@@ -213,7 +218,7 @@ training_args = RFDPOConfig(
 )
 ```
 
-**Example Notebook**: [DPO for Preference Alignment](https://github.com/RapidFireAI/rapidfireai/blob/main/tutorial_notebooks/rf-tutorial-dpo-alignment-lite.ipynb)
+**Example Notebook**: [DPO for Preference Alignment](https://github.com/RapidFireAI/rapidfireai/blob/main/tutorial_notebooks/post-training/rf-tutorial-dpo-alignment-lite.ipynb)
 
 ### GRPOTrainer
 
@@ -230,7 +235,7 @@ training_args = RFGRPOConfig(
 )
 ```
 
-**Example Notebook**: [GRPO for Math Reasoning](https://github.com/RapidFireAI/rapidfireai/blob/main/tutorial_notebooks/rf-tutorial-grpo-mathreasoning-lite.ipynb)
+**Example Notebook**: [GRPO for Math Reasoning](https://github.com/RapidFireAI/rapidfireai/blob/main/tutorial_notebooks/post-training/rf-tutorial-grpo-mathreasoning-lite.ipynb)
 
 ## Core Concepts
 
@@ -254,8 +259,8 @@ Through the RapidFire AI dashboard, you can dynamically control running experime
 
 - **Stop**: Pause a configuration (checkpointed automatically)
 - **Resume**: Continue from last checkpoint
-- **Clone**: Duplicate a configuration with modifications
-- **Clone & Warm Start**: Clone and initialize from parent's weights
+- **Clone-Modify**: Duplicate a configuration with modifications (new run starts from scratch)
+- **Clone-Modify with Warm Start**: Clone-modify and initialize from the parent's weights
 - **Delete**: Remove failed or unwanted runs
 
 This enables adaptive experimentation where you can stop underperforming configs early and clone promising ones with tweaked hyperparameters.
@@ -320,7 +325,87 @@ config = RFModelConfig(
 
 ### Multi-GPU Support
 
-RapidFire AI automatically detects and utilizes all available GPUs. No special configuration needed - the scheduler automatically distributes configurations across GPUs.
+RapidFire AI automatically detects and utilizes all available GPUs. By default, the scheduler distributes independent configurations across GPUs (data-parallel across configs), so no special setup is required to run `N` configs on `N` GPUs concurrently.
+
+For models that do not fit on a single GPU, RapidFire AI also supports **Fully Sharded Data Parallel (FSDP)** to shard a single configuration across multiple GPUs — see the next section.
+
+### Multi-GPU Training with FSDP
+
+When a model is too large for a single GPU, enable FSDP directly through the training args of `RFSFTConfig` or `RFDPOConfig` — the same `fsdp` and `fsdp_config` fields exposed by Hugging Face `TrainingArguments`:
+
+```python
+from rapidfireai.automl import RFModelConfig, RFSFTConfig, RFLoraConfig
+
+model_config = RFModelConfig(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    peft_config=RFLoraConfig(
+        r=16, lora_alpha=32, lora_dropout=0.05,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        bias="none",
+    ),
+    training_args=RFSFTConfig(
+        learning_rate=2e-4,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=8,
+        fsdp="full_shard auto_wrap",
+        fsdp_config={
+            "sharding_strategy": "FULL_SHARD",
+            "auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
+            "backward_prefetch": "backward_pre",
+            "forward_prefetch": True,
+            "use_orig_params": False,
+            "cpu_ram_efficient_loading": True,
+            "offload_params": True,
+            "sync_module_states": True,
+            "limit_all_gathers": True,
+        },
+    ),
+    model_type="causal_lm",
+    model_kwargs={"torch_dtype": "auto"},
+)
+```
+
+Key points:
+
+- FSDP works transparently with RapidFire AI's chunk-based scheduling, IC Ops (stop / resume / clone-modify with or without warm-starting), and all supported metric tracking backends.
+- FSDP is fully compatible with PEFT / LoRA — LoRA adapter weights are collected efficiently across shards when saving checkpoints.
+- FSDP composes with grid search and random search: each expanded config gets its own sharded training run.
+
+**Example Notebooks**:
+- [SFT with FSDP (lite, small model)](https://github.com/RapidFireAI/rapidfireai/blob/main/tutorial_notebooks/fine-tuning/rf-tutorial-sft-chatqa-fsdp-lite.ipynb)
+- [SFT with FSDP (large model)](https://github.com/RapidFireAI/rapidfireai/blob/main/tutorial_notebooks/fine-tuning/rf-tutorial-sft-chatqa-fsdp-large.ipynb)
+- [DPO with FSDP](https://github.com/RapidFireAI/rapidfireai/blob/main/tutorial_notebooks/post-training/rf-tutorial-dpo-alignment-fsdp-lite.ipynb)
+
+### Experiment Tracking Backends
+
+RapidFire AI supports three metric logging backends that can be used individually or together: **MLflow** (the default for local installs), **TensorBoard** (the default in Google Colab), and **Trackio**.
+
+Select one or more backends at server startup with the `--tracking-backends` flag:
+
+```bash
+# MLflow only (default on local installs)
+rapidfireai start --tracking-backends mlflow
+
+# TensorBoard only
+rapidfireai start --tracking-backends tensorboard
+
+# Any combination
+rapidfireai start --tracking-backends mlflow tensorboard trackio
+```
+
+Equivalent environment variables are also available:
+
+- `RF_MLFLOW_ENABLED` (default `true`, or `false` in Colab)
+- `RF_TENSORBOARD_ENABLED` (default `false`, or `true` in Colab)
+- `RF_TRACKIO_ENABLED` (default `false`)
+
+All three backends receive the same metrics (loss, evaluation scores, learning rate, etc.) and respect IC Ops run lifecycle events, so you can use, for example, Trackio for lightweight sharing alongside MLflow for a full local dashboard.
+
+### Running in Google Colab
+
+RapidFire AI runs on free Google Colab T4 GPUs, with tutorial notebooks for SFT, DPO, GRPO, and RAG / context-engineering workflows. In Colab, TensorBoard is the default tracking backend (MLflow is disabled for simplicity), and the usual `rapidfireai init` / `rapidfireai start` commands run directly from notebook cells — no terminal access required.
+
+Get started: [RapidFire AI in Google Colab](http://tinyurl.com/rapidfireai-colab).
 
 ## Best Practices
 

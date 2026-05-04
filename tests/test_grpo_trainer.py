@@ -177,9 +177,8 @@ class TestGRPORolloutDispatch:
         trainer.processing_class = SimpleNamespace(
             batch_decode=MagicMock(return_value=["decoded"]),
         )
+        trainer._tokenizer = SimpleNamespace(eos_token_id=2, pad_token_id=0)
         trainer.tools = None
-        trainer.eos_token_id = 2
-        trainer.pad_token_id = 0
         trainer._metrics = {
             "train": {
                 "num_tokens": [],
@@ -447,7 +446,7 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
@@ -484,7 +483,7 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
@@ -524,7 +523,7 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
@@ -1325,7 +1324,7 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n and "original_module" not in n:
                 # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
@@ -1923,11 +1922,25 @@ class TestGRPOTrainer(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -2106,7 +2119,7 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
@@ -2215,6 +2228,13 @@ class TestGRPOTrainer(TrlTestCase):
         [
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
         ],
     )
     @require_vision
