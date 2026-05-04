@@ -313,8 +313,8 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
             - `"live"` (any model):
                 Teacher is the student. No divergence, no callback.
             - `"base"` + PEFT model:
-                Teacher reuses `self.model`; the base weights are recovered downstream by disabling the adapter
-                via `use_adapter` during teacher forward.
+                Teacher reuses `self.model`; the base weights are recovered downstream by disabling the adapter via
+                `use_adapter` during teacher forward.
             - `"base"` + non-PEFT model:
                 Teacher is a frozen deepcopy of the initial student (falls through to the copy branch below).
             - `"ema"` + pure-LoRA training:
@@ -447,8 +447,8 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
     def _prepare_inputs(self, generation_batch):
         """Return the per-step training batch, regenerating rollouts and buffering them for reuse in train mode.
 
-        In train mode, rollouts are generated once every `steps_per_generation * num_iterations` steps and split
-        into per-step slices reused until the next regeneration. In eval mode, every batch is freshly prepared.
+        In train mode, rollouts are generated once every `steps_per_generation * num_iterations` steps and split into
+        per-step slices reused until the next regeneration. In eval mode, every batch is freshly prepared.
         """
         mode = "train" if self.model.training else "eval"
         if mode == "train":
@@ -637,13 +637,13 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
 
         Dispatches between three objectives based on `distillation_mode`:
 
-            - `"topk_logits"`: top-k approximation of the divergence, optionally with a tail bucket for the
-              remaining probability mass (`distillation_add_tail`).
+            - `"topk_logits"`: top-k approximation of the divergence, optionally with a tail bucket for the remaining
+              probability mass (`distillation_add_tail`).
             - `"full_logits"`: full-vocab divergence.
             - `"sampled_token"`: token-level (reverse-KL) distillation on sampled `completion_ids`.
 
-        When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a
-        clipped importance-sampling ratio between the current student and the student at rollout time.
+        When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a clipped
+        importance-sampling ratio between the current student and the student at rollout time.
         """
         if distillation_logits.response_mask.sum() == 0:
             mode = "train" if model.training else "eval"
@@ -825,8 +825,8 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
     ) -> TrainingBatch:
         """Build the final training batch from a shared student rollout batch.
 
-        Subclasses must return a `dict` with at least the following keys, all first-dim-aligned to the student
-        batch size `B`:
+        Subclasses must return a `dict` with at least the following keys, all first-dim-aligned to the student batch
+        size `B`:
 
             - `prompt_ids`: student prompt ids.
             - `prompt_mask`: student prompt mask.

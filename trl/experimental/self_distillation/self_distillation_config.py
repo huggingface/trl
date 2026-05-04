@@ -131,16 +131,15 @@ class SelfDistillationConfig(_BaseConfig):
         > Parameters that control self-distillation
 
         distillation_alpha (`float`, *optional*, defaults to `1.0`):
-            KL divergence direction: `0.0=forward KL`, `0.5=JSD`,
-            `1.0=reverse KL`. The default is valid for the shared `"sampled_token"` mode; method-specific configs
-            may override it.
+            KL divergence direction: `0.0=forward KL`, `0.5=JSD`, `1.0=reverse KL`. The default is valid for the shared
+            `"sampled_token"` mode; method-specific configs may override it.
         distillation_mode (`Literal["sampled_token", "full_logits", "topk_logits"]`, *optional*, defaults to `"sampled_token"`):
             Distillation objective mode. `"sampled_token"` uses token-level distillation on the sampled completion
             tokens, `"full_logits"` uses full-vocabulary divergence, and `"topk_logits"` uses a top-k approximation
             over the student support.
         distillation_topk (`int` or `None`, *optional*):
-            Number of top tokens for `"topk_logits"` distillation. Must be set when
-            `distillation_mode="topk_logits"` and left unset otherwise.
+            Number of top tokens for `"topk_logits"` distillation. Must be set when `distillation_mode="topk_logits"`
+            and left unset otherwise.
         distillation_is_clip (`float` or `None`, *optional*, defaults to `2.0`):
             Clipping coefficient for importance sampling in self-distillation. `None` disables clipping.
         distillation_add_tail (`bool`, *optional*, defaults to `False`):

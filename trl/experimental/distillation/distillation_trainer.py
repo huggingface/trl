@@ -430,6 +430,16 @@ class DistillationTrainer(_BaseTrainer):
 
         # ── PEFT ──
         if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
             model = get_peft_model(model, peft_config)
 
         # ── Data collator ──
@@ -1284,7 +1294,11 @@ class DistillationTrainer(_BaseTrainer):
 
         # Size the output tensors to tightly fit the teacher logprobs. Using the full padded
         # sequence length would include padding positions with -inf teacher logprobs, producing
-        # inf in the forward pass and NaN gradients in the backward pass (0 * inf = NaN).
+        # +inf in the forward pass and NaN gradients in the backward pass (0 * inf = NaN).
+        # Shorter samples in variable-length batches still need the -inf sentinel at the tail;
+        # downstream loss consumers (_compute_server_sparse_top_1_divergence_loss,
+        # _compute_server_forward_kl_loss) neutralise those positions before the divergence
+        # math runs.
         completion_length = max(
             (offset + len(lps) for offset, lps in zip(completion_offsets, result["logprobs"], strict=True)),
             default=0,
@@ -1353,6 +1367,13 @@ class DistillationTrainer(_BaseTrainer):
                     "Teacher server is missing top-1 logprobs for required forward-KL positions: "
                     f"{missing_count}/{total_required}."
                 )
+
+        # Replace -inf teacher logprobs at intra-batch padding (labels == -100) with 0 so
+        # reverse-KL's student_probs·(log_s - log_t) does not leak +inf into the backward pass.
+        pad_mask_2d = ~required
+        pad_mask_3d = pad_mask_2d.unsqueeze(-1)
+        topk_teacher_lps = torch.where(pad_mask_3d, 0.0, topk_teacher_lps)
+        actual_teacher_lps = torch.where(pad_mask_2d, 0.0, actual_teacher_lps)
 
         # Server path only supports "sampled" mode — config validation enforces this, but we guard
         # explicitly so future relaxations of the config check don't silently change behaviour.

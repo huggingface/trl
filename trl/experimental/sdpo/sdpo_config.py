@@ -51,14 +51,14 @@ class SDPOConfig(SelfDistillationConfig):
             Distillation objective mode. `"sampled_token"` is the default SDPO mode and requires
             `distillation_alpha=1.0`.
         distillation_topk (`int` or `None`, *optional*):
-            Top-k approximation for logit-level SDPO. Must be set when `distillation_mode="topk_logits"` and left
-            unset otherwise.
+            Top-k approximation for logit-level SDPO. Must be set when `distillation_mode="topk_logits"` and left unset
+            otherwise.
 
         > Parameters that control the teacher
 
         teacher_model_kind (`str`, *optional*, defaults to `"ema"`):
-            Semantic teacher choice. `base` uses the initial student, `live` uses the current student, and `ema`
-            uses an exponentially averaged teacher.
+            Semantic teacher choice. `base` uses the initial student, `live` uses the current student, and `ema` uses
+            an exponentially averaged teacher.
         teacher_update_rate (`float`, *optional*, defaults to `0.05`):
             EMA update rate used when `teacher_model_kind="ema"`.
         teacher_sync_steps (`int`, *optional*, defaults to `1`):
