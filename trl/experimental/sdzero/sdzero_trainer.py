@@ -50,16 +50,15 @@ RESTART_PROMPT = "Wait, this response is not correct, let me start over."
 
 class SDZeroTrainer(BaseSelfDistillationTrainer):
     """
-    On-policy self-distillation via revision feedback. See
-    [Self-Distillation Zero](https://huggingface.co/papers/2604.12002).
+    On-policy self-distillation via revision feedback. See [Self-Distillation
+    Zero](https://huggingface.co/papers/2604.12002).
 
-    At each step, the student generates a response, a binary verifier judges it, and a control prompt is
-    selected accordingly. The teacher provides a next-token distribution over the student's response,
-    conditioned on the response and the control prompt. The student is updated via KL divergence to match
-    the teacher's distribution.
+    At each step, the student generates a response, a binary verifier judges it, and a control prompt is selected
+    accordingly. The teacher provides a next-token distribution over the student's response, conditioned on the
+    response and the control prompt. The student is updated via KL divergence to match the teacher's distribution.
 
-    The dataset must contain two columns: `prompt` (the problem as a conversational list or plain string) and
-    `answer` (the gold answer used by the binary verifier).
+    The dataset must contain two columns: `prompt` (the problem as a conversational list or plain string) and `answer`
+    (the gold answer used by the binary verifier).
 
     Example:
 
@@ -67,9 +66,11 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
     from datasets import Dataset
     from trl.experimental.sdzero import SDZeroConfig, SDZeroTrainer
 
-    dataset = Dataset.from_list([
-        {"prompt": [{"role": "user", "content": "What is 2+2?"}], "answer": "4"},
-    ])
+    dataset = Dataset.from_list(
+        [
+            {"prompt": [{"role": "user", "content": "What is 2+2?"}], "answer": "4"},
+        ]
+    )
     trainer = SDZeroTrainer(
         model="model-id-or-path",
         args=SDZeroConfig(output_dir="sdzero-model", max_steps=100),
@@ -80,8 +81,7 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
 
     Args:
         model (`str` or [`~transformers.PreTrainedModel`] or [`~peft.PeftModel`]):
-            Model to be trained. Can be a model id string, a local directory path, or a pre-instantiated
-            model object.
+            Model to be trained. Can be a model id string, a local directory path, or a pre-instantiated model object.
         args ([`SDZeroConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`]):
@@ -91,10 +91,10 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
             Tokenizer or processor. If `None`, loaded from the model.
         reward_fn (`Callable`, *optional*):
-            Binary reward function with signature `(completions, solution) -> list[float | None]`, where
-            `completions` is a list of `[{"role": "assistant", "content": ...}]` lists and `solution` is a
-            list of gold answer strings. Return values of `1.0` are treated as correct, anything else as
-            incorrect. Defaults to [`~trl.rewards.accuracy_reward`], which parses `\\boxed{}` LaTeX format.
+            Binary reward function with signature `(completions, solution) -> list[float | None]`, where `completions`
+            is a list of `[{"role": "assistant", "content": ...}]` lists and `solution` is a list of gold answer
+            strings. Return values of `1.0` are treated as correct, anything else as incorrect. Defaults to
+            [`~trl.rewards.accuracy_reward`], which parses `\\boxed{}` LaTeX format.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             Callbacks to customize the training loop.
         optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
@@ -166,9 +166,9 @@ class SDZeroTrainer(BaseSelfDistillationTrainer):
         r"""
         Build the teacher context for the shared student rollout and assemble the training batch.
 
-        For each example, the student's rollout `y_init` is scored by `reward_fn`. A control prompt
-        `p_r` is selected from the outcome: the rephrase nudge when `y_init` verifies
-        as correct, the restart nudge otherwise. The teacher input is then assembled as
+        For each example, the student's rollout `y_init` is scored by `reward_fn`. A control prompt `p_r` is selected
+        from the outcome: the rephrase nudge when `y_init` verifies as correct, the restart nudge otherwise. The
+        teacher input is then assembled as
 
         ```
         teacher_input_ids = T(x, y, p_r) ++ completion_ids

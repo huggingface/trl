@@ -161,12 +161,23 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
                 "including its adapter. For unambiguous teacher behavior, start from a merged/non-adapter model "
                 "or manage separate adapters explicitly."
             )
-        if is_peft_model(model) and peft_config is not None:
-            raise ValueError(
-                "You passed a `PeftModel` instance together with a `peft_config`. Pass either a base "
-                "model with `peft_config`, or a pre-wrapped PEFT model."
-            )
-        if peft_config is not None or getattr(model, "peft_config", None) is not None:
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            if is_peft_model(model):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config`. Pass either a base "
+                    "model with `peft_config`, or a pre-wrapped PEFT model."
+                )
+        if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
 
         if processing_class is None:
@@ -175,17 +186,15 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
             )
 
         if isinstance(processing_class, ProcessorMixin):
-            tokenizer = processing_class.tokenizer
+            self._tokenizer = processing_class.tokenizer
         elif isinstance(processing_class, PreTrainedTokenizerBase):
-            tokenizer = processing_class
+            self._tokenizer = processing_class
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        self.pad_token_id = tokenizer.pad_token_id
-        self.eos_token_id = tokenizer.eos_token_id
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
         self.num_generations = args.num_generations
@@ -208,9 +217,9 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         self.generation_kwargs = {
             "max_new_tokens": self.max_completion_length,
             "do_sample": True,
-            "pad_token_id": tokenizer.pad_token_id,
-            "bos_token_id": tokenizer.bos_token_id,
-            "eos_token_id": tokenizer.eos_token_id,
+            "pad_token_id": self._tokenizer.pad_token_id,
+            "bos_token_id": self._tokenizer.bos_token_id,
+            "eos_token_id": self._tokenizer.eos_token_id,
             "temperature": args.temperature,
             "top_p": args.top_p,
             "top_k": args.top_k,
@@ -304,8 +313,8 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
             - `"live"` (any model):
                 Teacher is the student. No divergence, no callback.
             - `"base"` + PEFT model:
-                Teacher reuses `self.model`; the base weights are recovered downstream by disabling the adapter
-                via `use_adapter` during teacher forward.
+                Teacher reuses `self.model`; the base weights are recovered downstream by disabling the adapter via
+                `use_adapter` during teacher forward.
             - `"base"` + non-PEFT model:
                 Teacher is a frozen deepcopy of the initial student (falls through to the copy branch below).
             - `"ema"` + pure-LoRA training:
@@ -438,8 +447,8 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
     def _prepare_inputs(self, generation_batch):
         """Return the per-step training batch, regenerating rollouts and buffering them for reuse in train mode.
 
-        In train mode, rollouts are generated once every `steps_per_generation * num_iterations` steps and split
-        into per-step slices reused until the next regeneration. In eval mode, every batch is freshly prepared.
+        In train mode, rollouts are generated once every `steps_per_generation * num_iterations` steps and split into
+        per-step slices reused until the next regeneration. In eval mode, every batch is freshly prepared.
         """
         mode = "train" if self.model.training else "eval"
         if mode == "train":
@@ -505,14 +514,16 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
         device = self.accelerator.device
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
-        prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left").to(device=device)
+        prompt_ids = pad(prompt_ids, padding_value=self._tokenizer.pad_token_id, padding_side="left").to(device=device)
         prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left").to(device=device)
         completion_ids = [torch.tensor(ids) for ids in completion_ids_list]
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
-        completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right").to(device=device)
+        completion_ids = pad(completion_ids, padding_value=self._tokenizer.pad_token_id, padding_side="right").to(
+            device=device
+        )
         completion_mask = pad(completion_mask, padding_value=0, padding_side="right").to(device=device)
         if self.mask_truncated_completions:
-            eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
         old_per_token_logps = self._compute_rollout_logps(
@@ -560,7 +571,7 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
     def _generate_transformers(self, prompt_ids: list[list[int]]) -> tuple[list[list[int]], list[list[int]]]:
         device = self.accelerator.device
         prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
-        padded_ids = pad(prompt_tensors, padding_value=self.pad_token_id, padding_side="left")
+        padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
         attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
         generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
         generate_inputs = _BaseTrainer._prepare_inputs(self, generate_inputs)
@@ -581,7 +592,7 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
 
         prompt_length = generate_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
-        is_eos = completion_ids == self.eos_token_id
+        is_eos = completion_ids == self._tokenizer.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         seq_idx = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -626,13 +637,13 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
 
         Dispatches between three objectives based on `distillation_mode`:
 
-            - `"topk_logits"`: top-k approximation of the divergence, optionally with a tail bucket for the
-              remaining probability mass (`distillation_add_tail`).
+            - `"topk_logits"`: top-k approximation of the divergence, optionally with a tail bucket for the remaining
+              probability mass (`distillation_add_tail`).
             - `"full_logits"`: full-vocab divergence.
             - `"sampled_token"`: token-level (reverse-KL) distillation on sampled `completion_ids`.
 
-        When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a
-        clipped importance-sampling ratio between the current student and the student at rollout time.
+        When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a clipped
+        importance-sampling ratio between the current student and the student at rollout time.
         """
         if distillation_logits.response_mask.sum() == 0:
             mode = "train" if model.training else "eval"
@@ -814,8 +825,8 @@ class BaseSelfDistillationTrainer(_BaseTrainer, ABC):
     ) -> TrainingBatch:
         """Build the final training batch from a shared student rollout batch.
 
-        Subclasses must return a `dict` with at least the following keys, all first-dim-aligned to the student
-        batch size `B`:
+        Subclasses must return a `dict` with at least the following keys, all first-dim-aligned to the student batch
+        size `B`:
 
             - `prompt_ids`: student prompt ids.
             - `prompt_mask`: student prompt mask.

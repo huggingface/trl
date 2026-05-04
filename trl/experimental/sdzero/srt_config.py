@@ -30,11 +30,11 @@ class SRTConfig(SFTConfig):
         chat_template_kwargs (`dict[str, Any]` or `None`, *optional*):
             Extra keyword arguments forwarded to `apply_chat_template` when rendering SRT prompts and assistant turns.
         include_generation_loss (`bool`, *optional*, defaults to `True`):
-            Whether to include the generation loss term, which supervises the model on the full assistant turn
-            (initial answer, control prompt, and revised answer) given only the problem.
+            Whether to include the generation loss term, which supervises the model on the full assistant turn (initial
+            answer, control prompt, and revised answer) given only the problem.
         include_revision_loss (`bool`, *optional*, defaults to `True`):
-            Whether to include the revision loss term, which supervises the model only on the revised answer given
-            the full context (problem, initial answer, control prompt).
+            Whether to include the revision loss term, which supervises the model only on the revised answer given the
+            full context (problem, initial answer, control prompt).
     """
 
     _VALID_DICT_FIELDS = SFTConfig._VALID_DICT_FIELDS + ["chat_template_kwargs"]

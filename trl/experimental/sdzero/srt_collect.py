@@ -26,18 +26,18 @@ For each `(problem, gold_answer)` pair in the seed dataset:
     1. Sample one initial response `y_init` from the model.
     2. Verify `y_init` (correct vs. incorrect).
     3. Select a control prompt based on the outcome:
-       - correct   → "Let me rephrase the above solution."
+       - correct → "Let me rephrase the above solution."
        - incorrect → "Wait, this response is not correct, let me start over."
     4. Sample `num_revisions` revised responses conditioned on `[problem, y_init, control_prompt]`.
     5. Keep only revisions that verify as correct.
 
 The resulting dataset has one row per kept revision with columns:
 
-- `problem`        (str): the original problem statement.
-- `y_init`         (str): the model's initial response.
-- `r_init`         (int): 1 if `y_init` was correct, 0 otherwise.
+- `problem` (str): the original problem statement.
+- `y_init` (str): the model's initial response.
+- `r_init` (int): 1 if `y_init` was correct, 0 otherwise.
 - `control_prompt` (str): the rephrase/restart nudge used to elicit the revision.
-- `y_revised`      (str): a verified-correct revised response.
+- `y_revised` (str): a verified-correct revised response.
 
 Saved via `datasets.save_to_disk` for direct consumption by [`SRTTrainer`].
 
@@ -49,9 +49,8 @@ Generation backend is selectable at the CLI:
 Example:
 
     uv run python trl/experimental/sdzero/srt_collect.py \\
-        --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \\
-        --num_problems 256 --num_revisions 3 \\
-        --output_dir srt_revision_data
+        --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \\ --num_problems 256 --num_revisions 3 \\ --output_dir
+        srt_revision_data
 """
 
 import argparse

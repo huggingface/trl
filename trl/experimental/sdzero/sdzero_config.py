@@ -25,16 +25,16 @@ class SDZeroConfig(SelfDistillationConfig):
 
     Parameters:
         assistant_turn_template (`str`, *optional*, defaults to `"{y}\n\n{control_prompt}\n\n"`):
-            Template used to compose the teacher-side assistant prefix from the sampled response `y` and the
-            control prompt.
+            Template used to compose the teacher-side assistant prefix from the sampled response `y` and the control
+            prompt.
 
          > Parameters that control the teacher
 
         teacher_model_kind (`str`, *optional*, defaults to `"base"`):
             Semantic teacher choice. Defaults to `"base"` so the teacher stays fixed throughout training.
         teacher_update_rate (`float`, *optional*, defaults to `1.0`):
-            EMA update rate used when `teacher_model_kind="ema"`. Defaults to `1.0` so opting into EMA gives
-            periodic hard teacher resync.
+            EMA update rate used when `teacher_model_kind="ema"`. Defaults to `1.0` so opting into EMA gives periodic
+            hard teacher resync.
         teacher_sync_steps (`int`, *optional*, defaults to `512`):
             Number of optimizer steps between EMA teacher updates.
 

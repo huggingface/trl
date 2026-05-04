@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from ..self_distillation.self_distillation_config import SelfDistillationConfig
 
@@ -28,6 +29,12 @@ class SDFTConfig(SelfDistillationConfig):
         teacher_model_kind (`str`, *optional*, defaults to `"base"`):
             Semantic teacher choice for SDFT. `base` uses the initial student, `live` uses the current student, and
             `ema` uses an exponentially averaged teacher.
+        distillation_alpha (`float`, *optional*, defaults to `0.5`):
+            Divergence interpolation coefficient for SDFT top-k logit distillation.
+        distillation_mode (`Literal["sampled_token", "full_logits", "topk_logits"]`, *optional*, defaults to `"topk_logits"`):
+            Distillation objective mode. SDFT defaults to the previous effective top-k logit objective.
+        distillation_topk (`int` or `None`, *optional*, defaults to `100`):
+            Number of top tokens used by the default SDFT top-k logit objective.
         generate_from_teacher (`bool`, *optional*, defaults to `False`):
             Whether on-policy generation should use the teacher-conditioned prompt instead of the student prompt.
         teacher_prompt_template (`str`, *optional*, defaults to `"{prompt}\n\n{privileged_context}"`):
@@ -46,6 +53,18 @@ class SDFTConfig(SelfDistillationConfig):
             "help": "Semantic teacher choice for SDFT. `base` uses the initial student, `live` uses the current "
             "student, and `ema` uses an exponentially averaged teacher."
         },
+    )
+    distillation_alpha: float = field(
+        default=0.5,
+        metadata={"help": "Divergence interpolation coefficient for SDFT top-k logit distillation."},
+    )
+    distillation_mode: Literal["sampled_token", "full_logits", "topk_logits"] = field(
+        default="topk_logits",
+        metadata={"help": "Distillation objective mode. SDFT defaults to top-k logit distillation."},
+    )
+    distillation_topk: int | None = field(
+        default=100,
+        metadata={"help": "Number of top tokens used by the default SDFT top-k logit objective."},
     )
     generate_from_teacher: bool = field(
         default=False,

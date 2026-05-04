@@ -45,14 +45,13 @@ class SRTTrainer(SFTTrainer):
     """
     Trainer for Self-Revision Training (SRT) from [Self-Distillation Zero](https://huggingface.co/papers/2604.12002).
 
-    SRT trains a model with a joint objective combining two complementary loss terms. Each dataset row is
-    expanded into two training records that share the same token sequence but differ in which tokens are
-    supervised:
+    SRT trains a model with a joint objective combining two complementary loss terms. Each dataset row is expanded into
+    two training records that share the same token sequence but differ in which tokens are supervised:
 
-    - **Revision record**: loss computed only on the revised answer, conditioned on the full context
-      (problem, initial answer, control prompt) as input.
-    - **Generation record**: loss computed on the entire assistant turn — initial answer, control prompt,
-      and revised answer — conditioned on only the problem as input.
+    - **Revision record**: loss computed only on the revised answer, conditioned on the full context (problem, initial
+      answer, control prompt) as input.
+    - **Generation record**: loss computed on the entire assistant turn — initial answer, control prompt, and revised
+      answer — conditioned on only the problem as input.
 
     The dataset must contain four string columns: `problem`, `y_init`, `control_prompt`, and `y_revised`.
 
@@ -74,8 +73,8 @@ class SRTTrainer(SFTTrainer):
         eval_dataset ([`~datasets.Dataset`] or `dict[str, Dataset]`, *optional*):
             Dataset for evaluation. Must meet the same column requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
-            Processing class used to tokenize the data. If `None`, loaded from the model name. A padding token
-            must be set; if absent, `eos_token` is used.
+            Processing class used to tokenize the data. If `None`, loaded from the model name. A padding token must be
+            set; if absent, `eos_token` is used.
         compute_loss_func (`Callable`, *optional*):
             Custom loss function. See [`SFTTrainer`] for details.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -178,25 +177,21 @@ class SRTTrainer(SFTTrainer):
         - `control_prompt`: the verifier-derived revision cue `P_r`
         - `y_revised`: the revised answer
 
-        From each row, this function emits up to two tokenized samples over the same
-        serialized chat:
+        From each row, this function emits up to two tokenized samples over the same serialized chat:
 
-            user: problem
-            assistant: <assistant_template(y_init, control_prompt, y_revised)>
+            user: problem assistant: <assistant_template(y_init, control_prompt, y_revised)>
 
         with different completion masks:
 
         - Revision sample: loss is applied only to the `y_revised` suffix.
-        - Generation sample: loss is applied to the full assistant trace
-          `y_init + control_prompt + y_revised`.
+        - Generation sample: loss is applied to the full assistant trace `y_init + control_prompt + y_revised`.
 
-        To support arbitrary chat templates, token boundaries are computed from
-        structured chat renders rather than manual token concatenation:
+        To support arbitrary chat templates, token boundaries are computed from structured chat renders rather than
+        manual token concatenation:
 
-        - The generation boundary comes from the canonical prompt-only render with
-          `add_generation_prompt=True`.
-        - The revision boundary comes from rendering the same chat while continuing
-          the assistant message immediately before the `y_revised` suffix.
+        - The generation boundary comes from the canonical prompt-only render with `add_generation_prompt=True`.
+        - The revision boundary comes from rendering the same chat while continuing the assistant message immediately
+          before the `y_revised` suffix.
         """
 
         tokenizer = processing_class.tokenizer if isinstance(processing_class, ProcessorMixin) else processing_class

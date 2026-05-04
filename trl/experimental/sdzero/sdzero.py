@@ -22,11 +22,11 @@
 
 """Training script for [`SDZeroTrainer`] — SD-Zero Phase 2 (On-Policy Self-Distillation).
 
-Trains a model with on-policy self-distillation via revision feedback. The model (typically a Phase 1 SRT
-checkpoint) acts as both student and frozen teacher. The student generates responses on-policy, a binary verifier
-determines correctness, and the student is trained to match the teacher's revision distribution. By default,
-[`SDZeroConfig`] uses a frozen base teacher, full-logit distillation, `distillation_alpha=1.0`, no
-importance-sampling clipping, and one rollout per prompt.
+Trains a model with on-policy self-distillation via revision feedback. The model (typically a Phase 1 SRT checkpoint)
+acts as both student and frozen teacher. The student generates responses on-policy, a binary verifier determines
+correctness, and the student is trained to match the teacher's revision distribution. By default, [`SDZeroConfig`] uses
+a frozen base teacher, full-logit distillation, `distillation_alpha=1.0`, no importance-sampling clipping, and one
+rollout per prompt.
 
 The dataset must expose a `problem` column (the question) and an `answer` column (the gold final answer).
 
