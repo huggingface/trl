@@ -305,11 +305,11 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
 
             aux_loss = load_balancing_loss_func(
                 outputs.router_logits,
-                self.num_experts,
-                self.num_experts_per_tok,
+                text_config.num_experts,
+                text_config.num_experts_per_tok,
                 attention_mask,
             )
-            loss = loss + self.router_aux_loss_coef * aux_loss.to(loss.device)
+            loss = loss + text_config.router_aux_loss_coef * aux_loss.to(loss.device)
 
         return _ChunkedCELMHeadOutput(
             loss=loss,
