@@ -56,7 +56,7 @@ kernels = [
     "kernels"
 ]
 liger = [
-    "liger-kernel>=0.7.0"
+    "liger-kernel>=0.8.0"
 ]
 peft = [
     "peft>=0.8.0"
@@ -103,7 +103,7 @@ dev = [
     # kernels
     "kernels",
     # liger
-    "liger-kernel>=0.7.0",
+    "liger-kernel>=0.8.0",
     # peft
     "peft>=0.8.0",
     # quality
@@ -166,10 +166,12 @@ known-first-party = ["trl"]
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "low_priority: marks tests as low priority (deselect with '-m \"not low_priority\"')"
+    "low_priority: marks tests as low priority (deselect with '-m \"not low_priority\"')",
+    "invariant: training-invariant checks (run with '-m invariant')",
 ]
 norecursedirs = [
     "tests/experimental",
+    "tests/invariant",
 ]
 filterwarnings = [
     # SWIG deprecations from SWIG-generated C/C++ extensions: sentencepiece
