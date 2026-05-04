@@ -95,7 +95,7 @@ math_verify = [
     "math-verify>=0.5.2",
 ]
 openreward = [
-    "openreward>=0.1.109",
+    "openreward>=0.1.109; python_version >= '3.11'",  # openreward requires Python 3.11+
 ]
 dev = [
     # bco
@@ -107,8 +107,8 @@ dev = [
     "kernels",
     # liger
     "liger-kernel>=0.8.0",
-    # openreward
-    "openreward>=0.1.109",
+    # openreward (requires Python 3.11+)
+    "openreward>=0.1.109; python_version >= '3.11'",
     # peft
     "peft>=0.8.0",
     # quality
