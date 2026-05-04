@@ -43,10 +43,11 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from functools import cached_property
-from typing import Any, Callable
+from typing import Any
 
-from .environment import _RolloutEnvironment, _import_openreward
+from .environment import _import_openreward, _RolloutEnvironment
 
 
 logger = logging.getLogger(__name__)

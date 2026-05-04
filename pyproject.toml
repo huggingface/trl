@@ -107,6 +107,8 @@ dev = [
     "kernels",
     # liger
     "liger-kernel>=0.8.0",
+    # openreward
+    "openreward>=0.1.109",
     # peft
     "peft>=0.8.0",
     # quality

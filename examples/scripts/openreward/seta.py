@@ -63,7 +63,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="Eigent/SETA",
         help="ORS env target — either a catalog name (e.g. 'Eigent/SETA') or a URL "
-             "(e.g. 'https://you-seta.hf.space').",
+        "(e.g. 'https://you-seta.hf.space').",
     )
     parser.add_argument("--split", type=str, default="train")
     parser.add_argument("--num-tasks", type=int, default=64)

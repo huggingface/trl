@@ -37,6 +37,7 @@ def _import_openreward():
     """Lazy-import the openreward package with a friendly error message."""
     try:
         import openreward
+
         return openreward
     except ImportError as e:
         raise ImportError(
@@ -57,13 +58,21 @@ _JSON_TYPE_TO_PY: dict[str, str] = {
 }
 
 _PY_TYPE_OBJECTS: dict[str, type] = {
-    "str": str, "int": int, "float": float,
-    "bool": bool, "list": list, "dict": dict,
+    "str": str,
+    "int": int,
+    "float": float,
+    "bool": bool,
+    "list": list,
+    "dict": dict,
 }
 
 _PY_TYPE_FROM_VALUE: dict[type, str] = {
-    bool: "bool", int: "int", float: "float",
-    str: "str", list: "list", dict: "dict",
+    bool: "bool",
+    int: "int",
+    float: "float",
+    str: "str",
+    list: "list",
+    dict: "dict",
 }
 
 
@@ -223,6 +232,7 @@ class _RolloutEnvironment:
 
         if task_spec is not None:
             from openreward.api.environments.client import Task
+
             task = Task(
                 server_name=self._env.server if hasattr(self._env, "server") else self._env.name,
                 environment_name=self._env.name,
@@ -251,8 +261,7 @@ class _RolloutEnvironment:
         try:
             # The SDK's Session context-manager exit deletes both the env
             # state and the sid. We look up the original CM from the SDK.
-            self._session.__exit__(None, None, None) if hasattr(self._session, "__exit__") \
-                else None
+            self._session.__exit__(None, None, None) if hasattr(self._session, "__exit__") else None
         except Exception as e:  # noqa: BLE001
             logger.debug("session teardown failed: %s", e)
         self._session = None
@@ -352,7 +361,7 @@ def _spec_to_dict(spec: Any) -> dict[str, Any]:
     if isinstance(spec, dict):
         return spec
     return {
-        "name": getattr(spec, "name"),
+        "name": spec.name,
         "description": getattr(spec, "description", None),
         "input_schema": getattr(spec, "input_schema", None) or {},
     }
