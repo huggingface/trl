@@ -51,7 +51,7 @@ CUDA_VISIBLE_DEVICES=0,1 accelerate launch \
 import argparse
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.experimental.openreward import OpenRewardEnv
+from trl.experimental.openreward import OpenRewardSpec
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,7 +90,7 @@ def main() -> None:
     args = parse_args()
 
     # One spec object — fans out into TRL's three slots.
-    env = OpenRewardEnv(args.target, num_tasks=args.num_tasks, split=args.split)
+    spec = OpenRewardSpec(args.target, num_tasks=args.num_tasks, split=args.split)
 
     config_kwargs: dict = dict(
         learning_rate=args.learning_rate,
@@ -102,11 +102,6 @@ def main() -> None:
         max_tool_calling_iterations=args.max_tool_calling_iterations,
         chat_template_kwargs={"enable_thinking": False},
         log_completions=True,
-        bf16=True,
-        gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
-        beta=0.01,
-        loss_type="grpo",
         use_vllm=True,
         vllm_mode=args.vllm_mode,
         report_to=[s.strip() for s in args.report_to.split(",") if s.strip() and s.strip() != "none"] or "none",
@@ -121,9 +116,9 @@ def main() -> None:
     trainer = GRPOTrainer(
         model=args.model,
         args=GRPOConfig(**config_kwargs),
-        train_dataset=env.dataset,
-        environment_factory=env.factory,
-        reward_funcs=env.reward_func,
+        train_dataset=spec.train_dataset,
+        environment_factory=spec.environment_factory,
+        reward_funcs=spec.reward_funcs,
     )
     trainer.train()
 

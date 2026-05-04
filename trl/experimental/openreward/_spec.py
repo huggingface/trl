@@ -14,22 +14,23 @@
 
 """User-facing spec object for the OpenReward × TRL integration.
 
-The user constructs **one** ``OpenRewardEnv`` and reads three
-properties off of it — ``.dataset``, ``.factory``, ``.reward_func`` —
-to fill in the three TRL slots:
+The user constructs **one** ``OpenRewardSpec`` (a thin specification
+holding the env target + a few options) and reads three properties off
+of it — ``.train_dataset``, ``.environment_factory``, ``.reward_funcs``
+— each of which plugs directly into the matching ``GRPOTrainer`` kwarg:
 
 ```python
 from trl import GRPOConfig, GRPOTrainer
-from trl.experimental.openreward import OpenRewardEnv
+from trl.experimental.openreward import OpenRewardSpec
 
-env = OpenRewardEnv("Eigent/SETA", num_tasks=64)
+spec = OpenRewardSpec("Eigent/SETA", num_tasks=64)
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen3-4B",
     args=GRPOConfig(num_generations=2, max_steps=5, max_tool_calling_iterations=20),
-    train_dataset=env.dataset,
-    environment_factory=env.factory,
-    reward_funcs=env.reward_func,
+    train_dataset=spec.train_dataset,
+    environment_factory=spec.environment_factory,
+    reward_funcs=spec.reward_funcs,
 )
 trainer.train()
 ```
@@ -66,7 +67,7 @@ def _outcome_only_reward_func(environments, **_):
     return [env.reward for env in environments]
 
 
-class OpenRewardEnv:
+class OpenRewardSpec:
     """Single spec object that wires an ORS environment into a TRL trainer.
 
     Args:
@@ -124,10 +125,11 @@ class OpenRewardEnv:
     # ── public surface ──────────────────────────────────────────────
 
     @cached_property
-    def dataset(self):
+    def train_dataset(self):
         """A `datasets.Dataset` derived from the env's task list.
 
-        Built lazily on first access. Has at minimum:
+        Plugs directly into TRL's ``train_dataset=`` slot. Built lazily
+        on first access. Has at minimum:
           - `prompt`: empty user message (TRL appends the env's prompt).
           - `task_index`: int passed to the adapter's `reset()`.
           - per-task metadata columns (when `include_metadata=True`).
@@ -175,20 +177,21 @@ class OpenRewardEnv:
         return Dataset.from_dict(rows)
 
     @cached_property
-    def factory(self) -> Callable[[], _RolloutEnvironment]:
+    def environment_factory(self) -> Callable[[], _RolloutEnvironment]:
         """Zero-arg callable that returns a fresh ``_RolloutEnvironment``.
 
-        TRL calls this once per rollout slot at trainer construction
-        time, so each rollout has an isolated ORS session. Reuses the
-        spec's already-discovered SDK env + tool specs to skip per-env
-        HTTP at trainer init.
+        Plugs directly into TRL's ``environment_factory=`` slot. TRL
+        calls this once per rollout at trainer construction time, so
+        each rollout has an isolated ORS session. Reuses the spec's
+        already-discovered SDK env + tool specs to skip per-env HTTP
+        at trainer init.
         """
         # Pre-fetch tool specs once at the spec level.
         env = self._sdk_env
         tool_specs = env.list_tools()
         client = env.client if hasattr(env, "client") else self._sdk_client
 
-        kwargs: dict[str, Any] = {
+        kwargs = {
             "split": self._split,
             "secrets": self._effective_secrets(),
             "env_name": self._env_name,
@@ -211,10 +214,11 @@ class OpenRewardEnv:
         return _make
 
     @property
-    def reward_func(self) -> Callable[..., list[float]]:
+    def reward_funcs(self) -> Callable[..., list[float]]:
         """Default outcome-only reward function (last non-null reward per rollout).
 
-        Stable identity — module-level function, picklable for multi-process workers.
+        Plugs directly into TRL's ``reward_funcs=`` slot. Stable identity
+        — module-level function, picklable for multi-process workers.
         """
         return _outcome_only_reward_func
 

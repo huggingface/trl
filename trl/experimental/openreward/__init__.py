@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ._spec import OpenRewardEnv
+from ._spec import OpenRewardSpec
 
 
-__all__ = ["OpenRewardEnv"]
+__all__ = ["OpenRewardSpec"]

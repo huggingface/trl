@@ -98,7 +98,7 @@ class _RolloutEnvironment:
     """Per-rollout TRL adapter backed by the ``openreward`` SDK.
 
     **Internal class.** Users don't construct this directly; they create
-    an :class:`OpenRewardEnv` and pass ``env.factory`` to
+    an :class:`OpenRewardSpec` and pass ``spec.environment_factory`` to
     ``GRPOTrainer``. TRL's trainer then constructs one instance of this
     per rollout slot.
 
