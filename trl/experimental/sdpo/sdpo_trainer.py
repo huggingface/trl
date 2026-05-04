@@ -73,7 +73,9 @@ class SuccessfulRolloutTeacherContextBuilder:
         ]
         teacher_prompt_mask = [torch.ones(len(ids), dtype=torch.long, device=device) for ids in teacher_prompt_ids]
         return {
-            "prompt_ids": pad(teacher_prompt_ids, padding_value=self.trainer.pad_token_id, padding_side="left"),
+            "prompt_ids": pad(
+                teacher_prompt_ids, padding_value=self.trainer._tokenizer.pad_token_id, padding_side="left"
+            ),
             "prompt_mask": pad(teacher_prompt_mask, padding_value=0, padding_side="left"),
         }
 
@@ -101,7 +103,7 @@ class SuccessfulRolloutTeacherContextBuilder:
         # Use separate variables so the original completion_ids/completion_mask stay unpadded for the
         # teacher concat (they must match the student's sequence length for logits_to_keep alignment).
         padded_completion_ids = self.trainer.accelerator.pad_across_processes(
-            completion_ids, dim=1, pad_index=self.trainer.pad_token_id
+            completion_ids, dim=1, pad_index=self.trainer._tokenizer.pad_token_id
         )
         all_completion_ids = self.trainer.accelerator.gather(padded_completion_ids)
         all_prompts = gather_object(prompts)
@@ -179,7 +181,7 @@ class SuccessfulRolloutTeacherContextBuilder:
                 if demo_idx is None:
                     raise RuntimeError("Expected a successful demonstration index for an active SDPO teacher prompt.")
                 demo_ids = all_completion_ids[demo_idx]
-                demo_ids = demo_ids[demo_ids != self.trainer.processing_class.pad_token_id]
+                demo_ids = demo_ids[demo_ids != self.trainer._tokenizer.pad_token_id]
                 demo_text = self.trainer.processing_class.decode(demo_ids, skip_special_tokens=True)
 
                 if self.trainer.args.remove_thinking_from_demonstration:
@@ -431,7 +433,7 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
-        eos_and_pad = [self.eos_token_id, self.pad_token_id]
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())

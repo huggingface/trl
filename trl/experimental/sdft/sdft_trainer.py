@@ -107,9 +107,9 @@ class DemonstrationTeacherContextBuilder:
         device = completion_ids.device
         teacher_prompt_ids = [torch.tensor(ids) for ids in teacher_prompt_ids_list]
         teacher_prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in teacher_prompt_ids]
-        teacher_prompt_ids = pad(teacher_prompt_ids, padding_value=self.trainer.pad_token_id, padding_side="left").to(
-            device=device
-        )
+        teacher_prompt_ids = pad(
+            teacher_prompt_ids, padding_value=self.trainer._tokenizer.pad_token_id, padding_side="left"
+        ).to(device=device)
         teacher_prompt_mask = pad(teacher_prompt_mask, padding_value=0, padding_side="left").to(device=device)
         teacher_input_ids = torch.cat([teacher_prompt_ids, completion_ids], dim=1)
         teacher_attention_mask = torch.cat([teacher_prompt_mask, completion_mask], dim=1)
