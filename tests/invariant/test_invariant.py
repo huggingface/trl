@@ -189,6 +189,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
         "members": [
             _build("sft_default", "sft", SFT_DATASET),
             _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
+            _build("sft_no_grad_ckpt", "sft", SFT_DATASET, gradient_checkpointing=False),
         ],
     },
     "dpo": {
@@ -197,6 +198,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
         "members": [
             _build("dpo_default", "dpo", DPO_DATASET),
             _build("dpo_pdb1_gas8", "dpo", DPO_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
+            _build("dpo_no_grad_ckpt", "dpo", DPO_DATASET, gradient_checkpointing=False),
         ],
     },
 }
