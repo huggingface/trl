@@ -1164,7 +1164,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         device = last_hidden.device
         N, _ = last_hidden.shape
         vocab, _ = weight.shape
-        inv_t = logit_scale / temperature
+        inv_t = 1 / temperature
 
         # NOTE(@aminediro): always acc in fp32 for stability
         max_old = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
@@ -1186,6 +1186,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             logits_chunk = logits_buf[:, :C]
             logits_chunk.copy_(mm_buf[:, :C])
 
+            logits_chunk.mul_(logit_scale)
             if final_logit_softcapping is not None:
                 logits_chunk.div_(final_logit_softcapping).tanh_().mul_(final_logit_softcapping)
 
@@ -1226,7 +1227,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         chunk_size: int = ctx.chunk_size
         logit_scale: float = ctx.logit_scale
         final_logit_softcapping: float = ctx.final_logit_softcapping
-        inv_t = logit_scale / temperature
+        inv_t = 1 / temperature
 
         N, _ = hidden.shape
         vocab = weight.shape[0]
@@ -1251,6 +1252,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             logits_chunk = logits_buf[:, :C]
             logits_chunk.copy_(mm_buf[:, :C])
 
+            logits_chunk.mul_(logit_scale)
             if final_logit_softcapping is not None:
                 tanh_scaled = torch.tanh(logits_chunk / final_logit_softcapping)
                 logits_chunk.copy_(tanh_scaled * final_logit_softcapping)
@@ -1266,10 +1268,11 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             # If label in chunk add g to grad else it stays the same
             grad_logits[row_idx, local_idx] += g * in_chunk_cond
 
+            grad_logits = grad_logits * inv_t
             if final_logit_softcapping is not None:
                 grad_logits.mul_(1 - tanh_scaled.pow(2))
 
-            grad_logits = grad_logits * inv_t
+            grad_logits = grad_logits * logit_scale
 
             grad_hidden.add_(grad_logits @ w_chunk.float())
             grad_weight[start:end].add_(grad_logits.t() @ hidden.float())
