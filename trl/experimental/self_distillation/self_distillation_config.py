@@ -130,9 +130,10 @@ class SelfDistillationConfig(_BaseConfig):
 
         > Parameters that control self-distillation
 
-        distillation_alpha (`float`, *optional*, defaults to `0.5`):
+        distillation_alpha (`float`, *optional*, defaults to `1.0`):
             KL divergence direction: `0.0=forward KL`, `0.5=JSD`,
-            `1.0=reverse KL`.
+            `1.0=reverse KL`. The default is valid for the shared `"sampled_token"` mode; method-specific configs
+            may override it.
         distillation_mode (`Literal["sampled_token", "full_logits", "topk_logits"]`, *optional*, defaults to `"sampled_token"`):
             Distillation objective mode. `"sampled_token"` uses token-level distillation on the sampled completion
             tokens, `"full_logits"` uses full-vocabulary divergence, and `"topk_logits"` uses a top-k approximation
@@ -320,8 +321,11 @@ class SelfDistillationConfig(_BaseConfig):
         metadata={"help": "Reserved for entropy-based token filtering."},
     )
     distillation_alpha: float = field(
-        default=0.5,
-        metadata={"help": "KL divergence direction: `0.0=forward KL`, `0.5=JSD`, `1.0=reverse KL`."},
+        default=1.0,
+        metadata={
+            "help": "KL divergence direction: `0.0=forward KL`, `0.5=JSD`, `1.0=reverse KL`. The default is "
+            "valid for the shared sampled-token mode; method-specific configs may override it."
+        },
     )
     distillation_mode: Literal["sampled_token", "full_logits", "topk_logits"] = field(
         default="sampled_token",
