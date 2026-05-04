@@ -4,6 +4,70 @@ source {{ venv_path | default('/fsx/amine_dirhoussi/trl/.venv/bin/activate') }}
 export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
 export MASTER_PORT={{ master_port | default(29500) }}
 export HF_HOME=/fsx/amine_dirhoussi/.cache
+# Note: HF_HUB_OFFLINE=1 was tried 2026-05-01 21:52 during a transient HF Hub 500 outage on
+# sonic-moe but the `kernels` library doesn't respect this env var (uses its own local_files_only
+# param). HF came back online; reverted.
+
+# E3 mitigation (2026-05-01): bump NCCL heartbeat / watchdog timeouts so multi-rank
+# torch.compile warmup doesn't trip the default 30s heartbeat and crash rank-0's
+# TCPStore handler — symptom seen in P3/P4/Q2/P5 was 'TCPStore sendBytes ... Broken pipe'
+# spam from non-zero ranks, never reaching first training step.
+export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=600
+export NCCL_HEARTBEAT_TIMEOUT_SEC=600
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+
+# D-works.bug debugging (2026-05-01 evening): capture full pre-hang collective trace so when
+# the EP-multi-node ALLREDUCE-on-PG-ID-2 hang fires, we see exactly which call site is desynced.
+# NCCL_DEBUG=WARN keeps stderr quiet during normal training (full INFO is too verbose) but
+# emits warnings/errors. TORCH_NCCL_TRACE_BUFFER_SIZE enables in-memory collective trace dump
+# on watchdog timeout. TORCH_DISTRIBUTED_DEBUG=DETAIL adds work_id annotations to collectives.
+export NCCL_DEBUG=WARN
+export TORCH_NCCL_TRACE_BUFFER_SIZE=16384
+# Test C 2026-05-02: revert AVOID_RECORD_STREAMS — Theory 3 didn't fix it.
+# Test C uses sft_trainer.py patch (gc.collect + empty_cache per compute_loss) instead.
+# NOTE: Tried NCCL_ALGO=Ring, NCCL_PROTO=Simple — neither fixed. NCCL trace dump showed
+# hang is on EP all-reduce inside model forward — node 1's EP group stuck at iteration 754
+# while node 0's EP group + DP partner on node 1 (rank 11) finished. Tried torch.cuda.synchronize()
+# and dist.barrier() in compute_loss before gather_for_metrics — neither fixed. The bug is
+# the EP all-reduce itself, not the gather. Trying CUDA allocator tweak next.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# NOTE: TORCH_DISTRIBUTED_DEBUG=DETAIL was tried 2026-05-01 but broke DS-Z2 + EP at 4n with
+# `RuntimeError: No backend for the parent process group or its backend does not support splitting`
+# in `init_device_mesh -> split_group` (DETAIL wraps the parent PG with _ProcessGroupWrapper
+# which doesn't implement split). Job 22099817. Disabled.
+export TORCH_NCCL_DUMP_ON_TIMEOUT=1
+# Dump path on FSx so we can read traces from the launch node after a hang.
+mkdir -p /fsx/amine_dirhoussi/nccl-traces
+export TORCH_NCCL_DEBUG_INFO_TEMP_FILE="/fsx/amine_dirhoussi/nccl-traces/nccl_trace_${SLURM_JOB_ID:-unknown}_rank_${SLURM_PROCID:-0}_${HOSTNAME}"
+
+# H4 mitigation (2026-05-01): per-rank Triton cache dir. Set BEFORE python starts so sonicmoe's
+# Triton kernels honor it (sft.py:69-73 sets the same default but only after some early imports
+# may have already initialized Triton's cache lookup). Without this, 32+ ranks race on
+# /fsx/<user>/.triton/<HASH>/<kernel>.{source,ptx} and one rank reads a partial file.
+# SLURM_PROCID is the global process rank set by srun. HOSTNAME makes the dir unique per node
+# even if SLURM_PROCID is reset (e.g. by accelerate's per-node torchrun spawn).
+export TRITON_CACHE_DIR="/tmp/triton-rank-${SLURM_PROCID:-0}-${HOSTNAME}"
+mkdir -p "$TRITON_CACHE_DIR"
+
+# Test F debug instrumentation (2026-05-02): capture per-step batch metadata + per-call EP
+# all-reduce input stats so we can diff the last-good vs first-bad call when the bug fires.
+# Each rank writes to its own jsonl file; safe to leave on (no sync, only shape logging).
+{% if h5_mode|default('full') == 'full' %}
+export BATCH_DEBUG_DIR="/fsx/amine_dirhoussi/ep-hang-debug/job_${SLURM_JOB_ID:-unknown}/batch"
+export EP_DEBUG_DIR="/fsx/amine_dirhoussi/ep-hang-debug/job_${SLURM_JOB_ID:-unknown}/ep"
+export H5_DEBUG_DIR="/fsx/amine_dirhoussi/ep-hang-debug/job_${SLURM_JOB_ID:-unknown}/h5"
+mkdir -p "$BATCH_DEBUG_DIR" "$EP_DEBUG_DIR" "$H5_DEBUG_DIR"
+{% elif h5_mode == 'sync_only' %}
+# H5 verification: sync only, no heavy logging (test if .item() is the fix)
+export H5_FORCE_SYNC=1
+{% elif h5_mode == 'nan_check' %}
+# H5 NaN investigation: scan params at step entry, gradients post-backward
+export H5_DEBUG_DIR="/fsx/amine_dirhoussi/ep-hang-debug/job_${SLURM_JOB_ID:-unknown}/h5"
+export H5_NAN_CHECK=1
+mkdir -p "$H5_DEBUG_DIR"
+{% elif h5_mode == 'baseline' %}
+# H5 verification: baseline (no sync, no logging) — should reproduce loss=0
+{% endif %}
 
 accelerate launch \
   --config_file {{ accelerate_config_path }} \

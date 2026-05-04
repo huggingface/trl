@@ -138,6 +138,7 @@ def render_launch_script(env: Environment, run: dict, config: dict, run_id: str,
         trackio_project=config.get("trackio_project", config.get("wandb_project", "trl-sft-benchmark")),
         extra_args=run.get("extra_args", config.get("extra_args", "")),
         use_regional_compilation=run.get("use_regional_compilation", config.get("use_regional_compilation", False)),
+        h5_mode=run.get("h5_mode", config.get("h5_mode", "full")),
     )
 
 

@@ -14,6 +14,7 @@
 
 import contextlib
 import json
+import os
 import types
 import warnings
 from collections import defaultdict
@@ -956,7 +957,16 @@ class SFTTrainer(_BaseTrainer):
                         )
                     else:
                         model_init_kwargs["device_mesh"] = dist.init_device_mesh("cuda", (world_size,))
+            # I3 instrumentation: time the from_pretrained that's hidden inside create_model_from_path
+            import time as _time_lt2
+
+            _t_fp = _time_lt2.time()
+            print(f"[LOAD-T] rank={int(os.environ.get('RANK', '0'))} stage=create_model_from_path_start", flush=True)  # noqa: T201
             model = create_model_from_path(model, **model_init_kwargs)
+            print(  # noqa: T201
+                f"[LOAD-T] rank={int(os.environ.get('RANK', '0'))} stage=create_model_from_path_done elapsed={_time_lt2.time() - _t_fp:.2f}s",
+                flush=True,
+            )
         else:
             if args.model_init_kwargs is not None:
                 logger.warning(
@@ -1217,8 +1227,17 @@ class SFTTrainer(_BaseTrainer):
                     "completion-only loss. To resolve this, apply your formatting function before passing the "
                     "dataset, or disable `completion_only_loss` in `SFTConfig`."
                 )
+            # I3 instrumentation
+            import time as _time_lt5
+
+            _t_pd = _time_lt5.time()
+            print(f"[LOAD-T] rank={int(os.environ.get('RANK', '0'))} stage=_prepare_dataset_train_start", flush=True)  # noqa: T201
             train_dataset = self._prepare_dataset(
                 train_dataset, processing_class, args, args.packing, formatting_func, "train"
+            )
+            print(  # noqa: T201
+                f"[LOAD-T] rank={int(os.environ.get('RANK', '0'))} stage=_prepare_dataset_train_done elapsed={_time_lt5.time() - _t_pd:.2f}s",
+                flush=True,
             )
             if eval_dataset is not None:
                 packing = args.packing if args.eval_packing is None else args.eval_packing
@@ -1562,9 +1581,97 @@ class SFTTrainer(_BaseTrainer):
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
 
+    def _get_dataloader(
+        self, dataset, description, batch_size, sampler_fn=None, is_training=False, dataloader_key=None
+    ):
+        # I3 instrumentation: time when get_dataloader is called (= after accelerator.prepare for model)
+        if not getattr(self, "_lt_dl_logged", False):
+            import time as _time_lt4
+
+            print(  # noqa: T201
+                f"[LOAD-T] rank={int(os.environ.get('RANK', '0'))} stage=_get_dataloader_first_call t_wall={_time_lt4.time():.2f} desc={description}",
+                flush=True,
+            )
+            self._lt_dl_logged = True
+        # When EP is enabled, every rank within an EP group must see the SAME micro-batch —
+        # EP shards experts only, not data. Accelerate's prepare_data_loader has no concept of
+        # EP and gives every world rank a unique data shard, which causes mismatched per-rank
+        # tensor shapes inside the experts forward and a silent NCCL hang at the EP all-reduce.
+        # Patch accelerator.prepare_data_loader for one call to use EP-corrected
+        # num_processes (= world_size // ep_size) and process_index (= global_rank // ep_size).
+        if not getattr(self.args, "enable_expert_parallel", False):
+            return super()._get_dataloader(dataset, description, batch_size, sampler_fn, is_training, dataloader_key)
+
+        from accelerate.data_loader import prepare_data_loader as _prep_dl
+
+        ep_size = getattr(self.args, "expert_parallel_size", None) or 1
+        eff_num = self.accelerator.num_processes // ep_size
+        eff_idx = self.accelerator.process_index // ep_size
+
+        orig_prepare_dl = self.accelerator.prepare_data_loader
+
+        def _patched(dataloader, device_placement=None, slice_fn_for_dispatch=None):
+            if device_placement is None:
+                device_placement = self.accelerator.device_placement
+            return _prep_dl(
+                dataloader,
+                self.accelerator.device,
+                num_processes=eff_num,
+                process_index=eff_idx,
+                split_batches=self.accelerator.split_batches,
+                put_on_device=device_placement,
+                rng_types=self.accelerator.rng_types.copy(),
+                dispatch_batches=self.accelerator.dispatch_batches,
+                even_batches=self.accelerator.even_batches,
+                slice_fn_for_dispatch=slice_fn_for_dispatch,
+                use_seedable_sampler=self.accelerator.use_seedable_sampler,
+                data_seed=self.accelerator.dataloader_config.data_seed,
+                non_blocking=self.accelerator.non_blocking,
+                use_stateful_dataloader=self.accelerator.use_stateful_dataloader,
+                torch_device_mesh=None,
+            )
+
+        self.accelerator.prepare_data_loader = _patched
+        try:
+            return super()._get_dataloader(dataset, description, batch_size, sampler_fn, is_training, dataloader_key)
+        finally:
+            self.accelerator.prepare_data_loader = orig_prepare_dl
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
         prediction_loss_only = inputs.pop("_prediction_loss_only", None)
+
+        # Per-step batch metadata logging for EP-hang debugging. Activated by BATCH_DEBUG_DIR env var.
+        # Writes one JSONL line per rank per step; lets us diff the last-good vs first-bad batch.
+        _bdd = os.environ.get("BATCH_DEBUG_DIR")
+        if _bdd is not None and mode == "train":
+            try:
+                _step = int(getattr(self.state, "global_step", -1))
+                _ids = inputs.get("input_ids")
+                _lbl = inputs.get("labels")
+                _amask = inputs.get("attention_mask")
+                _pos = inputs.get("position_ids")
+                _rec = {
+                    "step": _step,
+                    "rank": int(os.environ.get("RANK", "-1")),
+                    "shapes": {
+                        "input_ids": list(_ids.shape) if _ids is not None else None,
+                        "labels": list(_lbl.shape) if _lbl is not None else None,
+                        "attention_mask": list(_amask.shape) if _amask is not None else None,
+                        "position_ids": list(_pos.shape) if _pos is not None else None,
+                    },
+                    "label_active": int((_lbl != -100).sum().item()) if _lbl is not None else None,
+                    "amask_active": int(_amask.sum().item()) if _amask is not None else None,
+                    "pos_max": int(_pos.max().item()) if _pos is not None else None,
+                    "pos_min": int(_pos.min().item()) if _pos is not None else None,
+                    "ids_min": int(_ids.min().item()) if _ids is not None else None,
+                    "ids_max": int(_ids.max().item()) if _ids is not None else None,
+                }
+                os.makedirs(_bdd, exist_ok=True)
+                with open(f"{_bdd}/batch_rank{_rec['rank']}.jsonl", "a") as _f:
+                    _f.write(json.dumps(_rec) + "\n")
+            except Exception as _e:
+                print(f"[batch_debug] error: {_e}", flush=True)  # noqa: T201
 
         # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
         # This can be removed when this issue is fixed.
@@ -1599,6 +1706,46 @@ class SFTTrainer(_BaseTrainer):
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
+
+        # H5 hypothesis test: force a CUDA->CPU sync after super().compute_loss().
+        # Hypothesis: H5 loss-zero is a CUDA stream race where backward reads `loss` before
+        # the CE kernel finishes writing. .item() forces the kernel to complete first.
+        # Activated by H5_FORCE_SYNC=1 (independent of H5_DEBUG_DIR which adds logging).
+        if os.environ.get("H5_FORCE_SYNC", "0") == "1" and mode == "train":
+            _ = loss.detach().item()
+
+        # H5 instrumentation — log loss components per step PRE-backward to nail down
+        # whether loss=0 is from the loss kernel returning 0 or from a NaN/inf masking elsewhere.
+        # Activated by H5_DEBUG_DIR env var. Note: this also implicitly forces a sync via .item().
+        _h5d = os.environ.get("H5_DEBUG_DIR")
+        if _h5d is not None and mode == "train":
+            try:
+                _h5_step = int(getattr(self.state, "global_step", -1))
+                _h5_rank = int(os.environ.get("RANK", "-1"))
+                _lbl_h5 = inputs.get("labels") if "shift_labels" not in inputs else inputs.get("shift_labels")
+                _logits_h5 = getattr(outputs, "logits", None)
+                _h5_rec = {
+                    "step": _h5_step,
+                    "rank": _h5_rank,
+                    "loss_value": float(loss.detach().item()) if loss is not None else None,
+                    "loss_is_nan": bool(torch.isnan(loss).item()) if loss is not None else None,
+                    "loss_is_inf": bool(torch.isinf(loss).item()) if loss is not None else None,
+                    "loss_requires_grad": bool(loss.requires_grad) if loss is not None else None,
+                    "label_active": int((_lbl_h5 != -100).sum().item()) if _lbl_h5 is not None else None,
+                    "label_total": int(_lbl_h5.numel()) if _lbl_h5 is not None else None,
+                    "logits_shape": list(_logits_h5.shape) if _logits_h5 is not None else "skipped",
+                    "logits_max": float(_logits_h5.detach().abs().max().item()) if _logits_h5 is not None else None,
+                    "logits_has_nan": bool(torch.isnan(_logits_h5).any().item()) if _logits_h5 is not None else None,
+                    "logits_has_inf": bool(torch.isinf(_logits_h5).any().item()) if _logits_h5 is not None else None,
+                    "entropy_sum": float(outputs.entropy_sum.item())
+                    if hasattr(outputs, "entropy_sum") and outputs.entropy_sum is not None
+                    else None,
+                }
+                os.makedirs(_h5d, exist_ok=True)
+                with open(f"{_h5d}/h5_rank{_h5_rank}.jsonl", "a") as _f:
+                    _f.write(json.dumps(_h5_rec) + "\n")
+            except Exception as _e:
+                print(f"[h5_debug] error: {_e}", flush=True)  # noqa: T201
 
         # Compute entropy
         if self.args.loss_type == "chunked_nll":
@@ -1711,8 +1858,80 @@ class SFTTrainer(_BaseTrainer):
 
     # Override training step to add activation offloading context.
     def training_step(self, *args, **kwargs):
+        # I3 instrumentation: log the FIRST training_step call entry time, so we can
+        # measure accelerator.prepare + first-batch + first-forward latency vs from_pretrained.
+        if not getattr(self, "_lt_first_step_logged", False):
+            import time as _time_lt3
+
+            print(  # noqa: T201
+                f"[LOAD-T] rank={int(os.environ.get('RANK', '0'))} stage=first_training_step_entry t_wall={_time_lt3.time():.2f}",
+                flush=True,
+            )
+            self._lt_first_step_logged = True
+
+        # H5 NaN investigation: scan params at step entry (= post-prev-optim values).
+        # If any param contains NaN, identify which one and at which step it first appeared.
+        # Activated by H5_NAN_CHECK=1 env var.
+        if os.environ.get("H5_NAN_CHECK", "0") == "1" and self.model.training:
+            _step = int(getattr(self.state, "global_step", -1))
+            _rank = int(os.environ.get("RANK", "-1"))
+            _h5n = os.environ.get("H5_DEBUG_DIR", "/tmp")
+            _nan_params = []
+            for _name, _p in self.model.named_parameters():
+                _local = _p.to_local() if hasattr(_p, "to_local") else _p
+                if _local.numel() == 0:
+                    continue
+                if torch.isnan(_local).any():
+                    _nan_params.append(_name)
+                    if len(_nan_params) >= 5:
+                        break  # cap output
+            if _nan_params:
+                _msg = f"[H5-NAN] rank={_rank} step={_step} pre-step nan_params={_nan_params}"
+                print(_msg, flush=True)  # noqa: T201
+                try:
+                    os.makedirs(_h5n, exist_ok=True)
+                    with open(f"{_h5n}/nan_check_rank{_rank}.jsonl", "a") as _f:
+                        _f.write(
+                            json.dumps({"step": _step, "rank": _rank, "phase": "pre_step", "nan_params": _nan_params})
+                            + "\n"
+                        )
+                except Exception as _e:
+                    print(f"[h5_nan_check] error: {_e}", flush=True)  # noqa: T201
+
         with self.maybe_activation_offload_context:
-            return super().training_step(*args, **kwargs)
+            _loss_out = super().training_step(*args, **kwargs)
+
+        # H5 NaN investigation: scan gradients post-backward, before optim.step (training_step does
+        # fwd+bwd then returns; optim.step is in _inner_training_loop). Identify NaN gradients.
+        if os.environ.get("H5_NAN_CHECK", "0") == "1" and self.model.training:
+            _step = int(getattr(self.state, "global_step", -1))
+            _rank = int(os.environ.get("RANK", "-1"))
+            _h5n = os.environ.get("H5_DEBUG_DIR", "/tmp")
+            _nan_grads = []
+            for _name, _p in self.model.named_parameters():
+                if _p.grad is None:
+                    continue
+                _local = _p.grad.to_local() if hasattr(_p.grad, "to_local") else _p.grad
+                if _local.numel() == 0:
+                    continue
+                if torch.isnan(_local).any():
+                    _nan_grads.append(_name)
+                    if len(_nan_grads) >= 5:
+                        break
+            if _nan_grads:
+                _msg = f"[H5-NAN] rank={_rank} step={_step} post-bwd nan_grads={_nan_grads}"
+                print(_msg, flush=True)  # noqa: T201
+                try:
+                    os.makedirs(_h5n, exist_ok=True)
+                    with open(f"{_h5n}/nan_check_rank{_rank}.jsonl", "a") as _f:
+                        _f.write(
+                            json.dumps({"step": _step, "rank": _rank, "phase": "post_bwd", "nan_grads": _nan_grads})
+                            + "\n"
+                        )
+                except Exception as _e:
+                    print(f"[h5_nan_check] error: {_e}", flush=True)  # noqa: T201
+
+        return _loss_out
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"

@@ -93,6 +93,23 @@ def main(script_args, training_args, model_args, dataset_args):
 
     logger = logging.get_logger(__name__)
 
+    # I3 instrumentation: timestamp markers for the load-speed investigation. Activated by
+    # LOAD_TIMING=1 (defaults on; cheap to keep enabled). Per-rank lines logged to stderr with
+    # a [LOAD-T] prefix for grep-ability.
+    import os as _os_lt
+    import time as _time_lt
+
+    _LT_T0 = _time_lt.time()
+    _LT_RANK = int(_os_lt.environ.get("RANK", "0"))
+
+    def _lt(stage):
+        if _os_lt.environ.get("LOAD_TIMING", "1") == "0":
+            return
+        dt = _time_lt.time() - _LT_T0
+        print(f"[LOAD-T] rank={_LT_RANK} t={dt:7.2f}s stage={stage}", flush=True)  # noqa: T201
+
+    _lt("main_entry")
+
     ################
     # Model init kwargs
     ################
@@ -103,41 +120,42 @@ def main(script_args, training_args, model_args, dataset_args):
         dtype=model_args.dtype,
     )
 
-    # With EP, transformers shard resolution races 16+ ranks × 16 shards through hub HEAD
-    # requests; some get rate-limited, raising spurious OSErrors. HF_HUB_OFFLINE=1 fixes the
-    # model load but blocks the kernels package's hub `get_kernel` calls. So: pre-warm the
-    # sonicmoe kernel (which uses @functools.cache, only one path), then flip offline.
-    # Only enable this dance for EP runs — non-EP runs don't hit the race and need hub access
-    # for FA3's `load_and_register_attn_kernel` which has its own get_kernel path the pre-warm
-    # doesn't cover.
+    # Pre-warm hub-fetched kernels then flip HF_HUB_OFFLINE=1 to avoid 100+ ranks racing the
+    # Hub for cached shards. Originally only EP runs did this (because EP hit a shard-resolution
+    # race), but every multi-node run benefits — the Hub freshness check at startup serializes
+    # under high rank count even when shards are fully cached on FSx. Anecdotal: B7 (235B 16n
+    # DS-Z3+SP, no EP) was sitting in HF Hub fetch for 10+ min before this was generalized.
+    # If a run uses sonicmoe and/or a kernel-based attn implementation, pre-warm them so the
+    # offline flip doesn't break their `get_kernel` path.
     import os as _os_kernel_warm
 
-    if training_args.enable_expert_parallel:
-        if getattr(training_args, "experts_implementation", None) == "sonicmoe":
-            from transformers.integrations.sonicmoe import _load_sonic_kernel
+    if getattr(training_args, "experts_implementation", None) == "sonicmoe":
+        from transformers.integrations.sonicmoe import _load_sonic_kernel
 
-            _load_sonic_kernel()  # @functools.cache → kernel cached in this process
+        _load_sonic_kernel()  # @functools.cache → kernel cached in this process
+    if model_args.attn_implementation and "/" in model_args.attn_implementation:
         # FA3 (or any kernel-based attn) is loaded via two separate paths during from_pretrained:
         # load_and_register_attn_kernel (registers in ALL_ATTENTION_FUNCTIONS) and
         # lazy_import_flash_attention (sets module-level _flash_fn etc). Both hit the hub —
         # pre-warm both so the offline flip below doesn't break either.
-        if model_args.attn_implementation and "/" in model_args.attn_implementation:
-            from transformers.integrations.hub_kernels import load_and_register_attn_kernel
-            from transformers.modeling_flash_attention_utils import lazy_import_flash_attention
+        from transformers.integrations.hub_kernels import load_and_register_attn_kernel
+        from transformers.modeling_flash_attention_utils import lazy_import_flash_attention
 
-            load_and_register_attn_kernel(model_args.attn_implementation)
-            lazy_import_flash_attention(model_args.attn_implementation)
-        # Monkey-patch the already-loaded module constant — env var alone is too late.
-        _os_kernel_warm.environ["HF_HUB_OFFLINE"] = "1"
-        import huggingface_hub.constants as _hf_const
+        load_and_register_attn_kernel(model_args.attn_implementation)
+        lazy_import_flash_attention(model_args.attn_implementation)
+    # Monkey-patch the already-loaded module constant — env var alone is too late.
+    _os_kernel_warm.environ["HF_HUB_OFFLINE"] = "1"
+    import huggingface_hub.constants as _hf_const
 
-        _hf_const.HF_HUB_OFFLINE = True
+    _hf_const.HF_HUB_OFFLINE = True
 
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
         model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
+
+    _lt("kernel_warm_done")
 
     # Create model
     # When enable_expert_parallel is set, pass model as string to SFTTrainer so it handles
@@ -146,7 +164,9 @@ def main(script_args, training_args, model_args, dataset_args):
         # Pass model as string so SFTTrainer handles EP device mesh + distributed_config.
         model = model_args.model_name_or_path
         training_args.model_init_kwargs = model_kwargs
+        _lt("model_string_assigned_for_EP")
     else:
+        _lt("from_pretrained_start")
         config = AutoConfig.from_pretrained(model_args.model_name_or_path)
         valid_image_text_architectures = MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.values()
 
@@ -156,8 +176,10 @@ def main(script_args, training_args, model_args, dataset_args):
             model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)
         else:
             model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+        _lt("from_pretrained_done")
 
     # Load the dataset
+    _lt("dataset_load_start")
     if dataset_args.datasets and script_args.dataset_name:
         logger.warning(
             "Both `datasets` and `dataset_name` are provided. The `datasets` argument will be used to load the "
@@ -173,7 +195,10 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
+    _lt("dataset_load_done")
+
     # Initialize the SFT trainer
+    _lt("trainer_init_start")
     trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -181,8 +206,10 @@ def main(script_args, training_args, model_args, dataset_args):
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         peft_config=get_peft_config(model_args),
     )
+    _lt("trainer_init_done")
 
     # Train the model
+    _lt("trainer_train_start")
     trainer.train()
 
     # Log training complete
