@@ -303,13 +303,18 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
             # single import keeps us in lockstep with upstream for every family we test.
             from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
 
+            if Version(transformers.__version__) < Version("5.0.0") and not is_vlm:
+                num_experts = self.num_experts
+                num_experts_per_tok = self.num_experts_per_tok
+                router_aux_loss_coef = self.router_aux_loss_coef
+            else:
+                num_experts = text_config.num_experts
+                num_experts_per_tok = text_config.num_experts_per_tok
+                router_aux_loss_coef = text_config.router_aux_loss_coef
             aux_loss = load_balancing_loss_func(
-                outputs.router_logits,
-                text_config.num_experts,
-                text_config.num_experts_per_tok,
-                attention_mask,
+                outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
             )
-            loss = loss + text_config.router_aux_loss_coef * aux_loss.to(loss.device)
+            loss = loss + router_aux_loss_coef * aux_loss.to(loss.device)
 
         return _ChunkedCELMHeadOutput(
             loss=loss,
