@@ -277,8 +277,9 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
     @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"])
-    def test_training_loss_types(self, loss_type):
+    def test_training_loss_types(self, loss_type, use_liger_kernel):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -290,6 +291,7 @@ class TestGRPOTrainer(TrlTestCase):
             max_completion_length=32,  # reduce the completion length to reduce memory usage
             gradient_accumulation_steps=2,  # set to 2 to test than DAPO can operate with accumulated batch
             loss_type=loss_type,
+            use_liger_kernel=use_liger_kernel,
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -1188,7 +1190,8 @@ class TestGRPOTrainer(TrlTestCase):
 
         release_memory(trainer.model, trainer)
 
-    def test_training_with_bias_correction_kl(self):
+    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
+    def test_training_with_bias_correction_kl(self, use_liger_kernel):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -1198,6 +1201,7 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
+            use_liger_kernel=use_liger_kernel,
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -1687,7 +1691,8 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_delta_clipping(self):
+    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
+    def test_training_delta_clipping(self, use_liger_kernel):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -1697,6 +1702,7 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             delta=2.0,  # set delta to a non-None value
+            use_liger_kernel=use_liger_kernel,
             report_to="none",
         )
         trainer = GRPOTrainer(

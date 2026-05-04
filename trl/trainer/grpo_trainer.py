@@ -726,6 +726,14 @@ class GRPOTrainer(_BaseTrainer):
                 loss_type=self.loss_type,
                 max_completion_length=self.max_completion_length,
                 importance_sampling_level=self.importance_sampling_level,
+                delta=args.delta,
+                use_bias_correction_kl=args.use_bias_correction_kl,
+                sapo_temperature_pos=args.sapo_temperature_pos,
+                sapo_temperature_neg=args.sapo_temperature_neg,
+                vespo_k_pos=args.vespo_k_pos,
+                vespo_lambda_pos=args.vespo_lambda_pos,
+                vespo_k_neg=args.vespo_k_neg,
+                vespo_lambda_neg=args.vespo_lambda_neg,
             )
 
         # Initialize the metrics
