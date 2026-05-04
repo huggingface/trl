@@ -269,16 +269,16 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         decoder_kwargs = {}
         if output_router_logits:
             decoder_kwargs["output_router_logits"] = True
-        # `self.base_model` resolves to `getattr(self, self.base_model_prefix, self)`, which gives:
-        # - VLMs: the multimodal wrapper (`self.model`, e.g. `LlavaModel`), so vision-token injection runs before the
-        #   text decoder.
-        # - Modern text-only LMs (Llama / Qwen / Mistral / Gemma / ...): the inner decoder (`self.model`).
-        # - Older text-only LMs (GPT-2 / OPT / GPT-Neo / ...): the inner decoder under its family-specific name
-        #   (`self.transformer`, etc.).
-        # Note that `self.get_decoder()` would skip injection and feed image-placeholder IDs into the text stack.
-        # In every case the returned module produces `last_hidden_state` without applying `lm_head`, so chunked CE
-        # still avoids the (B, S, V) materialization.
-        outputs: BaseModelOutputWithPast = self.base_model(
+        # `self.base_model` gives the inner module (skipping `lm_head`) — text decoder for LMs, multimodal wrapper
+        # for VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
+        # returns just the text stack and feeds image-placeholder IDs through it.
+        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `self.base_model is self` (re-runs `lm_head`).
+        # Fall back to `self.model` there.
+        if is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+            decoder = self.model
+        else:
+            decoder = self.base_model
+        outputs: BaseModelOutputWithPast = decoder(
             input_ids=input_ids, attention_mask=attention_mask, use_cache=False, **decoder_kwargs, **kwargs
         )
         hidden_states = outputs.last_hidden_state
