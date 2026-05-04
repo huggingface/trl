@@ -304,11 +304,7 @@ class TestGKDTrainer(TrlTestCase):
             processing_class=self.tokenizer,
         )
 
-        if not getattr(trainer, "use_liger_gkd_loss", False):
-            pytest.skip("Liger fused JSD not enabled at runtime")
-
-        # evaluate() calls compute_loss with return_outputs=True
-        # This should not raise UnboundLocalError
+        # evaluate() calls compute_loss with return_outputs=True; must not raise UnboundLocalError
         eval_results = trainer.evaluate()
         assert "eval_loss" in eval_results
         assert eval_results["eval_loss"] is not None

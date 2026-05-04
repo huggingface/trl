@@ -325,8 +325,8 @@ class GKDTrainer(SFTTrainer):
             student_hidden = student_outputs.last_hidden_state[:, :-1]
             teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
 
-            # Release full outputs to free memory
-            del student_outputs, teacher_outputs
+            # Release teacher outputs; keep student_outputs for return_outputs
+            del teacher_outputs
 
             # labels mask and labels (shifted)
             labels_mask = inputs["labels"] != -100
@@ -355,17 +355,8 @@ class GKDTrainer(SFTTrainer):
 
             # Release hidden states after loss computation
             del student_hidden, teacher_hidden, true_labels
-
-            if return_outputs:
-                student_outputs = model(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
-                )
-                empty_cache()
-                return (loss, student_outputs)
-            else:
-                empty_cache()
-                return loss
+            empty_cache()
+            return (loss, student_outputs) if return_outputs else loss
         else:
             # compute student output
             student_outputs = model(
