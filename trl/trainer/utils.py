@@ -1388,8 +1388,10 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
     """
     Estimate training FLOPs per token for a causal language model (forward + backward).
 
-    Supports both dense and MoE (Mixture-of-Experts) architectures. The backward pass is assumed to cost 2× the
-    forward pass, so total training FLOPs = 3 × forward FLOPs.
+    Supports dense and MoE architectures. Backward is assumed to cost 2× the forward pass, so total
+    training FLOPs = 3 × forward FLOPs. The attention-score term uses the non-causal convention (every
+    token attends to the full `seq_len`, matching PaLM / Megatron / nanoGPT); pass the resulting MFU
+    through [`adjusted_mfu`] for the Llama / DeepSpeed Ulysses causal-corrected convention.
 
     Args:
         config ([`~transformers.PretrainedConfig`]):
@@ -1404,68 +1406,35 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
     L = config.num_hidden_layers
     V = config.vocab_size
     n_heads = config.num_attention_heads
-    n_kv_heads = getattr(config, "num_key_value_heads", n_heads)
-    head_dim = getattr(config, "head_dim", h // n_heads)
+    n_kv_heads = config.num_key_value_heads
+    head_dim = config.head_dim
 
-    # Attention projections: Q, K, V, O  (each is a matmul: 2 * m * n FLOPs per token)
+    # Attention: Q/K/V/O projections + attention score (Q·Kᵀ and attn·V).
     qkv_flops = 2 * h * (n_heads * head_dim + 2 * n_kv_heads * head_dim)
     o_proj_flops = 2 * n_heads * head_dim * h
-    # Attention score: QK^T and attn @ V  (each is 2 * n_heads * head_dim * seq_len)
-    # NOTE: this uses the *non-causal* convention — every token treated as attending to the full seq.
-    # With causal masking the actual compute is ~half this, so reported MFU is inflated by ~1.5–2× at
-    # long context (where attention dominates). Convention used here matches PaLM / Megatron / nanoGPT;
-    # Llama 2/3 + DeepSpeed Ulysses use the halved (causal-corrected) version. Keep aware when
-    # comparing absolute MFU across reports.
     attn_score_flops = 2 * 2 * n_heads * head_dim * seq_len
     attn_flops = qkv_flops + o_proj_flops + attn_score_flops
 
-    # MLP FLOPs per layer
-    # TODO(@aminediro): Mixtral uses `intermediate_size` for experts, not `moe_intermediate_size`.
-    #   Accessing `config.moe_intermediate_size` will crash. Fall back to `intermediate_size`.
-    # TODO(@aminediro): Qwen2MoE shared experts are not counted. Each MoE layer runs a dense shared
-    #   expert (2 * 3 * h * shared_expert_intermediate_size FLOPs/token) plus a gating linear.
-    num_experts = getattr(config, "num_local_experts", None) or getattr(config, "num_experts", None)
-    is_moe = num_experts is not None
-    if is_moe:
-        moe_intermediate = config.moe_intermediate_size
-        num_experts_per_tok = config.num_experts_per_tok
-        # Routed experts: gate_proj + up_proj + down_proj (3 matmuls, each 2*h*moe_intermediate)
-        mlp_flops = num_experts_per_tok * 2 * 3 * h * moe_intermediate
-        # Router: hidden -> num_experts
-        mlp_flops += 2 * h * num_experts
-        # Dense layers in MoE models use the full intermediate_size
-        dense_intermediate = config.intermediate_size
-        dense_mlp_flops = 2 * 3 * h * dense_intermediate
-    else:
-        intermediate = config.intermediate_size
-        mlp_flops = 2 * 3 * h * intermediate
-
-    # Per-layer forward FLOPs
-    if is_moe:
-        # Some MoE models have dense MLP layers interspersed (decoder_sparse_step)
-        # TODO(@aminediro): `mlp_only_layers` is not checked. Transformers uses both
-        #   `mlp_only_layers` and `decoder_sparse_step` to decide MoE vs dense per layer.
-        # TODO(@aminediro): indexing differs from transformers: we use `layer_idx % step`
-        #   but transformers uses `(layer_idx + 1) % step`. Total count is the same for
-        #   any step, but individual layer assignments are shifted.
-        sparse_step = getattr(config, "decoder_sparse_step", 1)
-        total_layer_flops = 0
-        for layer_idx in range(L):
-            layer_flops = attn_flops
-            if sparse_step > 0 and layer_idx % sparse_step == 0:
-                layer_flops += mlp_flops  # MoE layer
-            else:
-                layer_flops += dense_mlp_flops  # Dense layer
-            total_layer_flops += layer_flops
-    else:
+    # MoE dispatch: `num_experts_per_tok` is the canonical MoE marker — present on Mixtral,
+    # Qwen3-MoE, DeepSeek-V2, etc.; absent on dense configs.
+    num_experts_per_tok = getattr(config, "num_experts_per_tok", None)
+    if num_experts_per_tok is None:
+        mlp_flops = 2 * 3 * h * config.intermediate_size
         total_layer_flops = L * (attn_flops + mlp_flops)
+    else:
+        # Routed experts (gate + up + down, 3 matmuls each) + router.
+        moe_mlp_flops = num_experts_per_tok * 2 * 3 * h * config.moe_intermediate_size
+        moe_mlp_flops += 2 * h * config.num_local_experts
+        dense_mlp_flops = 2 * 3 * h * config.intermediate_size  # interspersed dense layers
+        sparse_step = config.decoder_sparse_step
+        total_layer_flops = sum(
+            attn_flops + (moe_mlp_flops if layer_idx % sparse_step == 0 else dense_mlp_flops) for layer_idx in range(L)
+        )
 
-    # Embedding and lm_head
     embed_flops = 2 * V * h
-    lm_head_flops = 2 * V * h if not config.tie_word_embeddings else 0
+    lm_head_flops = 0 if config.tie_word_embeddings else 2 * V * h
 
     forward_flops = total_layer_flops + embed_flops + lm_head_flops
-    # Training: forward (1×) + backward (2×) = 3× forward
     return 3 * forward_flops
 
 
@@ -1495,3 +1464,31 @@ def compute_mfu(
         `float`: MFU as a percentage (0-100).
     """
     return 100 * (flops_per_token * tokens_per_second) / (peak_flops_per_device * world_size)
+
+
+def adjusted_mfu(mfu: float, config: PretrainedConfig, seq_len: int) -> float:
+    """
+    Apply a causal-masking correction to an MFU computed with [`compute_flops_per_token`].
+
+    [`compute_flops_per_token`] uses the non-causal attention convention (every token treated as
+    attending to the full `seq_len`, matching PaLM / Megatron / nanoGPT). With causal masking, only
+    half of the attention-score FLOPs (`Q·K^T` and `attn·V`) are actually performed. This function
+    subtracts that half from the per-token total and rescales `mfu` accordingly. Use it to compare
+    against reports that follow the Llama 2/3 / DeepSpeed Ulysses convention.
+
+    Args:
+        mfu (`float`):
+            MFU as a percentage, computed via [`compute_mfu`] (i.e., using the non-causal
+            [`compute_flops_per_token`]).
+        config ([`~transformers.PretrainedConfig`]):
+            The model configuration.
+        seq_len (`int`):
+            The sequence length used for training.
+
+    Returns:
+        `float`: Causal-corrected MFU as a percentage.
+    """
+    flops_full = compute_flops_per_token(config, seq_len)
+    # Half of the attention-score FLOPs (Q·Kᵀ and attn·V), per layer, ×3 for fwd+bwd.
+    half_attn_score = config.num_hidden_layers * 3 * 2 * config.num_attention_heads * config.head_dim * seq_len
+    return mfu * (flops_full - half_attn_score) / flops_full
