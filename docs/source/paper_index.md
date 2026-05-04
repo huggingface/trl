@@ -1121,25 +1121,6 @@ training_args = DPOConfig(
 )
 ```
 
-### Length-Normalized DPO (Sigmoid Norm)
-
-**📜 Paper**: https://huggingface.co/papers/2405.14734
-
-The length-normalized sigmoid loss addresses length bias in DPO by dividing chosen and rejected log-ratio scores by their respective completion lengths before computing the Bradley-Terry loss. This per-token normalization was introduced in [SimPO](https://huggingface.co/papers/2405.14734) as an average log-probability reward for a reference-free setting, and was later adopted for standard reference-model-based DPO in post-training recipes such as [Tulu 3](https://huggingface.co/papers/2411.15124) (Section 4.3). The loss is:
-
-$$
-\mathcal{L}_{\text{sigmoid\_norm}} = -\log\sigma\!\left(\beta \left({\color{red}\frac{1}{|y_w|}}\log\frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - {\color{red}\frac{1}{|y_l|}}\log\frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)\right),
-$$
-which can be set with:
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(
-    loss_type=["sigmoid_norm"],
-)
-```
-
 ### Enhancing the Reasoning Ability of Multimodal Large Language Models via Mixed Preference Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2411.10442
@@ -1153,6 +1134,25 @@ training_args = DPOConfig(
     loss_type=["sigmoid", "bco_pair", "sft"],  # ℒ = w_p·ℒ_p + w_q·ℒ_q + w_g·ℒ_g (Section 3.2 of the paper)
     loss_weights=[0.8, 0.2, 1.0],  # w_p, w_q, w_g loss weights (Section 7 of the paper)
     learning_rate=5e-6,  # learning rate (Section 7 of the paper)
+)
+```
+
+### TÜLU 3: Pushing Frontiers in Open Language Model Post-Training
+
+**📜 Paper**: https://huggingface.co/papers/2411.15124
+
+The length-normalized sigmoid loss addresses length bias in DPO by dividing chosen and rejected log-ratio scores by their respective completion lengths before computing the Bradley-Terry loss. This per-token normalization was introduced in [SimPO](https://huggingface.co/papers/2405.14734) (Appendix I "DPO w/ LN" ablation) as an average log-probability reward for a reference-free setting, and was later adopted for standard reference-model-based DPO in post-training recipes such as [Tülu 3](https://huggingface.co/papers/2411.15124) (Section 4.3). The loss is:
+
+$$
+\mathcal{L}_{\text{sigmoid\_norm}} = -\log\sigma\!\left(\beta \left({\color{red}\frac{1}{|y_w|}}\log\frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - {\color{red}\frac{1}{|y_l|}}\log\frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)\right),
+$$
+which can be set with:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="sigmoid_norm",
 )
 ```
 

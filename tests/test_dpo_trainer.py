@@ -266,7 +266,6 @@ class TestDPOTrainer(TrlTestCase):
             "sigmoid",
             "hinge",
             "ipo",
-            "sigmoid_norm",
             "exo_pair",
             "nca_pair",
             "robust",
@@ -278,6 +277,7 @@ class TestDPOTrainer(TrlTestCase):
             "apo_down",
             "discopop",
             "sft",
+            "sigmoid_norm",
         ],
     )
     def test_train_loss_types(self, loss_type):
