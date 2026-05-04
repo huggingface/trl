@@ -45,6 +45,10 @@ Original Llama 3 chat template.
 
 Original Llama 3.1 / 3.2 chat templates. Both render tool calls as a single bare JSON object using the key `parameters` (instead of `arguments`) and support at most one tool call per assistant turn.
 
+### `phi3.jinja`
+
+Original Phi-3 chat template.
+
 ### `qwen2_5.jinja`
 
 Original Qwen2.5 chat template.
