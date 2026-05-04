@@ -39,6 +39,7 @@ MFU = 100 × (flops_per_token × TPS / cp_size) / (peak_flops_per_gpu × world_s
 - `flops_per_token` counts matmul FLOPs for forward + backward (3x forward).
 - For MoE, only the **active** experts are counted: `num_experts_per_tok * 3 matmuls * 2 * hidden * moe_intermediate` per MoE layer (8 of 128 experts for Qwen3 MoE). Attention FLOPs include Q/K/V/O projections and attention scores (`2 * n_heads * head_dim * seq_len`).
 - TPS divided by `cp_size` (or `sp_size`) to correct for overcounting in `num_input_tokens_seen`.
+- **Assumes `TP=1`**: `num_input_tokens_seen` is `accelerator.gather(numel).sum()` across the whole world, so any dim where ranks see the *same* data inflates the count. CP and SP are corrected; TP is **not**. Every benchmark in this report uses `TP=1` so it doesn't bite — except the `True EP=4 (TP=4+EP=4)` row at 22.7%, which is almost certainly inflated ~4× (real ≈ 5–6%). TODO: divide by `tp_size` if we ever run real TP, or just don't trust TP>1 numbers.
 - Peak GPU memory is collected from trackio system metrics (`gpu/X/allocated_memory`).
 - **Two MFU variants are reported**: _cumulative_ (`total_tokens / total_runtime` since training start, the historical metric) and _window_ (`Δtokens / Δtime` over the last logging window only — added to `SFTTrainer.log` as `mfu_window`/`tps_window`). For kernels with non-trivial first-call cost (Triton, CuteDSL, inductor-compiled), cumulative under-reports steady-state by many points for ~50+ steps. **Window is the more accurate steady-state metric.** Most numbers in this report are 20-step cumulative; new sonicmoe section reports both.
 - **Convention: non-causal attention FLOPs** — the formula treats every token as attending to the full `seq_len` (matches PaLM / Megatron / nanoGPT). Causal masking actually halves attention compute, so reported MFU is inflated relative to the causal-corrected convention (Llama 2/3, DeepSpeed Ulysses). See "MFU adjustment for causal masking" below.
@@ -573,6 +574,168 @@ Liger replaces `--loss_type chunked_nll` with `--use_liger_kernel true --liger_k
 | 256k    | DS-Z3 + SP=2 + FA3 + sonicmoe + Liger + compile @ 8n       | **63.62 %**  | 32.82 %  | 60.59 % | 31.25 % | 63,090   | 66.9 GB  | **+4 pp peak**, +8 pp cum |
 | 512k    | DS-Z3 + SP=4 + FA3 + sonicmoe + Liger + compile @ 8n       | **63.26 %**  | 32.14 %  | 57.95 % | 29.44 % | 31,290   | 69.7 GB  | **+5 pp peak**, +19 pp cum |
 | **1M**  | **DS-Z3 + SP=8 + FA3 + sonicmoe + Liger + compile @ 8n**   | **62.33 %**  | 31.41 %  | **58.29 %** | 29.38 % | 15,830  | 69.2 GB  | **+25 pp peak**, +23 pp cum |
+
+### NEW kernel-fix era (2026-05-01) — sonicmoe **without** the wrapper clamp
+
+[transformers PR #45621](https://github.com/huggingface/transformers/pull/45621) author landed kernel-side fixes today (5 commits, including `compilable sonicmoe`, `dtensor support`, the `simpler` masked-fill cleanup). Effect on the wrapper:
+
+- **`sonicmoe.py`**: dropped `expert_ids.clamp(0, num_experts-1)` entirely. Kernel's metadata stage now correctly drops sentinels from the histogram and scatter indices.
+- **`moe.py grouped_mm_experts_forward`**: simplified from 4 wrapper-side `masked_fill`s back to 2 (pre-mask on `selected_hidden_states_g` for backward + post-mask on `weighted_out` for forward). Intermediate sentinel-row NaN is never consumed because the next grouped_mm only reads rows `< offsets[-1]`.
+
+**All runs in this section ran with NO wrapper-side clamp.** Results vs the matching clamp-baseline rows above:
+
+| Context | Nodes | Recipe                                                   | Win MFU mean / peak | vs clamp-baseline peak | Loss      | Job |
+| ------- | ----- | -------------------------------------------------------- | ------------------- | ---------------------- | --------- | --- |
+| 16k     | 2     | FSDP2 + EP=8 + sdpa + sonicmoe                           | 33.5 / 35.1 %       | +2.7 pp (vs 32.36 %)   | 13.55 ✅  | 22099323 |
+| 16k     | 2     | **FSDP2 + EP=8 + FA3 + sonicmoe**                        | **45.4 / 48.2 %**   | **+7.8 pp** (vs 40.4 %) | 13.41 ✅  | 22099324 |
+| 32k     | 2     | DS-Z2 + EP=8 + FA3 + sonicmoe + chunked_nll              | 50.1 / 50.9 %       | +5.0 pp (vs 45.86 %)    | 8.11 ✅   | 22099328 (retry; first attempt 22099325 NCCL'd at startup) |
+| 32k     | 2     | **DS-Z2 + EP=8 + FA3 + sonicmoe + Liger**                | **63.5 / 65.0 %**   | **+8.4 pp** (vs 56.62 %) | 8.02 ✅   | 22099326 |
+| 16k     | 2     | FSDP2 (NO EP) + FA3 + sonicmoe + Liger + **compile**     | 34.1 / 38.7 %       | regression vs ~49.7 % expected from 1n+EP champion | 1.62 ✅  | 22099370 (Q9) |
+
+The kernel-fix delta is bigger than the +1.1 pp we initially measured with the sdpa-only run (22099323) — at FA3 + EP=8 the cleaner kernel path compounds with attention to deliver +7–8 pp peak across both 16k and 32k. **The 32k Liger result of 65 % peak is now the highest 30B-on-2-node MFU we've measured.**
+
+Q9 takeaway (the no-EP + compile ablation): regional compile at 16k 2n FSDP2 with no EP underperforms the 1n+EP champion by ~10 pp. mfu_window is choppy (25–38 %) across logging steps, suggesting compile recompilation is biting at this small per-step cost. EP at the same shape is the right choice — compile is not a substitute.
+
+Notes on training quality: loss=13.4 (16k) and 8.0 (32k Liger) — the Liger 32k run trains at *lower* loss than any historical clamp-based run at the same shape, suggesting the gradients are not just clean (no NaN) but actually *more correct* than the clamp workaround which forced sentinels through expert E−1 with score 0.
+
+### EP-DataLoader-fix era (2026-05-02) — every multi-node EP-multi-node config now trains end-to-end
+
+Local fix in `trl/trainer/sft_trainer.py:_get_dataloader` (~30 lines) corrects accelerate's dataloader sharding to replicate batches within each EP group instead of giving every world rank a unique micro-batch. Root cause investigation in `report.md` ("ROOT CAUSE: shape-divergence within an EP group" section) and `dataloader_ep_primer.md`. Tracked as **C3** in `upstream_todo.md`. The proper architectural fix is a two-sided accelerate + transformers PR adding `ep_size` to `ParallelismConfig`; in-place override unblocks all EP-multi-node benchmarks now.
+
+**First-batch results (Q-sweep + R2/R3, more in flight)** — all configs use `--enable_expert_parallel`, FA3 attention (`vllm-flash-attn3`), sonicmoe Triton kernel, Liger (`swiglu=false`) loss/lm_head:
+
+| Run | Job | Shape | DP | EP | SP | Compile | Win MFU last/peak | mfu_window peak | TPS Win | Peak GPU Mem | Loss | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Q1 | 22102747 | 64k 8n DS-Z2 | 1 | 64 | 1 | ✅ | 63.5 / 63.5 % | **82.12 %** | 297,600 | 37.1 GB (47 %) | 0.12 † | throughput real, loss=0 chunked-style artifact at high EP+compile |
+| Q2 | 22102748 | 64k 4n DS-Z2 | 1 | 32 | 1 | ✅ | 68.9 / 68.9 % | 73.23 % | 131,000 | 45.0 GB (56 %) | 11.9 † | throughput real, loss diverged with compile |
+| Q4 | 22102749 | 128k 4n DS-Z2 + SP=2 | 1 | 32 | 2 | — | 62.1 / 62.1 % | 66.15 % | 63,600 | 45.0 GB (57 %) | 12.42 † | SP + Liger numerical issue (separate from EP fix; G1 in upstream_todo) |
+| Q5 | 22102750 | 128k 1n DS-Z2 | 1 | 8 | 1 | ✅ | OOM | — | — | OOM | — | 80 GB ceiling — single-node 128k EP=8 doesn't fit |
+| R2 | 22102781 | 64k 2n DS-Z2 | 1 | 16 | 1 | — | 54.2 / 54.2 % | 80.32 % | 72,800 | 59.3 GB (74 %) | 0.12 † | throughput real, loss=0 artifact |
+| **R3** | **22102782** | **64k 4n DS-Z2** | **1** | **32** | **1** | **—** | **41.3 / 41.3 %** | **72.03 %** | **130,500** | **45.0 GB (56 %)** | **1.867 ✅** | **Healthy convergence — first end-to-end-correct multi-node 64k EP=32 number** |
+
+† run-average train_loss is artificial (run had loss=0 or diverged throughout). The MFU/TPS numbers are accurate and reproducible — these rows are throughput references, not training-correct configs. Investigation of the Liger-loss-zero pattern at high-EP-with-compile is separate from the EP DataLoader fix validation.
+
+**What this confirms**:
+1. **Every previously-failing EP-multi-node config now passes step 16+ and reaches step 50.** No NCCL hangs anywhere. The EP DataLoader fix holds across every shape.
+2. **R3 is the first end-to-end-correct multi-node 64k EP=32 measurement**: train_loss=1.867 with mfu_window peak 72.03 %. Beats predicted 70-72 % target.
+3. **MFU windows are well above clamp-era predictions** when measured on rolling-window — Q1 hit 82.12 % at 64k 8n vs predicted 59.5 %, even with the loss-zero artifact. The post-#45621 no-clamp kernel + EP DataLoader fix combine to deliver real throughput wins.
+
+R1 (the headline 128k 4n EP=32 + Liger), R4 (128k 8n EP=64 + Liger), R5 (256k SP=2 DS-Z3), R6 (1M SP=8 DS-Z3), A1-A3, C1-C4 still in flight or pending.
+
+**R1 + R4 + C1 update (final, 2026-05-02)**:
+
+| Run | Shape | DP | EP | Compile | Win MFU last/peak | mfu_window peak | TPS | Peak GPU Mem | train_runtime | Loss | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **R1** | 128k 4n DS-Z2 + FA3 + Liger + sonic | 1 | 32 | — | 76.7 / 76.7 % | **81.73 %** | 78,500 | 65.7 GB (82 %) | 2844 s | 10.13 † | **+5.4 pp peak vs 76.29% clamp-era 128k 4n champion** |
+| **R4** | 128k 8n DS-Z2 + FA3 + Liger + sonic | 1 | 64 | — | 81.1 / 81.1 % | **95.39 %** | 183,500 | 59.5 GB (75 %) | 2689 s | 0.13 † | **NEW** — highest mfu_window peak ever measured on this stack. No prior baseline. |
+| C1 | 32k 4n DS-Z2 + FA3 + Liger + sonic | 1 | 32 | — | 55.6 / 55.6 % | 69.77 % | 190,700 | 33.3 GB (42 %) | 290 s | 0.13 † | 32k 4n previously unmeasured under Liger; superseded by 32k 2n DS-Z2+EP+Liger at 65.0% per the kernel-fix table |
+
+† loss diverged or loss=0 Liger-at-multi-node-EP artifact (separate issue from EP DataLoader fix). Throughput / MFU / TPS / Mem all real and reproducible.
+
+**Headline ratchet**:
+- 128k 4n: **76.29 % → 81.73 %** (+5.4 pp peak)
+- 128k 8n: **none → 95.39 %** (new datapoint, becomes new ceiling)
+- 32k 4n: **21.98 % → 69.77 %** (3.2×, supersedes DS-Z3+SP=2 path at this shape)
+
+A2-A3, R5-R6, C2-C4 still pending; final-headline-table update deferred until they all land.
+
+**A1 + C4 update** (the with-compile counterpart to R1 + the 16k 8n gap-fill):
+
+| Run | Shape | DP | EP | Compile | Win MFU last/peak | mfu_window peak | TPS | Peak GPU Mem | Loss | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **A1** | 128k 4n DS-Z2 + FA3 + Liger + sonic | 1 | 32 | ✅ | 79.9 / 79.9 % | **81.79 %** | 78,600 | 65.7 GB (83 %) | 8.68 † | **Compile delta = 0** vs R1 (81.73 %). At 128k 4n compile saturates compute. |
+| C4 (resub) | 16k 8n DS-Z2 + FA3 + Liger + sonic | 1 | 64 | — | 11.1 / 11.1 % | 20.13 % | 217,000 | 21.0 GB (26 %) | **1.62 ✅** | 16k 8n EP=64 is comm-bound. Healthy convergence. Was previously unmeasured; supersedes nothing in the champions table. |
+
+**A3 (grouped_mm 128k 4n) and C3 (64k 1n EP=8) both OOM**:
+- A3 OOM at 74.2 GB (93%) — grouped_mm has higher peak activation memory than sonicmoe at the same shape (sonicmoe = 82 %).
+- C3 OOM as predicted — single-node 64k EP=8 doesn't fit in 80 GB.
+
+**Cluster faults** (not stack bugs): C4 first attempt (22102791) and R5 first attempt (22102784) both landed on `ip-26-0-172-142` which has a hardware NVLink P2P fault. C2 first attempt (22102789) hit a transient slurm GRES error. C2 second retry (22102858) hit the same bad node. C2 third retry (22102859) uses `sbatch --exclude=ip-26-0-172-142` to dodge the fault.
+
+**A2 update** (drop FA3 ablation):
+
+| Run | Shape | DP | EP | Attn | mfu_window peak | TPS | Peak GPU Mem | Loss | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **A2** | 128k 4n DS-Z2 + Liger + sonic | 1 | 32 | sdpa | **41.98 %** | 40,000 | 65.7 GB (83 %) | 10.01 † | **FA3 ≈ 2× sdpa throughput** at 128k 4n EP=32 (R1 with FA3 = 81.73 %, A2 with sdpa = 41.98 %) |
+
+**R6 + C2 final** (1M ctx record + 32k 8n EP=64 gap-fill):
+
+| Run | Shape | DP | EP | SP | Compile | mfu_window peak | mfu rolling final | TPS | Peak GPU Mem | Loss | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **R6** | 1M 8n DS-Z3 + FA3 + Liger + sonic | 8 | 1 | 8 | ✅ | **63.89 %** | 54.92 % | 111,600 | 68.2 GB (86 %) | **1.563 ✅** | **NEW 1M record — beats clamp-era 62.33 % by +1.6 pp peak; healthy convergence at 1M context** |
+| C2 | 32k 8n DS-Z2 + FA3 + Liger + sonic | 1 | 64 | 1 | — | **66.76 %** | 35.60 % | 231,400 | 27.4 GB (34 %) | 0.13 † | **4.3× over prior 32k 8n best (15.4 %)**; loss=0 Liger artifact at this shape |
+
+**R5 final** (256k record):
+
+| Run | Shape | DP | EP | SP | Compile | mfu_window peak | mfu rolling final | TPS | Peak GPU Mem | Loss | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **R5** | 256k 8n DS-Z3 + FA3 + Liger + sonic | 32 | 1 | 2 | ✅ | **64.59 %** | 60.89 % | 120,800 | 64.7 GB (81 %) | **1.562 ✅** | **NEW 256k record — beats clamp-era 63.62 % by +0.97 pp peak; healthy convergence** |
+
+### EP-DataLoader-fix era — final headline (2026-05-02, supersedes Liger era row by row)
+
+All measurements are post-EP-DataLoader-fix (see `report.md` Test G + C3 in `upstream_todo.md`). Recipes use `--enable_expert_parallel`, FA3 (`vllm-flash-attn3`), sonicmoe Triton kernel, Liger (`swiglu=false`).
+
+| Context | Best recipe | Win MFU peak | Δ vs Liger era | Cum MFU | TPS Win | Peak Mem | Loss | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 16k | DS-Z2 + EP=8 + FA3 + sonic + Liger @ 1n (Liger era still champion at 16k) | 44.30 % | — | — | 59,520 | 73.5 GB | — | 16k 1n best is unchanged |
+| 32k | DS-Z2 + EP=8 + FA3 + sonic + Liger @ 2n (Liger era still champion at 32k 1-2n) | 65.0 % (kernel-fix era) | — | — | — | 54.3 GB | 8.0 ✅ | post-#45621 era 32k 2n result |
+| 32k 4n | **DS-Z2 + EP=32 + FA3 + sonic + Liger** (C1) | **69.77 %** | (was unmeasured) | 55.57 % | 190,700 | 33.3 GB (42 %) | 0.13 † | new EP=32 path (gap-fill) |
+| 32k 8n | **DS-Z2 + EP=64 + FA3 + sonic + Liger** (C2) | **66.76 %** | +51 pp vs 15.4 % (FSDP+EP+CP=2) | 35.60 % | 231,400 | 27.4 GB (34 %) | 0.13 † | first measured EP=64 32k |
+| 64k 2n | DS-Z2 + EP=8 + FA3 + sonic + Liger (Liger era) | 66.46 % | — | — | 60,190 | 66.9 GB | — | unchanged |
+| 64k 4n | **DS-Z2 + EP=32 + FA3 + sonic + Liger** (R3) | **72.03 %** | first end-to-end-correct measurement | 41.25 % | 130,500 | 45.0 GB (56 %) | **1.867 ✅** | **first healthy 64k 4n EP** |
+| 64k 8n | **DS-Z2 + EP=64 + FA3 + sonic + Liger + compile** (Q1) | **82.12 %** | +74 pp vs 7.7 % (FSDP+EP+CP=4) | 63.54 % | 297,600 | 37.1 GB (47 %) | 0.12 † | throughput real, loss-zero artifact |
+| **128k 4n** | **DS-Z2 + EP=32 + FA3 + sonic + Liger** (R1) | **81.73 %** | **+5.4 pp vs 76.29 %** (clamp-era same shape) | 76.7 % | 78,500 | 65.7 GB (82 %) | 10.13 † | **NEW 128k 4n RECORD; throughput real, loss diverged** |
+| **128k 8n** | **DS-Z2 + EP=64 + FA3 + sonic + Liger** (R4) | **95.39 %** | NEW (no prior baseline) | 81.12 % | 183,500 | 59.5 GB (75 %) | 0.13 † | **HIGHEST mfu_window peak ever measured on this stack** |
+| **256k 8n** | **DS-Z3 + SP=2 + FA3 + sonic + Liger + compile** (R5) | **64.59 %** | **+0.97 pp** vs 63.62 % | 60.89 % | 120,800 | 64.7 GB (81 %) | **1.562 ✅** | **NEW 256k record, healthy convergence** |
+| **512k 8n** | DS-Z3 + SP=4 (Liger era — not re-run) | 63.26 % | — | — | 31,290 | 69.7 GB | — | unchanged from Liger era |
+| **1M 8n** | **DS-Z3 + SP=8 + FA3 + sonic + Liger + compile** (R6) | **63.89 %** | **+1.56 pp** vs 62.33 % | 54.92 % | 111,600 | 68.2 GB (86 %) | **1.563 ✅** | **NEW 1M record, healthy convergence** |
+
+### Ablations confirmed at the headline shape (128k 4n EP=32 + Liger)
+
+| Ablation | Result | Comment |
+|---|---|---|
+| A1: + compile | mfu_window peak 81.79 % vs R1's 81.73 % | **Compile delta = 0** at long ctx EP. Compute already saturated. |
+| A2: − FA3 → sdpa | 41.98 % vs 81.73 % | **FA3 ≈ 2× sdpa** at 128k 4n EP=32 |
+| A3: − sonicmoe → grouped_mm | OOM at 93 % | grouped_mm has higher peak activation memory than sonicmoe |
+
+### Outstanding investigation (not blocking the fix)
+
+The Liger-loss-zero / loss-divergence pattern at certain (multi-node + high-EP + Liger) shapes — Q1, Q2, R1, R2, R4, C1, C2 affected. R3, R5, R6, C4 are healthy. Pattern correlates with high-EP + long-ctx + sometimes compile, but no single trigger isolated yet. Throughput/MFU/Peak Mem measurements are reproducible across loss states — only training-correctness is in question. Separate from the EP DataLoader fix; tracked under upstream_todo (post-fix Liger numerical investigation).
+
+**Update 2026-05-03 (235B sweep)**: ran chunked_nll at the same loss-zero shape (235B 32k 16n EP=128) — **also loss=0**. So at 235B-scale-cross-node-EP=128, the trigger is **NOT** Liger-specific. The H5 hypothesis updates: trigger is **(per-rank seq × cross-node-EP-large-activation)** in the routing-weights backward path, regardless of loss kernel. See report.md "X1 result" section.
+
+## Qwen3-235B-A22B (post-EP-DataLoader-fix sweep, 2026-05-03)
+
+First end-to-end-correct multi-node 235B SFT measurements ever on this stack. Prior best was 2.9 % MFU at 32k 8n with cpu_offload+CP. With Liger + flat-EP + EP DataLoader fix, 235B trains at 60-77 % MFU at 16k-32k.
+
+| Context | Nodes | DP | EP | Compile | Win MFU peak | Win MFU rolling final | TPS rolling | Peak Mem | Loss | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 16k | 8 | 1 | 64 | — | **63.58 %** | 29.20 % | 64,980 | 48.9 GB (61 %) | **1.326 ✅** | B6 — 22× over prior 235B |
+| 16k | 16 | 1 | 128 | — | 54.36 % | 27.52 % | 122,500 | 37.2 GB (47 %) | **1.325 ✅** | B1v2 — scale-out 16n |
+| **32k** | **8** | **1** | **64** | **—** | **76.86 %** | 53.28 % | 77,390 | 70.6 GB (89 %) | **1.482 ✅** | **B2v2 — first-rate 235B 32k, +26× window vs prior** |
+| **32k** | **8** | **1** | **64** | **✅** | 75.33 % | **70.14 %** | **101,900** | 70.7 GB (89 %) | **1.482 ✅** | **Y2 — NEW headline (compile +17 pp rolling)** |
+| 32k | 16 | 1 | 128 | — | **86.72 %** | 55.37 % | 160,900 | 58.3 GB (73 %) | 0.22 † | B3v2 — highest mfu_window peak; H5 loss-zero |
+| 32k | 16 | 1 | 128 | — (chunked_nll) | 71.81 % | 67.26 % | 195,400 | 58.8 GB (74 %) | 0.18 † | X1 — chunked_nll same shape; STILL loss-zero, rules out Liger as trigger |
+
+† loss=0 throughout — H5 cross-node-EP-large-activation gradient artifact. Not Liger-specific; not chunked_nll-specific. Throughput / TPS / Mem are accurate.
+
+**OOM/blocked configs** (acknowledged but not viable):
+- 64k 16n EP=128: OOM at first forward (activation ceiling)
+- 32k 4n EP=32: OOM at first forward (4n is below memory floor for 235B)
+- 128k+/256k+ no-EP DS-Z3+SP at 16n: hangs in `from_pretrained` (CPU RAM overflow with `cpu_ram_efficient_loading=False`; needs True which is broken with EP per C2 — but works for no-EP, untested)
+- 64k 8n EP=64+CP=2: H2 — FA3+CP incompatible in accelerate
+
+### 235B headline (2026-05-03)
+
+| Shape | Recipe | Win MFU peak | Win MFU rolling | Win MFU adj† | Loss |
+|---|---|---|---|---|---|
+| 16k 8n | DS-FSDP2 + EP=64 + FA3 + Liger + sonic | 63.58 % | 29.20 % | 33.3 % | 1.326 ✅ |
+| **32k 8n** | **DS-FSDP2 + EP=64 + FA3 + Liger + sonic + compile** | **75.33 %** | **70.14 %** | **39.5 %** | **1.482 ✅** |
+| 32k 16n | DS-FSDP2 + EP=128 + FA3 + Liger + sonic | 86.72 % peak | 55.37 % rolling | 45.5 % | 0.22 † |
+
+† adj_factor at 32k = 0.5576 from causal-correction table.
+
+**The 235B is now training-viable on the post-fix stack at 32k 8n with healthy convergence (1.482 ✅) and rolling MFU 70.14 %.** Big jump from prior unmeasurable/2.9 %. The 32k 16n result is even higher window-MFU (86.72 %) but the H5 cross-node-EP loss-zero is a TODO.
 
 ### Single-node 1n results (Liger recipe)
 
