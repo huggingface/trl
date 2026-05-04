@@ -571,7 +571,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
     requirements. Currently Cohere, Cohere2, DeepSeek-V3, Gemma, Gemma2, Gemma 3, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3,
-    Qwen2.5, Qwen3, and Qwen3.6 are supported.
+    Qwen2.5, Qwen3 (including the Instruct-2507 variant), and Qwen3.6 are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
