@@ -308,9 +308,13 @@ qwen3_5_schema = {
 
 cohere_chat_template = (_CHAT_TEMPLATES_DIR / "cohere.jinja").read_text()
 
+cohere2_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2.jinja").read_text()
+
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
 
 gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text()
+
+gemma3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3.jinja").read_text()
 
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
 
@@ -533,9 +537,13 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase
 
 cohere_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere_training.jinja").read_text()
 
+cohere2_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2_training.jinja").read_text()
+
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text()
 
 gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma_training.jinja").read_text()
+
+gemma3_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3_training.jinja").read_text()
 
 glm4moe_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe_training.jinja").read_text()
 
@@ -558,8 +566,8 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently Cohere, DeepSeek-V3, Gemma, Gemma2, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Qwen2.5, Qwen3, and
-    Qwen3.6 are supported.
+    requirements. Currently Cohere, Cohere2, DeepSeek-V3, Gemma, Gemma2, Gemma 3, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3,
+    Qwen2.5, Qwen3, and Qwen3.6 are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
@@ -613,11 +621,17 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None
     if tokenizer.chat_template == cohere_chat_template:
         return cohere_training_chat_template
 
+    if tokenizer.chat_template == cohere2_chat_template:
+        return cohere2_training_chat_template
+
     if tokenizer.chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
 
     if tokenizer.chat_template == gemma_chat_template:
         return gemma_training_chat_template
+
+    if tokenizer.chat_template == gemma3_chat_template:
+        return gemma3_training_chat_template
 
     if tokenizer.chat_template == glm4moe_chat_template:
         return glm4moe_training_chat_template
