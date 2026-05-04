@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "qwen-vl-utils",
 #     "torchvision",
 #     "bitsandbytes",
@@ -44,11 +43,10 @@ accelerate launch \
     --save_steps 300 \
     --learning_rate 8e-5 \
     --max_grad_norm 0.3 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --lr_scheduler_type cosine \
     --push_to_hub False \
-    --dtype bfloat16 \
-    --gradient_checkpointing True
+    --dtype bfloat16
 """
 
 import json
@@ -65,10 +63,6 @@ from qwen_vl_utils import process_vision_info
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def download_video(url: str, cache_dir: str) -> str:
@@ -181,7 +175,6 @@ if __name__ == "__main__":
     script_args, training_args, model_args = parser.parse_args_and_config()
 
     # Configure training args
-    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     training_args.remove_unused_columns = False
 
     # Load dataset

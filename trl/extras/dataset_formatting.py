@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,10 +15,10 @@
 
 import datasets
 from datasets import Value
-from packaging import version
+from packaging.version import Version
 
 
-if version.parse(datasets.__version__) >= version.parse("4.0.0"):
+if Version(datasets.__version__) >= Version("4.0.0"):
     from datasets import List
 
     FORMAT_MAPPING = {

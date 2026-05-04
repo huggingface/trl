@@ -23,7 +23,7 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train*&runs=sft_qwen3-0.6B_capybara" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
+<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train*&sidebar=hidden&runs=sft_qwen3-0.6B_capybara" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
 
 ## Expected dataset type and format
 
@@ -108,6 +108,9 @@ where  \\( y_t \\) is the target token at timestep  \\( t \\), and the model is 
 > [!TIP]
 > The paper [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward Rectification](https://huggingface.co/papers/2508.05629) proposes an alternative loss function, called **Dynamic Fine-Tuning (DFT)**, which aims to improve generalization by rectifying the reward signal. This method can be enabled by setting `loss_type="dft"` in the [`SFTConfig`]. For more details, see [Paper Index - Dynamic Fine-Tuning](paper_index#on-the-generalization-of-sft-a-reinforcement-learning-perspective-with-reward-rectification).
 
+> [!TIP]
+> For a memory-efficient variant of the standard loss, set `loss_type="chunked_nll"` in the [`SFTConfig`]. Same math as `"nll"`, but the `lm_head` projection skips ignored-label tokens and the cross-entropy is processed in chunks, so peak activation memory does not scale with the full vocab × seq_len logits tensor. See [Chunked cross-entropy for reducing peak memory usage](reducing_memory_usage#chunked-cross-entropy-for-reducing-peak-memory-usage).
+
 ### Label shifting and masking
 
 During training, the loss is computed using a **one-token shift**: the model is trained to predict each token in the sequence based on all previous tokens. Specifically, the input sequence is shifted right by one position to form the target labels.
@@ -169,11 +172,26 @@ training_args = SFTConfig(assistant_only_loss=True)
 ![train_on_assistant](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_assistant.png)
 
 > [!WARNING]
-> This functionality is only available for chat templates that support returning the assistant tokens mask via the `&#123;% generation %&#125;` and `&#123;% endgeneration %&#125;` keywords. For an example of such a template, see [HugggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B/blob/main/chat_template.jinja#L76-L82).
+> This functionality requires the chat template to include `&#123;% generation %&#125;` and `&#123;% endgeneration %&#125;` keywords. For known model families (e.g. Qwen3), TRL automatically patches the template when `assistant_only_loss=True`. See [Chat Templates](chat_templates#training-templates) for the full list of bundled training templates. For other models, check that your chat template includes these keywords. See [HuggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B/blob/main/chat_template.jinja#L76-L82) for an example.
 
 ### Train on completion only
 
 To train on completion only, use a [prompt-completion](dataset_formats#prompt-completion) dataset. By default, the trainer computes the loss on the completion tokens only, ignoring the prompt tokens. If you want to train on the full sequence, set `completion_only_loss=False` in the [`SFTConfig`].
+
+```python
+from trl import SFTConfig, SFTTrainer
+from datasets import load_dataset
+
+# Load a prompt-completion dataset; loss is computed on the completion only by default
+dataset = load_dataset("trl-lib/kto-mix-14k", split="train")
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    args=SFTConfig(completion_only_loss=True),  # True by default for prompt-completion datasets
+    train_dataset=dataset,
+)
+trainer.train()
+```
 
 ![train_on_completion](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_completion.png)
 
@@ -194,7 +212,7 @@ dataset = load_dataset("trl-lib/Capybara", split="train")
 trainer = SFTTrainer(
     "Qwen/Qwen3-0.6B",
     train_dataset=dataset,
-    peft_config=LoraConfig()
+    peft_config=LoraConfig(),
 )
 
 trainer.train()
@@ -295,7 +313,7 @@ For details on the expected dataset structure, see the [Dataset Format — Tool 
 
 ## Training Vision Language Models
 
-[`SFTTrainer`] fully supports training Vision-Language Models (VLMs). To train a VLM, you need to provide a dataset with an additional `images` column containing the images to be processed. For more information on the expected dataset structure, see the [Dataset Format — Vision Dataset](dataset_formats#vision-dataset) section.
+[`SFTTrainer`] fully supports training Vision-Language Models (VLMs). To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision Dataset](dataset_formats#vision-dataset) section.
 An example of such a dataset is the [LLaVA Instruct Mix](https://huggingface.co/datasets/trl-lib/llava-instruct-mix).
 
 ```python
@@ -329,11 +347,3 @@ trainer.train()
 ## SFTConfig
 
 [[autodoc]] SFTConfig
-
-## DataCollatorForLanguageModeling
-
-[[autodoc]] trainer.sft_trainer.DataCollatorForLanguageModeling
-
-## DataCollatorForVisionLanguageModeling
-
-[[autodoc]] trainer.sft_trainer.DataCollatorForVisionLanguageModeling

@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,9 +14,8 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[peft]",
 #     "Pillow",
-#     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
 #     "torchvision",
@@ -35,9 +34,7 @@ accelerate launch \
     --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
     --output_dir rloo-Qwen2.5-VL-3B-Instruct \
     --learning_rate 1e-5 \
-    --gradient_checkpointing \
     --dtype bfloat16 \
-    --max_prompt_length 2048 \
     --max_completion_length 1024 \
     --use_vllm \
     --vllm_mode colocate \
@@ -55,7 +52,6 @@ accelerate launch \
     --output_dir rloo-SmolVLM2-2.2B-Instruct \
     --learning_rate 1e-5 \
     --dtype bfloat16 \
-    --max_prompt_length 2048 \
     --max_completion_length 1024 \
     --use_peft \
     --lora_target_modules "q_proj", "v_proj" \
@@ -65,8 +61,6 @@ accelerate launch \
     --num_generations 2
 
 """
-
-import os
 
 import torch
 from datasets import load_dataset
@@ -82,10 +76,6 @@ from trl import (
     get_quantization_config,
 )
 from trl.rewards import accuracy_reward, think_format_reward
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":

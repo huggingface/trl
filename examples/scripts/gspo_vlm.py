@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,9 +14,8 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[peft]",
 #     "Pillow",
-#     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
 #     "torchvision",
@@ -52,8 +51,6 @@ accelerate launch \
 
 """
 
-import os
-
 import torch
 from datasets import load_dataset
 
@@ -68,10 +65,6 @@ from trl import (
     get_quantization_config,
 )
 from trl.rewards import accuracy_reward, think_format_reward
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":

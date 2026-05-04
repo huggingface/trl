@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "einops",
 #     "scikit-learn",
 #     "joblib",
@@ -35,18 +34,15 @@ python examples/scripts/bco.py \
     --per_device_train_batch_size 16 \
     --per_device_eval_batch_size 32 \
     --num_train_epochs 1 \
-    --learning_rate 1e-6 \
-    --gradient_checkpointing \
     --gradient_accumulation_steps 1 \
     --eval_steps 0.2 \
     --save_strategy no \
     --output_dir bco-aligned-model \
     --logging_first_step \
     --max_length 2048 \
-    --max_prompt_length 1536 \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
-    --warmup_ratio 0.1
+    --warmup_steps 0.1
 
 # QLoRA:
 python examples/scripts/bco.py \
@@ -56,19 +52,16 @@ python examples/scripts/bco.py \
     --per_device_train_batch_size 16 \
     --per_device_eval_batch_size 32 \
     --num_train_epochs 1 \
-    --learning_rate 1e-6 \
-    --gradient_checkpointing \
     --gradient_accumulation_steps 1 \
     --eval_steps 0.2 \
     --save_strategy no \
     --output_dir bco-aligned-model-lora \
     --logging_first_step \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --max_length 2048 \
-    --max_prompt_length 1536 \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --use_peft \
     --load_in_4bit \
     --lora_target_modules all-linear \
@@ -76,7 +69,6 @@ python examples/scripts/bco.py \
     --lora_alpha 16
 """
 
-import os
 from functools import partial
 
 import torch
@@ -87,10 +79,6 @@ from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgum
 
 from trl import ModelConfig, ScriptArguments, get_peft_config
 from trl.experimental.bco import BCOConfig, BCOTrainer
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, model: PreTrainedModel):

@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+import threading
 
 from trl.rewards import accuracy_reward, get_soft_overlong_punishment, reasoning_accuracy_reward, think_format_reward
 
@@ -113,8 +115,8 @@ class TestAccuracyReward:
         assert rewards[0] == 0.0
 
     @require_math_latex
-    def test_accuracy_reward_unparseable_gold(self):
-        """Test accuracy_reward with an unparseable gold solution."""
+    def test_accuracy_reward_unparsable_gold(self):
+        """Test accuracy_reward with an unparsable gold solution."""
         completion = [
             [{"content": "Answer is forty two."}],
             [{"content": r"Some other content. \boxed{43}."}],
@@ -126,6 +128,27 @@ class TestAccuracyReward:
         rewards = accuracy_reward(completion, solution)
         assert rewards[0] is None
         assert rewards[1] is None
+
+    @require_math_latex
+    def test_accuracy_reward_in_worker_thread(self):
+        """Test that accuracy_reward works when called from a non-main thread."""
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}]]
+        solutions = [r"\frac{1}{3}"]
+        results = []
+        exceptions = []
+
+        def target():
+            try:
+                results.extend(accuracy_reward(completions, solutions))
+            except Exception as e:
+                exceptions.append(e)
+
+        t = threading.Thread(target=target)
+        t.start()
+        t.join()
+
+        assert not exceptions, f"accuracy_reward raised in worker thread: {exceptions[0]}"
+        assert results == [1.0]
 
 
 class TestReasoningAccuracyReward:
@@ -181,7 +204,7 @@ class TestReasoningAccuracyReward:
         assert rewards[1] == 0.0
 
     @require_math_latex
-    def test_unparseable_gold_solution_yields_none_reward(self):
+    def test_unparsable_gold_solution_yields_none_reward(self):
         completions = [
             [{"content": r"<think> Reasoning content </think> \boxed{42}"}],
         ]

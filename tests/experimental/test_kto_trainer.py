@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,45 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import multiprocess
 import pytest
 import torch
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from datasets import Dataset, load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.kto import KTOConfig, KTOTrainer
-from trl.experimental.kto.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
+from trl.experimental.kto.kto_trainer import _get_kl_dataset
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_no_wandb, require_peft
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft
 
 
 class TestKTOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
-        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
     @pytest.mark.parametrize(
-        "name, config_name, loss_type, pre_compute, eval_dataset",
+        "config_name, loss_type, pre_compute, eval_dataset",
         [
-            ("qwen", "standard_preference", "kto", True, True),
-            # ("t5", "standard_implicit_prompt_preference", "kto", True, False), # KTO broken for enc-dec
-            ("qwen", "standard_unpaired_preference", "kto", False, True),
-            # ("t5", "conversational_preference", "kto", False, False),
-            ("qwen", "conversational_implicit_prompt_preference", "apo_zero_unpaired", True, True),
-            # ("t5", "conversational_unpaired_preference", "apo_zero_unpaired", True, False),
-            ("qwen", "standard_unpaired_preference", "apo_zero_unpaired", False, True),
-            # ("t5", "conversational_unpaired_preference", "apo_zero_unpaired", False, False),
+            ("standard_preference", "kto", True, True),
+            ("standard_unpaired_preference", "kto", False, True),
+            ("conversational_implicit_prompt_preference", "apo_zero_unpaired", True, True),
+            ("standard_unpaired_preference", "apo_zero_unpaired", False, True),
         ],
     )
-    def test_kto_trainer(self, name, config_name, loss_type, pre_compute, eval_dataset):
+    def test_kto_trainer(self, config_name, loss_type, pre_compute, eval_dataset):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
@@ -67,20 +58,11 @@ class TestKTOTrainer(TrlTestCase):
 
         dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-        if name == "qwen":
-            model = self.model
-            ref_model = self.ref_model
-            tokenizer = self.tokenizer
-        elif name == "t5":
-            model = self.t5_model
-            ref_model = self.t5_ref_model
-            tokenizer = self.t5_tokenizer
-
         trainer = KTOTrainer(
-            model=model,
-            ref_model=ref_model,
+            model=self.model,
+            ref_model=self.ref_model,
             args=training_args,
-            processing_class=tokenizer,
+            processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
             eval_dataset=dummy_dataset["test"] if eval_dataset else None,
         )
@@ -117,6 +99,11 @@ class TestKTOTrainer(TrlTestCase):
             )
 
     def test_tokenize_and_process_tokens(self):
+        # Pytest/CI often starts background threads before tests run. Under Python 3.12+,
+        # using "fork" in a multi-threaded process emits a DeprecationWarning and may deadlock.
+        # Force "spawn" to keep this multiprocessing test safe while still exercising `num_proc=2`.
+        multiprocess.set_start_method("spawn", force=True)
+
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
@@ -130,64 +117,53 @@ class TestKTOTrainer(TrlTestCase):
         )
 
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        train_dataset = dummy_dataset["train"]
 
         trainer = KTOTrainer(
             model=self.model,
             ref_model=self.ref_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=train_dataset,
             eval_dataset=dummy_dataset["test"],
         )
 
-        train_dataset = dummy_dataset["train"]
-        tokenized_dataset = train_dataset.map(
-            _tokenize,
-            fn_kwargs={"tokenizer": trainer.processing_class},
-            batched=True,
-            batch_size=2,
+        # Verify the tokenization step: dataset stores raw token IDs (aligned with DPO style).
+        # prompt_ids must start with the tokenized prompt text.
+        prompt_ids = self.tokenizer(train_dataset["prompt"][0])["input_ids"]
+        assert trainer.train_dataset[0]["prompt_ids"][: len(prompt_ids)] == prompt_ids
+        # completion_ids are the raw answer tokens (no prompt prefix, no BOS/EOS added yet).
+        assert len(trainer.train_dataset[0]["completion_ids"]) > 0
+
+        # Verify the collator output (assembly, BOS/EOS insertion, labels).
+        example = trainer.train_dataset[0]
+        batch = trainer.data_collator([example])
+        # completion_input_ids ends with EOS
+        assert batch["completion_input_ids"][0, -1].item() == self.tokenizer.eos_token_id
+        # completion_labels: prompt prefix masked with -100, answer+EOS unmasked and matching input_ids
+        completion_input_ids = batch["completion_input_ids"][0].tolist()
+        completion_labels = batch["completion_labels"][0].tolist()
+        first_unmasked = next(i for i, lbl in enumerate(completion_labels) if lbl != -100)
+        assert first_unmasked > 0  # at least the prompt is masked
+        assert completion_labels[first_unmasked:] == completion_input_ids[first_unmasked:]
+
+        # Test corruption of (prompt, completion) pairs for KL dataset.
+        # _get_kl_dataset shifts completion_ids by one within each batch; prompt_ids are unchanged.
+        synthetic = Dataset.from_dict(
+            {
+                "prompt_ids": [[1, 2], [3, 4], [5, 6]],
+                "completion_ids": [[10, 11], [20, 21], [30, 31]],
+                "label": [True, False, True],
+            }
         )
-        assert tokenized_dataset["prompt"][:] == train_dataset["prompt"][:]
-        assert tokenized_dataset["completion"][:] == train_dataset["completion"][:]
-        assert tokenized_dataset["label"][:] == train_dataset["label"][:]
-        assert tokenized_dataset["prompt_input_ids"][0] == [46518, 374, 2664, 1091]
-        assert tokenized_dataset["prompt_attention_mask"][0] == [1, 1, 1, 1]
-        assert tokenized_dataset["answer_input_ids"][0] == [27261, 13]
-        assert tokenized_dataset["answer_attention_mask"][0] == [1, 1]
-
-        # Test corruption of (prompt, completion) pairs for KL dataset
         for batch_size in [2, 3]:
-            tokenized_kl_dataset = tokenized_dataset.map(_get_kl_dataset, batched=True, batch_size=batch_size)
+            rotated = synthetic.map(_get_kl_dataset, batched=True, batch_size=batch_size)
 
-            # Verify that the "answer_input_ids" have been modified, meaning the new "answer_input_ids" differ
-            # from the original ones. However, when the length of the dataset modulo batch_size equals 1,
-            # the last batch remains unaltered. This is a rare scenario that does not impact the training
-            # process, so we exclude it from testing by iterating only up to len - 1.
-            for i in range(len(tokenized_kl_dataset["answer_input_ids"]) - 1):
-                assert tokenized_dataset["prompt_input_ids"][i] == tokenized_kl_dataset["prompt_input_ids"][i]
-                assert (
-                    tokenized_dataset["prompt_attention_mask"][i] == tokenized_kl_dataset["prompt_attention_mask"][i]
-                )
-                assert tokenized_dataset["answer_input_ids"][i] != tokenized_kl_dataset["answer_input_ids"][i]
-
-        fn_kwargs = {
-            "prefix": "",
-            "is_encoder_decoder": trainer.is_encoder_decoder,
-            "tokenizer": trainer.processing_class,
-            "max_length": trainer.max_length,
-            "truncation_mode": trainer.truncation_mode,
-            "label_pad_token_id": trainer.label_pad_token_id,
-            "max_prompt_length": trainer.max_prompt_length,
-        }
-        processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
-        assert processed_dataset["prompt"][:] == train_dataset["prompt"][:]
-        assert processed_dataset["completion"][:] == train_dataset["completion"][:]
-        assert processed_dataset["label"][:] == train_dataset["label"][:]
-        assert processed_dataset["prompt_input_ids"][0] == [46518, 374, 2664, 1091]
-        assert processed_dataset["prompt_attention_mask"][0] == [1, 1, 1, 1]
-        assert processed_dataset["completion_input_ids"][0] == [46518, 374, 2664, 1091, 27261, 13, 151645]
-        assert processed_dataset["completion_attention_mask"][0] == [1, 1, 1, 1, 1, 1, 1]
-        assert processed_dataset["completion_labels"][0] == [-100, -100, -100, -100, 27261, 13, 151645]
+            # Verify that completion_ids have been rotated (differ from original). When the dataset length
+            # modulo batch_size equals 1, the last batch is unaltered: exclude it from the check.
+            for i in range(len(rotated) - 1):
+                assert synthetic["prompt_ids"][i] == rotated["prompt_ids"][i]
+                assert synthetic["completion_ids"][i] != rotated["completion_ids"][i]
 
     def test_kto_trainer_without_providing_ref_model(self):
         training_args = KTOConfig(
@@ -274,90 +250,6 @@ class TestKTOTrainer(TrlTestCase):
                 if param.sum() != 0:  # ignore 0 biases
                     assert not torch.equal(param, new_param)
 
-    @require_no_wandb
-    def test_kto_trainer_generate_during_eval_no_wandb(self):
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=1,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            generate_during_eval=True,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
-
-        with pytest.raises(
-            ValueError,
-            match="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
-            " Please install `wandb` or `comet-ml` to resolve.",
-        ):
-            KTOTrainer(
-                model=self.model,
-                ref_model=None,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-            )
-
-    @require_peft
-    def test_kto_lora_save(self):
-        from peft import LoraConfig, get_peft_model
-
-        lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-
-        # lora model
-        model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        model_peft = get_peft_model(model, lora_config)
-
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=4,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
-
-        # kto train lora model with a lora config
-        trainer = KTOTrainer(
-            model=model_peft,
-            ref_model=None,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-            peft_config=lora_config,
-        )
-
-        # train the model
-        trainer.train()
-
-        # save peft adapter
-        trainer.save_model()
-
-        # assert that the model is loaded without giving OSError
-        try:
-            AutoModelForCausalLM.from_pretrained(self.tmp_dir)
-        except OSError:
-            pytest.fail("Loading the saved peft adapter failed")
-
     @require_liger_kernel
     def test_kto_trainer_with_liger(self):
         """Test KTO trainer with Liger kernel enabled."""
@@ -390,7 +282,7 @@ class TestKTOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param)
 
     def test_compute_metrics(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         tokenizer.pad_token = tokenizer.eos_token

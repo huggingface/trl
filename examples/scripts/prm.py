@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,7 +28,6 @@ python examples/scripts/prm.py \
     --output_dir Qwen2-0.5B-Reward \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
-    --gradient_checkpointing True \
     --learning_rate 1.0e-5 \
     --eval_strategy steps \
     --eval_steps 50
@@ -40,7 +39,6 @@ python examples/scripts/prm.py \
     --output_dir Qwen2-0.5B-Reward-LoRA \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
-    --gradient_checkpointing True \
     --learning_rate 1.0e-4 \
     --eval_strategy steps \
     --eval_steps 50
@@ -48,8 +46,6 @@ python examples/scripts/prm.py \
     --lora_r 32 \
     --lora_alpha 16
 """
-
-import os
 
 import torch
 from accelerate import logging
@@ -69,14 +65,9 @@ from trl.experimental.prm import PRMConfig, PRMTrainer
 logger = logging.get_logger(__name__)
 
 
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
-
-
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, PRMConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_into_dataclasses()
-    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
     ################
     # Model & Tokenizer
@@ -98,8 +89,6 @@ if __name__ == "__main__":
     model = AutoModelForTokenClassification.from_pretrained(
         model_args.model_name_or_path, num_labels=2, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
-    # Align padding tokens between tokenizer and model
-    model.config.pad_token_id = tokenizer.pad_token_id
 
     if model_args.use_peft and model_args.lora_task_type != "TOKEN_CLS":
         logger.warning(

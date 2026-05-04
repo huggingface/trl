@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,30 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import inspect
 import itertools
-import logging
+import warnings
 from collections.abc import Callable
 from contextlib import contextmanager
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
-import torch
+import accelerate
 import torch.nn as nn
-from accelerate.utils import is_peft_model
-from packaging import version
-from transformers import PreTrainedModel, TrainingArguments
-from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.utils import is_peft_available
+import transformers
+from accelerate import Accelerator
+from packaging.version import Version
+from torch.distributed.fsdp import FSDPModule
+from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
+from transformers import GenerationConfig, PreTrainedModel
+
+from ..import_utils import suppress_experimental_warning
 
 
-if is_peft_available():
-    import peft
-    from peft import PeftConfig, PeftModel, get_peft_model
+with suppress_experimental_warning():
+    from ..experimental.utils import create_reference_model as _create_reference_model
 
+
+if Version(accelerate.__version__) >= Version("1.11.0"):
+    from accelerate.utils.fsdp_utils import get_parameters_from_modules
 
 if TYPE_CHECKING:
-    from accelerate import Accelerator
     from deepspeed.runtime.engine import DeepSpeedEngine
     from torch.nn import Module
     from torch.nn.parallel.distributed import DistributedDataParallel
@@ -84,7 +87,7 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
         optimizer_offload = model.optimizer
     else:
         raise RuntimeError("The model optimizer is None, which is not yet supported.")
-    if version.parse(deepspeed.__version__) >= version.parse("0.16.4"):
+    if Version(deepspeed.__version__) >= Version("0.16.4"):
         # Account for renaming in https://github.com/deepspeedai/DeepSpeed/pull/6847
         optimizer_offload._register_deepspeed_module(optimizer_offload.module)
     else:
@@ -92,7 +95,7 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
 
 
 @contextmanager
-def unwrap_model_for_generation(
+def _unwrap_model_for_generation(
     model: "DistributedDataParallel | DeepSpeedEngine",
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
@@ -114,7 +117,7 @@ def unwrap_model_for_generation(
 
     Example:
     ```python
-    with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
+    with _unwrap_model_for_generation(model, accelerator) as unwrapped_model:
         generated_outputs = unwrapped_model.generate(input_ids)
     ```
     """
@@ -136,6 +139,87 @@ def unwrap_model_for_generation(
         yield unwrapped_model
     if is_gradient_checkpointing:
         unwrapped_model.gradient_checkpointing_enable()
+
+
+@contextmanager
+def _override_model_generation_config(model, generation_kwargs=None):
+    """
+    Context manager to temporarily override a model's generation_config with training config.
+
+    This works around transformers' config merging logic that would otherwise overwrite values matching global defaults
+    with model-specific values (see upstream issue transformers#42762; fixed in transformers v5 by PR
+    `transformers#42702`).
+
+    By temporarily setting the model's generation_config to match the passed generation_config, we avoid the conflict.
+
+    The model's original generation_config is preserved outside this context, ensuring that saved/pushed models retain
+    their intended inference behavior.
+
+    Args:
+        model: The model (typically unwrapped_model) whose generation_config to temporarily override.
+        generation_kwargs (dict): Generation kwargs to be used to override model's generation config.
+    """
+    if (
+        # Issue fixed in transformers v5 by PR transformers#42702
+        Version(transformers.__version__) >= Version("5.0.0")
+        or generation_kwargs is None
+        or not hasattr(model, "generation_config")
+    ):
+        yield model
+        return
+    # If it is a PEFT model, override the underlying base model
+    if hasattr(model, "get_base_model"):
+        model = model.get_base_model()
+    # Keep original model generation_config
+    original_config = model.generation_config
+    # Create training-specific generation config from the model's original generation config
+    # Then overwrite it with the training-specific generation kwargs
+    generation_config = GenerationConfig.from_dict(model.generation_config.to_dict())
+    generation_config.update(**generation_kwargs)
+    model.generation_config = generation_config
+    try:
+        yield
+    finally:
+        model.generation_config = original_config
+
+
+@contextmanager
+def unwrap_model_for_generation(
+    model: "DistributedDataParallel | DeepSpeedEngine",
+    accelerator: "Accelerator",
+    gather_deepspeed3_params: bool = True,
+    generation_kwargs: dict | None = None,
+):
+    """
+    Context manager to unwrap distributed or accelerated models for generation tasks.
+
+    This function unwraps distributed models (FSDP, DeepSpeed) and optionally overrides the model's generation_config
+    temporarily during generation. This is useful for applying training-specific generation parameters without
+    permanently modifying the model's original generation_config.
+
+    Args:
+        model (`DistributedDataParallel | DeepSpeedEngine`):
+            Model to be unwrapped.
+        accelerator ([`~accelerate.Accelerator`]):
+            Accelerator instance managing the model.
+        gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
+            Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
+            can be more memory-efficient but may lead to slower generation times.
+        generation_kwargs (dict, *optional*):
+            If provided, temporarily overrides the model's generation_config during generation. The original config is
+            automatically restored when exiting the context. This is useful for using different generation parameters
+            during training vs. inference.
+
+    Yields:
+        Unwrapped model with optionally overridden generation_config.
+    """
+    with (
+        _unwrap_model_for_generation(
+            model, accelerator, gather_deepspeed3_params=gather_deepspeed3_params
+        ) as unwrapped_model,
+        _override_model_generation_config(unwrapped_model, generation_kwargs=generation_kwargs),
+    ):
+        yield unwrapped_model
 
 
 def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
@@ -178,31 +262,50 @@ def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
     return model
 
 
-def prepare_fsdp(model, accelerator):
-    # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1421
-    from torch.distributed.fsdp import FSDPModule
-    from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
-
-    # Check if the model is already a FSDP model due to `Manual Wrapping` and if so,
-    # don't wrap it again
-    if not (isinstance(model, FSDP) or isinstance(model, FSDPModule)):
-        accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
+def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
+    # Check if the model is already a FSDP model due to `Manual Wrapping` and if so, don't wrap it again
+    if not isinstance(model, (FSDP, FSDPModule)):
         fsdp_plugin = accelerator.state.fsdp_plugin
-        kwargs = {
-            "sharding_strategy": fsdp_plugin.sharding_strategy or fsdp_plugin.reshard_after_forward,
-            "cpu_offload": fsdp_plugin.cpu_offload,
-            "auto_wrap_policy": fsdp_plugin.auto_wrap_policy,
-            "mixed_precision": fsdp_plugin.mixed_precision_policy,
-            "sync_module_states": fsdp_plugin.sync_module_states,
-            "backward_prefetch": fsdp_plugin.backward_prefetch,
-            "forward_prefetch": fsdp_plugin.forward_prefetch,
-            "use_orig_params": fsdp_plugin.use_orig_params,
-            "param_init_fn": fsdp_plugin.param_init_fn,
-            "ignored_modules": fsdp_plugin.ignored_modules,
-            "limit_all_gathers": fsdp_plugin.limit_all_gathers,
-            "device_id": accelerator.device,
-        }
-        model = FSDP(model, **kwargs)
+        if fsdp_plugin.fsdp_version == 1:
+            accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
+            kwargs = {
+                "sharding_strategy": fsdp_plugin.sharding_strategy or fsdp_plugin.reshard_after_forward,
+                "cpu_offload": fsdp_plugin.cpu_offload,
+                "auto_wrap_policy": fsdp_plugin.auto_wrap_policy,
+                "mixed_precision": fsdp_plugin.mixed_precision_policy,
+                "sync_module_states": fsdp_plugin.sync_module_states,
+                "backward_prefetch": fsdp_plugin.backward_prefetch,
+                "forward_prefetch": fsdp_plugin.forward_prefetch,
+                "use_orig_params": fsdp_plugin.use_orig_params,
+                "param_init_fn": fsdp_plugin.param_init_fn,
+                "ignored_modules": fsdp_plugin.ignored_modules,
+                "limit_all_gathers": fsdp_plugin.limit_all_gathers,
+                "device_id": accelerator.device,
+            }
+            model = FSDP(model, **kwargs)
+        elif fsdp_plugin.fsdp_version == 2:
+            from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+
+            mesh = getattr(accelerator, "torch_device_mesh", None)
+            if Version(accelerate.__version__) >= Version("1.11.0"):
+                ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
+            else:
+                warnings.warn(
+                    "FSDP version 2 is being used with accelerate version < 1.11.0, which may lead to incorrect "
+                    "handling of ignored modules. Please upgrade accelerate to v1.11.0 or later for proper support."
+                )
+                ignored_params = None
+            fully_shard(
+                model,
+                reshard_after_forward=fsdp_plugin.reshard_after_forward,
+                offload_policy=fsdp_plugin.cpu_offload,
+                # `fully_shard` doesn't accept `None` in case of `MixedPrecisionPolicy`
+                mp_policy=fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
+                mesh=mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)] if mesh is not None else None,
+                ignored_params=ignored_params,
+            )
+        else:
+            raise ValueError(f"FSDP version {fsdp_plugin.fsdp_version} is not supported.")
     model.eval()
     return model
 
@@ -258,135 +361,6 @@ class _ForwardRedirection:
         pass
 
 
-def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs=None):
-    r"""
-    Prepare a k-bit quantized transformers model for training (PEFT/QLoRA).
-    """
-    loaded_in_kbit = getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False)
-    quant_methods = ["gptq", "aqlm", "eetq", "torchao", "hqq"]
-    is_quantized = getattr(model, "quantization_method", None) in quant_methods or getattr(
-        model, "hqq_quantized", False
-    )
-
-    if gradient_checkpointing_kwargs is None:
-        gradient_checkpointing_kwargs = {}
-
-    for _, param in model.named_parameters():
-        # freeze all parameters
-        param.requires_grad = False
-
-    # Enable gradient checkpointing if needed
-    if (loaded_in_kbit or is_quantized) and use_gradient_checkpointing:
-        if hasattr(model, "enable_input_require_grads"):
-            model.enable_input_require_grads()
-        else:
-            # backward-compatible hook
-            def make_inputs_require_grad(module, input, output):
-                output.requires_grad_(True)
-
-            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
-        supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
-            inspect.signature(model.gradient_checkpointing_enable).parameters
-        )
-        gc_kwargs = {"gradient_checkpointing_kwargs": gradient_checkpointing_kwargs} if supports_gc_kwargs else {}
-        model.gradient_checkpointing_enable(**gc_kwargs)
-
-    return model
-
-
-def enable_gradient_checkpointing(
-    model: PreTrainedModel, gradient_checkpointing_kwargs: dict | None
-) -> PreTrainedModel:
-    """Enables gradient checkpointing for the model."""
-    # Enable gradient checkpointing on the base model for PEFT
-    if is_peft_model(model):
-        model.base_model.gradient_checkpointing_enable()
-    # Enable gradient checkpointing for non-PEFT models
-    else:
-        model.gradient_checkpointing_enable()
-
-    gradient_checkpointing_kwargs = gradient_checkpointing_kwargs or {}
-    use_reentrant = (
-        "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
-    )
-
-    if use_reentrant:
-        if hasattr(model, "enable_input_require_grads"):
-            model.enable_input_require_grads()
-        else:
-
-            def make_inputs_require_grad(module, input, output):
-                output.requires_grad_(True)
-
-            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
-    return model
-
-
-def peft_module_casting_to_bf16(model):
-    for name, module in model.named_modules():
-        if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
-            module = module.to(torch.float32)
-        elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
-            if hasattr(module, "weight"):
-                if module.weight.dtype == torch.float32:
-                    module = module.to(torch.bfloat16)
-
-
-def prepare_peft_model(
-    model: PreTrainedModel, peft_config: "PeftConfig | None", args: TrainingArguments
-) -> PreTrainedModel:
-    """Prepares a model for PEFT training."""
-    if not is_peft_available():
-        raise ImportError("PEFT is required to use a peft model. Run `pip install peft`.")
-
-    # If the model is already a PeftModel, we need to merge and unload it.
-    # Further information here: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
-    if isinstance(model, PeftModel) and peft_config is not None:
-        model = model.merge_and_unload()
-
-    # Handle quantized models (QLoRA)
-    is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
-
-    is_sharded_qlora = False
-    if getattr(model, "is_loaded_in_4bit", False):
-        # Check if model is sharded (FSDP/DS-Zero3)
-        for _, param in model.named_parameters():
-            if param.__class__.__name__ == "Params4bit":
-                is_sharded_qlora = param.data.device.type in {"cpu", "meta"}
-                break
-
-    # Prepare model for kbit training if needed
-    if is_qlora and not is_sharded_qlora and not isinstance(model, PeftModel):
-        model = prepare_model_for_kbit_training(
-            model,
-            use_gradient_checkpointing=args.gradient_checkpointing,
-            gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs or {},
-        )
-        # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
-        args.gradient_checkpointing = False
-    elif args.gradient_checkpointing:
-        model = enable_gradient_checkpointing(model, args.gradient_checkpointing_kwargs)
-
-    # Create PEFT model
-    if peft_config is not None:
-        if (
-            version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
-            and getattr(model, "is_loaded_in_4bit", False)
-            and is_sharded_qlora
-        ):
-            model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
-        else:
-            model = get_peft_model(model, peft_config)
-
-    # Handle bf16 casting for 4-bit models
-    if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
-        peft_module_casting_to_bf16(model)
-
-    return model
-
-
 @contextmanager
 def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointing_kwargs: dict | None = None):
     """
@@ -408,84 +382,14 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
             model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
 
 
-LAYER_PATTERNS = [
-    "transformer.h.{layer}",
-    "model.decoder.layers.{layer}",
-    "gpt_neox.layers.{layer}",
-    "model.layers.{layer}",
-]
-
-
 def create_reference_model(
     model: nn.Module, num_shared_layers: int | None = None, pattern: str | None = None
 ) -> nn.Module:
-    """
-    Creates a static reference copy of a model. Note that model will be in `.eval()` mode.
-
-    Args:
-        model ([`nn.Module`]): The model to be copied.
-        num_shared_layers (`int`, *optional*):
-            The number of initial layers that are shared between both models and kept frozen.
-        pattern (`str`, *optional*): The shared layers are selected with a string pattern
-            (e.g. "transformer.h.{layer}" for GPT2) and if a custom pattern is necessary it can be passed here.
-
-    Returns:
-        [`nn.Module`]
-    """
-    if is_deepspeed_zero3_enabled():
-        raise ValueError(
-            "DeepSpeed ZeRO-3 is enabled and is not compatible with `create_reference_model()`. Please instantiate your reference model directly with `AutoModelForCausalLM.from_pretrained()`."
-        )
-
-    parameter_names = [n for n, _ in model.named_parameters()]
-    ref_model = deepcopy(model)
-
-    # if no layers are shared, return copy of model
-    if num_shared_layers is None:
-        for param_name in parameter_names:
-            param = ref_model.get_parameter(param_name)
-            param.requires_grad = False
-        return ref_model.eval()
-
-    # identify layer name pattern
-    if pattern is not None:
-        pattern = pattern.format(layer=num_shared_layers)
-    else:
-        for pattern_candidate in LAYER_PATTERNS:
-            pattern_candidate = pattern_candidate.format(layer=num_shared_layers)
-            if any(pattern_candidate in name for name in parameter_names):
-                pattern = pattern_candidate
-                break
-
-    if pattern is None:
-        raise ValueError("Layer pattern could not be matched.")
-
-    # divide parameters in shared and unshared parameter lists
-    shared_param_list = []
-    unshared_param_list = []
-
-    shared_parameter = True
-    for name, _param in model.named_parameters():
-        if pattern in name:
-            shared_parameter = False
-        if shared_parameter:
-            shared_param_list.append(name)
-        else:
-            unshared_param_list.append(name)
-
-    # create reference of the original parameter if they are shared
-    for param_name in shared_param_list:
-        param = model.get_parameter(param_name)
-        param.requires_grad = False
-
-        _ref_param = ref_model.get_parameter(param_name)
-
-    # for all other parameters just make sure they don't use gradients
-    for param_name in unshared_param_list:
-        param = ref_model.get_parameter(param_name)
-        param.requires_grad = False
-
-    if pattern is not None and len(unshared_param_list) == 0:
-        logging.warning("Pattern passed or found, but no layers matched in the model. Check for a typo.")
-
-    return ref_model.eval()
+    warnings.warn(
+        "The `create_reference_model` function is now located in `trl.experimental.utils`. Please update your "
+        "imports to `from trl.experimental.utils import create_reference_model`. This import path will be removed in "
+        "TRL 1.0.0.",
+        FutureWarning,
+        stacklevel=2,
+    )
+    return _create_reference_model(model, num_shared_layers=num_shared_layers, pattern=pattern)

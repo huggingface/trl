@@ -1,11 +1,5 @@
 # PPO Trainer
 
-<Tip warning={true}>
-
-**Deprecation Notice**: PPOTrainer and PPOConfig have been moved to `trl.experimental.ppo` and will be removed from `trl.trainer` in TRL 0.29.0. Please update your imports to use `from trl.experimental.ppo import PPOConfig, PPOTrainer` instead. See [issue #4466](https://github.com/huggingface/trl/issues/4466) for more information.
-
-</Tip>
-
 [![model badge](https://img.shields.io/badge/All_models-PPO-blue)](https://huggingface.co/models?other=ppo,trl)
 
 TRL supports training LLMs with [Proximal Policy Optimization (PPO)](https://huggingface.co/papers/1707.06347).
@@ -183,6 +177,8 @@ To validate the PPO implementation works, we ran experiment on the 1B model. Her
 ```shell
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/ppo/ppo_tldr.py \
+    --dataset_name trl-lib/tldr \
+    --dataset_test_split validation \
     --output_dir models/minimal/ppo_tldr \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 16 \
@@ -193,25 +189,17 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --local_rollout_forward_batch_size 16 \
     --missing_eos_penalty 1.0 \
-    --stop_token eos
+    --stop_token eos \
+    --eval_strategy steps \
+    --eval_steps 100
 ```
 
 Checkpoints and experiment tracking are available at:
 
-- [🤗 Model checkpoint](https://huggingface.co/vwxyzjn/ppo_tldr)
+- [🤗 Model checkpoint](https://huggingface.co/trl-lib/ppo_tldr)
 - [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/dd2o3g35)
 
-To evaluate, we use [vLLM](https://github.com/vllm-project/vllm) to load the checkpoints and GPT-4o mini as a judge model to evaluate the generated TL;DR against the reference TL;DR.
-For more information on how to use judges, see [Judges](judges).
-
-```bash
-$ python examples/scripts/evals/judge_tldr.py --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr --judge_model gpt-4o-mini --num_examples 1000
-Model win rate: 33.00%
-$ python examples/scripts/evals/judge_tldr.py --model_name_or_path vwxyzjn/ppo_tldr --judge_model gpt-4o-mini --num_examples 1000
-Model win rate: 64.70%
-```
-
-The PPO checkpoint gets a 64.7% preferred rate vs the 33.0% preference rate of the SFT checkpoint. This is a good sign that the PPO training is working as intended.
+The PPO checkpoint gets a 64.7% preferred rate vs the 33.0% preference rate of the SFT checkpoint (evaluated with GPT-4o mini as a judge). This is a good sign that the PPO training is working as intended.
 
 Metrics:
 
