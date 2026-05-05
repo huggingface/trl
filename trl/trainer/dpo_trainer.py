@@ -1368,11 +1368,18 @@ class DPOTrainer(_BaseTrainer):
                 # shape of other losses; only the mean is used, so this is a no-op numerically.
                 per_sequence_loss = batch_loss.expand(chosen_logits.size(0))
 
+            elif loss_type == "sigmoid_norm":
+                chosen_mask, rejected_mask = completion_mask.chunk(2, dim=0)
+                chosen_avg_score = chosen_scores / chosen_mask.sum(dim=1).clamp(min=1.0)
+                rejected_avg_score = rejected_scores / rejected_mask.sum(dim=1).clamp(min=1.0)
+                delta = chosen_avg_score - rejected_avg_score
+                per_sequence_loss = -F.logsigmoid(self.beta * delta)
+
             else:
                 raise ValueError(
                     f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
                     "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired', 'apo_zero', 'apo_down', "
-                    "'discopop', 'sft']"
+                    "'discopop', 'sft', 'sigmoid_norm']"
                 )
 
             if self.use_weighting:
