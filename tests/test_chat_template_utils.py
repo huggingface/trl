@@ -128,6 +128,7 @@ class TestAddResponseSchema:
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
+            pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
         ],
     )
     def test_add_response_schema(self, tokenizer_name):
@@ -199,7 +200,7 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
             pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", id="qwen3"),
-            pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3-instruct-2507"),
+            pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3moe"),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
@@ -432,15 +433,18 @@ class TestIsChatTemplatePrefixPreserving:
     "tokenizer_name",
     [
         pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
+        pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
         pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
         pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
         pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
+        pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3"),
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
+        pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
             id="qwen36",
@@ -651,6 +655,7 @@ class TestGetTrainingChatTemplate:
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
+        pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36"),
@@ -711,6 +716,7 @@ class TestParseResponse:
             "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
         ):
             pytest.skip("This tokenizer doesn't support inline reasoning_content.")

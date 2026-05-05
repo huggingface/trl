@@ -72,8 +72,8 @@ class DPOConfig(_BaseConfig):
         loss_type (`list[str]`, *optional*, defaults to `["sigmoid"]`):
             Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, `'nca_pair'`,
             `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`, `'apo_zero'`, `'apo_down'`,
-            `'discopop'`, `'sft'`. If multiple loss types are provided, they will be combined using the weights
-            specified in `loss_weights`.
+            `'discopop'`, `'sft'`, `'sigmoid_norm'`. If multiple loss types are provided, they will be combined using
+            the weights specified in `loss_weights`.
         loss_weights (`list[float]`, *optional*):
             List of loss weights for multi-loss combinations. Used when combining multiple loss types. Example: `[0.8,
             0.2, 1.0]` for MPO. If not provided, defaults to equal weights (`1.0`) for all loss types.
@@ -213,8 +213,8 @@ class DPOConfig(_BaseConfig):
         metadata={
             "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, "
             "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`, `'apo_zero'`, "
-            "`'apo_down'`, `'discopop'`, `'sft'`. If multiple loss types are provided, they will be combined using "
-            "the weights specified in `loss_weights`.",
+            "`'apo_down'`, `'discopop'`, `'sft'`, `'sigmoid_norm'`. If multiple loss types are provided, they will be "
+            "combined using the weights specified in `loss_weights`.",
         },
     )
     loss_weights: list[float] | None = field(
