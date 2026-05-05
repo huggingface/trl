@@ -18,7 +18,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import torch
 import torch.nn as nn
@@ -65,10 +65,6 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
-
-
-if TYPE_CHECKING:
-    from transformers import PreTrainedModel
 
 
 logger = logging.get_logger(__name__)
