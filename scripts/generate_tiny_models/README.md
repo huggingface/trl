@@ -39,13 +39,13 @@ Direct overwrites of `main` aren't supported — update via `--create-pr` and me
 
 ## Version pinning
 
-Every script declares `TRANSFORMERS_VERSION = "X.Y.Z"`, which is:
+Each script calls `check_transformers_version(...)`, which enforces:
 
 ```
 max(version that introduced the model, TRL's transformers floor)
 ```
 
-The floor (currently `4.56.2`) is the `transformers>=` bound from `pyproject.toml`. Scripts for models introduced after the floor pin a higher version (e.g. Qwen3-VL pins `4.57.0`, Gemma4 pins `5.6.0`). The check is an exact match via `packaging.version.Version`; install the pinned version before running.
+By default — `check_transformers_version()` with no argument — the expected version is the `transformers>=` floor read from `pyproject.toml` (currently `4.56.2`). Scripts for models introduced after the floor pass an explicit pin, e.g. `check_transformers_version("4.57.0")` for Qwen3-VL or `check_transformers_version("5.6.0")` for Gemma4. The check is an exact match via `packaging.version.Version`; install the matching version before running.
 
 **Why exact?** transformers is backward-compatible (a checkpoint saved by X loads on any ≥ X) but not forward-compatible. TRL CI runs against the floor, so tiny models must be saved with the oldest version that supports them — any newer save risks using config fields the floor can't parse. The exact-match check prevents accidental drift.
 
@@ -53,5 +53,5 @@ The floor (currently `4.56.2`) is the `transformers>=` bound from `pyproject.tom
 
 1. Pick the right subfolder based on the model class suffix (`ForCausalLM`, `ForSequenceClassification`, `ForConditionalGeneration`).
 2. Copy an existing script with the closest shape and adapt it — reference model id, config class, model class, special kwargs.
-3. Set `TRANSFORMERS_VERSION` to the release that introduced the model (or to the TRL floor, whichever is higher).
+3. If the model requires a release newer than the TRL floor, pass it explicitly: `check_transformers_version("X.Y.Z")`. Otherwise leave the call argument-less to default to the floor.
 4. Run it. Inspect the `[smoke_test]` and `[config_diff]` output before letting it push.
