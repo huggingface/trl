@@ -1239,7 +1239,7 @@ class KTOTrainer(_BaseTrainer):
         # Add averaged stored metrics to logs
         for key, metrics in self._metrics[train_eval].items():
             logs[f"{prefix}{key}"] = torch.Tensor(metrics).mean().item()
-        del self._metrics[train_eval]
+        self._metrics[train_eval].clear()
         return super().log(logs, start_time)
 
     # Ensure the model card is saved along with the checkpoint
