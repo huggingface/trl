@@ -194,7 +194,14 @@ class TestSupportsToolCalling:
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
-            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                id="glm4moe",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="GLM4 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
@@ -438,7 +445,14 @@ class TestIsChatTemplatePrefixPreserving:
         pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
         pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
         pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3"),
-        pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
+        pytest.param(
+            "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+            id="glm4moe",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="GLM4 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
