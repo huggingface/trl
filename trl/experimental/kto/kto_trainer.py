@@ -18,7 +18,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import torch
 import torch.nn as nn
@@ -65,10 +65,6 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
-
-
-if TYPE_CHECKING:
-    from transformers import PreTrainedModel
 
 
 logger = logging.get_logger(__name__)
@@ -323,13 +319,6 @@ class KTOTrainer(_BaseTrainer):
             for param in model.parameters():
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
-
-        # KTO only supports causal language models, not encoder-decoder models
-        if model is not None and hasattr(model.config, "is_encoder_decoder") and model.config.is_encoder_decoder:
-            raise ValueError(
-                "KTO only supports causal language models. Encoder-decoder models are not supported. "
-                "Please use a causal LM (e.g., GPT, Llama, Mistral) instead of an encoder-decoder model (e.g., T5, BART)."
-            )
 
         if args.max_length is None:
             logger.warning(
