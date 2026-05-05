@@ -178,7 +178,7 @@ class TestNashMDTrainer(TrlTestCase):
             report_to="none",
             remove_unused_columns=False,  # Important for the dummy dataset
         )
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")["train"]
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = NashMDTrainer(
             model=peft_model_instance,  # Pass the already PEFT model
