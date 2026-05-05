@@ -324,13 +324,6 @@ class KTOTrainer(_BaseTrainer):
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
 
-        # KTO only supports causal language models, not encoder-decoder models
-        if model is not None and hasattr(model.config, "is_encoder_decoder") and model.config.is_encoder_decoder:
-            raise ValueError(
-                "KTO only supports causal language models. Encoder-decoder models are not supported. "
-                "Please use a causal LM (e.g., GPT, Llama, Mistral) instead of an encoder-decoder model (e.g., T5, BART)."
-            )
-
         if args.max_length is None:
             logger.warning(
                 "When using DataCollatorForUnpairedPreference, you should set `max_length` in the KTOTrainer's init"
