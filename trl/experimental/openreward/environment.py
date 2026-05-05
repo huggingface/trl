@@ -369,9 +369,8 @@ def _bind_tool_method(cls: type, spec: dict[str, Any]) -> None:
 def _spec_to_dict(spec: Any) -> dict[str, Any]:
     """Normalise SDK ``ToolSpec`` and dict shapes to the same dict form.
 
-    ``openreward.api.environments.types.ToolSpec`` is a stable dataclass with
-    ``name``, ``description``, ``input_schema`` fields, so direct attribute
-    access is safe.
+    ``openreward.api.environments.types.ToolSpec`` is a stable dataclass with ``name``, ``description``,
+    ``input_schema`` fields, so direct attribute access is safe.
     """
     if isinstance(spec, dict):
         return spec
@@ -385,9 +384,8 @@ def _spec_to_dict(spec: Any) -> dict[str, Any]:
 def _join_text_blocks(blocks: list[Any]) -> str:
     """Concatenate the ``text`` field of every text block in order.
 
-    Accepts both SDK ``TextBlock`` dataclasses and plain dicts. Both shapes
-    expose a ``type`` discriminator (`"text"` vs `"image"`); non-text blocks
-    are skipped so e.g. ``ImageBlock`` doesn't trip up the join.
+    Accepts both SDK ``TextBlock`` dataclasses and plain dicts. Both shapes expose a ``type`` discriminator (`"text"`
+    vs `"image"`); non-text blocks are skipped so e.g. ``ImageBlock`` doesn't trip up the join.
     """
     if not blocks:
         return ""

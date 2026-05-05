@@ -184,6 +184,11 @@ class OpenRewardSpec:
         tool_specs = env.list_tools()
         client = self._sdk_client
 
+        # Each spec gets its own `_RolloutEnvironment` subclass so two specs
+        # for different envs (different tool sets) never clobber each other's
+        # bound methods on the shared parent class.
+        rollout_cls = type(f"_RolloutEnvironment_{id(self):x}", (_RolloutEnvironment,), {})
+
         kwargs = {
             "split": self._split,
             "secrets": self._effective_secrets(),
@@ -202,7 +207,7 @@ class OpenRewardSpec:
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
         def _make() -> _RolloutEnvironment:
-            return _RolloutEnvironment(**kwargs)
+            return rollout_cls(**kwargs)
 
         return _make
 

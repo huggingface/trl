@@ -189,3 +189,18 @@ class TestOpenRewardSpec(TrlTestCase):
         assert env_b.reward == 0.0  # untouched
         env_a._close()
         env_b._close()
+
+    def test_two_specs_get_isolated_rollout_subclasses(self, echo_env_url):
+        # Two specs (potentially against different envs with different tool
+        # sets) must each produce rollout instances with their own subclass,
+        # so neither side's bound tools clobber or shadow the other's.
+        spec_a = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=1)
+        spec_b = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=1)
+        env_a = spec_a.environment_factory()
+        env_b = spec_b.environment_factory()
+        # Each rollout is a distinct subclass of _RolloutEnvironment.
+        assert type(env_a) is not type(env_b)
+        # Both subclasses still get their own `echo` method.
+        assert callable(env_a.echo) and callable(env_b.echo)
+        env_a._close()
+        env_b._close()
