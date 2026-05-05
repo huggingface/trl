@@ -350,7 +350,6 @@ class KTOTrainer(_BaseTrainer):
             self.use_dpo_data_collator = False
 
         self.loss_type = args.loss_type
-        self.max_length = max_length
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
         # Not all losses require a KL calculation
