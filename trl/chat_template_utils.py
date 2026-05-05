@@ -308,9 +308,13 @@ qwen3_5_schema = {
 
 cohere_chat_template = (_CHAT_TEMPLATES_DIR / "cohere.jinja").read_text()
 
+cohere2_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2.jinja").read_text()
+
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
 
 gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text()
+
+gemma3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3.jinja").read_text()
 
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
 
@@ -327,6 +331,8 @@ phi3_chat_template = (_CHAT_TEMPLATES_DIR / "phi3.jinja").read_text()
 qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text()
 
 qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text()
+
+qwen3_instruct_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507.jinja").read_text()
 
 qwen3_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl.jinja").read_text()
 
@@ -386,7 +392,7 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer.response_schema = gptoss_schema
     elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
         tokenizer.response_schema = llama3_schema
-    elif chat_template in [qwen3_chat_template, qwen3_vl_chat_template]:
+    elif chat_template in [qwen3_chat_template, qwen3_instruct_2507_chat_template, qwen3_vl_chat_template]:
         tokenizer.response_schema = qwen3_schema
     elif chat_template in [
         qwen3_5_chat_template_2b_and_below,
@@ -533,9 +539,13 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase
 
 cohere_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere_training.jinja").read_text()
 
+cohere2_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2_training.jinja").read_text()
+
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text()
 
 gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma_training.jinja").read_text()
+
+gemma3_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3_training.jinja").read_text()
 
 glm4moe_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe_training.jinja").read_text()
 
@@ -549,6 +559,8 @@ qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja"
 
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text()
 
+qwen3_instruct_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507_training.jinja").read_text()
+
 qwen3_6_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6_training.jinja").read_text()
 
 
@@ -558,8 +570,8 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently Cohere, DeepSeek-V3, Gemma, Gemma2, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Qwen2.5, Qwen3, and
-    Qwen3.6 are supported.
+    requirements. Currently Cohere, Cohere2, DeepSeek-V3, Gemma, Gemma2, Gemma 3, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3,
+    Qwen2.5, Qwen3 (including the Instruct-2507 variant), and Qwen3.6 are supported.
 
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
@@ -613,11 +625,17 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None
     if tokenizer.chat_template == cohere_chat_template:
         return cohere_training_chat_template
 
+    if tokenizer.chat_template == cohere2_chat_template:
+        return cohere2_training_chat_template
+
     if tokenizer.chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
 
     if tokenizer.chat_template == gemma_chat_template:
         return gemma_training_chat_template
+
+    if tokenizer.chat_template == gemma3_chat_template:
+        return gemma3_training_chat_template
 
     if tokenizer.chat_template == glm4moe_chat_template:
         return glm4moe_training_chat_template
@@ -636,6 +654,9 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None
 
     if tokenizer.chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
+
+    if tokenizer.chat_template == qwen3_instruct_2507_chat_template:
+        return qwen3_instruct_2507_training_chat_template
 
     if tokenizer.chat_template == qwen3_6_chat_template:
         return qwen3_6_training_chat_template
