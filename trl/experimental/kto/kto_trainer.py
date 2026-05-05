@@ -372,7 +372,7 @@ class KTOTrainer(_BaseTrainer):
             )
 
         # metric
-        self._stored_metrics = defaultdict(lambda: defaultdict(list))
+        self._metrics = defaultdict(lambda: defaultdict(list))
 
         # KTO parameter
         self.beta = args.beta
@@ -1164,7 +1164,7 @@ class KTOTrainer(_BaseTrainer):
 
     def store_metrics(self, metrics: dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
         for key, value in metrics.items():
-            self._stored_metrics[train_eval][key].append(value)
+            self._metrics[train_eval][key].append(value)
 
     def _get_train_sampler(self, dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
         if dataset is None:
@@ -1224,23 +1224,22 @@ class KTOTrainer(_BaseTrainer):
         prefix = "eval_" if train_eval == "eval" else ""
         # accumulate average metrics from sums and lengths
         for split in ["chosen", "rejected"]:
-            if f"count/{split}" in self._stored_metrics[train_eval]:
-                count_sum = torch.Tensor(self._stored_metrics[train_eval][f"count/{split}"]).sum().item()
+            if f"count/{split}" in self._metrics[train_eval]:
+                count_sum = torch.Tensor(self._metrics[train_eval][f"count/{split}"]).sum().item()
                 for metric in ["rewards", "logps", "logits"]:
                     logs[f"{prefix}{metric}/{split}"] = (
-                        torch.Tensor(self._stored_metrics[train_eval][f"{metric}/{split}_sum"]).sum().item()
-                        / count_sum
+                        torch.Tensor(self._metrics[train_eval][f"{metric}/{split}_sum"]).sum().item() / count_sum
                     )
                     # delete obsolete metric
-                    del self._stored_metrics[train_eval][f"{metric}/{split}_sum"]
-                del self._stored_metrics[train_eval][f"count/{split}"]
+                    del self._metrics[train_eval][f"{metric}/{split}_sum"]
+                del self._metrics[train_eval][f"count/{split}"]
         # calculate reward margin
         if f"{prefix}rewards/chosen" in logs and f"{prefix}rewards/rejected" in logs:
             logs[f"{prefix}rewards/margins"] = logs[f"{prefix}rewards/chosen"] - logs[f"{prefix}rewards/rejected"]
         # Add averaged stored metrics to logs
-        for key, metrics in self._stored_metrics[train_eval].items():
+        for key, metrics in self._metrics[train_eval].items():
             logs[f"{prefix}{key}"] = torch.Tensor(metrics).mean().item()
-        del self._stored_metrics[train_eval]
+        del self._metrics[train_eval]
         return super().log(logs, start_time)
 
     # Ensure the model card is saved along with the checkpoint
