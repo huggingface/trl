@@ -56,15 +56,15 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        dataset = load_dataset("trl-internal-testing/zen", config_name)
 
         trainer = KTOTrainer(
             model=self.model,
             ref_model=self.ref_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"] if eval_dataset else None,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"] if eval_dataset else None,
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -73,7 +73,7 @@ class TestKTOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -87,7 +87,7 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         with pytest.raises(ValueError):
             KTOTrainer(
@@ -95,7 +95,7 @@ class TestKTOTrainer(TrlTestCase):
                 ref_model=self.model,  # ref_model can't be the same as model
                 args=training_args,
                 processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
+                train_dataset=dataset,
             )
 
     def test_tokenize_and_process_tokens(self):
@@ -116,8 +116,8 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
-        train_dataset = dummy_dataset["train"]
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        train_dataset = dataset["train"]
 
         trainer = KTOTrainer(
             model=self.model,
@@ -125,7 +125,7 @@ class TestKTOTrainer(TrlTestCase):
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=train_dataset,
-            eval_dataset=dummy_dataset["test"],
+            eval_dataset=dataset["test"],
         )
 
         # Verify the tokenization step: dataset stores raw token IDs (aligned with DPO style).
@@ -178,15 +178,15 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
         trainer = KTOTrainer(
             model=self.model,
             ref_model=None,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -195,7 +195,7 @@ class TestKTOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -225,15 +225,15 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
         trainer = KTOTrainer(
             model=self.model,
             ref_model=None,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
             peft_config=lora_config,
         )
 
@@ -243,7 +243,7 @@ class TestKTOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             if "lora" in n:
                 new_param = trainer.model.get_parameter(n)
@@ -259,13 +259,13 @@ class TestKTOTrainer(TrlTestCase):
             use_liger_kernel=True,  # Enable Liger kernel
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         trainer = KTOTrainer(
             model=self.model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dataset,
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -287,7 +287,7 @@ class TestKTOTrainer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         tokenizer.pad_token = tokenizer.eos_token
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
         def dummy_compute_metrics(*args, **kwargs):
             return {"test": 0.0}
@@ -308,8 +308,8 @@ class TestKTOTrainer(TrlTestCase):
             ref_model=ref_model,
             args=training_args,
             processing_class=tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
             compute_metrics=dummy_compute_metrics,
         )
 

@@ -28,7 +28,7 @@ if is_peft_available():
 
 
 class TestGSPOTokenTrainer(TrlTestCase):
-    def test_training(self):
+    def test_train(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
