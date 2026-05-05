@@ -165,7 +165,10 @@ class OpenRewardSpec:
             for spec in task_specs:
                 if isinstance(spec, dict):
                     metadata_keys.update(spec.keys())
-            metadata_keys.discard("task_index")  # never overwrite our column
+            # Never let a task-spec key overwrite our reserved row columns
+            # (e.g. an env that exposes a `prompt` task-spec field would
+            # otherwise replace our chat-format prompt with a raw string).
+            metadata_keys -= rows.keys()
             for key in sorted(metadata_keys):
                 rows[key] = [s.get(key) if isinstance(s, dict) else None for s in task_specs]
 

@@ -190,6 +190,19 @@ class TestOpenRewardSpec(TrlTestCase):
         env_a._close()
         env_b._close()
 
+    def test_metadata_does_not_overwrite_reserved_columns(self, echo_env_url):
+        # If a task spec ever shipped a `prompt` key, the metadata loop must
+        # not clobber our chat-format `prompt` column. Same for `task_index`.
+        # We assert the shape directly — the echo env's task spec doesn't
+        # currently have either, but the guard is what we're testing.
+        spec = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=1)
+        ds = spec.train_dataset
+        # `prompt` is a list-of-message-dicts, not a string from task spec.
+        assert isinstance(ds[0]["prompt"], list)
+        assert ds[0]["prompt"][0]["role"] == "user"
+        # `task_index` is the int we set, not anything from the spec.
+        assert isinstance(ds[0]["task_index"], int)
+
     def test_two_specs_get_isolated_rollout_subclasses(self, echo_env_url):
         # Two specs (potentially against different envs with different tool
         # sets) must each produce rollout instances with their own subclass,
