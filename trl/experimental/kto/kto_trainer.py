@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import inspect
 import textwrap
 from collections import defaultdict
 from collections.abc import Callable
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import torch
 import torch.nn as nn
@@ -29,7 +28,6 @@ from accelerate import PartialState, logging
 from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
 from packaging.version import Version
-from torch import autocast
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoProcessor,
@@ -59,7 +57,6 @@ from ...trainer.utils import (
     selective_log_softmax,
     use_adapter,
 )
-from ..utils import peft_module_casting_to_bf16
 from .kto_config import KTOConfig
 
 
@@ -67,11 +64,7 @@ if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearKTOLoss
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
-
-
-if TYPE_CHECKING:
-    from transformers import PreTrainedModel
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 
 logger = logging.get_logger(__name__)
@@ -102,22 +95,13 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     Args:
         pad_token_id (`int`):
             Token ID to use for padding `input_ids` sequences.
-        bos_token_id (`int`):
-            Token ID for the beginning-of-sequence token. If set and not already present at the start of `prompt_ids`,
-            it is prepended to both prompt and completion.
-        eos_token_id (`int`):
-            Token ID for the end-of-sequence token. If set and not already present at the end of `completion_ids`, it
-            is appended to the completion.
         max_length (`int`, *optional*):
-            Maximum sequence length after assembly. Sequences exceeding this limit are truncated from the end of the
-            completion before BOS/EOS tokens are added.
+            Maximum sequence length after assembly. Sequences longer than `max_length` are truncated from the end.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
     """
 
     pad_token_id: int
-    bos_token_id: int
-    eos_token_id: int
     max_length: int | None = None
     return_tensors: str = "pt"
 
@@ -132,36 +116,12 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
             for ex in examples:
                 prompt_ids = ex["prompt_ids"]
                 answer_ids = ex[ids_key]
-
+                full_ids = prompt_ids + answer_ids
+                labels = [-100] * len(prompt_ids) + answer_ids
                 if self.max_length is not None:
-                    # Reserve budget for BOS/EOS tokens that will be added.
-                    # BOS: only if not already present (truncation never removes the first token)
-                    # EOS: always reserve a slot — truncation removes from the end, so EOS may be cut
-                    # even when it was present before truncation; the post-truncation guard re-appends it
-                    max_len = self.max_length
-                    if prompt_ids and self.bos_token_id != prompt_ids[0]:
-                        max_len -= 1
-                    if self.eos_token_id is not None:
-                        max_len -= 1
-                    if len(prompt_ids) + len(answer_ids) > max_len:
-                        answer_ids = answer_ids[: max_len - len(prompt_ids)]
-
-                # Assemble completion = prompt + (truncated) answer
-                completion_ids = prompt_ids + answer_ids
-
-                # Add BOS, which affects both prompt and the full completion
-                if self.bos_token_id is not None and (not prompt_ids or prompt_ids[0] != self.bos_token_id):
-                    prompt_ids = [self.bos_token_id] + prompt_ids
-                    completion_ids = [self.bos_token_id] + completion_ids
-
-                # Add EOS, which affects only the full completion
-                if not answer_ids or self.eos_token_id != answer_ids[-1]:
-                    completion_ids = completion_ids + [self.eos_token_id]
-
-                # Create labels: mask prompt tokens with -100
-                labels = [-100] * len(prompt_ids) + completion_ids[len(prompt_ids) :]
-
-                full_ids_list.append(completion_ids)
+                    full_ids = full_ids[: self.max_length]
+                    labels = labels[: self.max_length]
+                full_ids_list.append(full_ids)
                 labels_list.append(labels)
 
             batch[f"{prefix}_input_ids"] = pad(
@@ -224,18 +184,12 @@ class KTOTrainer(_BaseTrainer):
             The data collator to use for training. If None is specified, the default data collator
             ([`~experimental.kto.kto_trainer.DataCollatorForUnpairedPreference`]) will be used which will pad the
             sequences to the maximum length of the sequences in the batch.
-        model_init (`Callable[[], transformers.PreTrainedModel]`):
-            The model initializer to use for training. If None is specified, the default model initializer will be
-            used.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
             The optimizer and scheduler to use for training.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
-            The function to use to preprocess the logits before computing the metrics.
-        peft_config (`dict`, defaults to `None`):
-            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
-            a PEFT model.
+        peft_config ([`~peft.PeftConfig`], *optional*):
+            PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
             metric values.
@@ -265,11 +219,9 @@ class KTOTrainer(_BaseTrainer):
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         data_collator: DataCollator | None = None,
-        model_init: Callable[[], PreTrainedModel] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
-        peft_config: dict | None = None,
+        peft_config: "PeftConfig | None" = None,
         compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
     ):
         # Args
@@ -314,29 +266,36 @@ class KTOTrainer(_BaseTrainer):
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
         if isinstance(processing_class, ProcessorMixin):
-            tokenizer = processing_class.tokenizer
+            self._tokenizer = processing_class.tokenizer
         elif isinstance(processing_class, PreTrainedTokenizerBase):
-            tokenizer = processing_class
+            self._tokenizer = processing_class
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
-        # has been called in order to properly call autocast if needed.
-        self._peft_has_been_casted_to_bf16 = False
+        # PEFT
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            if is_peft_model(model):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                    "with the new `peft_config` to the trainer."
+                )
+            # Create PEFT model
+            model = get_peft_model(model, peft_config)
 
-        if not is_peft_available() and peft_config is not None:
-            raise ValueError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it with `pip install peft` to use the PEFT models"
-            )
-        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
-            raise ValueError(
-                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
-                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
-                "with the new `peft_config` to the trainer."
-            )
-        if is_peft_available() and isinstance(model, PeftModel) and ref_model is None:
+        elif is_peft_model(model) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during KTO training.
             model.add_adapter("ref", model.peft_config["default"])
@@ -345,76 +304,27 @@ class KTOTrainer(_BaseTrainer):
                     ref_name = name.replace(".default.", ".ref.")
                     ref_param = model.get_parameter(ref_name)
                     ref_param.data.copy_(param.data)
-        if is_peft_available() and peft_config is not None:
-            if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-                _support_gc_kwargs = hasattr(
-                    args, "gradient_checkpointing_kwargs"
-                ) and "gradient_checkpointing_kwargs" in list(
-                    inspect.signature(prepare_model_for_kbit_training).parameters
-                )
 
-                prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
+        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
+        if is_peft_model(model) and args.gradient_checkpointing:
+            model.enable_input_require_grads()
 
-                if _support_gc_kwargs:
-                    prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
+        if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data = param.data.to(torch.bfloat16)
 
-                model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
-            elif args.gradient_checkpointing:
-                # For backward compatibility with older versions of transformers
-                if hasattr(model, "enable_input_require_grads"):
-                    model.enable_input_require_grads()
-                else:
-
-                    def make_inputs_require_grad(module, input, output):
-                        output.requires_grad_(True)
-
-                    model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
-            # get peft model with the given config
-            model = get_peft_model(model, peft_config)
-            if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
-                peft_module_casting_to_bf16(model)
-                # If args.bf16 we need to explicitly call `generate` with torch amp autocast context manager
-                self._peft_has_been_casted_to_bf16 = True
-
-        # For models that use gradient_checkpointing, we need to attach a hook that enables input
-        # to explicitly have `requires_grad=True`, otherwise training will either silently
-        # fail or completely fail.
-        elif args.gradient_checkpointing:
-            # For backward compatibility with older versions of transformers
-            if hasattr(model, "enable_input_require_grads"):
-                model.enable_input_require_grads()
-            else:
-
-                def make_inputs_require_grad(module, input, output):
-                    output.requires_grad_(True)
-
-                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
-        # KTO only supports causal language models, not encoder-decoder models
-        if model is not None and hasattr(model.config, "is_encoder_decoder") and model.config.is_encoder_decoder:
-            raise ValueError(
-                "KTO only supports causal language models. Encoder-decoder models are not supported. "
-                "Please use a causal LM (e.g., GPT, Llama, Mistral) instead of an encoder-decoder model (e.g., T5, BART)."
-            )
-
-        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
-
-        if args.max_length is None:
-            logger.warning(
-                "When using DataCollatorForUnpairedPreference, you should set `max_length` in the KTOTrainer's init"
-                " it will be set to `512` by default, but you should do it yourself in the future.",
-            )
-            max_length = 512
-        if args.max_length is not None:
-            max_length = args.max_length
-
+        # Data collator
         if data_collator is None:
             data_collator = DataCollatorForUnpairedPreference(
-                pad_token_id=tokenizer.pad_token_id,
-                bos_token_id=tokenizer.bos_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-                max_length=max_length,
+                pad_token_id=self._tokenizer.pad_token_id,
+                max_length=args.max_length,
             )
 
             if args.remove_unused_columns:
@@ -429,28 +339,19 @@ class KTOTrainer(_BaseTrainer):
         else:
             self.use_dpo_data_collator = False
 
-        self.loss_type = args.loss_type
-        self.max_length = max_length
-        self.precompute_ref_log_probs = args.precompute_ref_log_probs
-
-        # Not all losses require a KL calculation
-        self.calculate_KL = True
-        if self.loss_type in ["apo_zero_unpaired"]:
-            self.calculate_KL = False
-        if self.calculate_KL and args.per_device_train_batch_size <= 1:
-            raise ValueError(
-                "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
-            )
-
-        # metric
-        self._stored_metrics = defaultdict(lambda: defaultdict(list))
-
-        # KTO parameter
+        # Training arguments
         self.beta = args.beta
+        self.precompute_ref_log_probs = args.precompute_ref_log_probs
+        self.loss_type = args.loss_type
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        self.calculate_KL = False if self.loss_type in ["apo_zero_unpaired"] else True
+        if self.calculate_KL and args.per_device_train_batch_size <= 1:
+            raise ValueError(
+                "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
+            )
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
             logger.warning(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
@@ -485,11 +386,9 @@ class KTOTrainer(_BaseTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
-            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
         # Reference model
@@ -514,6 +413,9 @@ class KTOTrainer(_BaseTrainer):
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
+
+        # Initialize the metrics
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -548,7 +450,7 @@ class KTOTrainer(_BaseTrainer):
                     "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
                     "`precompute_ref_log_probs=False`."
                 )
-            if self.is_peft_model:
+            if is_peft_model(self.model):
                 raise ValueError(
                     "You cannot use `use_liger_kernel=True` with Peft models. Please set `use_liger_kernel=False`."
                 )
@@ -639,8 +541,6 @@ class KTOTrainer(_BaseTrainer):
                     map_kwargs["desc"] = f"Unpairing {dataset_name} dataset"
                 dataset = unpair_preference_dataset(dataset, **map_kwargs)
 
-            tokenizer = getattr(processing_class, "tokenizer", processing_class)
-
             # Add EOS token if needed: non-conversational only
             first_example = next(iter(dataset))
             if not is_conversational(first_example):
@@ -652,7 +552,7 @@ class KTOTrainer(_BaseTrainer):
                         example["completion"] = example["completion"] + eos_token
                     return example
 
-                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": tokenizer.eos_token}, **map_kwargs)
+                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": self._tokenizer.eos_token}, **map_kwargs)
 
             # Tokenize dataset
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -749,7 +649,7 @@ class KTOTrainer(_BaseTrainer):
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
-        if self.is_peft_model:
+        if is_peft_model(self.model):
             model = self.accelerator.unwrap_model(self.model)
             with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
                 yield
@@ -1225,12 +1125,7 @@ class KTOTrainer(_BaseTrainer):
         return_outputs=False,
         num_items_in_batch=None,
     ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        compute_loss_context_manager = (
-            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
-        )
-
-        with compute_loss_context_manager:
-            loss, metrics = self.get_batch_loss_metrics(model, inputs)
+        loss, metrics = self.get_batch_loss_metrics(model, inputs)
 
         # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
         loss = loss.to(self.args.device)
@@ -1244,7 +1139,7 @@ class KTOTrainer(_BaseTrainer):
 
     def store_metrics(self, metrics: dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
         for key, value in metrics.items():
-            self._stored_metrics[train_eval][key].append(value)
+            self._metrics[train_eval][key].append(value)
 
     def _get_train_sampler(self, dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
         if dataset is None:
@@ -1266,10 +1161,7 @@ class KTOTrainer(_BaseTrainer):
             else:
                 ignore_keys = []
 
-        prediction_context_manager = (
-            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
-        )
-        with torch.no_grad(), prediction_context_manager:
+        with torch.no_grad():
             loss, metrics = self.get_batch_loss_metrics(model, inputs)
 
         # force log the metrics
@@ -1307,23 +1199,22 @@ class KTOTrainer(_BaseTrainer):
         prefix = "eval_" if train_eval == "eval" else ""
         # accumulate average metrics from sums and lengths
         for split in ["chosen", "rejected"]:
-            if f"count/{split}" in self._stored_metrics[train_eval]:
-                count_sum = torch.Tensor(self._stored_metrics[train_eval][f"count/{split}"]).sum().item()
+            if f"count/{split}" in self._metrics[train_eval]:
+                count_sum = torch.Tensor(self._metrics[train_eval][f"count/{split}"]).sum().item()
                 for metric in ["rewards", "logps", "logits"]:
                     logs[f"{prefix}{metric}/{split}"] = (
-                        torch.Tensor(self._stored_metrics[train_eval][f"{metric}/{split}_sum"]).sum().item()
-                        / count_sum
+                        torch.Tensor(self._metrics[train_eval][f"{metric}/{split}_sum"]).sum().item() / count_sum
                     )
                     # delete obsolete metric
-                    del self._stored_metrics[train_eval][f"{metric}/{split}_sum"]
-                del self._stored_metrics[train_eval][f"count/{split}"]
+                    del self._metrics[train_eval][f"{metric}/{split}_sum"]
+                del self._metrics[train_eval][f"count/{split}"]
         # calculate reward margin
         if f"{prefix}rewards/chosen" in logs and f"{prefix}rewards/rejected" in logs:
             logs[f"{prefix}rewards/margins"] = logs[f"{prefix}rewards/chosen"] - logs[f"{prefix}rewards/rejected"]
         # Add averaged stored metrics to logs
-        for key, metrics in self._stored_metrics[train_eval].items():
+        for key, metrics in self._metrics[train_eval].items():
             logs[f"{prefix}{key}"] = torch.Tensor(metrics).mean().item()
-        del self._stored_metrics[train_eval]
+        self._metrics[train_eval].clear()
         return super().log(logs, start_time)
 
     # Ensure the model card is saved along with the checkpoint

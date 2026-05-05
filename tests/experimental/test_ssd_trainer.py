@@ -31,7 +31,7 @@ class TestSSDTrainer(TrlTestCase):
         assert config.vllm_mode == "colocate"
         assert config.vllm_model_impl == "vllm"
 
-    def test_training_with_string_prompts(self):
+    def test_train_with_string_prompts(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SSDConfig(
@@ -52,7 +52,7 @@ class TestSSDTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_training_with_chat_prompts(self):
+    def test_train_with_chat_prompts(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = SSDConfig(
@@ -73,7 +73,7 @@ class TestSSDTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_training_with_temperature_and_truncation(self):
+    def test_train_with_temperature_and_truncation(self):
         """Test with SSD-paper-style hyperparameters: T_train=0.6, top_k=20, top_p=0.95."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -98,7 +98,7 @@ class TestSSDTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_training_reuses_buffered_generation_batches(self):
+    def test_train_reuses_buffered_generation_batches(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SSDConfig(
@@ -120,7 +120,7 @@ class TestSSDTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_training_with_filter_empty_disabled(self):
+    def test_train_with_filter_empty_disabled(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SSDConfig(
@@ -142,7 +142,7 @@ class TestSSDTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_training_logs_ssd_metrics(self):
+    def test_train_logs_ssd_metrics(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SSDConfig(
@@ -170,7 +170,7 @@ class TestSSDTrainer(TrlTestCase):
         assert "completions/mean_length" in last_log
 
     @require_peft
-    def test_training_with_peft_model(self):
+    def test_train_with_peft_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SSDConfig(
@@ -195,7 +195,7 @@ class TestSSDTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_training_with_disable_dropout_false(self):
+    def test_train_with_disable_dropout_false(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SSDConfig(

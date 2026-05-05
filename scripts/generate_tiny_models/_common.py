@@ -17,10 +17,10 @@
 # the `trl-internal-testing` organization.
 
 import argparse
-import json
 import os
-import struct
+import re
 import tempfile
+from pathlib import Path
 
 import torch
 from huggingface_hub import CommitOperationAdd, HfApi, ModelCard
@@ -46,9 +46,24 @@ This is a minimal model built for unit tests in the [TRL](https://github.com/hug
 api = HfApi()
 
 
-def check_transformers_version(expected_version):
-    """Raise unless the installed transformers matches `expected_version` exactly."""
+def _transformers_floor_from_pyproject():
+    """Read the `transformers>=X.Y.Z` floor from the repo's pyproject.toml."""
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    match = re.search(r'"transformers>=([^"]+)"', pyproject.read_text())
+    if match is None:
+        raise RuntimeError(f"Could not find a `transformers>=` bound in {pyproject}")
+    return match.group(1)
+
+
+def check_transformers_version(expected_version=None):
+    """Raise unless the installed transformers matches `expected_version` exactly.
+
+    If `expected_version` is None, defaults to the `transformers>=` floor from pyproject.toml.
+    """
     import transformers
+
+    if expected_version is None:
+        expected_version = _transformers_floor_from_pyproject()
 
     if Version(transformers.__version__) != Version(expected_version):
         raise RuntimeError(
@@ -116,81 +131,52 @@ def _flatten(d, prefix=""):
 _DIFF_IGNORE = {"_name_or_path", "transformers_version", "architectures", "model_type", "torch_dtype", "dtype"}
 
 
-def _read_local_safetensors_dtypes(path):
-    """Parse the header of every .safetensors file under `path` and return {tensor_name: dtype_str}."""
-    dtypes = {}
-    for fname in os.listdir(path):
-        if not fname.endswith(".safetensors"):
-            continue
-        with open(os.path.join(path, fname), "rb") as f:
-            header_len = struct.unpack("<Q", f.read(8))[0]
-            header = json.loads(f.read(header_len))
-        for name, info in header.items():
-            if name == "__metadata__":
-                continue
-            dtypes[name] = info["dtype"]
-    return dtypes
+_TORCH_TO_SAFETENSORS_DTYPE = {
+    torch.float32: "F32",
+    torch.float16: "F16",
+    torch.bfloat16: "BF16",
+    torch.float64: "F64",
+    torch.float8_e4m3fn: "F8_E4M3",
+    torch.float8_e5m2: "F8_E5M2",
+    torch.int8: "I8",
+    torch.int16: "I16",
+    torch.int32: "I32",
+    torch.int64: "I64",
+    torch.uint8: "U8",
+    torch.bool: "BOOL",
+}
 
 
-def check_dtype_pattern(reference_id, model, revision=None):
+def check_dtype_pattern(reference_id, model):
     """Flag tensors whose dtype diverges from the reference checkpoint.
 
-    Saves the tiny to a temp dir first so its on-disk tensor names (after any save-time conversion
-    applied by the model class) line up with the reference's safetensors names. When the installed
-    transformers exposes ``conversion_mapping`` (>= 5.0.0), also index reference tensors under their
-    forward-mapped (internal) names so models whose save path doesn't reverse every renaming (e.g.
-    V4's complex multi-group rules) still match. Useful to catch cases like Qwen3.5 where specific
-    params are kept in fp32 while the rest is bf16.
+    Reads the reference safetensors header via the Hub API (no weight download). Useful to catch cases
+    like Qwen3.5 where specific params (e.g. linear_attn.A_log) are kept in fp32 while the rest is bf16.
     """
-    with tempfile.TemporaryDirectory() as tmpdir:
-        model.save_pretrained(tmpdir)
-        tiny_dtypes = _read_local_safetensors_dtypes(tmpdir)
-
-    ref_metadata = api.get_safetensors_metadata(reference_id, revision=revision)
-    ref_dtypes = {name: info.dtype for fm in ref_metadata.files_metadata.values() for name, info in fm.tensors.items()}
-
-    try:
-        from transformers.conversion_mapping import get_checkpoint_conversion_mapping
-        from transformers.core_model_loading import WeightRenaming
-
-        renamings = [r for r in (get_checkpoint_conversion_mapping(model.config.model_type) or []) if isinstance(r, WeightRenaming)]
-    except ImportError:
-        renamings = []
-    for name, dtype in list(ref_dtypes.items()):
-        renamed = name
-        for r in renamings:
-            renamed, _ = r.rename_source_key(renamed)
-        if renamed != name:
-            ref_dtypes.setdefault(renamed, dtype)
+    metadata = api.get_safetensors_metadata(reference_id)
+    ref_dtypes = {name: info.dtype for fm in metadata.files_metadata.values() for name, info in fm.tensors.items()}
 
     mismatches = []
-    unmatched = []
-    for name, tiny_dtype in tiny_dtypes.items():
+    for name, tensor in model.state_dict().items():
         ref_dtype = ref_dtypes.get(name)
         if ref_dtype is None:
-            unmatched.append(name)  # tensor has no counterpart in the reference
-            continue
+            continue  # tensor has no counterpart in the reference (e.g. scale-down, PEFT wrapper, tying)
+        tiny_dtype = _TORCH_TO_SAFETENSORS_DTYPE.get(tensor.dtype)
         if tiny_dtype != ref_dtype:
             mismatches.append((name, ref_dtype, tiny_dtype))
 
-    total = len(tiny_dtypes)
-    matched = total - len(unmatched)
-    print(f"[dtype_check] {reference_id}: {matched}/{total} tiny tensors matched reference")
-    if unmatched:
-        print(f"[dtype_check]   {len(unmatched)} tiny tensors have no reference match:")
-        for name in unmatched:
-            print(f"    {name}")
-    if mismatches:
-        print(f"[dtype_check]   {len(mismatches)} tensors differ from reference:")
-        for name, ref, tiny in mismatches:
-            print(f"    {name}: reference={ref}, tiny={tiny}")
-    else:
-        print(f"[dtype_check]   all {matched} matched tensors have the reference dtype")
+    if not mismatches:
+        print(f"[dtype_check] {reference_id}: all matched tensors have the reference dtype")
+        return
+
+    print(f"[dtype_check] {reference_id}: {len(mismatches)} tensors differ from reference:")
+    for name, ref, tiny in mismatches:
+        print(f"  {name}: reference={ref}, tiny={tiny}")
 
 
-def print_config_diff(reference_id, model, revision=None):
+def print_config_diff(reference_id, model):
     """Print the flat, recursive diff between the reference Hub config and the tiny-model config."""
-    reference_config = AutoConfig.from_pretrained(reference_id, revision=revision)
+    reference_config = AutoConfig.from_pretrained(reference_id)
     ref_flat = _flatten(reference_config.to_dict())
     tiny_flat = _flatten(model.config.to_dict())
 

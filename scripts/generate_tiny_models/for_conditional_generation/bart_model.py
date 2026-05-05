@@ -15,11 +15,10 @@
 import torch
 from transformers import AutoConfig, AutoTokenizer, BartModel
 
-from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub, smoke_test
+from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub
 
 
-TRANSFORMERS_VERSION = "4.56.2"
-check_transformers_version(TRANSFORMERS_VERSION)
+check_transformers_version()
 
 MODEL_ID = "facebook/bart-base"
 
@@ -27,7 +26,6 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 config = AutoConfig.from_pretrained(MODEL_ID)
 config.d_model = 24
 model = BartModel(config).to(dtype=torch.float32)
-smoke_test(model, tokenizer)
 check_dtype_pattern(MODEL_ID, model)
 print_config_diff(MODEL_ID, model)
 push_to_hub(model, tokenizer, None, "tiny")

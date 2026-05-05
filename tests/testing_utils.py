@@ -92,9 +92,6 @@ def is_ampere_or_newer(device_index=0):
     return (major, minor) >= (8, 0)
 
 
-require_ampere_or_newer = pytest.mark.skipif(not is_ampere_or_newer(), reason="test requires Ampere or newer GPU")
-
-
 class TrlTestCase:
     @pytest.fixture(autouse=True)
     def set_tmp_dir(self, tmp_path):

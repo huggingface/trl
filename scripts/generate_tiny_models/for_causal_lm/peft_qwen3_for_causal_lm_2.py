@@ -20,8 +20,7 @@ from transformers import Qwen3ForCausalLM
 from .._common import check_transformers_version, push_to_hub, smoke_test
 
 
-TRANSFORMERS_VERSION = "4.56.2"
-check_transformers_version(TRANSFORMERS_VERSION)
+check_transformers_version()
 
 BASE = "trl-internal-testing/tiny-Qwen3ForCausalLM"
 
