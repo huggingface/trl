@@ -331,9 +331,6 @@ class KTOTrainer(_BaseTrainer):
                 "Please use a causal LM (e.g., GPT, Llama, Mistral) instead of an encoder-decoder model (e.g., T5, BART)."
             )
 
-        if args.max_length is not None:
-            max_length = args.max_length
-
         if data_collator is None:
             data_collator = DataCollatorForUnpairedPreference(
                 pad_token_id=self._tokenizer.pad_token_id,
