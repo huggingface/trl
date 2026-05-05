@@ -25,8 +25,7 @@ from .._common import (
 )
 
 
-TRANSFORMERS_VERSION = "4.56.2"
-check_transformers_version(TRANSFORMERS_VERSION)
+check_transformers_version()
 
 MODEL_ID = "Qwen/Qwen2.5-Coder-0.5B"
 

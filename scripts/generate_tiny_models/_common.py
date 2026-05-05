@@ -18,7 +18,9 @@
 
 import argparse
 import os
+import re
 import tempfile
+from pathlib import Path
 
 import torch
 from huggingface_hub import CommitOperationAdd, HfApi, ModelCard
@@ -44,9 +46,24 @@ This is a minimal model built for unit tests in the [TRL](https://github.com/hug
 api = HfApi()
 
 
-def check_transformers_version(expected_version):
-    """Raise unless the installed transformers matches `expected_version` exactly."""
+def _transformers_floor_from_pyproject():
+    """Read the `transformers>=X.Y.Z` floor from the repo's pyproject.toml."""
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    match = re.search(r'"transformers>=([^"]+)"', pyproject.read_text())
+    if match is None:
+        raise RuntimeError(f"Could not find a `transformers>=` bound in {pyproject}")
+    return match.group(1)
+
+
+def check_transformers_version(expected_version=None):
+    """Raise unless the installed transformers matches `expected_version` exactly.
+
+    If `expected_version` is None, defaults to the `transformers>=` floor from pyproject.toml.
+    """
     import transformers
+
+    if expected_version is None:
+        expected_version = _transformers_floor_from_pyproject()
 
     if Version(transformers.__version__) != Version(expected_version):
         raise RuntimeError(
