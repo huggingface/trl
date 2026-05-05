@@ -331,12 +331,6 @@ class KTOTrainer(_BaseTrainer):
                 "Please use a causal LM (e.g., GPT, Llama, Mistral) instead of an encoder-decoder model (e.g., T5, BART)."
             )
 
-        if args.max_length is None:
-            logger.warning(
-                "When using DataCollatorForUnpairedPreference, you should set `max_length` in the KTOTrainer's init"
-                " it will be set to `512` by default, but you should do it yourself in the future.",
-            )
-            max_length = 512
         if args.max_length is not None:
             max_length = args.max_length
 
