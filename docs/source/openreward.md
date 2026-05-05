@@ -189,6 +189,10 @@ trainer = GRPOTrainer(
 
 The per-rollout adapter exposes the running state TRL needs — `env.reward`, `env.rewards`, `env.metadata`, `env.finished`, `env.last_output` — for arbitrary post-hoc reward shaping.
 
+## OpenRewardSpec
+
+[[autodoc]] trl.experimental.openreward.OpenRewardSpec
+
 ## Limitations
 
 - The integration is in `trl.experimental` — APIs may change. Set `TRL_EXPERIMENTAL_SILENCE=1` to silence the warning in CI logs.

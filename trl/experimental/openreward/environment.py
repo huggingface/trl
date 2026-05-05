@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 
@@ -184,7 +185,8 @@ class _RolloutEnvironment:
 
         self._split = split
         self._secrets = secrets
-        self._session = None  # entered on reset()
+        self._session_cm = None  # the SDK context manager itself, retained for clean teardown
+        self._session = None  # the entered Session object
 
         # Episode state — read by the trainer's reward_func.
         self.reward: float = 0.0
@@ -224,7 +226,7 @@ class _RolloutEnvironment:
             from openreward.api.environments.client import Task
 
             task = Task(
-                server_name=self._env.server if hasattr(self._env, "server") else self._env.name,
+                server_name=self._env.server,
                 environment_name=self._env.name,
                 task_spec=task_spec,
                 namespace=self._env.namespace,
@@ -233,6 +235,10 @@ class _RolloutEnvironment:
         else:
             cm = self._env.session(split=self._split, index=int(task_index), secrets=self._secrets)
 
+        # Retain the context manager itself so `_teardown_session` can call
+        # its __exit__; calling __exit__ on the entered Session alone leaves
+        # the CM's exit logic (which deletes the env state + sid) unrun.
+        self._session_cm = cm
         self._session = cm.__enter__()
         prompt = self._session.get_prompt()
         return _join_text_blocks(prompt)
@@ -246,14 +252,15 @@ class _RolloutEnvironment:
     # ── helpers ──────────────────────────────────────────────────────
 
     def _teardown_session(self) -> None:
-        if self._session is None:
+        if self._session_cm is None:
             return
         try:
-            # The SDK's Session context-manager exit deletes both the env
-            # state and the sid. We look up the original CM from the SDK.
-            self._session.__exit__(None, None, None) if hasattr(self._session, "__exit__") else None
+            # Exit the SDK's Session context manager — this deletes both
+            # the per-rollout env state and the sid on the server.
+            self._session_cm.__exit__(None, None, None)
         except Exception as e:  # noqa: BLE001
             logger.debug("session teardown failed: %s", e)
+        self._session_cm = None
         self._session = None
 
     def _call_ors_tool(self, tool_name: str, tool_input: dict[str, Any]) -> str:
@@ -269,23 +276,22 @@ class _RolloutEnvironment:
             self.last_output = f"Error: {e}"
             return self.last_output
 
-        text = _join_text_blocks(getattr(out, "blocks", []) or []) or "(no output)"
+        # `out` is `openreward.api.environments.types.ToolOutput` — a stable dataclass
+        # with `blocks: list`, `reward: Optional[float]`, `metadata: Optional[dict]`, `finished: bool`.
+        text = _join_text_blocks(out.blocks or []) or "(no output)"
 
-        raw_reward = getattr(out, "reward", None)
         step_reward: float | None = None
-        if raw_reward is not None:
+        if out.reward is not None:
             try:
-                step_reward = float(raw_reward)
+                step_reward = float(out.reward)
             except (TypeError, ValueError):
                 step_reward = None
         self.rewards.append(step_reward)
         if step_reward is not None:
             self.reward = step_reward  # last-non-null wins (outcome-only convention)
 
-        md = getattr(out, "metadata", None)
-        self.metadata.append(md if isinstance(md, dict) else None)
-
-        self.finished = bool(getattr(out, "finished", False))
+        self.metadata.append(out.metadata if isinstance(out.metadata, dict) else None)
+        self.finished = bool(out.finished)
         self.last_output = text
         return text
 
@@ -293,14 +299,24 @@ class _RolloutEnvironment:
 # ── dynamic tool binding ─────────────────────────────────────────────
 
 
+_VALID_TOOL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 def _bind_tool_method(cls: type, spec: dict[str, Any]) -> None:
     """Generate a typed Python method for one ORS tool spec.
 
     Signature comes from the JSON Schema; docstring is Google-style so ``transformers.utils.get_json_schema`` (used by
     vLLM) can produce a correct tool schema for the model.
+
+    Untrusted text from the server (tool name, descriptions) is never spliced raw into the generated source — the name
+    is validated against a Python-identifier regex and the description / per-param descriptions are passed through
+    ``repr()`` before being interpolated, so a tool description containing triple quotes can't break binding.
     """
     tool_name = spec["name"]
-    if hasattr(cls, tool_name) and callable(getattr(cls, tool_name)):
+    if not _VALID_TOOL_NAME.match(tool_name):
+        logger.warning("skipping tool with non-identifier name: %r", tool_name)
+        return
+    if tool_name in cls.__dict__:
         # Already bound by an earlier instance — idempotent skip.
         return
 
@@ -317,6 +333,9 @@ def _bind_tool_method(cls: type, spec: dict[str, Any]) -> None:
     annotations: dict[str, type] = {}
     args_doc_lines: list[str] = []
     for pname, pdef in required_props + optional_props:
+        if not _VALID_TOOL_NAME.match(pname):
+            logger.warning("skipping tool %r — non-identifier param name: %r", tool_name, pname)
+            return
         py_type = _resolve_param_type(pdef)
         annotations[pname] = _PY_TYPE_OBJECTS[py_type]
         if pname in required:
@@ -327,10 +346,12 @@ def _bind_tool_method(cls: type, spec: dict[str, Any]) -> None:
         pdesc = pdef.get("description") or pdef.get("title") or pname
         args_doc_lines.append(f"        {pname}: {pdesc}")
 
-    args_section = ("\n\n    Args:\n" + "\n".join(args_doc_lines)) if args_doc_lines else ""
+    # Build the docstring as a single repr-quoted string so triple-quotes / quotes / newlines in the description or
+    # arg text can never close out the generated docstring early.
+    docstring = description + (("\n\n    Args:\n" + "\n".join(args_doc_lines)) if args_doc_lines else "")
     src = (
         f"def {tool_name}(self, {', '.join(params_src)}) -> str:\n"
-        f'    """{description}{args_section}"""\n'
+        f"    {docstring!r}\n"
         f"    _kwargs = dict(locals()); _kwargs.pop('self', None)\n"
         f"    return self._call_ors_tool({tool_name!r}, _kwargs)\n"
     )
@@ -346,26 +367,40 @@ def _bind_tool_method(cls: type, spec: dict[str, Any]) -> None:
 
 
 def _spec_to_dict(spec: Any) -> dict[str, Any]:
-    """Normalise SDK ``ToolSpec`` and dict shapes to the same dict form."""
+    """Normalise SDK ``ToolSpec`` and dict shapes to the same dict form.
+
+    ``openreward.api.environments.types.ToolSpec`` is a stable dataclass with
+    ``name``, ``description``, ``input_schema`` fields, so direct attribute
+    access is safe.
+    """
     if isinstance(spec, dict):
         return spec
     return {
         "name": spec.name,
-        "description": getattr(spec, "description", None),
-        "input_schema": getattr(spec, "input_schema", None) or {},
+        "description": spec.description,
+        "input_schema": spec.input_schema or {},
     }
 
 
 def _join_text_blocks(blocks: list[Any]) -> str:
     """Concatenate the ``text`` field of every text block in order.
 
-    Accepts both SDK ``TextBlock`` objects and plain dicts.
+    Accepts both SDK ``TextBlock`` dataclasses and plain dicts. Both shapes
+    expose a ``type`` discriminator (`"text"` vs `"image"`); non-text blocks
+    are skipped so e.g. ``ImageBlock`` doesn't trip up the join.
     """
     if not blocks:
         return ""
     parts: list[str] = []
     for b in blocks:
-        text = getattr(b, "text", None) if not isinstance(b, dict) else b.get("text")
+        if isinstance(b, dict):
+            if b.get("type") != "text":
+                continue
+            text = b.get("text")
+        else:
+            if b.type != "text":
+                continue
+            text = b.text
         if text:
             parts.append(str(text))
     return "\n".join(parts)

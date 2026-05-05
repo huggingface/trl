@@ -53,7 +53,9 @@ logger = logging.getLogger(__name__)
 
 def _to_spec(task) -> dict[str, Any]:
     """Normalise an SDK ``Task`` (or already-a-dict) to its task_spec dict."""
-    return getattr(task, "task_spec", task) if not isinstance(task, dict) else task
+    if isinstance(task, dict):
+        return task
+    return task.task_spec
 
 
 def _outcome_only_reward_func(environments, **_):
@@ -180,7 +182,7 @@ class OpenRewardSpec:
         # Pre-fetch tool specs once at the spec level.
         env = self._sdk_env
         tool_specs = env.list_tools()
-        client = env.client if hasattr(env, "client") else self._sdk_client
+        client = self._sdk_client
 
         kwargs = {
             "split": self._split,
@@ -239,5 +241,10 @@ class OpenRewardSpec:
     @cached_property
     def _sdk_env(self):
         """The shared SDK ``Environment`` handle."""
-        target = self._env_name or self._target if self._is_url else self._target
+        if self._is_url:
+            # Self-hosted single-env URL — pass any name; the SDK redirects.
+            # Fallback to "env" matches `_RolloutEnvironment.__init__`.
+            target = self._env_name or "env"
+        else:
+            target = self._target
         return self._sdk_client.environments.get(target)
