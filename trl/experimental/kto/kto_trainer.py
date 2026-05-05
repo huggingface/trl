@@ -371,8 +371,8 @@ class KTOTrainer(_BaseTrainer):
                 "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
             )
 
-        # metric
-        self._metrics = defaultdict(lambda: defaultdict(list))
+        # Initialize the metrics
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
 
         # KTO parameter
         self.beta = args.beta
