@@ -1632,7 +1632,6 @@ class SFTTrainer(_BaseTrainer):
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         if self.args.loss_type == "chunked_nll":
-            num_valid = self.accelerator.gather_for_metrics(outputs.num_valid_tokens).sum()
             correct = self.accelerator.gather_for_metrics(outputs.num_correct_tokens).sum()
             accuracy = (correct / num_valid).item() if num_valid > 0 else 0.0
             self._metrics[mode]["mean_token_accuracy"].append(accuracy)
