@@ -218,14 +218,14 @@ class TestGKDTrainer(TrlTestCase):
             per_device_eval_batch_size=2,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=training_args,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
             processing_class=self.tokenizer,
         )
 
@@ -243,13 +243,13 @@ class TestGKDTrainer(TrlTestCase):
             report_to="none",
             use_liger_kernel=True,
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=training_args,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dataset,
             processing_class=self.tokenizer,
         )
 
@@ -264,14 +264,14 @@ class TestGKDTrainer(TrlTestCase):
 
     def test_generation_config_init(self):
         training_args = GKDConfig(output_dir=self.tmp_dir)
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=training_args,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
             processing_class=self.tokenizer,
         )
 

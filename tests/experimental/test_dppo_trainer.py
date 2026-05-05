@@ -131,7 +131,7 @@ class TestDPPODivergenceMask:
 @pytest.mark.low_priority
 class TestDPPOTrainer(TrlTestCase):
     @pytest.mark.parametrize("divergence_type", ["binary_tv", "binary_kl"])
-    def test_training_binary(self, divergence_type):
+    def test_train_binary(self, divergence_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = DPPOConfig(
@@ -161,7 +161,7 @@ class TestDPPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
-    def test_training_conversational(self, config_name):
+    def test_train_conversational(self, config_name):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
         training_args = DPPOConfig(
