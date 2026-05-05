@@ -339,27 +339,22 @@ class KTOTrainer(_BaseTrainer):
         else:
             self.use_dpo_data_collator = False
 
-        self.loss_type = args.loss_type
-        self.precompute_ref_log_probs = args.precompute_ref_log_probs
-
-        # Not all losses require a KL calculation
-        self.calculate_KL = True
-        if self.loss_type in ["apo_zero_unpaired"]:
-            self.calculate_KL = False
-        if self.calculate_KL and args.per_device_train_batch_size <= 1:
-            raise ValueError(
-                "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
-            )
-
         # metric
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
-        # KTO parameter
+        # Training arguments
         self.beta = args.beta
+        self.precompute_ref_log_probs = args.precompute_ref_log_probs
+        self.loss_type = args.loss_type
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        self.calculate_KL = False if self.loss_type in ["apo_zero_unpaired"] else True
+        if self.calculate_KL and args.per_device_train_batch_size <= 1:
+            raise ValueError(
+                "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
+            )
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
             logger.warning(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
