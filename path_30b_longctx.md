@@ -167,28 +167,31 @@ Logs land in `benchmark/logs/`. Result collection and peak-memory queries
 go through `benchmark/collect_results.py` and `benchmark/fetch_peak_gpu_mem.py`.
 
 > **Repro verification (2026-05-06)** — a fresh `/fsx/amine_dirhoussi/benchmark_repo`
-> install of the three forks above ran the four configs below end-to-end. The
-> infrastructure path (clone → uv install → `run_benchmark.py` → sbatch → first
-> training step) works as documented and throughput-correct numbers match the
-> headline table (mfu_window peak 84.89 % at 64k 4n EP=32, 66.65 % at 32k 2n
-> EP=8). Numerical correctness on the rebased stack does NOT yet match the
-> validated OLD stack (transformers 5.6.0.dev0 with cherry-picks of #45433 +
-> #45621). Two distinct regressions surface, both tracked as open work:
+> install of the three forks above runs the 32k 2n DS-Z2 + EP=8 + sonicmoe +
+> Liger champion end-to-end (slurm 22112596, 5/5 steps, **loss 16.34 → 12.01 →
+> 11.73 → 10.04 → 14.13** decreasing, mfu_window peak **64.92 %** matching the
+> headline 65 %). Healthy training, real gradients, `loss.item()` finite from
+> step 1.
 >
-> | slurm | shape | result |
-> |---|---|---|
-> | 22112529 | 32k 2n DS-Z2 + EP=8 + sonicmoe + Liger | mfu_window 66.65 % ✅, NaN cascade from step 2 |
-> | 22112531 | 16k 2n same recipe (diagnostic) | mfu_window 43.83 % ✅, NaN from step 2 |
-> | 22112537 | 64k 2n DS-Z2 + EP=8 + sonicmoe + chunked_nll (Test G) | CUDA illegal memory access in `flash_attention_forward` at step 1 |
-> | 22112538 | 64k 4n DS-Z2 + EP=32 + sonicmoe + Liger (R3) | mfu_window 84.89 % ✅, NaN from step 2 + CUDA error on shutdown |
+> Getting there required a 7-step `git bisect` to track down a kernel-pin
+> regression. First repro attempt (slurm 22112529 + 22112531 + 22112537 +
+> 22112538, four shapes 16k/32k/64k 2n/4n) all NaN-cascaded from step 2 with
+> throughput-correct mfu_window peaks (66.65 % / 43.83 % / 84.89 % matching
+> headline). Bisecting the 75 transformers commits between merge-base
+> `c472755e79` and current main `1825a374b9` showed every commit was healthy
+> when the user's working-tree diff was overlaid (taking `--theirs` for the
+> conflict in `hub_kernels.py`). The actual culprit was the rebase resolution:
+> when the cherry-pick commit conflicted with upstream's merge of #45433 in
+> `hub_kernels.py`, taking `--ours` (upstream version) silently swapped the
+> sonic-moe pin from `IlyasMoutawwakil/sonic-moe` revision `main` (the dev
+> kernel that the user validated against) to `kernels-community/sonic-moe`
+> revision `ep-support` (the upstream-merged version, which produces NaN
+> gradients on the first backward at every shape we tested).
 >
-> All four shapes were validated as healthy on the OLD stack. So the rebase
-> onto current `huggingface/transformers#main` (75 commits past 5.6.0.dev0,
-> picking up the merged #45433 / #45621) introduced a numerical/kernel
-> regression that needs bisection. Throughput-correctness, EP wiring, the DS
-> monkey-patch, the accelerate `_prepare_tp` skip, and the run_benchmark.py
-> sbatch infrastructure all work as expected — the gap is purely in the
-> kernel + numerical correctness layer.
+> Fix landed as commit `3c33554e50` on `AmineDiro/transformers#ds-ep-integration`
+> — pin `sonic-moe` to `IlyasMoutawwakil/sonic-moe@main` and add
+> `allow_all_kernels=True` in `lazy_load_kernel`. The fresh repro env now
+> reproduces the headline number end-to-end without further intervention.
 
 > The `AmineDiro/transformers#ds-ep-integration` and
 > `AmineDiro/accelerate#ep-fixes` branches will be force-pushed as fixes
@@ -206,4 +209,4 @@ go through `benchmark/collect_results.py` and `benchmark/fetch_peak_gpu_mem.py`.
 
 - **2026-05-06** — Issue opened. Headline numbers as of `benchmark-sft-moe@ee2876cc`.
 - **2026-05-06** — Ported the DeepSpeed `engine.py` external-MoE detection to a transformers-side monkey-patch on `DeepSpeedEngine._configure_distributed_model`. No DS fork required. Validated on 16k 2n DS-Z2 + EP=8 + sonicmoe + Liger (job 22112383, COMPLETED 3:43, 5/5 steps healthy).
-- **2026-05-06** — Repro flow verified end-to-end from a fresh `/fsx/amine_dirhoussi/benchmark_repo` install of `AmineDiro/transformers#ds-ep-integration` + `AmineDiro/accelerate#ep-fixes` + stock DS across four shapes (16k/32k/64k, 2n/4n). Throughput numbers match the headline (mfu_window peak 84.89 % at 64k 4n, 66.65 % at 32k 2n). NaN cascade fires on every Liger config tested; chunked_nll path hits CUDA illegal memory access in `flash_attention_forward`. Both are fresh-stack regressions — bisect the 75 commits between transformers 5.6.0.dev0 and current main (post-#45433 / post-#45621) to identify the trigger.
+- **2026-05-06** — Repro flow verified end-to-end from a fresh `/fsx/amine_dirhoussi/benchmark_repo` install of `AmineDiro/transformers#ds-ep-integration` + `AmineDiro/accelerate#ep-fixes` + stock DS. First attempt NaN'd across four shapes (16k/32k/64k, 2n/4n) despite throughput matching the headline. 7-step git bisect through the 75 transformers commits between merge-base and current main showed every commit was healthy with the user's diff overlaid — the actual regression was a rebase-resolution bug: `hub_kernels.py` lost the user's pin to `IlyasMoutawwakil/sonic-moe@main` (working dev kernel) and silently fell back to upstream's `kernels-community/sonic-moe@ep-support` (different build, produces NaN). Fixed in `3c33554e50`. 32k 2n champion now reproduces healthy: loss 16.34 → 12.01 → 11.73 → 10.04, mfu_window peak 64.92 % matching the headline 65 %.
