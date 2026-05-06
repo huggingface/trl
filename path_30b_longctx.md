@@ -57,7 +57,8 @@ ones — without them, EP > 1 produces silently wrong expert outputs.
 
 - ✅ **Merged** [#45436](https://github.com/huggingface/transformers/pull/45436) — Add EP support for Qwen3 MoE, fix `GroupedGemmParallel` for 2D meshes
 - ✅ **Merged** [#45473](https://github.com/huggingface/transformers/pull/45473) — Fix EP routing: `RouterParallel` shape, `tp_plan` property, `grouped_mm` sentinels (3 bugs that combined to produce silently wrong logits at every EP > 1; first regression tests for EP)
-- 🟡 **Open** [#45621](https://github.com/huggingface/transformers/pull/45621) — sonicmoe kernel-side sentinel fix (drops the wrapper-level `expert_ids.clamp` workaround; +5–8 pp peak MFU at 16k–32k EP=8)
+- 🟡 **Open** [#45433](https://github.com/huggingface/transformers/pull/45433) — Integrate the `kernels-community/sonic-moe` CuteDSL fused MoE kernel as a selectable `_experts_implementation`. Drop-in for `grouped_mm`; +23 % steady-state MFU vs `grouped_mm` on 16k EP=8 (single biggest kernel win on this stack).
+- 🟡 **Open** [#45621](https://github.com/huggingface/transformers/pull/45621) — sonicmoe kernel-side sentinel fix. Drops the wrapper-level `expert_ids.clamp` workaround; +5–8 pp peak MFU at 16k–32k EP=8. **TRL-side contribution from this work**: the `grouped_mm_experts_forward` wrapper-level `masked_fill_` pre/post-mask pair (`integrations/moe.py`) that pairs with the kernel fix to keep gradients clean on EP-sentinel rows — landed in the same PR after several iterations on `debug_sonic_bwd_dtensor.md` and `grouped_mm_pr45621_comment.md`.
 - 🟡 **Open** [#45662](https://github.com/huggingface/transformers/pull/45662) — EP + FSDP DTensor wrap (lets EP-sharded params survive FSDP2's `ignored_params` boundary)
 - 🟡 **Open** [#45548](https://github.com/huggingface/transformers/pull/45548) — DeepSpeed-Z3 + EP weight loading
 - 🟡 **Open** [#45649](https://github.com/huggingface/transformers/pull/45649) — FSDP `cpu_ram_efficient_loading` fixes
@@ -84,7 +85,7 @@ first.
 4. ⏳ Generalized kernel pre-warm + `HF_HUB_OFFLINE` flip (workaround for HF Hub cache races on multi-node — see Known issues / H3)
 5. ⏳ SP `--pad_to_multiple_of` auto-default when `accelerator.parallelism_config.sp_size > 1` (G1 in upstream-todo)
 6. ⏳ Per-rank `TRITON_CACHE_DIR` + legacy TF32 flags in `trl/scripts/sft.py`
-7. ✅ **Merged** [#5575](https://github.com/huggingface/trl/pull/5575) — Chunked cross-entropy loss for SFT (up to −50 % VRAM, unlocked the 32k → 1M long-context configs)
+7. ✅ **Merged** [#5575](https://github.com/huggingface/trl/pull/5575) by [@qgallouedec](https://github.com/qgallouedec) — Chunked cross-entropy loss for SFT (up to −50 % VRAM). Load-bearing for this stack: it's what frees the ~20 GB lm_head logit tensor and lets the EP-replicated expert buffer fit at 32k → 128k context, which unlocks every long-context champion in the table above.
 
 ### DeepSpeed
 
