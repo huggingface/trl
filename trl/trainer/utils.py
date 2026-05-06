@@ -33,6 +33,7 @@ import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
 from huggingface_hub import ModelCard, ModelCardData
+from packaging.version import Version
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
@@ -1360,8 +1361,12 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
         total_layer_flops = L * (attn_flops + mlp_flops)
     else:
         # Routed experts (gate + up + down, 3 matmuls each) + router.
+        if Version(transformers.__version__) >= Version("5.1.0"):
+            num_experts = config.num_local_experts
+        else:
+            num_experts = config.num_experts
         moe_mlp_flops = num_experts_per_tok * 2 * 3 * h * config.moe_intermediate_size
-        moe_mlp_flops += 2 * h * config.num_local_experts
+        moe_mlp_flops += 2 * h * num_experts
         dense_mlp_flops = 2 * 3 * h * config.intermediate_size  # interspersed dense layers
         sparse_step = config.decoder_sparse_step
         total_layer_flops = sum(
