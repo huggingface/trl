@@ -665,18 +665,17 @@ class KTOTrainer(_BaseTrainer):
             "shuffle": False,
         }
         data_loader = self.accelerator.prepare(DataLoader(dataset, **dataloader_params))
-        reference_completion_logps = []
+        reference_logps = []
         reference_KL_logps = []
         for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
             reference_completion_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
             reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
-            reference_completion_logps.append(reference_completion_logp.cpu())
+            reference_logps.append(reference_completion_logp.cpu())
             if self.calculate_KL:
                 reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
                 reference_KL_logps.append(reference_KL_logp.cpu())
-        dataset = dataset.add_column(
-            name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
-        )
+
+        dataset = dataset.add_column(name="reference_logps", column=torch.cat(reference_logps).float().numpy())
         if self.calculate_KL:
             dataset = dataset.add_column(
                 name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
