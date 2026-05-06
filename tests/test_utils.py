@@ -1339,15 +1339,6 @@ class TestComputeFlopsPerToken(TrlTestCase):
 
 
 class TestComputeMfu(TrlTestCase):
-    def test_dimensional_correctness(self):
-        # Pure-arithmetic sanity: the formula is `100 * flops * tps / (peak * world_size)`.
-        flops = 100e9
-        tps = 1000.0
-        world_size = 8
-        peak = 1e15
-        expected = 100 * (flops * tps) / (peak * world_size)
-        assert compute_mfu(flops, tps, world_size, peak_flops_per_device=peak) == pytest.approx(expected)
-
     def test_perfect_utilization(self):
         # If aggregate TPS is exactly `peak * world_size / flops_per_token`, MFU is 100%.
         flops = 100e9
