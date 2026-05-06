@@ -19,6 +19,7 @@ from datasets import load_dataset
 from packaging.version import Version
 from packaging.version import parse as parse_version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer
@@ -26,7 +27,7 @@ from trl.trainer.dpo_trainer import DataCollatorForPreference, DataCollatorForVi
 
 from .testing_utils import (
     TrlTestCase,
-    require_ampere_or_newer,
+    is_ampere_or_newer,
     require_bitsandbytes,
     require_kernels,
     require_liger_kernel,
@@ -686,7 +687,10 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_kernels
-    @require_ampere_or_newer  # Flash attention 2 requires Ampere or newer GPUs
+    @pytest.mark.skipif(
+        not is_ampere_or_newer() and torch_device != "xpu",
+        reason="Flash attention 2 requires Ampere or newer GPU, or XPU",
+    )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 

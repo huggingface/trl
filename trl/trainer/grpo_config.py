@@ -886,6 +886,16 @@ class GRPOConfig(_BaseConfig):
                 stacklevel=3,
             )
 
+        if self.parallelism_config is not None and (
+            self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
+        ):
+            raise ValueError(
+                "GRPOTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` or "
+                "`parallelism_config.sp_size > 1`) yet. GRPO builds model inputs after generation inside the trainer, "
+                "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
+                "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
+            )
+
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
 
         if self.log_completions_hub_repo is not None and not self.log_completions:

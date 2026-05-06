@@ -51,6 +51,8 @@
     title: Liger Kernel
   - local: openenv
     title: OpenEnv
+  - local: openreward
+    title: OpenReward
   - local: peft_integration
     title: PEFT
   - local: ptt_integration

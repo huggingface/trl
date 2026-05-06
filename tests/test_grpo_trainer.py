@@ -24,7 +24,7 @@ import pytest
 import torch
 import transformers
 from accelerate.utils.memory import release_memory
-from datasets import Dataset, Features, Image, Value, load_dataset
+from datasets import Dataset, Image, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
@@ -43,7 +43,7 @@ from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
     TrlTestCase,
-    require_ampere_or_newer,
+    is_ampere_or_newer,
     require_bitsandbytes,
     require_jmespath,
     require_kernels,
@@ -3005,8 +3005,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
             "HuggingFaceTB/SmolVLM-Instruct",  # Only test the smaller model to avoid OOM
         ],
     )
+    @pytest.mark.skipif(
+        not is_ampere_or_newer() and torch_device != "xpu",
+        reason="Flash attention 2 requires Ampere or newer GPU, or XPU",
+    )
     @require_kernels
-    @require_ampere_or_newer  # Flash attention 2 requires Ampere or newer GPUs
     @require_bitsandbytes
     @require_peft
     def test_vlm_training(self, model_name):
@@ -3026,29 +3029,17 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         # Create processor once outside the data generator
         processor = AutoProcessor.from_pretrained(model_name, use_fast=True, padding_side="left")
-        conversation = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": "What is in the image?"},
-                ],
-            },
-        ]
-        prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+        prompt = [{"role": "user", "content": "What is in the image?"}]
 
-        def data_gen(num_samples):
-            for _ in range(num_samples):
-                yield {
+        dataset = Dataset.from_list(
+            [
+                {
                     "prompt": prompt,
-                    "image": np.random.uniform(low=0.0, high=255.0, size=(64, 64, 3)).astype(
-                        np.uint8
-                    ),  # Much smaller images
+                    "image": np.random.uniform(low=0.0, high=255.0, size=(64, 64, 3)).astype(np.uint8),
                 }
-
-        dataset = Dataset.from_generator(
-            data_gen, gen_kwargs={"num_samples": 4}, features=Features(image=Image(), prompt=Value(dtype="string"))
-        )
+                for _ in range(4)
+            ],
+        ).cast_column("image", Image())
         # reduce memory requirements as much as possible
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -3060,14 +3051,15 @@ class TestGRPOTrainerSlow(TrlTestCase):
         model = AutoModelForImageTextToText.from_pretrained(
             model_name,
             attn_implementation="kernels-community/flash-attn2",
-            dtype="float32",
+            dtype="bfloat16",
             device_map=get_kbit_device_map(),
             quantization_config=quantization_config,
         )
 
         def reward_func(prompts, completions, **kwargs):
-            # simple nonsensical reward
-            return [-((len(c) - 25) ** 2) + 100 for c in completions]
+            # Use hash-based reward to ensure different completions get different rewards,
+            # avoiding zero-std advantages which would result in zero loss and no parameter updates.
+            return [float(hash(c[0]["content"]) % 100) for c in completions]
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
