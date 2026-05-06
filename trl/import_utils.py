@@ -86,6 +86,10 @@ def is_mergekit_available() -> bool:
     return _is_package_available("mergekit")
 
 
+def is_openreward_available() -> bool:
+    return _is_package_available("openreward")
+
+
 def is_pydantic_available() -> bool:
     return _is_package_available("pydantic")
 

@@ -564,6 +564,16 @@ class RLOOConfig(_BaseConfig):
                 stacklevel=3,
             )
 
+        if self.parallelism_config is not None and (
+            self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
+        ):
+            raise ValueError(
+                "RLOOTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` or "
+                "`parallelism_config.sp_size > 1`) yet. RLOO builds model inputs after generation inside the trainer, "
+                "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
+                "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
+            )
+
         num_processes = self.world_size
         # The current default effective batch size
         if self.generation_batch_size is None and self.steps_per_generation is None:

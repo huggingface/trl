@@ -36,6 +36,7 @@ from trl.import_utils import (
     is_liger_kernel_available,
     is_math_verify_available,
     is_mergekit_available,
+    is_openreward_available,
     is_vllm_available,
 )
 
@@ -47,6 +48,7 @@ require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test re
 require_liger_kernel = pytest.mark.skipif(not is_liger_kernel_available(), reason="test requires liger-kernel")
 require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
 require_mergekit = pytest.mark.skipif(not is_mergekit_available(), reason="test requires mergekit")
+require_openreward = pytest.mark.skipif(not is_openreward_available(), reason="test requires openreward")
 require_peft = pytest.mark.skipif(not is_peft_available(), reason="test requires peft")
 require_rich = pytest.mark.skipif(not is_rich_available(), reason="test requires rich")
 require_sklearn = pytest.mark.skipif(
@@ -90,9 +92,6 @@ def is_ampere_or_newer(device_index=0):
     major, minor = torch.cuda.get_device_capability(device_index)
     # Ampere starts at compute capability 8.0 (e.g., A100 = 8.0, RTX 30xx = 8.6)
     return (major, minor) >= (8, 0)
-
-
-require_ampere_or_newer = pytest.mark.skipif(not is_ampere_or_newer(), reason="test requires Ampere or newer GPU")
 
 
 class TrlTestCase:
