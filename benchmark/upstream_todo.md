@@ -286,15 +286,30 @@ git -C /fsx/amine_dirhoussi/transformers checkout -- src/transformers/trainer.py
 **Upstream split** (when ready):
 
 1. Patches (1)+(2)+(4)+(5) → transformers PR depending on `#45662` landing first.
-2. Patch (3) → **DO NOT open a DeepSpeed PR**. Decision 2026-05-05: avoid a deepspeed-side PR at all costs (DS upstreaming has long review cycles, the maintainers don't own external-EP semantics, and we don't want to take on a DS dependency). Keep the workaround on transformers/TRL side. Three options to explore, in order of likely cleanness:
+2. Patch (3) → ✅ **RESOLVED 2026-05-06** by a transformers-side monkey-patch on `DeepSpeedEngine._configure_distributed_model`, installed once from `Trainer.create_accelerator_and_postprocess` next to the existing `_create_expert_and_data_parallel(ep_size)` call. Static analysis of the three options originally sketched (a/b/c, kept below for reference) showed (a) is insufficient on its own: `_configure_moe_settings` runs DURING `deepspeed.initialize` and bakes `expert_dp_process_group` into the optimizer's `real_dp_process_group` / `partition_count` lists at init time — setting `engine.has_moe_layers = True` AFTER `accelerator.prepare` returns is too late. The actual fix runs at the same lifecycle point as the in-venv `engine.py:1430` shim (within `_configure_distributed_model`, before `_configure_optimizer`) but lives entirely outside DS:
 
-    a. **Post-`deepspeed.initialize` engine attribute patch** (preferred) — after `accelerator.prepare(model, optimizer, ...)` returns the wrapped engine, write `engine.has_moe_layers = True` and `engine.optimizer.expert_data_parallel_group = groups._get_expert_data_parallel_group(f"ep_size_{ep_size}")` directly. Requires that `_create_expert_and_data_parallel(ep_size)` ran beforehand (already done in `create_accelerator_and_postprocess`). DS's auto-detect loop in `engine.py` is consulted only at init; once we set the attributes after, the rest of DS reads them as-is. Lives in `transformers/trainer.py`, ~5 lines.
+    ```python
+    import deepspeed.runtime.engine as _ds_engine
+    if not getattr(_ds_engine.DeepSpeedEngine, "_external_moe_patched", False):
+        _orig_cdm = _ds_engine.DeepSpeedEngine._configure_distributed_model
+        def _wrapped_cdm(engine, model):
+            _orig_cdm(engine, model)
+            if not engine.has_moe_layers:
+                for _, mod in engine.module.named_modules():
+                    if any(getattr(p, "allreduce", True) is False for p in mod.parameters(recurse=False)):
+                        engine.has_moe_layers = True
+                        engine.num_experts.append(getattr(mod, "num_experts", 0))
+        _ds_engine.DeepSpeedEngine._configure_distributed_model = _wrapped_cdm
+        _ds_engine.DeepSpeedEngine._external_moe_patched = True
+    ```
 
-    b. **Pre-`deepspeed.initialize` module marker** — set `module._has_moe_layers = True` (or whatever attribute DS's detection loop checks) on each EP-experts module before `accelerator.prepare`. Slightly more invasive than (a) because it reaches into DS's internal attribute names, but requires no post-init poking. Survey `engine.py:_configure_distributed_model`'s detection loop first to confirm what attribute name it inspects.
+    Validated end-to-end at 16k 2n DS-Z2 + EP=8 + sonicmoe + Liger (slurm 22112383, COMPLETED 3:43, 5/5 steps healthy, mfu_window peak 34 %). Stock DS works as-is — `uv pip install --reinstall --no-deps deepspeed` is no longer required. Lives in `transformers/trainer.py` around line 877. Original three options preserved below for reference:
 
-    c. **Wrap external EP modules in a `deepspeed.moe.layer.MoE`-shaped shim** — wraps EP modules in a class that quacks like DS's `MoE` (exposes `deepspeed_moe`, the right `group_name`, etc.) so DS's detection finds them naturally. Most invasive; only consider if (a) and (b) both turn out leaky.
+    a. **Post-`deepspeed.initialize` engine attribute patch** (originally preferred) — after `accelerator.prepare(model, optimizer, ...)` returns the wrapped engine, write `engine.has_moe_layers = True` and `engine.optimizer.expert_data_parallel_group = groups._get_expert_data_parallel_group(f"ep_size_{ep_size}")` directly. **Insufficient on its own** — the ZeRO optimizer's `_configure_moe_settings` already ran (or didn't) at init based on the original `has_moe_layers`; setting it after doesn't replay that bookkeeping.
 
-    All three keep the workaround inside transformers/TRL. None requires touching DS. Pick (a) when implementing the DS-Z2+EP transformers PR (item 1 above).
+    b. **Pre-`deepspeed.initialize` module marker** — set `module._has_moe_layers = True` (or whatever attribute DS's detection loop checks) on each EP-experts module before `accelerator.prepare`. Would require wrapping experts in a `deepspeed.moe.layer.MoE`-shaped shim because the existing detection is `isinstance(module, MoE)` — collapses into option (c).
+
+    c. **Wrap external EP modules in a `deepspeed.moe.layer.MoE`-shaped shim** — wraps EP modules in a class that quacks like DS's `MoE` (exposes `deepspeed_moe`, the right `group_name`, etc.) so DS's detection finds them naturally. Most invasive; superseded by the monkey-patch above.
 
 3. TRL side (6) → falls under G2 in this todo.
 4. (7) → A1 in this todo.
@@ -924,8 +939,8 @@ These are TRL-repo additions (managed by TRL git, not "uncommitted patches"):
 
 - [ ] **A1 — sonicmoe EP/DTensor support (`.to_local()` + clamp wrapper)** → blocked on `#45621` (sonicmoe Ilyas patch) + `#45662` (EP+FSDP DTensor wrap). Write up follow-up PR explaining the autograd-through-`to_local()` backward gap.
 - [ ] **Deepseep EP-works — DS-Z2 + EP, 7 patches across 3 repos**, the recipe behind every long-context champion in the report. Split into:
-    - [ ] transformers PR — patches 1/2/4/5 (`tensor_parallel.py`, `trainer.py:create_accelerator_and_postprocess`, `trainer.py:create_optimizer`, `trainer.py:_clip_grad_norm`) **+ post-`deepspeed.initialize` engine attribute patch** (replaces the deleted DS PR — see D-works "Upstream split" item 2 for options a/b/c)
-    - [ ] ~~DeepSpeed PR — patch 3~~ — **do not open**. Workaround stays on transformers/TRL side (decided 2026-05-05).
+    - [ ] transformers PR — patches 1/2/4/5 (`tensor_parallel.py`, `trainer.py:create_accelerator_and_postprocess`, `trainer.py:create_optimizer`, `trainer.py:_clip_grad_norm`) **+ the `_configure_distributed_model` monkey-patch that replaces the deleted DS PR** (validated 2026-05-06, slurm 22112383 — see D-works "Upstream split" item 2)
+    - [x] ~~DeepSpeed PR — patch 3~~ — landed as a transformers-side monkey-patch on `_configure_distributed_model` (2026-05-06). Stock DS works as-is.
     - [ ] TRL PR — patch 6 (pre-init `deepspeed.comm` in SFTTrainer EP branch — falls under G2 below)
 
 ### 🟡 Keep local (proper fix is upstream elsewhere)
@@ -976,6 +991,7 @@ git checkout -- src/transformers/{modeling_utils.py,trainer.py,core_model_loadin
 cd /fsx/amine_dirhoussi/trl
 uv pip install --reinstall --no-deps accelerate
 
-# DeepSpeed already reverted in tree; reinstall as a safety net
+# DeepSpeed: stock is now sufficient (engine.py monkey-patch lives in transformers/trainer.py).
+# Only run the reinstall if a previous session wrote to engine.py in-place.
 uv pip install --reinstall --no-deps deepspeed
 ```
