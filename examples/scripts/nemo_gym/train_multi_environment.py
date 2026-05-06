@@ -362,7 +362,7 @@ def main():
         loss_type="grpo",
         mask_truncated_completions=True,
         shuffle_dataset=False,
-        model_init_kwargs={"torch_dtype": "auto"},
+        model_init_kwargs={"dtype": "auto"},
         agent_servers=agent_servers,
         request_timeout=10800,
         **config,

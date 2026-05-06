@@ -2354,7 +2354,7 @@ class TestPatchChunkedCELMHead:
     CHUNK_SIZE = 5  # small, to exercise the chunk loop
 
     def _setup(self, model_id):
-        ref_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32, device_map=torch_device)
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
         chunked_model = copy.deepcopy(ref_model)
         _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
 
@@ -2389,7 +2389,7 @@ class TestPatchChunkedCELMHead:
         """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
         to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
         ref_model = AutoModelForCausalLM.from_pretrained(
-            model_id, torch_dtype=torch.float32, output_router_logits=True, device_map=torch_device
+            model_id, dtype=torch.float32, output_router_logits=True, device_map=torch_device
         )
         chunked_model = copy.deepcopy(ref_model)
         _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
