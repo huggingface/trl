@@ -36,11 +36,19 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = DeepseekV3Config(
     vocab_size=129280,
-    hidden_size=8,
+    # Every FP8Linear's `in_features` must be a multiple of 128 (the activation-quant kernel asserts
+    # `x.shape[-1] % 128 == 0`). That forces hidden_size, q_lora_rank, kv_lora_rank, intermediate_size,
+    # and `num_attention_heads * v_head_dim` (the o_proj input) to all be multiples of 128.
+    hidden_size=128,
     num_attention_heads=4,
-    num_key_value_heads=2,
+    # MLA already produces keys at `num_attention_heads`; setting `num_kv_heads < num_heads` makes
+    # `sdpa_attention_forward` call `repeat_kv` with groups>1 and double the key heads, breaking
+    # the matmul. The reference config keeps them equal — mirror that here.
+    num_key_value_heads=4,
     num_hidden_layers=2,
-    intermediate_size=32,
+    intermediate_size=128,
+    q_lora_rank=128,
+    kv_lora_rank=128,
     max_position_embeddings=163840,
     rope_scaling={
         "beta_fast": 32.0,
