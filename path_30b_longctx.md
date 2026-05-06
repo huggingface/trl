@@ -7,37 +7,29 @@
 > TRL / DeepSpeed / Liger) that this depends on, the known issues, and the
 > performance numbers we land along the way.
 >
-> Modeled after vLLM's [transformers v5 tracking PR](https://github.com/vllm-project/vllm/pull/30566).
 > Community contributions and reproduction reports on different hardware are
-> very welcome — please drop a comment with your config + numbers.
+> very welcome. Please drop a comment with your config + numbers.
 
 ## Why this is non-trivial
 
-Qwen3-30B-A3B has 128 experts (8 active per token) and a 152k vocab; out of
-the box it does not train cleanly on any combination of FSDP2 / DeepSpeed /
-Expert Parallel / Sequence Parallel / Context Parallel. A single recipe
-(`SFTTrainer` + `--enable_expert_parallel` + Liger + sonicmoe + FA3 + chunked
-loss) gets there, but it required fixing real bugs in 4 repos. This issue
-tracks all of them.
+Qwen3-30B-A3B has 128 experts (8 active per token) out of the box it currently doesn't train cleanly on any combination of FSDP2 / DeepSpeed /Expert Parallel / Sequence Parallel / Context Parallel with `trl`.
+This issue tracks the recipes `SFTTrainer` + `--enable_expert_parallel` + Liger + sonicmoe + FA3 + chunkedloss to get there
 
 ## Status snapshot — Qwen3-30B-A3B (2026-05-06)
 
-Best end-to-end-correct configurations on 2× / 4× / 8× p5.48xlarge nodes
-(H100 SXM5, 989.5 TFLOPS bf16 peak). All numbers measured with the
-`benchmark-sft-moe` branch of TRL + the patched transformers fork referenced
-below. **Window MFU peak** is the per-log-window throughput; **adj.** is the
-causal-corrected value (matches the Llama 2/3 / DS-Ulysses convention — half
-the attention FLOPs disappear under causal masking).
+Best end-to-end-correct configurations on 2× / 4× / 8× p5.48xlarge nodes (H100 SXM5, 989.5 TFLOPS bf16 peak).
 
-| Context | Nodes | Recipe | Window MFU | Adj. MFU | Loss | Notes |
-|---|---|---|---|---|---|---|
-| 16k | 2 | FSDP2 + EP=8 + FA3 + sonicmoe (post-PR #45621 kernel fix) | **48.2 %** | 32.3 % | 13.4 ✅ | new champion since clamp era |
-| 32k | 2 | DS-Z2 + EP=8 + FA3 + sonicmoe + Liger | **65.0 %** | 39.2 % | 8.0 ✅ | highest 30B-on-2-node MFU we have measured |
-| 64k | 4 | DS-Z2 + EP=32 + FA3 + sonicmoe + Liger (R3) | **72.0 %** | 40.1 % | 1.87 ✅ | first end-to-end-correct multi-node EP=32 |
-| 128k | 4 | DS-Z2 + EP=32 + FA3 + sonicmoe + Liger (R1) | **81.7 %** | 43.4 % | (see H5) | throughput real, convergence: see Known issues / H5 |
-| 256k | 8 | DS-Z3 + SP=2 + FA3 + sonicmoe + Liger + compile | **63.6 %** | 32.8 % | 1.56 ✅ | SP path beyond the EP-buffer ceiling |
-| 512k | 8 | DS-Z3 + SP=4 + FA3 + sonicmoe + Liger + compile | **63.3 %** | 32.1 % | ✅ | |
-| 1M | 8 | DS-Z3 + SP=8 + FA3 + sonicmoe + Liger + compile | **62.3 %** | 31.4 % | 1.56 ✅ | first 1M-context MoE SFT result on this stack |
+**Window MFU peak** is the per-log-window throughput; **adj.** is the causal-corrected value (matches the Llama 2/3 / DS-Ulysses convention — half the attention FLOPs disappear under causal masking).
+
+| Context | Nodes | Recipe                                                    | Window MFU | Adj. MFU | Loss     | Notes                                               |
+| ------- | ----- | --------------------------------------------------------- | ---------- | -------- | -------- | --------------------------------------------------- |
+| 16k     | 2     | FSDP2 + EP=8 + FA3 + sonicmoe (post-PR #45621 kernel fix) | **48.2 %** | 32.3 %   | 13.4 ✅  | new champion since clamp era                        |
+| 32k     | 2     | DS-Z2 + EP=8 + FA3 + sonicmoe + Liger                     | **65.0 %** | 39.2 %   | 8.0 ✅   | highest 30B-on-2-node MFU we have measured          |
+| 64k     | 4     | DS-Z2 + EP=32 + FA3 + sonicmoe + Liger (R3)               | **72.0 %** | 40.1 %   | 1.87 ✅  | first end-to-end-correct multi-node EP=32           |
+| 128k    | 4     | DS-Z2 + EP=32 + FA3 + sonicmoe + Liger (R1)               | **81.7 %** | 43.4 %   | (see H5) | throughput real, convergence: see Known issues / H5 |
+| 256k    | 8     | DS-Z3 + SP=2 + FA3 + sonicmoe + Liger + compile           | **63.6 %** | 32.8 %   | 1.56 ✅  | SP path beyond the EP-buffer ceiling                |
+| 512k    | 8     | DS-Z3 + SP=4 + FA3 + sonicmoe + Liger + compile           | **63.3 %** | 32.1 %   | ✅       |                                                     |
+| 1M      | 8     | DS-Z3 + SP=8 + FA3 + sonicmoe + Liger + compile           | **62.3 %** | 31.4 %   | 1.56 ✅  | first 1M-context MoE SFT result on this stack       |
 
 For Qwen3-235B-A22B early numbers (32k 8n EP=64 + Liger + compile = 70.1 %
 window MFU, healthy loss), see the J section of `benchmark/upstream_todo.md`
@@ -102,14 +94,6 @@ attribute patch that lives entirely in `transformers/trainer.py`. Avoids
 taking on a DS-side dependency. See D-works in `benchmark/upstream_todo.md`
 for the three options being evaluated.
 
-### Liger
-
-- ⏳ **Planned** — `apply_liger_kernel_to_qwen3_moe` should auto-skip the
-  SwiGLU patch when EP is active (today it silently bypasses transformers'
-  `@use_experts_implementation` dispatcher, calling `F.one_hot` with an
-  out-of-range sentinel → `device-side assert`). Workaround:
-  `--liger_kernel_config '{"swiglu":false}'`. Repro: `benchmark/test_liger_qwen3_moe_ep.py`. Investigation log: `benchmark/debug_liger_ep.md`.
-
 ## Known issues / open blockers
 
 > Status legend (matches `benchmark/upstream_todo.md`):
@@ -126,29 +110,49 @@ for the three options being evaluated.
 
 ## How to reproduce
 
-The 32k 2-node champion (DS-Z2 + EP=8 + FA3 + sonicmoe + Liger, 65 % window
-MFU, healthy loss):
+`SFTTrainer` + `--enable_expert_parallel` requires patched checkouts of
+`transformers` and `accelerate` until the PRs in §transformers and
+§accelerate land. The fork branches below carry exactly the local fixes
+described in `benchmark/upstream_todo.md`.
 
 ```bash
-git checkout benchmark-sft-moe          # ← will collapse to main as the PRs above land
+# 1. TRL — this branch
+git clone --branch benchmark-sft-moe https://github.com/huggingface/trl.git
+cd trl
 
-# transformers + accelerate need the patched fork until the PRs in §transformers and §accelerate land
-# (full revert recipe in benchmark/upstream_todo.md "Revert everything")
-cd /path/to/transformers
-git remote add aminediro git@github.com:aminediro/transformers.git  # placeholder name
-git fetch aminediro qwen3-moe-ep-v2 && git checkout qwen3-moe-ep-v2
+# 2. Fresh venv in the TRL repo (CLAUDE.md convention)
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -e .
 
-cd /path/to/trl
+# 3. Patched transformers (EP, sonicmoe, DS-Z2+EP, FSDP+EP+DTensor — all the
+#    PRs in §transformers, applied locally on top of 5.6.0.dev0)
+git clone --branch ds-ep-integration https://github.com/AmineDiro/transformers.git ../transformers
+pip install -e ../transformers
+
+# 4. Patched accelerate (`_prepare_tp has_ep` skip + the EP-aware
+#    `prepare_data_loader` divisor — see §accelerate for both)
+git clone --branch ep-fixes https://github.com/AmineDiro/accelerate.git ../accelerate
+pip install -e ../accelerate
+
+# 5. Submit the 32k 2-node champion (DS-Z2 + EP=8 + FA3 + sonicmoe + Liger,
+#    65 % window MFU, healthy loss). Each row in the YAML corresponds to one
+#    cell in the headline table — pick a different --run-index for the
+#    others.
 python benchmark/run_benchmark.py \
     --config benchmark/configs/qwen3_30b_a3b.yaml \
     --submit \
     --run-index <row-from-table-above>
 ```
 
-Each row in `benchmark/configs/qwen3_30b_a3b.yaml` corresponds to one cell in
-the headline table. Logs land in `benchmark/logs/`; results collection +
-peak-mem queries via `benchmark/collect_results.py` and
-`benchmark/fetch_peak_gpu_mem.py`.
+Logs land in `benchmark/logs/`. Result collection and peak-memory queries
+go through `benchmark/collect_results.py` and `benchmark/fetch_peak_gpu_mem.py`.
+
+> The `AmineDiro/transformers#ds-ep-integration` and
+> `AmineDiro/accelerate#ep-fixes` branches will be force-pushed as fixes
+> evolve until the upstream PRs land. Pin a commit SHA if you need a
+> stable target.
 
 ## Help wanted
 
