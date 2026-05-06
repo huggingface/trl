@@ -119,33 +119,35 @@ Status: 🔧 active workaround · 🟡 keep local (proper fix is in another repo
 §accelerate land. The fork branches below carry exactly the local fixes
 described in `benchmark/upstream_todo.md`.
 
+Uses [`uv`](https://docs.astral.sh/uv/getting-started/installation/) — install with `curl -LsSf https://astral.sh/uv/install.sh | sh` if you don't already have it.
+
 ```bash
 # 1. TRL — this branch
 git clone --branch benchmark-sft-moe https://github.com/huggingface/trl.git
 cd trl
 
-# 2. Fresh venv in the TRL repo (CLAUDE.md convention)
-python -m venv .venv
+# 2. Fresh venv in the TRL repo
+uv venv .venv --python 3.11
 source .venv/bin/activate
-pip install --upgrade pip
-pip install -e .
+uv pip install -e .
 
 # 3. Patched transformers — the rebased fork carrying everything in §transformers
 #    that is not yet upstream (EP+FSDP DTensor wrap, DS-Z2+EP trainer hooks,
 #    `_configure_distributed_model` monkey-patch for stock DS, sonicmoe wrapper).
 git clone --branch ds-ep-integration https://github.com/AmineDiro/transformers.git ../transformers
-pip install -e ../transformers --no-deps
+uv pip install -e ../transformers --no-deps --reinstall
 
 # 4. Patched accelerate — `_prepare_tp` skip when `model._device_mesh` is set
 #    by transformers' EP path (see §accelerate).
 git clone --branch ep-fixes https://github.com/AmineDiro/accelerate.git ../accelerate
-pip install -e ../accelerate --no-deps
+uv pip install -e ../accelerate --no-deps --reinstall
 
-# 5. Runtime extras the kernel + logging stack expects but TRL's pyproject
-#    does not pin. Versions matched against the validated benchmark venv.
-pip install torch==2.10.0 deepspeed==0.18.9 liger-kernel==0.7.0 \
-            kernels==0.13.0 trackio==0.23.0 \
-            nvidia-cutlass-dsl==4.4.2 apache-tvm-ffi==0.1.9
+# 5. Pin torch + runtime extras the kernel + logging stack expects but TRL's
+#    pyproject does not pin. Versions matched against the validated benchmark venv.
+uv pip install --reinstall torch==2.10.0
+uv pip install deepspeed==0.18.9 liger-kernel==0.7.0 \
+               kernels==0.13.0 trackio==0.23.0 \
+               nvidia-cutlass-dsl==4.4.2 apache-tvm-ffi==0.1.9
 
 # 6. The benchmark templates expect a `venv` at /fsx/amine_dirhoussi/trl/.venv.
 #    For an out-of-tree clone, edit benchmark/templates/launch.sh.j2 to point
