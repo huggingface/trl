@@ -26,7 +26,7 @@ Best end-to-end-correct configurations on 2× / 4× / 8× p5.48xlarge nodes (H10
 | 16k     | 2     | FSDP2 + EP=8 + FA3 + sonicmoe (post-PR #45621 kernel fix) | **48.2 %** | 32.3 %   | 13.4 ✅  | new champion since clamp era                        |
 | 32k     | 2     | DS-Z2 + EP=8 + FA3 + sonicmoe + Liger                     | **65.0 %** | 39.2 %   | 8.0 ✅   | highest 30B-on-2-node MFU we have measured          |
 | 64k     | 4     | DS-Z2 + EP=32 + FA3 + sonicmoe + Liger (R3)               | **72.0 %** | 40.1 %   | 1.87 ✅  | first end-to-end-correct multi-node EP=32           |
-| 128k    | 4     | DS-Z2 + EP=32 + FA3 + sonicmoe + Liger (R1)               | **81.7 %** | 43.4 %   | (see H5) | throughput real, convergence: see Known issues / H5 |
+| 128k    | 4     | DS-Z2 + EP=32 + FA3 + sonicmoe + Liger                    | **81.7 %** | 43.4 %   | NaN ⛔   | throughput real, convergence: see "Loss-zero / NaN at large EP" below |
 | 256k    | 8     | DS-Z3 + SP=2 + FA3 + sonicmoe + Liger + compile           | **63.6 %** | 32.8 %   | 1.56 ✅  | SP path beyond the EP-buffer ceiling                |
 | 512k    | 8     | DS-Z3 + SP=4 + FA3 + sonicmoe + Liger + compile           | **63.3 %** | 32.1 %   | ✅       |                                                     |
 | 1M      | 8     | DS-Z3 + SP=8 + FA3 + sonicmoe + Liger + compile           | **62.3 %** | 31.4 %   | 1.56 ✅  | first 1M-context MoE SFT result on this stack       |
@@ -43,7 +43,7 @@ in the `benchmark-sft-moe` branch.
 - **accelerate**: 1.13.0 + an in-place `_prepare_tp` `has_ep` skip (§accelerate)
 - **DeepSpeed**: stock — no fork, no in-venv patch. DS's MoE auto-detection is extended in `transformers/trainer.py` via a transparent monkey-patch on `DeepSpeedEngine._configure_distributed_model` (see §DeepSpeed).
 - **PyTorch**: 2.10.0+cu128
-- **Liger Kernel**: fused CrossEntropy + RMSNorm + RoPE (Triton). SwiGLU patch must be **disabled** under EP (`--liger_kernel_config '{"swiglu":false}'`) — see §Known issues / H1
+- **Liger Kernel**: fused CrossEntropy + RMSNorm + RoPE (Triton). SwiGLU patch must be **disabled** under EP (`--liger_kernel_config '{"swiglu":false}'`) — `LigerExperts.forward` bypasses transformers' EP-aware `@use_experts_implementation` dispatcher and hits an out-of-range `F.one_hot` with the EP sentinel, see §Liger.
 - **Flash Attention 3**: `kernels-community/vllm-flash-attn3`
 - **MoE kernel**: `kernels-community/sonic-moe` (CuteDSL), selected via `--experts_implementation sonicmoe`
 - **Dataset**: `THUDM/LongAlign-10k` packed with `--packing --packing_strategy wrapped`
@@ -82,7 +82,7 @@ first.
 1. ⏳ MFU helpers — `compute_flops_per_token` + `compute_mfu` in `trl/trainer/utils.py`. Pure-Python, no `SFTTrainer` coupling. Includes causal-correct attention and the `embed_flops=0` / `lm_head_flops=2*V*h` accounting fix.
 2. ⏳ `SFTTrainer.log()` MFU integration (window + cumulative; corrects `num_input_tokens_seen` overcount by `cp_size × sp_size`)
 3. ⏳ `enable_expert_parallel` + `expert_parallel_size` + `experts_implementation` config fields and the EP branch in `SFTTrainer.__init__` (depends on the transformers PRs landing)
-4. ⏳ Generalized kernel pre-warm + `HF_HUB_OFFLINE` flip (workaround for HF Hub cache races on multi-node — see Known issues / H3)
+4. ⏳ Generalized kernel pre-warm + `HF_HUB_OFFLINE` flip (workaround for the multi-node HF Hub cache race in the Known issues section)
 5. ⏳ SP `--pad_to_multiple_of` auto-default when `accelerator.parallelism_config.sp_size > 1` (G1 in upstream-todo)
 6. ⏳ Per-rank `TRITON_CACHE_DIR` + legacy TF32 flags in `trl/scripts/sft.py`
 7. ✅ **Merged** [#5575](https://github.com/huggingface/trl/pull/5575) by [@qgallouedec](https://github.com/qgallouedec) — Chunked cross-entropy loss for SFT (up to −50 % VRAM). Load-bearing for this stack: it's what frees the ~20 GB lm_head logit tensor and lets the EP-replicated expert buffer fit at 32k → 128k context, which unlocks every long-context champion in the table above.
@@ -101,17 +101,16 @@ per process, idempotent. Stock DS works as-is — no fork, no in-place
 
 ## Known issues / open blockers
 
-> Status legend (matches `benchmark/upstream_todo.md`):
-> 🟢 ready to PR · 🟡 keep local (fix is elsewhere) · ⛔ blocked / not yet attempted · 🔧 active workaround in place · 🧪 frontier · 🗑️ debug-only
+Status: 🔧 active workaround · 🟡 keep local (proper fix is in another repo) · ⛔ not yet fixed.
 
-- **🔧 EP-aware DataLoader sharding (C3)** — Local fix in `transformers/trainer.py` that exposes the EP mesh as `"tp"` so accelerate's existing TP-replication branch in `prepare_data_loader` divides correctly. Without it, every world rank gets a unique micro-batch but the 8 ranks of an EP group must see the **same** batch (EP shards experts only) → silent NCCL hang on the EP all-reduce after a random number of steps. Caused multi-night investigations (`SeqNum=2201` ALLREDUCE-PG-ID-2 fingerprint). **Highest-leverage upstream cleanup remaining.**
-- **🟡 `_clip_grad_norm` cross-mesh failure (B1)** — `clip_grad_norm_` calls `_foreach_norm` which stacks per-param norms; stacking DTensors on different meshes (EP mesh + FSDP DP mesh) errors with `RuntimeError: All operands in aten.stack.default must have the same mesh`. Local skip returns `tensor(0.0)` for telemetry — gradients are not actually clipped. Fine for benchmarks, unsafe for production. Proper fix is in PyTorch.
-- **⛔ FSDP + EP + compile Adam crash (E1)** — `_group_tensors_by_device_and_dtype` strict-asserts grouped tensors share device+dtype; EP DTensors (EP mesh, size 8) and FSDP DP DTensors (size 16) trip the assert. DS-Z2+EP+compile works because DS uses plain `nn.Parameter` (`allreduce=False` / `group_name` markers, no DTensor mesh). 3 fix paths under evaluation.
-- **⛔ Architectural EP buffer ceiling at 32k+ per-rank seq (F1)** — transformers' EP replicates routing across all EP ranks (TP-style EP, not all-to-all), so every rank materializes a `seq × num_local_experts × moe_intermediate × 2 B` activation tensor: 18.55 GiB at 32k per-rank, 37.09 GiB at 64k. Workaround: chunked-CE / Liger frees ~20 GB from the lm_head logits which leaves room up to 128k EP=32 (R1, 81.7 % MFU). Real fix is a streaming kernel rewrite — biggest single ceiling-breaker for 256k+ EP, RFC TODO.
-- **⛔ FA3 + CP incompatible (H2)** — accelerate hard-guards CP to sdpa attention. Long-context MoE has to choose between FA3 throughput (SP path) and ring-attention seq sharding (CP path). Cost: ~5 pp MFU at 32k FSDP+EP+CP=2 (15.6 % today; FA3 would close most of that).
-- **🔧 Multi-node HF Hub cache race (H3)** — concurrent writes to `~/.cache/huggingface` corrupt the lock files on 4n+. Workaround: `HF_HUB_OFFLINE=1` after pre-warming sonicmoe + FA3 kernels in `trl/scripts/sft.py`.
-- **⛔ sonicmoe Triton kernel ignores `TRITON_CACHE_DIR` (H4)** — multi-node EP=32+ runs intermittently fail with `FileNotFoundError` on `~/.triton/<HASH>/token_gather_sum_kernel.{source,ptx}`. Hypothesis: the `kernels` library compiles before `sft.py:69` sets the env var. Try setting it from `templates/launch.sh.j2` before Python starts.
-- **⛔ Loss-zero / NaN at large EP + long-ctx + Liger / chunked (H5)** — at "≥32k context AND large total rank count", `loss.item()` PRE-backward is NaN from step 1, masked downstream so the trainer reports `loss=0`. NaN appears inside the optimizer step for the 5 FSDP/DS-sharded entry-side params (`embed_tokens.weight` + `layers.0.self_attn.{q,k,v,o}_proj.weight`). Static analysis ruled out the EP all-reduce math, DS-Z3 reduce-scatter averaging, Liger FLCE chain-rule scaling, and the C3 dataloader fix. Forward + backward math is fine; bug is in `(grad → optim_state → param)`. **High priority — the 81 % / 95 % window MFU rows on this stack are throughput-real but training-incorrect today.** Healthy convergence at 64k 4n EP=32 (R3, 1.87 loss) and at SP-path long-context (R5/R6, 1.56 loss).
+- **🔧 EP-aware DataLoader sharding** — Local fix in `transformers/trainer.py` that exposes the EP mesh as `"tp"` so accelerate's existing TP-replication branch in `prepare_data_loader` divides correctly. Without it, every world rank gets a unique micro-batch but the 8 ranks of an EP group must see the **same** batch (EP shards experts only, not data) → silent NCCL hang on the EP all-reduce after a random number of steps. **Highest-leverage upstream cleanup remaining.**
+- **🟡 `_clip_grad_norm` cross-mesh failure** — `clip_grad_norm_` → `_foreach_norm` stacks per-param norms; stacking DTensors on different meshes (EP mesh + FSDP DP mesh) errors with `RuntimeError: All operands in aten.stack.default must have the same mesh`. Local skip returns `tensor(0.0)` for telemetry — gradients are not actually clipped. Fine for benchmarks, unsafe for production. Proper fix is in PyTorch.
+- **⛔ FSDP + EP + compile Adam crash** — `_group_tensors_by_device_and_dtype` strict-asserts grouped tensors share device+dtype; EP DTensors (EP mesh, size 8) and FSDP DP DTensors (size 16) trip the assert. DS-Z2+EP+compile works because DS uses plain `nn.Parameter` (no DTensor mesh).
+- **⛔ Architectural EP buffer ceiling at 32k+ per-rank seq** — transformers' EP replicates routing across all EP ranks (TP-style EP, not all-to-all), so every rank materializes a `seq × num_local_experts × moe_intermediate × 2 B` activation tensor: 18.55 GiB at 32k per-rank, 37.09 GiB at 64k. Workaround: chunked-CE / Liger frees ~20 GB from the lm_head logits which leaves room up to 128k EP=32 (81.7 % MFU). Real fix is a streaming kernel rewrite — biggest single ceiling-breaker for 256k+ EP.
+- **⛔ FA3 + CP incompatible** — accelerate hard-guards CP to sdpa attention. Long-context MoE has to choose between FA3 throughput (SP path) and ring-attention seq sharding (CP path). Cost: ~5 pp MFU at 32k FSDP+EP+CP=2.
+- **🔧 Multi-node HF Hub cache race** — concurrent writes to `~/.cache/huggingface` corrupt the lock files on 4n+. Workaround: `HF_HUB_OFFLINE=1` after pre-warming sonicmoe + FA3 kernels in `trl/scripts/sft.py`.
+- **⛔ sonicmoe Triton kernel ignores `TRITON_CACHE_DIR`** — multi-node EP=32+ runs intermittently fail with `FileNotFoundError` on `~/.triton/<HASH>/token_gather_sum_kernel.{source,ptx}`. Hypothesis: the `kernels` library compiles before `sft.py` sets the env var.
+- **⛔ Loss-zero / NaN at large EP + long-ctx** — at "≥32k context AND large total rank count", `loss.item()` PRE-backward is NaN from step 1, masked downstream so the trainer reports `loss=0`. NaN appears inside the optimizer step for the FSDP/DS-sharded entry-side params (`embed_tokens.weight` + `layers.0.self_attn.{q,k,v,o}_proj.weight`). Forward + backward math is clean; bug is in `(grad → optim_state → param)`. **High priority — the 81 % window MFU rows on this stack are throughput-real but training-incorrect today.** Healthy convergence at 64k 4n EP=32 (1.87 loss) and at SP-path long-context (1.56 loss).
 
 ## How to reproduce
 
@@ -163,8 +162,8 @@ go through `benchmark/collect_results.py` and `benchmark/fetch_peak_gpu_mem.py`.
 
 - Reproduction reports on non-H100 hardware (H200, MI300X, B200) — especially the EP=8 16k FSDP2 baseline
 - Cross-checks of the MFU formula in `trl/trainer/utils.py:compute_flops_per_token` against your own training runs (Llama 2/3 / DS-Ulysses / Megatron numbers welcome)
-- A clean repro for the H5 NaN-at-large-EP issue (the smallest config we have today is 16k 8n EP=64 — anything smaller would massively shorten the debug loop)
-- Anyone looking at the FSDP + EP + compile Adam path (E1) — three fix paths sketched in `benchmark/upstream_todo.md`, none yet attempted
+- A clean repro for the NaN-at-large-EP issue (the smallest config we have today is 16k 8n EP=64 — anything smaller would massively shorten the debug loop)
+- Anyone looking at the FSDP + EP + compile Adam path — three fix paths sketched in `benchmark/upstream_todo.md`, none yet attempted
 
 ## Changelog
 
