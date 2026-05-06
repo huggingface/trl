@@ -166,14 +166,29 @@ python benchmark/run_benchmark.py \
 Logs land in `benchmark/logs/`. Result collection and peak-memory queries
 go through `benchmark/collect_results.py` and `benchmark/fetch_peak_gpu_mem.py`.
 
-> **Repro verified 2026-05-06** — fresh `/fsx/amine_dirhoussi/benchmark_repo`
-> install of the three forks above ran 32k 2n DS-Z2 + EP=8 + sonicmoe + Liger
-> end-to-end (slurm 22112529, 5/5 steps, mfu_window peak **66.65 %** matching
-> the headline 65 %). Convergence is the documented NaN-at-large-EP issue —
-> step-1 grad_norm is finite, step-2+ losses are NaN-masked-as-zero. The
-> infrastructure path (clone → install → run_benchmark.py → sbatch → first
-> training step) works as documented; the numerical stability work tracked
-> under "Loss-zero / NaN at large EP + long-ctx" is the open follow-up.
+> **Repro verification (2026-05-06)** — a fresh `/fsx/amine_dirhoussi/benchmark_repo`
+> install of the three forks above ran the four configs below end-to-end. The
+> infrastructure path (clone → uv install → `run_benchmark.py` → sbatch → first
+> training step) works as documented and throughput-correct numbers match the
+> headline table (mfu_window peak 84.89 % at 64k 4n EP=32, 66.65 % at 32k 2n
+> EP=8). Numerical correctness on the rebased stack does NOT yet match the
+> validated OLD stack (transformers 5.6.0.dev0 with cherry-picks of #45433 +
+> #45621). Two distinct regressions surface, both tracked as open work:
+>
+> | slurm | shape | result |
+> |---|---|---|
+> | 22112529 | 32k 2n DS-Z2 + EP=8 + sonicmoe + Liger | mfu_window 66.65 % ✅, NaN cascade from step 2 |
+> | 22112531 | 16k 2n same recipe (diagnostic) | mfu_window 43.83 % ✅, NaN from step 2 |
+> | 22112537 | 64k 2n DS-Z2 + EP=8 + sonicmoe + chunked_nll (Test G) | CUDA illegal memory access in `flash_attention_forward` at step 1 |
+> | 22112538 | 64k 4n DS-Z2 + EP=32 + sonicmoe + Liger (R3) | mfu_window 84.89 % ✅, NaN from step 2 + CUDA error on shutdown |
+>
+> All four shapes were validated as healthy on the OLD stack. So the rebase
+> onto current `huggingface/transformers#main` (75 commits past 5.6.0.dev0,
+> picking up the merged #45433 / #45621) introduced a numerical/kernel
+> regression that needs bisection. Throughput-correctness, EP wiring, the DS
+> monkey-patch, the accelerate `_prepare_tp` skip, and the run_benchmark.py
+> sbatch infrastructure all work as expected — the gap is purely in the
+> kernel + numerical correctness layer.
 
 > The `AmineDiro/transformers#ds-ep-integration` and
 > `AmineDiro/accelerate#ep-fixes` branches will be force-pushed as fixes
@@ -191,4 +206,4 @@ go through `benchmark/collect_results.py` and `benchmark/fetch_peak_gpu_mem.py`.
 
 - **2026-05-06** — Issue opened. Headline numbers as of `benchmark-sft-moe@ee2876cc`.
 - **2026-05-06** — Ported the DeepSpeed `engine.py` external-MoE detection to a transformers-side monkey-patch on `DeepSpeedEngine._configure_distributed_model`. No DS fork required. Validated on 16k 2n DS-Z2 + EP=8 + sonicmoe + Liger (job 22112383, COMPLETED 3:43, 5/5 steps healthy).
-- **2026-05-06** — Repro flow verified end-to-end from a fresh `/fsx/amine_dirhoussi/benchmark_repo` install of `AmineDiro/transformers#ds-ep-integration` + `AmineDiro/accelerate#ep-fixes` + stock DS. 32k 2n run (slurm 22112529) reached mfu_window peak 66.65 % (matches headline 65 %). Numerical stability is the open NaN-at-large-EP follow-up.
+- **2026-05-06** — Repro flow verified end-to-end from a fresh `/fsx/amine_dirhoussi/benchmark_repo` install of `AmineDiro/transformers#ds-ep-integration` + `AmineDiro/accelerate#ep-fixes` + stock DS across four shapes (16k/32k/64k, 2n/4n). Throughput numbers match the headline (mfu_window peak 84.89 % at 64k 4n, 66.65 % at 32k 2n). NaN cascade fires on every Liger config tested; chunked_nll path hits CUDA illegal memory access in `flash_attention_forward`. Both are fresh-stack regressions — bisect the 75 commits between transformers 5.6.0.dev0 and current main (post-#45433 / post-#45621) to identify the trigger.
