@@ -358,8 +358,8 @@ class TestSFTTrainer(TrlTestCase):
             pytest.param(
                 "trl-internal-testing/tiny-DeepseekV4ForCausalLM",
                 marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.7.0.dev0"),
-                    reason="DeepseekV4 models were introduced in transformers-5.7.0",
+                    Version(transformers.__version__) < Version("5.8.0"),
+                    reason="DeepSeek-V4 models were introduced in transformers-5.7.0",
                 ),
             ),
             pytest.param(
@@ -386,18 +386,10 @@ class TestSFTTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-<<<<<<< HEAD
-        # Check the params have changed — collect ALL unchanged params, not just the first.
-        unchanged = [
-            n for n, param in previous_trainable_params.items() if torch.allclose(param, trainer.model.get_parameter(n))
-        ]
-        assert not unchanged, f"{len(unchanged)} parameters did not change:\n" + "\n".join(unchanged)
-=======
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
->>>>>>> origin/main
 
     # Special case for harmony
     def test_train_gpt_oss(self):
@@ -2176,14 +2168,14 @@ _CHUNKED_CE_MODEL_IDS = [
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            reason="DeepSeek-V3 SDPA attention is broken in transformers < 5.0.0",
         ),
     ),
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            reason="DeepSeek-V3 SDPA attention is broken in transformers < 5.0.0",
         ),
     ),
     "trl-internal-testing/tiny-Gemma2ForCausalLM",

@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# WIP: targets the in-review transformers branch that adds DeepseekV4 and the in-review model PR on
+# WIP: targets the in-review transformers branch that adds DeepSeek-V4 and the in-review model PR on
 # the Hub. This script exists to provide early feedback on the integration; expect the pinned version
 # and revision to change once V4 lands upstream.
 
 import torch
+from torch import nn
 from transformers import AutoTokenizer, DeepseekV4Config, DeepseekV4ForCausalLM, GenerationConfig
-from transformers.models.deepseek_v4.modeling_deepseek_v4 import DeepseekV4HyperConnection, DeepseekV4HyperHead
+from transformers.models.deepseek_v4.modeling_deepseek_v4 import DeepseekV4Experts
 
 from .._common import (
     check_dtype_pattern,
@@ -30,7 +31,7 @@ from .._common import (
 )
 
 
-TRANSFORMERS_VERSION = "5.7.0.dev0"
+TRANSFORMERS_VERSION = "5.8.0"
 check_transformers_version(TRANSFORMERS_VERSION)
 
 MODEL_ID = "deepseek-ai/DeepSeek-V4-Flash"
@@ -38,14 +39,6 @@ REVISION = "refs/pr/16"
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=REVISION)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID, revision=REVISION)
-_yarn_rope = {
-    "beta_fast": 32,
-    "beta_slow": 1,
-    "factor": 16,
-    "original_max_position_embeddings": 65536,
-    "rope_type": "yarn",
-    "type": "yarn",
-}
 config = DeepseekV4Config(
     vocab_size=len(tokenizer.vocab),
     hidden_size=8,
@@ -56,65 +49,73 @@ config = DeepseekV4Config(
     # = compressor-only. Also covers the three dense/MoE + hash/learned-gate dispatch axes.
     num_hidden_layers=4,
     intermediate_size=32,
-    compress_ratios=[0, 0, 4, 128],
-    first_k_dense_replace=2,  # layers 0-1 dense, layers 2-3 MoE
-    num_hash_layers=3,  # layer 2 hash-routed (MoE), layer 3 learned-gate (MoE)
-    n_routed_experts=4,
-    num_experts_per_tok=2,
+    layer_types=[
+        "sliding_attention",
+        "sliding_attention",
+        "compressed_sparse_attention",
+        "heavily_compressed_attention",
+    ],
+    rope_parameters={
+        "main": {
+            "beta_fast": 32,
+            "beta_slow": 1,
+            "factor": 16,
+            "original_max_position_embeddings": 65536,
+            "type": "yarn",
+            "rope_theta": 10000,
+            "rope_type": "yarn",
+            "partial_rotary_factor": 0.125,
+        },
+        "compress": {
+            "beta_fast": 32,
+            "beta_slow": 1,
+            "factor": 16,
+            "original_max_position_embeddings": 65536,
+            "type": "yarn",
+            "rope_theta": 160000,
+            "rope_type": "yarn",
+            "partial_rotary_factor": 0.125,
+        },
+    },
     topk_method="noaux_tc",
-    rope_parameters=_yarn_rope,
-    compress_rope_parameters=_yarn_rope,
+    quantization_config={
+        "activation_scheme": "dynamic",
+        "fmt": "e4m3",
+        "quant_method": "fp8",
+        "scale_fmt": "ue8m0",
+        "weight_block_size": [128, 128],
+    },
 )
 model = DeepseekV4ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
-
-# Hyper-connection params (hc_head/attn_hc/ffn_hc base/fn/scale), attention sinks, and compressor
-# absolute-positional-embedding parameters are kept in fp32 in the reference. Restore them after
-# the global bf16 cast.
-def _should_be_fp32(name):
-    return name.endswith(".sinks") or name.endswith(".ape") or name.endswith(".mlp.gate.bias")
-
-
-for name, param in model.named_parameters():
-    if _should_be_fp32(name):
-        param.data = param.data.float()
-# Covers buffers (e.g. mlp.gate.bias — DeepSeek's non-learnable routing-balance correction,
-# registered as a buffer upstream, not a parameter).
-for name, buf in model.named_buffers():
-    if _should_be_fp32(name):
-        buf.data = buf.data.float()
-for module in model.modules():
-    if isinstance(module, (DeepseekV4HyperConnection, DeepseekV4HyperHead)):
-        for p in module.parameters(recurse=False):
-            p.data = p.data.float()
-
 smoke_test(model, tokenizer)
 
-# Reference checkpoint is FP8-quantized on attention projections and shared/routed experts. The
-# upstream serialization labels those tensors with safetensors `dtype=I8` (the bytes are FP8 E4M3,
-# but the metadata field is int8); the runtime quantizer reinterprets them via
-# `quantization_config.fmt=e4m3`. To match that on-disk label we cast to torch.int8 here — the saved
-# tiny is byte-equivalent FP8 but reports the same I8 dtype as the reference. Done after smoke_test
-# because the cast severs the nn.Linear forward path; this tiny is a storage artefact, not runnable.
-_FP8_WEIGHT_SUFFIXES = (
-    ".self_attn.wq_a.weight",
-    ".self_attn.wq_b.weight",
-    ".self_attn.wkv.weight",
-    ".self_attn.wo_a.weight",
-    ".self_attn.wo_b.weight",
-    ".self_attn.compressor.indexer.wq_b.weight",
-    ".mlp.shared_experts.gate_proj.weight",
-    ".mlp.shared_experts.up_proj.weight",
-    ".mlp.shared_experts.down_proj.weight",
-    ".mlp.experts.gate_up_proj",
-    ".mlp.experts.down_proj",
-)
-for name, param in model.named_parameters():
-    if name.endswith(_FP8_WEIGHT_SUFFIXES):
-        # int8 isn't a float/complex dtype, so PyTorch won't let us reassign `.data` on a
-        # gradient-requiring parameter. Drop the grad requirement, then swap the storage.
-        param.requires_grad_(False)
-        param.data = param.data.to(torch.int8)
+# Reference checkpoint is FP8-quantized: every Linear (except lm_head) and the MoE Experts module
+# carry a `*_scale_inv` companion holding per-block (128x128) dequantization scales. Our tiny stays
+# bf16 for usability, but we register the same scale_inv parameters so the on-disk checkpoint shape
+# matches the reference and re-loading produces no MISSING entries. Done after smoke_test because
+# attaching parameters has no effect on forward (FP8 paths only trigger when the weight itself is fp8).
+_FP8_BLOCK = (128, 128)
+
+
+def _cdiv(a, b):
+    return (a + b - 1) // b
+
+
+for name, module in model.named_modules():
+    if isinstance(module, nn.Linear) and not name.endswith("lm_head"):
+        out_f, in_f = module.out_features, module.in_features
+        scale = torch.ones(_cdiv(out_f, _FP8_BLOCK[0]), _cdiv(in_f, _FP8_BLOCK[1]), dtype=torch.float32)
+        module.register_parameter("weight_scale_inv", nn.Parameter(scale, requires_grad=False))
+    elif isinstance(module, DeepseekV4Experts):
+        n_experts, gu_out, gu_in = module.gate_up_proj.shape
+        _, d_out, d_in = module.down_proj.shape
+        gu_scale = torch.ones(
+            n_experts, _cdiv(gu_out, _FP8_BLOCK[0]), _cdiv(gu_in, _FP8_BLOCK[1]), dtype=torch.float32
+        )
+        d_scale = torch.ones(n_experts, _cdiv(d_out, _FP8_BLOCK[0]), _cdiv(d_in, _FP8_BLOCK[1]), dtype=torch.float32)
+        module.register_parameter("gate_up_proj_scale_inv", nn.Parameter(gu_scale, requires_grad=False))
+        module.register_parameter("down_proj_scale_inv", nn.Parameter(d_scale, requires_grad=False))
 
 check_dtype_pattern(MODEL_ID, model, revision=REVISION)
 print_config_diff(MODEL_ID, model, revision=REVISION)

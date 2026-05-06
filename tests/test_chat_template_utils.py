@@ -190,8 +190,8 @@ class TestSupportsToolCalling:
                 "trl-internal-testing/tiny-DeepseekV4ForCausalLM",
                 id="deepseekv4",
                 marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.7.0.dev0"),
-                    reason="DeepseekV4 models were introduced in transformers-5.7.0",
+                    Version(transformers.__version__) < Version("5.8.0"),
+                    reason="DeepSeek-V4 models were introduced in transformers-5.7.0",
                 ),
             ),
             pytest.param(
