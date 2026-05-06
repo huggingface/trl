@@ -130,20 +130,31 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -e .
 
-# 3. Patched transformers (EP, sonicmoe, DS-Z2+EP, FSDP+EP+DTensor — all the
-#    PRs in §transformers, applied locally on top of 5.6.0.dev0)
+# 3. Patched transformers — the rebased fork carrying everything in §transformers
+#    that is not yet upstream (EP+FSDP DTensor wrap, DS-Z2+EP trainer hooks,
+#    `_configure_distributed_model` monkey-patch for stock DS, sonicmoe wrapper).
 git clone --branch ds-ep-integration https://github.com/AmineDiro/transformers.git ../transformers
-pip install -e ../transformers
+pip install -e ../transformers --no-deps
 
-# 4. Patched accelerate (`_prepare_tp has_ep` skip + the EP-aware
-#    `prepare_data_loader` divisor — see §accelerate for both)
+# 4. Patched accelerate — `_prepare_tp` skip when `model._device_mesh` is set
+#    by transformers' EP path (see §accelerate).
 git clone --branch ep-fixes https://github.com/AmineDiro/accelerate.git ../accelerate
-pip install -e ../accelerate
+pip install -e ../accelerate --no-deps
 
-# 5. Submit the 32k 2-node champion (DS-Z2 + EP=8 + FA3 + sonicmoe + Liger,
-#    65 % window MFU, healthy loss). Each row in the YAML corresponds to one
-#    cell in the headline table — pick a different --run-index for the
-#    others.
+# 5. Runtime extras the kernel + logging stack expects but TRL's pyproject
+#    does not pin. Versions matched against the validated benchmark venv.
+pip install torch==2.10.0 deepspeed==0.18.9 liger-kernel==0.7.0 \
+            kernels==0.13.0 trackio==0.23.0 \
+            nvidia-cutlass-dsl==4.4.2 apache-tvm-ffi==0.1.9
+
+# 6. The benchmark templates expect a `venv` at /fsx/amine_dirhoussi/trl/.venv.
+#    For an out-of-tree clone, edit benchmark/templates/launch.sh.j2 to point
+#    at your venv (or pass it via run_benchmark.py if you patch the template
+#    rendering to thread `venv_path` through).
+
+# 7. Submit the 32k 2-node champion (DS-Z2 + EP=8 + FA3 + sonicmoe + Liger,
+#    65 % window MFU). Each row in the YAML corresponds to one cell in the
+#    headline table — pick a different --run-index for the others.
 python benchmark/run_benchmark.py \
     --config benchmark/configs/qwen3_30b_a3b.yaml \
     --submit \
@@ -152,6 +163,15 @@ python benchmark/run_benchmark.py \
 
 Logs land in `benchmark/logs/`. Result collection and peak-memory queries
 go through `benchmark/collect_results.py` and `benchmark/fetch_peak_gpu_mem.py`.
+
+> **Repro verified 2026-05-06** — fresh `/fsx/amine_dirhoussi/benchmark_repo`
+> install of the three forks above ran 32k 2n DS-Z2 + EP=8 + sonicmoe + Liger
+> end-to-end (slurm 22112529, 5/5 steps, mfu_window peak **66.65 %** matching
+> the headline 65 %). Convergence is the documented NaN-at-large-EP issue —
+> step-1 grad_norm is finite, step-2+ losses are NaN-masked-as-zero. The
+> infrastructure path (clone → install → run_benchmark.py → sbatch → first
+> training step) works as documented; the numerical stability work tracked
+> under "Loss-zero / NaN at large EP + long-ctx" is the open follow-up.
 
 > The `AmineDiro/transformers#ds-ep-integration` and
 > `AmineDiro/accelerate#ep-fixes` branches will be force-pushed as fixes
@@ -169,3 +189,4 @@ go through `benchmark/collect_results.py` and `benchmark/fetch_peak_gpu_mem.py`.
 
 - **2026-05-06** — Issue opened. Headline numbers as of `benchmark-sft-moe@ee2876cc`.
 - **2026-05-06** — Ported the DeepSpeed `engine.py` external-MoE detection to a transformers-side monkey-patch on `DeepSpeedEngine._configure_distributed_model`. No DS fork required. Validated on 16k 2n DS-Z2 + EP=8 + sonicmoe + Liger (job 22112383, COMPLETED 3:43, 5/5 steps healthy).
+- **2026-05-06** — Repro flow verified end-to-end from a fresh `/fsx/amine_dirhoussi/benchmark_repo` install of `AmineDiro/transformers#ds-ep-integration` + `AmineDiro/accelerate#ep-fixes` + stock DS. 32k 2n run (slurm 22112529) reached mfu_window peak 66.65 % (matches headline 65 %). Numerical stability is the open NaN-at-large-EP follow-up.
