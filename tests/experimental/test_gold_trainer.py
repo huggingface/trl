@@ -977,3 +977,455 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
 
     expected = config.uld_hybrid_unmatched_weight * loss_fn.last_unmatched_loss
     torch.testing.assert_close(loss, expected, atol=1e-6, rtol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Tests for the seq_kd path in GOLDTrainer (_fill_buffer / _generate_seq_kd_for_slices)
+# ---------------------------------------------------------------------------
+
+import random as _random  # noqa: E402
+
+from trl.experimental.gold import GOLDConfig  # noqa: E402
+
+
+_TINY_MODEL_ID = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+
+
+def _build_seq_kd_trainer(
+    tmp_dir,
+    *,
+    seq_kd,
+    lmbda,
+    max_steps,
+    gradient_accumulation_steps=1,
+    per_device_train_batch_size=1,
+    use_uld_loss=False,
+    teacher_tokenizer_name_or_path=None,
+):
+    """Build a small GOLDTrainer for seq_kd tests using the tiny Qwen model on CPU."""
+    from datasets import load_dataset
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from trl.experimental.gold import GOLDTrainer
+
+    tokenizer = AutoTokenizer.from_pretrained(_TINY_MODEL_ID)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    student = AutoModelForCausalLM.from_pretrained(_TINY_MODEL_ID, dtype="float32")
+    teacher = AutoModelForCausalLM.from_pretrained(_TINY_MODEL_ID, dtype="float32")
+
+    args = GOLDConfig(
+        output_dir=tmp_dir,
+        report_to="none",
+        max_steps=max_steps,
+        per_device_train_batch_size=per_device_train_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        max_completion_length=8,
+        max_length=64,
+        seq_kd=seq_kd,
+        lmbda=lmbda,
+        beta=0.5,
+        temperature=0.9,
+        top_p=1.0,
+        top_k=0,
+        num_generations=1,
+        use_vllm=False,
+        use_uld_loss=use_uld_loss,
+        teacher_tokenizer_name_or_path=teacher_tokenizer_name_or_path,
+        log_completions=False,
+        dataloader_drop_last=True,
+        save_strategy="no",
+        eval_strategy="no",
+        logging_strategy="no",
+        learning_rate=1e-7,
+    )
+
+    dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+    trainer = GOLDTrainer(
+        model=student,
+        teacher_model=teacher,
+        args=args,
+        train_dataset=dataset,
+        processing_class=tokenizer,
+    )
+    return trainer
+
+
+def _spy_generate(trainer):
+    """Wrap teacher_model.generate and model.generate to count calls. Returns a counter dict."""
+    counts = {"teacher": 0, "student": 0}
+
+    original_teacher_gen = trainer.teacher_model.generate
+    original_student_gen = trainer.model.generate
+
+    def counted_teacher_gen(*args, **kwargs):
+        counts["teacher"] += 1
+        return original_teacher_gen(*args, **kwargs)
+
+    def counted_student_gen(*args, **kwargs):
+        counts["student"] += 1
+        return original_student_gen(*args, **kwargs)
+
+    trainer.teacher_model.generate = counted_teacher_gen
+    trainer.model.generate = counted_student_gen
+    return counts
+
+
+@pytest.mark.slow
+def test_seq_kd_uses_teacher_generation_when_lmbda_is_zero(tmp_path):
+    _random.seed(0)
+    torch.manual_seed(0)
+    trainer = _build_seq_kd_trainer(
+        str(tmp_path),
+        seq_kd=True,
+        lmbda=0.0,
+        max_steps=2,
+    )
+    counts = _spy_generate(trainer)
+
+    trainer.train()
+
+    assert counts["teacher"] >= 1, f"Expected teacher.generate >=1, got {counts['teacher']}"
+    assert counts["student"] == 0, f"Expected student.generate ==0, got {counts['student']}"
+    assert trainer.state.log_history[-1]["train_loss"] is not None
+
+
+@pytest.mark.slow
+def test_seq_kd_skips_teacher_generation_when_lmbda_is_one(tmp_path):
+    _random.seed(0)
+    torch.manual_seed(0)
+    trainer = _build_seq_kd_trainer(
+        str(tmp_path),
+        seq_kd=True,
+        lmbda=1.0,
+        max_steps=2,
+    )
+    counts = _spy_generate(trainer)
+
+    trainer.train()
+
+    assert counts["teacher"] == 0, f"Expected teacher.generate ==0, got {counts['teacher']}"
+    assert counts["student"] >= 1, f"Expected student.generate >=1, got {counts['student']}"
+    assert trainer.state.log_history[-1]["train_loss"] is not None
+
+
+@pytest.mark.slow
+def test_seq_kd_mutually_exclusive_per_slice(tmp_path, monkeypatch):
+    """For each slice, EITHER teacher generated OR student did, never both, never neither (with seq_kd=True)."""
+    grad_accum = 4
+    _random.seed(0)
+    torch.manual_seed(0)
+
+    trainer = _build_seq_kd_trainer(
+        str(tmp_path),
+        seq_kd=True,
+        lmbda=0.5,
+        max_steps=1,  # exactly 1 optimizer step => 1 buffer fill
+        gradient_accumulation_steps=grad_accum,
+    )
+
+    # Deterministically force a mixed [True, False, True, False] flag pattern across the 4 slices
+    # by patching the `random.random` used inside _fill_buffer. With lmbda=0.5:
+    #   random()=0.0 -> 0.0 <= 0.5 -> True  (on-policy)
+    #   random()=1.0 -> 1.0 <= 0.5 -> False (seq_kd)
+    forced_values = iter([0.0, 1.0, 0.0, 1.0])
+
+    def fake_random():
+        return next(forced_values)
+
+    monkeypatch.setattr(gold_trainer_module.random, "random", fake_random)
+
+    # Capture per-slice generation routing during the single buffer fill.
+    routing = {"on_policy_indices": [], "seq_kd_indices": []}
+
+    original_on_policy = trainer._generate_on_policy_for_slices
+    original_seq_kd = trainer._generate_seq_kd_for_slices
+
+    def spy_on_policy(slices, on_policy_indices):
+        routing["on_policy_indices"].extend(on_policy_indices)
+        return original_on_policy(slices, on_policy_indices)
+
+    def spy_seq_kd(slices, seq_kd_indices):
+        routing["seq_kd_indices"].extend(seq_kd_indices)
+        return original_seq_kd(slices, seq_kd_indices)
+
+    trainer._generate_on_policy_for_slices = spy_on_policy
+    trainer._generate_seq_kd_for_slices = spy_seq_kd
+
+    trainer.train()
+
+    on_policy_indices = routing["on_policy_indices"]
+    seq_kd_indices = routing["seq_kd_indices"]
+    flags = list(trainer._buffered_on_policy)
+
+    # Patched RNG produces exactly this routing.
+    assert flags == [True, False, True, False], f"Expected forced routing [True, False, True, False], got {flags}"
+
+    # Mutual exclusion: a slice cannot be in both lists.
+    overlap = set(on_policy_indices) & set(seq_kd_indices)
+    assert not overlap, f"Slice indices appear in both routes: {overlap}"
+
+    # With seq_kd=True every slice is either on-policy or seq_kd-generated.
+    covered = set(on_policy_indices) | set(seq_kd_indices)
+    assert covered == set(range(grad_accum)), (
+        f"Slices {set(range(grad_accum)) - covered} were neither on-policy nor seq_kd"
+    )
+
+    # Routing matches the buffered on_policy flags.
+    for i, flag in enumerate(flags):
+        if flag:
+            assert i in on_policy_indices and i not in seq_kd_indices
+        else:
+            assert i in seq_kd_indices and i not in on_policy_indices
+
+    # We exercised both routes in this test (mixed flags).
+    assert any(flags) and not all(flags)
+
+
+@pytest.mark.slow
+def test_seq_kd_disabled_uses_dataset_off_policy(tmp_path):
+    _random.seed(0)
+    torch.manual_seed(0)
+    trainer = _build_seq_kd_trainer(
+        str(tmp_path),
+        seq_kd=False,
+        lmbda=0.0,
+        max_steps=2,
+    )
+    counts = _spy_generate(trainer)
+
+    trainer.train()
+
+    assert counts["teacher"] == 0, f"Expected teacher.generate ==0, got {counts['teacher']}"
+    assert counts["student"] == 0, f"Expected student.generate ==0, got {counts['student']}"
+    assert trainer.state.log_history[-1]["train_loss"] is not None
+
+
+@pytest.mark.slow
+def test_seq_kd_disabled_with_lmbda_one_unchanged(tmp_path):
+    _random.seed(0)
+    torch.manual_seed(0)
+    trainer = _build_seq_kd_trainer(
+        str(tmp_path),
+        seq_kd=False,
+        lmbda=1.0,
+        max_steps=2,
+    )
+    counts = _spy_generate(trainer)
+
+    trainer.train()
+
+    assert counts["teacher"] == 0, f"Expected teacher.generate ==0, got {counts['teacher']}"
+    assert counts["student"] >= 1, f"Expected student.generate >=1, got {counts['student']}"
+    assert trainer.state.log_history[-1]["train_loss"] is not None
+
+
+@pytest.mark.slow
+def test_seq_kd_batches_teacher_generation_across_slices(tmp_path):
+    _random.seed(0)
+    torch.manual_seed(0)
+    grad_accum = 4
+    trainer = _build_seq_kd_trainer(
+        str(tmp_path),
+        seq_kd=True,
+        lmbda=0.0,
+        max_steps=1,  # exactly 1 optimizer step => 1 buffer fill
+        gradient_accumulation_steps=grad_accum,
+    )
+    counts = _spy_generate(trainer)
+
+    trainer.train()
+
+    assert counts["teacher"] == 1, (
+        f"Expected exactly 1 teacher.generate call (batched across {grad_accum} slices), got {counts['teacher']}"
+    )
+    assert counts["student"] == 0
+
+
+@pytest.mark.slow
+def test_seq_kd_replaces_dataset_input_ids(tmp_path):
+    """seq_kd should replace dataset input_ids with teacher-generated sequences in _buffered_inputs."""
+    _random.seed(0)
+    torch.manual_seed(0)
+    trainer = _build_seq_kd_trainer(
+        str(tmp_path),
+        seq_kd=True,
+        lmbda=0.0,
+        max_steps=1,
+    )
+
+    # Capture dataset slices BEFORE _fill_buffer mutates them, then capture buffered slices AFTER.
+    captured = {"original_input_ids": None, "original_labels": None}
+
+    original_fill = trainer._fill_buffer
+
+    def spy_fill_buffer(generation_batch, buffer_steps):
+        # Save a copy of the original (dataset) slice input_ids and labels before generation runs.
+        from trl.experimental.gold.gold_trainer import split_tensor_dict
+
+        slices = split_tensor_dict(generation_batch, buffer_steps)
+        captured["original_input_ids"] = [s["input_ids"].clone() for s in slices]
+        captured["original_labels"] = [s["labels"].clone() for s in slices]
+        return original_fill(generation_batch, buffer_steps)
+
+    trainer._fill_buffer = spy_fill_buffer
+
+    trainer.train()
+
+    assert captured["original_input_ids"] is not None, "_fill_buffer was not invoked"
+    assert trainer._buffered_inputs is not None and len(trainer._buffered_inputs) >= 1
+
+    # With seq_kd=True and lmbda=0.0, every slice should be teacher-generated and therefore differ
+    # from the dataset slice's input_ids (different shape OR different values).
+    for slice_idx, original_input_ids in enumerate(captured["original_input_ids"]):
+        buffered = trainer._buffered_inputs[slice_idx]
+        assert buffered is not None, f"Buffered slice {slice_idx} is None"
+        new_input_ids = buffered["input_ids"]
+
+        differs = new_input_ids.shape != original_input_ids.shape or not torch.equal(
+            new_input_ids.cpu(), original_input_ids.cpu()
+        )
+        assert differs, (
+            f"Slice {slice_idx}: buffered input_ids match the original dataset input_ids; "
+            f"teacher generation did not replace the dataset input"
+        )
+
+        # Stronger check: buffered labels must be populated at completion positions and the
+        # completion content must differ from the dataset's labels — proves the teacher
+        # generated meaningful new content, not just a longer/shorter version of the dataset row.
+        buffered_labels = buffered["labels"].cpu()
+        original_labels = captured["original_labels"][slice_idx].cpu()
+
+        assert (buffered_labels != -100).any(), (
+            f"Slice {slice_idx}: buffered labels are all -100; teacher completion was empty"
+        )
+
+        # Compare the (multiset of) non--100 label tokens between original and buffered. If they
+        # match exactly, the teacher reproduced the dataset's completion verbatim — we want them
+        # to differ (the teacher generated *something different*).
+        buffered_completion_tokens = sorted(buffered_labels[buffered_labels != -100].tolist())
+        original_completion_tokens = sorted(original_labels[original_labels != -100].tolist())
+        assert buffered_completion_tokens != original_completion_tokens, (
+            f"Slice {slice_idx}: buffered completion tokens are identical to dataset completion "
+            f"tokens; teacher did not generate distinct content"
+        )
+
+
+@pytest.mark.slow
+def test_seq_kd_cross_tokenizer_uld(tmp_path):
+    teacher_tok_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+    try:
+        from transformers import AutoTokenizer
+
+        AutoTokenizer.from_pretrained(teacher_tok_id)
+    except Exception as exc:
+        pytest.skip(f"Teacher tokenizer {teacher_tok_id} unavailable: {exc}")
+
+    _random.seed(0)
+    torch.manual_seed(0)
+    try:
+        trainer = _build_seq_kd_trainer(
+            str(tmp_path),
+            seq_kd=True,
+            lmbda=0.0,
+            max_steps=1,
+            use_uld_loss=True,
+            teacher_tokenizer_name_or_path=teacher_tok_id,
+        )
+    except Exception as exc:
+        pytest.skip(f"Could not construct cross-tokenizer trainer: {exc}")
+
+    counts = _spy_generate(trainer)
+
+    # Spy on teacher_tokenizer.batch_decode: with use_cross_tok=True, _generate_seq_kd_for_slices
+    # decodes the teacher's completion ids using the *teacher* tokenizer (then re-encodes with the
+    # student tokenizer). With same-tok, that branch is skipped entirely. Counting calls before
+    # training establishes a baseline; the seq_kd path must add at least one more call.
+    decode_counts = {"teacher": 0}
+    original_teacher_decode = trainer.teacher_tokenizer.batch_decode
+
+    def counted_teacher_decode(*args, **kwargs):
+        decode_counts["teacher"] += 1
+        return original_teacher_decode(*args, **kwargs)
+
+    trainer.teacher_tokenizer.batch_decode = counted_teacher_decode
+
+    baseline_decode_calls = decode_counts["teacher"]
+    trainer.train()
+
+    assert counts["teacher"] >= 1
+    assert counts["student"] == 0
+    assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    # The cross-tokenizer branch in _generate_seq_kd_for_slices must call
+    # teacher_tokenizer.batch_decode at least once. (compute_loss may call it again for ULD,
+    # so we assert >= baseline + 1 rather than an exact count.)
+    assert decode_counts["teacher"] > baseline_decode_calls, (
+        "teacher_tokenizer.batch_decode was never called; cross-tokenizer branch in "
+        "_generate_seq_kd_for_slices did not run"
+    )
+
+
+@pytest.mark.slow
+def test_seq_kd_batches_multiple_prompts_per_slice(tmp_path):
+    _random.seed(0)
+    torch.manual_seed(0)
+    grad_accum = 2
+    per_device_bs = 2
+    trainer = _build_seq_kd_trainer(
+        str(tmp_path),
+        seq_kd=True,
+        lmbda=0.0,
+        max_steps=1,
+        gradient_accumulation_steps=grad_accum,
+        per_device_train_batch_size=per_device_bs,
+    )
+    counts = _spy_generate(trainer)
+
+    # Capture the number of prompts in each dataset slice before generation runs, so we can verify
+    # the buffered output preserves the per-slice prompt count (no rows lost or duplicated when
+    # distributing the single batched generation back to slices).
+    captured = {"slice_prompt_counts": None}
+    original_fill = trainer._fill_buffer
+
+    def spy_fill_buffer(generation_batch, buffer_steps):
+        from trl.experimental.gold.gold_trainer import split_tensor_dict
+
+        slices = split_tensor_dict(generation_batch, buffer_steps)
+        captured["slice_prompt_counts"] = [s["prompts"].shape[0] for s in slices]
+        return original_fill(generation_batch, buffer_steps)
+
+    trainer._fill_buffer = spy_fill_buffer
+
+    trainer.train()
+
+    assert counts["teacher"] == 1, (
+        f"Expected exactly 1 teacher.generate call (batched across all slices), got {counts['teacher']}"
+    )
+    assert counts["student"] == 0, f"Expected student.generate ==0, got {counts['student']}"
+
+    slice_prompt_counts = captured["slice_prompt_counts"]
+    assert slice_prompt_counts is not None and len(slice_prompt_counts) == grad_accum
+    # Each slice must hold more than one prompt for this test to be meaningful.
+    assert all(c >= 2 for c in slice_prompt_counts), (
+        f"Each slice should hold >= 2 prompts to exercise the multi-prompt batching path; "
+        f"got per-slice counts {slice_prompt_counts}"
+    )
+
+    assert trainer._buffered_inputs is not None and len(trainer._buffered_inputs) == grad_accum
+    for slice_idx, expected_count in enumerate(slice_prompt_counts):
+        buffered = trainer._buffered_inputs[slice_idx]
+        assert buffered is not None, f"Buffered slice {slice_idx} is None"
+        # Buffered batch size must match the number of dataset prompts that were routed to this slice.
+        assert buffered["input_ids"].shape[0] == expected_count, (
+            f"Slice {slice_idx} buffered batch size {buffered['input_ids'].shape[0]} does not match "
+            f"the original dataset slice prompt count {expected_count}; the single batched "
+            f"generation was not distributed back to slices correctly"
+        )
+        # Each row in this slice must have a non-empty completion (labels not all -100).
+        labels = buffered["labels"].cpu()
+        for row_idx in range(labels.shape[0]):
+            assert (labels[row_idx] != -100).any(), (
+                f"Slice {slice_idx} row {row_idx}: all labels are -100; teacher completion missing"
+            )
