@@ -709,6 +709,8 @@ class DPOTrainer(_BaseTrainer):
                     "Liger DPO loss does not support precomputing reference log probabilities. Either disable "
                     "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
                 )
+            if is_peft_model(model):
+                raise NotImplementedError("Liger DPO loss is not implemented for PEFT models.")
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
