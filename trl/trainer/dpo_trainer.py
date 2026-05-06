@@ -1098,16 +1098,13 @@ class DPOTrainer(_BaseTrainer):
         weight = lm_head.weight
         bias = lm_head.bias
 
-        if is_peft_model(model):
-            raise NotImplementedError("Liger DPO loss is not implemented for PEFT models.")
-        else:
-            with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-                ref_decoder = self.ref_model.get_decoder()
-                ref_outputs = ref_decoder(input_ids, attention_mask=attention_mask, use_cache=False)
-                ref_lm_head = self.ref_model.get_output_embeddings()
-                ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
-                ref_weight = ref_lm_head.weight
-                ref_bias = ref_lm_head.bias
+        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
+            ref_decoder = self.ref_model.get_decoder()
+            ref_outputs = ref_decoder(input_ids, attention_mask=attention_mask, use_cache=False)
+            ref_lm_head = self.ref_model.get_output_embeddings()
+            ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
+            ref_weight = ref_lm_head.weight
+            ref_bias = ref_lm_head.bias
 
         shift_completion_mask = completion_mask[:, 1:].contiguous()
         labels = input_ids[:, 1:].clone()
