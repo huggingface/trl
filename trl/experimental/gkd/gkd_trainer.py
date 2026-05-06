@@ -33,7 +33,7 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils import ModelOutput, is_liger_kernel_available, is_peft_available
 
 from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
@@ -356,7 +356,10 @@ class GKDTrainer(SFTTrainer):
             # Release hidden states after loss computation
             del student_hidden, teacher_hidden, true_labels
             empty_cache()
-            return (loss, student_outputs) if return_outputs else loss
+            if return_outputs:
+                return (loss, ModelOutput(logits=None, last_hidden_state=student_outputs.last_hidden_state))
+            else:
+                return loss
         else:
             # compute student output
             student_outputs = model(
