@@ -699,7 +699,7 @@ class KTOTrainer(_BaseTrainer):
                 reference_KL_logps = torch.cat(reference_KL_logps).float().numpy()
                 save_dict["reference_KL_logps"] = reference_KL_logps
             if self.accelerator.is_main_process:
-                np.savez(cache_file, **save_dict)
+                np.savez_compressed(cache_file, **save_dict)
             self.accelerator.wait_for_everyone()
 
         if self.calculate_KL:
