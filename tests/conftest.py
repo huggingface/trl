@@ -37,6 +37,7 @@ import torch
 
 MODEL_REVISIONS = {
     # Add model_id: revision mappings here to test PRs
+    "trl-internal-testing/tiny-Qwen3MoeForCausalLM": "refs/pr/1",
 }
 
 
@@ -46,7 +47,7 @@ def apply_model_revisions(monkeypatch):
     if not MODEL_REVISIONS:
         return
 
-    from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
+    from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
 
     def create_classmethod_wrapper(original_classmethod):
         # Extract the underlying function from the classmethod
@@ -65,11 +66,7 @@ def apply_model_revisions(monkeypatch):
         return classmethod(wrapper)
 
     # Patch all transformers Auto* classes
-    for cls in [
-        PreTrainedModel,
-        PreTrainedTokenizerBase,
-        ProcessorMixin,
-    ]:
+    for cls in [AutoConfig, AutoModelForCausalLM, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin]:
         monkeypatch.setattr(cls, "from_pretrained", create_classmethod_wrapper(cls.from_pretrained))
 
 
