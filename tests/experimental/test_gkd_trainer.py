@@ -280,6 +280,48 @@ class TestGKDTrainer(TrlTestCase):
         assert trainer.generation_config.temperature == training_args.temperature
         assert trainer.generation_config.top_k == 0
 
+    def test_seq_kd_does_not_waste_teacher_generation_when_lmbda_is_one(self):
+        """
+        With `seq_kd=True` and `lmbda=1.0`, the student-generation branch fires every step, so the teacher
+        generation must never run (otherwise it would be silently overwritten by the student output).
+        """
+        training_args = GKDConfig(
+            output_dir=self.tmp_dir,
+            dataloader_drop_last=True,
+            max_steps=2,
+            per_device_train_batch_size=2,
+            report_to="none",
+            seq_kd=True,
+            lmbda=1.0,
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        trainer = GKDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        teacher_calls = 0
+        student_calls = 0
+        original = trainer.generate_on_policy_outputs
+
+        def counting_generate(unwrapped_model, *args, **kwargs):
+            nonlocal teacher_calls, student_calls
+            if unwrapped_model is trainer.teacher_model:
+                teacher_calls += 1
+            else:
+                student_calls += 1
+            return original(unwrapped_model, *args, **kwargs)
+
+        trainer.generate_on_policy_outputs = counting_generate
+        trainer.train()
+
+        assert teacher_calls == 0, "teacher generation must not run when student branch fires (lmbda=1.0)"
+        assert student_calls > 0, "student generation should run on every step at lmbda=1.0"
+
     @require_liger_kernel
     def test_compute_loss_return_outputs_with_liger(self):
         """Test that return_outputs=True works correctly with Liger kernel path."""

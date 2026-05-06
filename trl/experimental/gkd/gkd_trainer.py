@@ -426,12 +426,13 @@ class GKDTrainer(SFTTrainer):
 
         This method implements the on-policy learning approach described in the GKD paper. With probability
         `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
-        the original inputs.
+        the original inputs. Otherwise, when `self.seq_kd` is enabled, it falls back to teacher-generated sequences
+        (sequence-level KD); without `seq_kd`, the original dataset inputs are kept.
         """
-        if self.seq_kd:
+        if random.random() <= self.lmbda:
             with (
                 unwrap_model_for_generation(
-                    self.teacher_model,
+                    model,
                     self.accelerator,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                 ) as unwrapped_model
@@ -442,10 +443,10 @@ class GKDTrainer(SFTTrainer):
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
-        if random.random() <= self.lmbda:
+        elif self.seq_kd:
             with (
                 unwrap_model_for_generation(
-                    model,
+                    self.teacher_model,
                     self.accelerator,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                 ) as unwrapped_model
