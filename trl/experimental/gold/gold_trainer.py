@@ -1314,6 +1314,8 @@ class GOLDTrainer(SFTTrainer):
             # would silently drop EOS (skip_special_tokens=True) and shift tokens at BPE boundaries,
             # so the student would train on a sequence that differs from what the teacher emitted.
             teacher_pad_id = teacher_gen_config.pad_token_id
+            if teacher_pad_id is None:
+                teacher_pad_id = self.processing_class.eos_token_id
             student_completion_ids: list[list[int]] = []
             for row in teacher_completion_ids:
                 ids = row.tolist()

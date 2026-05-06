@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import random as _random
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +20,7 @@ import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
+from trl.experimental.gold import GOLDConfig
 from trl.experimental.gold import gold_trainer as gold_trainer_module
 from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, build_teacher_inputs_from_texts
 from trl.experimental.utils import DataCollatorForChatML
@@ -983,10 +985,6 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
 # Tests for the seq_kd path in GOLDTrainer (_fill_buffer / _generate_seq_kd_for_slices)
 # ---------------------------------------------------------------------------
 
-import random as _random  # noqa: E402
-
-from trl.experimental.gold import GOLDConfig  # noqa: E402
-
 
 _TINY_MODEL_ID = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
@@ -1003,10 +1001,7 @@ def _build_seq_kd_trainer(
     teacher_tokenizer_name_or_path=None,
 ):
     """Build a small GOLDTrainer for seq_kd tests using the tiny Qwen model on CPU."""
-    from datasets import load_dataset
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    from trl.experimental.gold import GOLDTrainer
+    from transformers import AutoModelForCausalLM
 
     tokenizer = AutoTokenizer.from_pretrained(_TINY_MODEL_ID)
     if tokenizer.pad_token is None:
