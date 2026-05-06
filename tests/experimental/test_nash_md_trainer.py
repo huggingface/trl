@@ -97,7 +97,7 @@ class TestNashMDTrainer(TrlTestCase):
             learning_rate=9e-1,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
         trainer = NashMDTrainer(
             model=self.model,
@@ -105,16 +105,15 @@ class TestNashMDTrainer(TrlTestCase):
             reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dataset,
         )
 
         trainer.train()
 
-        # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
-    def test_training_with_peft(self):
+    def test_train_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         training_args = NashMDConfig(
             output_dir=self.tmp_dir,
@@ -123,24 +122,23 @@ class TestNashMDTrainer(TrlTestCase):
             learning_rate=5.0e-7,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = NashMDTrainer(
             model=self.model,
             reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dataset,
             peft_config=lora_config,
         )
 
         trainer.train()
 
-        # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
-    def test_training_with_peft_and_ref_model(self):
+    def test_train_with_peft_and_ref_model(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         training_args = NashMDConfig(
             output_dir=self.tmp_dir,
@@ -149,7 +147,7 @@ class TestNashMDTrainer(TrlTestCase):
             learning_rate=5.0e-7,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = NashMDTrainer(
             model=self.model,
@@ -157,17 +155,16 @@ class TestNashMDTrainer(TrlTestCase):
             reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dataset,
             peft_config=lora_config,
         )
 
         trainer.train()
 
-        # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
-    def test_training_pre_pefted_model_implicit_ref_with_reward_model(self):
+    def test_train_pre_pefted_model_implicit_ref_with_reward_model(self):
         lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
         # self.model from setUp is a base AutoModelForCausalLM
         peft_model_instance = get_peft_model(self.model, lora_config)
@@ -181,7 +178,7 @@ class TestNashMDTrainer(TrlTestCase):
             report_to="none",
             remove_unused_columns=False,  # Important for the dummy dataset
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")["train"]
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         trainer = NashMDTrainer(
             model=peft_model_instance,  # Pass the already PEFT model
@@ -189,7 +186,7 @@ class TestNashMDTrainer(TrlTestCase):
             reward_funcs=self.reward_model,  # To trigger GeometricMixtureWrapper path
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             # peft_config is not passed, as model is already PEFT
         )
 

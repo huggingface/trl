@@ -33,7 +33,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import Accelerator, PartialState, logging
-from accelerate.utils import tqdm
+from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset
 from packaging.version import Version
 from torch import autocast
@@ -65,7 +65,7 @@ from .bco_config import BCOConfig
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
 
 if is_wandb_available():
     import wandb
@@ -484,7 +484,7 @@ class BCOTrainer(_BaseTrainer):
                     f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
                     f"got {type(peft_config).__name__}."
                 )
-            if isinstance(model, PeftModel):
+            if is_peft_model(model):
                 raise ValueError(
                     "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
                     "merge and unload the existing adapter, save the resulting base model, and then pass that base "
@@ -549,13 +549,12 @@ class BCOTrainer(_BaseTrainer):
         else:
             self.is_encoder_decoder = args.is_encoder_decoder
 
-        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = model_adapter_name
         self.ref_adapter_name = ref_adapter_name
 
         if ref_model:
             self.ref_model = ref_model
-        elif self.is_peft_model or args.precompute_ref_log_probs:
+        elif is_peft_model(model) or args.precompute_ref_log_probs:
             # The `model` with adapters turned off will be used as the reference model
             self.ref_model = None
         else:
@@ -767,7 +766,7 @@ class BCOTrainer(_BaseTrainer):
                 )
 
         if self.ref_model is None:
-            if not (self.is_peft_model or self.precompute_ref_log_probs):
+            if not (is_peft_model(model) or self.precompute_ref_log_probs):
                 raise ValueError(
                     "No reference model and model is not a Peft model. Try setting `precompute_ref_log_probs=True`"
                 )
@@ -939,7 +938,7 @@ class BCOTrainer(_BaseTrainer):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
         with (
             self.accelerator.unwrap_model(self.model).disable_adapter()
-            if self.is_peft_model and not self.ref_adapter_name
+            if is_peft_model(self.model) and not self.ref_adapter_name
             else nullcontext()
         ):
             if self.ref_adapter_name:

@@ -18,7 +18,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import torch
 import torch.nn as nn
@@ -65,10 +65,6 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
-
-
-if TYPE_CHECKING:
-    from transformers import PreTrainedModel
 
 
 logger = logging.get_logger(__name__)
@@ -290,13 +286,16 @@ class KTOTrainer(_BaseTrainer):
                     f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
                     f"got {type(peft_config).__name__}."
                 )
-            if isinstance(model, PeftModel):
+            if is_peft_model(model):
                 raise ValueError(
                     "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
                     "and unload the existing adapter, save the resulting base model, and then pass that base model along "
                     "with the new `peft_config` to the trainer."
                 )
-        if is_peft_available() and isinstance(model, PeftModel) and ref_model is None:
+            # Create PEFT model
+            model = get_peft_model(model, peft_config)
+
+        elif is_peft_model(model) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during KTO training.
             model.add_adapter("ref", model.peft_config["default"])
@@ -306,13 +305,9 @@ class KTOTrainer(_BaseTrainer):
                     ref_param = model.get_parameter(ref_name)
                     ref_param.data.copy_(param.data)
 
-        # Create PEFT model
-        if peft_config is not None:
-            model = get_peft_model(model, peft_config)
-
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_available() and isinstance(model, PeftModel) and args.gradient_checkpointing:
+        if is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -325,28 +320,11 @@ class KTOTrainer(_BaseTrainer):
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
 
-        # KTO only supports causal language models, not encoder-decoder models
-        if model is not None and hasattr(model.config, "is_encoder_decoder") and model.config.is_encoder_decoder:
-            raise ValueError(
-                "KTO only supports causal language models. Encoder-decoder models are not supported. "
-                "Please use a causal LM (e.g., GPT, Llama, Mistral) instead of an encoder-decoder model (e.g., T5, BART)."
-            )
-
-        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
-
-        if args.max_length is None:
-            logger.warning(
-                "When using DataCollatorForUnpairedPreference, you should set `max_length` in the KTOTrainer's init"
-                " it will be set to `512` by default, but you should do it yourself in the future.",
-            )
-            max_length = 512
-        if args.max_length is not None:
-            max_length = args.max_length
-
+        # Data collator
         if data_collator is None:
             data_collator = DataCollatorForUnpairedPreference(
                 pad_token_id=self._tokenizer.pad_token_id,
-                max_length=max_length,
+                max_length=args.max_length,
             )
 
             if args.remove_unused_columns:
@@ -361,28 +339,19 @@ class KTOTrainer(_BaseTrainer):
         else:
             self.use_dpo_data_collator = False
 
-        self.loss_type = args.loss_type
-        self.max_length = max_length
-        self.precompute_ref_log_probs = args.precompute_ref_log_probs
-
-        # Not all losses require a KL calculation
-        self.calculate_KL = True
-        if self.loss_type in ["apo_zero_unpaired"]:
-            self.calculate_KL = False
-        if self.calculate_KL and args.per_device_train_batch_size <= 1:
-            raise ValueError(
-                "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
-            )
-
-        # metric
-        self._stored_metrics = defaultdict(lambda: defaultdict(list))
-
-        # KTO parameter
+        # Training arguments
         self.beta = args.beta
+        self.precompute_ref_log_probs = args.precompute_ref_log_probs
+        self.loss_type = args.loss_type
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        self.calculate_KL = False if self.loss_type in ["apo_zero_unpaired"] else True
+        if self.calculate_KL and args.per_device_train_batch_size <= 1:
+            raise ValueError(
+                "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
+            )
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
             logger.warning(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
@@ -445,6 +414,9 @@ class KTOTrainer(_BaseTrainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
+        # Initialize the metrics
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
@@ -478,7 +450,7 @@ class KTOTrainer(_BaseTrainer):
                     "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
                     "`precompute_ref_log_probs=False`."
                 )
-            if self.is_peft_model:
+            if is_peft_model(self.model):
                 raise ValueError(
                     "You cannot use `use_liger_kernel=True` with Peft models. Please set `use_liger_kernel=False`."
                 )
@@ -677,7 +649,7 @@ class KTOTrainer(_BaseTrainer):
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
-        if self.is_peft_model:
+        if is_peft_model(self.model):
             model = self.accelerator.unwrap_model(self.model)
             with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
                 yield
@@ -1167,7 +1139,7 @@ class KTOTrainer(_BaseTrainer):
 
     def store_metrics(self, metrics: dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
         for key, value in metrics.items():
-            self._stored_metrics[train_eval][key].append(value)
+            self._metrics[train_eval][key].append(value)
 
     def _get_train_sampler(self, dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
         if dataset is None:
@@ -1227,23 +1199,22 @@ class KTOTrainer(_BaseTrainer):
         prefix = "eval_" if train_eval == "eval" else ""
         # accumulate average metrics from sums and lengths
         for split in ["chosen", "rejected"]:
-            if f"count/{split}" in self._stored_metrics[train_eval]:
-                count_sum = torch.Tensor(self._stored_metrics[train_eval][f"count/{split}"]).sum().item()
+            if f"count/{split}" in self._metrics[train_eval]:
+                count_sum = torch.Tensor(self._metrics[train_eval][f"count/{split}"]).sum().item()
                 for metric in ["rewards", "logps", "logits"]:
                     logs[f"{prefix}{metric}/{split}"] = (
-                        torch.Tensor(self._stored_metrics[train_eval][f"{metric}/{split}_sum"]).sum().item()
-                        / count_sum
+                        torch.Tensor(self._metrics[train_eval][f"{metric}/{split}_sum"]).sum().item() / count_sum
                     )
                     # delete obsolete metric
-                    del self._stored_metrics[train_eval][f"{metric}/{split}_sum"]
-                del self._stored_metrics[train_eval][f"count/{split}"]
+                    del self._metrics[train_eval][f"{metric}/{split}_sum"]
+                del self._metrics[train_eval][f"count/{split}"]
         # calculate reward margin
         if f"{prefix}rewards/chosen" in logs and f"{prefix}rewards/rejected" in logs:
             logs[f"{prefix}rewards/margins"] = logs[f"{prefix}rewards/chosen"] - logs[f"{prefix}rewards/rejected"]
         # Add averaged stored metrics to logs
-        for key, metrics in self._stored_metrics[train_eval].items():
+        for key, metrics in self._metrics[train_eval].items():
             logs[f"{prefix}{key}"] = torch.Tensor(metrics).mean().item()
-        del self._stored_metrics[train_eval]
+        self._metrics[train_eval].clear()
         return super().log(logs, start_time)
 
     # Ensure the model card is saved along with the checkpoint
