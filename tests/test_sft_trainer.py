@@ -482,17 +482,13 @@ class TestSFTTrainer(TrlTestCase):
 
     @require_peft
     def test_train_chunked_nll_loss_peft(self):
-        # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="chunked_nll", report_to="none")
-
         trainer = SFTTrainer(
             model=model_id,
             args=training_args,
@@ -500,59 +496,19 @@ class TestSFTTrainer(TrlTestCase):
             peft_config=LoraConfig(),
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the peft params have changed and the base model params have not changed
+        # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
-            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
-
-    @require_peft
-    def test_train_chunked_nll_loss_peft(self):
-        # Get the base model parameter names
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
-        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
-
-        # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="chunked_nll", report_to="none")
-
-        trainer = SFTTrainer(
-            model=model_id,
-            args=training_args,
-            train_dataset=dataset,
-            peft_config=LoraConfig(),
-        )
-
-        # Save the initial parameters to compare them later
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        # Train the model
-        trainer.train()
-
-        # Check that the training loss is not None
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check the peft params have changed and the base model params have not changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
-            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize(
         "model_id",
@@ -596,10 +552,8 @@ class TestSFTTrainer(TrlTestCase):
     )
     @require_vision
     def test_train_chunked_nll_loss_vlm(self, model_id):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
 
-        # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             loss_type="chunked_nll",
@@ -608,16 +562,13 @@ class TestSFTTrainer(TrlTestCase):
         )
         trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             # Vision-tower params that are frozen by design across transformers versions; mirrors the skips in
