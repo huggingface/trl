@@ -453,45 +453,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "metrics",
             ]
 
-    def _prepare_context_parallel_inputs(self, model, inputs):
-        # Wrap super() so additional GRPO-specific per-token tensors (completion_mask, old_log_probs)
-        # also get sharded along seq dim 1 inside cp_context. Without this, the chunked LM head and
-        # loss code see partial-shard hidden_states alongside full-shape masks/logprobs and fail.
-        cp_context, inputs = super()._prepare_context_parallel_inputs(model, inputs)
-        pc = self.accelerator.parallelism_config
-        if pc is None or not pc.cp_enabled:
-            return cp_context, inputs
-        import functools
-        from torch.distributed.tensor.experimental import context_parallel
+    def _get_extra_cp_buffers(self, inputs):
+        # GRPO-specific per-token tensors that flow through the chunked LM head and loss alongside
+        # `hidden_states` and must be seq-sharded under CP, else shape-mismatch downstream.
         extra_buffers = []
-        extra_dims = []
+        extra_buffer_seq_dims = []
         for key in ("completion_mask", "old_log_probs"):
             t = inputs.get(key)
             if isinstance(t, torch.Tensor) and t.dim() >= 2:
                 extra_buffers.append(t)
-                extra_dims.append(1)
-        if not extra_buffers:
-            return cp_context, inputs
-        # Re-build cp_context with the merged buffers list. Re-derive base buffers/dims from inputs
-        # the same way transformers' _prepare_context_parallel_inputs does.
-        base_buffers = []
-        base_dims = []
-        for key in ("input_ids", "labels", "shift_labels", "attention_mask", "position_ids"):
-            t = inputs.get(key)
-            if isinstance(t, torch.Tensor) and t.dim() >= 2:
-                base_buffers.append(t)
-                base_dims.append(1)
-        merged_buffers = base_buffers + extra_buffers
-        merged_dims = base_dims + extra_dims
-        cp_mesh = self.accelerator.torch_device_mesh["cp"]
-        new_cp_context = functools.partial(
-            context_parallel,
-            mesh=cp_mesh,
-            buffers=merged_buffers,
-            buffer_seq_dims=merged_dims,
-            no_restore_buffers=set(merged_buffers),
-        )
-        return new_cp_context, inputs
+                extra_buffer_seq_dims.append(1)
+        return extra_buffers, extra_buffer_seq_dims
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         input_ids = inputs["input_ids"]
