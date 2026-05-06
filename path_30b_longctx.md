@@ -41,7 +41,7 @@ in the `benchmark-sft-moe` branch.
 - **TRL**: `benchmark-sft-moe` branch (this branch will land via the PRs in §TRL below)
 - **transformers**: 5.6.0.dev0 + the `qwen3-moe-ep-v2` series of fixes (see §transformers below)
 - **accelerate**: 1.13.0 + an in-place `_prepare_tp` `has_ep` skip (§accelerate)
-- **DeepSpeed**: stock + a runtime engine attribute patch (no DeepSpeed PR planned — workaround stays on TRL/transformers side)
+- **DeepSpeed**: stock — no fork, no in-venv patch. DS's MoE auto-detection is extended in `transformers/trainer.py` via a transparent monkey-patch on `DeepSpeedEngine._configure_distributed_model` (see §DeepSpeed).
 - **PyTorch**: 2.10.0+cu128
 - **Liger Kernel**: fused CrossEntropy + RMSNorm + RoPE (Triton). SwiGLU patch must be **disabled** under EP (`--liger_kernel_config '{"swiglu":false}'`) — see §Known issues / H1
 - **Flash Attention 3**: `kernels-community/vllm-flash-attn3`
@@ -89,11 +89,15 @@ first.
 
 ### DeepSpeed
 
-**No upstream PR planned.** The originally-planned 1-line `engine.py` MoE
-detection patch is being replaced by a post-`deepspeed.initialize` engine
-attribute patch that lives entirely in `transformers/trainer.py`. Avoids
-taking on a DS-side dependency. See D-works in `benchmark/upstream_todo.md`
-for the three options being evaluated.
+**No upstream PR planned.** The original `engine.py` MoE-detection patch
+(extends DS to recognize transformers' EP params tagged
+`allreduce=False` + `group_name`) is now applied as a transparent
+monkey-patch on `DeepSpeedEngine._configure_distributed_model`, installed
+from `Trainer.create_accelerator_and_postprocess` next to the existing
+`_create_expert_and_data_parallel(ep_size)` call. ~10 lines, runs once
+per process, idempotent. Stock DS works as-is — no fork, no in-place
+`engine.py` edit. Validated end-to-end at 16k 2n DS-Z2 + EP=8 + sonicmoe
++ Liger (job 22112383, 5/5 steps, finite loss, mfu_window 34 %).
 
 ## Known issues / open blockers
 
@@ -165,3 +169,4 @@ go through `benchmark/collect_results.py` and `benchmark/fetch_peak_gpu_mem.py`.
 ## Changelog
 
 - **2026-05-06** — Issue opened. Headline numbers as of `benchmark-sft-moe@ee2876cc`.
+- **2026-05-06** — Ported the DeepSpeed `engine.py` external-MoE detection to a transformers-side monkey-patch on `DeepSpeedEngine._configure_distributed_model`. No DS fork required. Validated on 16k 2n DS-Z2 + EP=8 + sonicmoe + Liger (job 22112383, COMPLETED 3:43, 5/5 steps healthy).
