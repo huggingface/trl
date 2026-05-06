@@ -124,6 +124,10 @@ class _EmptyIterableDataset(torch.utils.data.IterableDataset):
 class DataCollatorForRollout(DataCollatorMixin):
     pad_token_id: int
     return_tensors: str = "pt"
+    # When > 1, the seq dim is right-padded so its length is a multiple of `2 * cp_size`, as required
+    # by torch's context_parallel attention sharding (zigzag load-balancing splits each rank into two
+    # non-contiguous chunks, so the seq must be evenly divisible by `2 * cp_size`).
+    cp_size: int = 1
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         input_ids = [torch.tensor(example["input_ids"], dtype=torch.long) for example in examples]
@@ -136,6 +140,17 @@ class DataCollatorForRollout(DataCollatorMixin):
         attention_mask = pad(attention_mask, padding_value=0)
         completion_mask = pad(completion_mask, padding_value=0)
         old_log_probs = pad(old_log_probs, padding_value=0)
+
+        if self.cp_size > 1:
+            seq_len = input_ids.size(1)
+            block = 2 * self.cp_size  # zigzag load-balanced CP splits each rank into 2 chunks
+            target_len = ((seq_len + block - 1) // block) * block
+            extra = target_len - seq_len
+            if extra > 0:
+                input_ids = torch.nn.functional.pad(input_ids, (0, extra), value=self.pad_token_id)
+                attention_mask = torch.nn.functional.pad(attention_mask, (0, extra), value=0)
+                completion_mask = torch.nn.functional.pad(completion_mask, (0, extra), value=0)
+                old_log_probs = torch.nn.functional.pad(old_log_probs, (0, extra), value=0)
 
         # Total valid completion tokens across all samples in the full batch.
         # Repeated per sample so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
@@ -405,11 +420,16 @@ class AsyncGRPOTrainer(_BaseTrainer):
         else:
             dataset = _EmptyIterableDataset()
 
+        pc = self.accelerator.parallelism_config
+        cp_size = pc.cp_size if pc is not None and pc.cp_enabled else 1
+        # Under CP, all CP ranks within a CP group consume the same batch (replicated, then seq-sharded).
+        # The global batch is per_device * dp_size, where dp_size = num_processes // cp_size.
+        dp_size = self.accelerator.num_processes // cp_size
         return self.accelerator.prepare(
             DataLoader(
                 dataset,
-                batch_size=self.args.per_device_train_batch_size * self.accelerator.num_processes,
-                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id),
+                batch_size=self.args.per_device_train_batch_size * dp_size,
+                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id, cp_size=cp_size),
                 num_workers=0,
                 # NOTE(@aminediro):
                 # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
@@ -433,6 +453,46 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "metrics",
             ]
 
+    def _prepare_context_parallel_inputs(self, model, inputs):
+        # Wrap super() so additional GRPO-specific per-token tensors (completion_mask, old_log_probs)
+        # also get sharded along seq dim 1 inside cp_context. Without this, the chunked LM head and
+        # loss code see partial-shard hidden_states alongside full-shape masks/logprobs and fail.
+        cp_context, inputs = super()._prepare_context_parallel_inputs(model, inputs)
+        pc = self.accelerator.parallelism_config
+        if pc is None or not pc.cp_enabled:
+            return cp_context, inputs
+        import functools
+        from torch.distributed.tensor.experimental import context_parallel
+        extra_buffers = []
+        extra_dims = []
+        for key in ("completion_mask", "old_log_probs"):
+            t = inputs.get(key)
+            if isinstance(t, torch.Tensor) and t.dim() >= 2:
+                extra_buffers.append(t)
+                extra_dims.append(1)
+        if not extra_buffers:
+            return cp_context, inputs
+        # Re-build cp_context with the merged buffers list. Re-derive base buffers/dims from inputs
+        # the same way transformers' _prepare_context_parallel_inputs does.
+        base_buffers = []
+        base_dims = []
+        for key in ("input_ids", "labels", "shift_labels", "attention_mask", "position_ids"):
+            t = inputs.get(key)
+            if isinstance(t, torch.Tensor) and t.dim() >= 2:
+                base_buffers.append(t)
+                base_dims.append(1)
+        merged_buffers = base_buffers + extra_buffers
+        merged_dims = base_dims + extra_dims
+        cp_mesh = self.accelerator.torch_device_mesh["cp"]
+        new_cp_context = functools.partial(
+            context_parallel,
+            mesh=cp_mesh,
+            buffers=merged_buffers,
+            buffer_seq_dims=merged_dims,
+            no_restore_buffers=set(merged_buffers),
+        )
+        return new_cp_context, inputs
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
@@ -442,12 +502,20 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # The collator pads to the global batch max length (across all ranks). After DataLoaderDispatcher slices and
         # sends rows to each rank, the local slice is still padded to that global max. Truncate to the longest real
-        # sequence in this rank's slice so we don't run the forward pass over pure-padding columns.
-        local_max_len = attention_mask.sum(dim=1).max()
-        input_ids = input_ids[:, :local_max_len]
-        attention_mask = attention_mask[:, :local_max_len]
-        completion_mask = completion_mask[:, :local_max_len]
-        old_log_probs = old_log_probs[:, :local_max_len]
+        # sequence in this rank's slice so we don't run the forward pass over pure-padding columns. Skip under CP:
+        # attention_mask is seq-sharded so attention_mask.sum(dim=1).max() is partial and varies across CP ranks,
+        # which would cause CP ranks to truncate to different lengths and break the seq-dim sharding contract.
+        pc = self.accelerator.parallelism_config
+        cp_size = pc.cp_size if pc is not None and pc.cp_enabled else 1
+        if cp_size == 1:
+            local_max_len = attention_mask.sum(dim=1).max()
+            input_ids = input_ids[:, :local_max_len]
+            attention_mask = attention_mask[:, :local_max_len]
+            completion_mask = completion_mask[:, :local_max_len]
+            old_log_probs = old_log_probs[:, :local_max_len]
+        else:
+            # Under CP, attention_mask is seq-sharded; report the local seq dim length for metrics.
+            local_max_len = attention_mask.size(1)
 
         forward_start = time.time()
         outputs = model(
