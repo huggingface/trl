@@ -683,11 +683,14 @@ class KTOTrainer(_BaseTrainer):
             reference_KL_logps = []
             for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
                 reference_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
-                reference_logp = self.accelerator.gather_for_metrics(reference_logp)
-                reference_logps.append(reference_logp.cpu())
                 if self.calculate_KL:
-                    reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
+                    reference_logp, reference_KL_logp = self.accelerator.gather_for_metrics(
+                        (reference_logp, reference_KL_logp)
+                    )
                     reference_KL_logps.append(reference_KL_logp.cpu())
+                else:
+                    reference_logp = self.accelerator.gather_for_metrics(reference_logp)
+                reference_logps.append(reference_logp.cpu())
 
             # Save the reference log probabilities to cache. We need .float() because bf16 is not supported by numpy
             reference_logps = torch.cat(reference_logps).float().numpy()
