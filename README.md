@@ -119,7 +119,7 @@ from trl import DPOTrainer
 dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
 trainer = DPOTrainer(
-    model="Qwen3/Qwen-0.6B",
+    model="Qwen/Qwen3-0.6B",
     train_dataset=dataset,
 )
 trainer.train()
