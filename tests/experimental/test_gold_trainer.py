@@ -324,6 +324,44 @@ def test_process_completions_to_buffer_left_pads_prompt_ids():
     assert torch.equal(buffered_inputs["labels"], torch.tensor([[-100, -100, 31], [-100, -100, 41]]))
 
 
+def test_process_completions_to_buffer_handles_empty_completion():
+    class RecordingTokenizer:
+        pad_token_id = 0
+        pad_token = "<pad>"
+
+        def batch_decode(self, sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            del skip_special_tokens, clean_up_tokenization_spaces
+            return [" ".join(str(token) for token in sequence) for sequence in sequences]
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer.processing_class = RecordingTokenizer()
+    trainer.args = SimpleNamespace(max_length=None)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+
+    GOLDTrainer._process_completions_to_buffer(
+        trainer,
+        slices=[{"slice": "original"}],
+        on_policy_indices=[0],
+        local_slice_indices=[0, 0],
+        completion_ids=[[], [41]],  # first completion is empty
+        prompts_text_with_special=["one", "two"],
+        prompt_ids_list=[[11], [21]],
+        prompts_text=["one", "two"],
+        max_completion_length=2,
+    )
+
+    buffered = trainer._buffered_inputs[0]
+    assert buffered["input_ids"].dtype == torch.long, (
+        f"input_ids must be long for embedding lookup, got {buffered['input_ids'].dtype}"
+    )
+    assert buffered["labels"].dtype == torch.long, (
+        f"labels must be long for cross_entropy, got {buffered['labels'].dtype}"
+    )
+    assert buffered["attention_mask"].dtype == torch.long
+
+
 def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_prompts():
     class RecordingVLLMGeneration:
         def __init__(self):

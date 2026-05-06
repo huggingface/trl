@@ -1278,7 +1278,10 @@ class GOLDTrainer(SFTTrainer):
             prompt_ids = pad(truncated_prompt_ids, padding_side="left", padding_value=pad_token_id)
             prompt_attention_mask = pad(prompt_attention_masks, padding_side="left", padding_value=0)
 
-            completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids_for_slice]
+            # torch.tensor([]) defaults to float; force long so empty completions stay int
+            completion_ids_tensors = [
+                torch.tensor(ids, device=device, dtype=torch.long) for ids in completion_ids_for_slice
+            ]
             completion_ids_for_text: list[list[int]] = []
             padded_completion_ids_list = []
             completion_attention_masks = []
