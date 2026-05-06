@@ -1,0 +1,32 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --loss_type chunked_nll
+
+# Validation of EP→TP dataloader piggy-back fix.
+#
+# This is the same config that hung deterministically at step 16 in Test D
+# (job 22102169) — sonicmoe + EP=8 + DS-Z3 + 64k 2n. With tp=1 bookkeeping the
+# accelerate yaml emits NO parallelism_config block, so ACCELERATE_USE_PARALLELISM_CONFIG
+# is unset and accelerate's TP-replication branch in prepare_data_loader is never
+# reached via its native path. Exercises the new ds_device_mesh injection in
+# SFTTrainer.__init__ instead.
+#
+# Expected: 30/30 steps, healthy loss, no NCCL hang. (Test G result with the
+# previous _get_dataloader override: train_loss=1.555.)
+
+runs:
+  - context_length: 65536
+    nodes: 2
+    backend: deepspeed_zero3
+    zero_stage: 2
+    dp: 2
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    max_steps: 30
+    logging_steps: 1
+    attn_implementation: kernels-community/vllm-flash-attn3
+    h5_mode: full

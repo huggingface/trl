@@ -1,0 +1,36 @@
+model_name_or_path: Qwen/Qwen3-30B-A3B
+dataset_name: THUDM/LongAlign-10k
+gpus_per_node: 8
+trackio_project: trl-sft-benchmark
+extra_args: --enable_expert_parallel --expert_parallel_size 8 --experts_implementation sonicmoe --loss_type chunked_nll
+# C2 Layer 2: cpu_ram_efficient_loading=True + EP corrupts via fsdp2_load_full_state_dict
+# scatter mismatch over EP-DTensors. Disabled per #45662 PR description until C2 Patch 2 lands.
+cpu_ram_efficient_loading: false
+
+# Phase 1 — FSDP+EP validation of the new EP-as-TP path via accelerate's ParallelismConfig.
+#
+# What this exercises (NEW code, never run before):
+#   1. transformers/trainer.py:_build_accelerator_args — sets parallelism_config.tp_size = ep_size
+#      and dp_shard_size = world_size // ep_size for FSDP+EP runs, instead of the previous
+#      _get_dataloader monkey-patch.
+#   2. accelerate/_prepare_tp — early-return on `model._device_mesh is not None` (replaces the
+#      previous `has_ep` skip).
+#   3. accelerate's TP-replication branch in prepare_data_loader (data_loader.py:1146-1154) is
+#      now reached natively for FSDP+EP runs — divides process_index by submesh_tp_size=8.
+#
+# Pre-fix behavior at this shape: silent NCCL hang at the EP all-reduce (variable seq_len with
+# packing → 8 EP-group ranks see mismatched (B, S) shapes → SeqNum=NNNN ALLREDUCE PG-ID-2 hang).
+# Post-fix expected: 30/30 steps clean, healthy loss.
+
+runs:
+  - context_length: 16384
+    nodes: 2
+    backend: fsdp2
+    dp: 2
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    max_steps: 30
+    logging_steps: 1
+    attn_implementation: sdpa

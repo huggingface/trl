@@ -12,9 +12,19 @@
 
 ## 0. The hook (lede + snark, 1–2 paragraphs)
 
-A few weeks ago, an [open-weights/open-training post](https://www.workshoplabs.ai/blog/open-weights-open-training) and a flurry of dunk threads landed on `transformers` not being a "real" training framework. The argument goes: HuggingFace ships great inference and a great hub, but if you want to _train_ a frontier-size MoE you have to leave for Megatron / NeMo / a hand-rolled stack.
+There's a recurring take you'll see on X AI and in research-engineering circles: `transformers` isn't a "real" training framework — and the same is said about `trl` for reinforcement learning. The argument goes — HuggingFace ships great inference and a great hub, but if you want to _train_ a frontier-size MoE you have to leave for Megatron / NeMo / a hand-rolled stack.
 
-The premise is wrong. Or rather — it _was_ wrong about a month ago, and we've spent the last few weeks fixing it. This post is the receipt. We took the open stack — `trl.SFTTrainer` + `transformers` + `accelerate` + `deepspeed` — and pushed Qwen3-30B-A3B SFT from **2.8% MFU at 16k to 76% peak MFU at 128k**, then to **1M context training that actually steps cleanly**. Every fix is upstreamable. Most are already upstream or in-flight.
+The whole benchmark in this post was done with `trl.SFTTrainer`, so let's frontload the stack. **TRL** is the entry point — `SFTTrainer`, `GRPOTrainer`, `DPOTrainer`, etc. — and most of them subclass **transformers'** `Trainer`. The `Trainer` owns the training loop (dataloader, forward, backward, optimizer step, checkpointing, logging). Anything _distributed_ it delegates to **accelerate**, which wraps `torch.distributed` + FSDP + DeepSpeed + everything-else into one config object. The call stack:
+
+```
+trl.SFTTrainer  →  transformers.Trainer  →  accelerate.Accelerator  →  torch.distributed / FSDP / DeepSpeed
+```
+
+If you're new to distributed training and the alphabet soup that follows — FSDP, ZeRO-1/2/3, TP, CP, SP, PP, EP, and all the P's — go read the [Ultra-scale Playbook](https://huggingface.co/spaces/nanotron/ultrascale-playbook) first. We assume the vocabulary; that link is the prerequisite.
+
+Concretely, what `trainer.train()` does on a multi-GPU run: `Accelerator()` is constructed and builds a device mesh from your `accelerate launch` config (`num_processes`, parallelism backend, FSDP / DeepSpeed plugins). Then `accelerator.prepare(model, optimizer, dataloader)` wraps each one — the model gets FSDP-sharded or DeepSpeed-partitioned, the dataloader gets sharded across ranks, the optimizer's parameter references get remapped to whatever DTensor / `nn.Parameter` view the wrapper produced. Then the training loop runs. That's the entire delegation. (We'll come back to this picture multiple times in §2 — most of what we fixed lives at one of those four arrows.)
+
+The premise of those takes is wrong. Or rather — it _was_ wrong about a month ago, and we've spent the last few weeks fixing it. This post is the receipt. We took the open stack — `trl.SFTTrainer` + `transformers` + `accelerate` + `deepspeed` — and pushed Qwen3-30B-A3B SFT from **2.8% MFU at 16k to 76% peak MFU at 128k**, then to **1M context training that actually steps cleanly**. Every fix is upstreamable. Most are already upstream or in-flight.
 
 > **What "we did the work" looks like by the numbers** (call this out in the lede as the rebuttal-by-receipt):
 >
@@ -40,7 +50,11 @@ This is the one context section before the technical thread. Three sub-points, e
 
 Recent releases have made MoE the **default architecture** for cost-conscious frontier work: Qwen3-30B-A3B (3B active / 30B total — 10× compute savings per token vs dense), DeepSeek-V3 (37B active / 671B total), Llama-4-Scout / Maverick, Mixtral, Qwen3-235B-A22B. The pattern is consistent: **training compute scales with active params, model capacity scales with total params, and inference is bounded by active** — so MoE is a Pareto win on serving cost.
 
-For post-training (SFT / RLHF / GRPO / online-RL), this is *especially* attractive: you're tuning over many trajectories, often with low gradient-update count per token. Halving compute per token via MoE is a big deal.
+The technical reason MoE matters so much for *training* compute is laid out cleanly in the [JAX scaling book § Sparsity and Mixture of Experts](https://jax-ml.github.io/scaling-book/transformers/#sparsity-and-mixture-of-experts): for a transformer with hidden dim `D` and sequence length `T`, dot-product attention FLOPs only become dominant during training once `T > 8D`. Below that threshold, **MLP FLOPs dominate** — and that's exactly where MoE's sparsity bites. For Qwen3-30B-A3B (D = 2048), MLP dominates up to **T ≈ 16k**, where most short-to-mid SFT lives. For Qwen3-235B-A22B (D = 4096), up to **T ≈ 32k**. For DeepSeek-V3 (D = 7168), up to **T ≈ 57k**. So the savings MoE advertises ("10× FLOPs per token via 8/128 active experts") translate to most of the wall-clock training cost across the range of contexts people actually train at — and the JAX book's framing makes this rigorous: *as the MLP grows, attention's quadratic cost stops being the bottleneck people fear it is*.
+
+For post-training (SFT / RLHF / GRPO / online-RL), this is _especially_ attractive: you're tuning over many trajectories, often with low gradient-update count per token. Halving compute per token via MoE is a big deal.
+
+At very long context (32k+ on Qwen3-30B-A3B, 64k+ on Qwen3-235B-A22B), attention crosses the `T > 8D` line and becomes dominant — which is why FA3 is the other big lever in this post (Step 3). MoE handles the MLP half; FA3 handles the attention half. Together they cover the realistic span of context lengths.
 
 **The catch**: if your training framework can't run MoE at >5% MFU, you give back the entire savings advantage in wall-clock time. **MoE is only a Pareto win if the framework is good.** This is the gap the post is about.
 
@@ -48,9 +62,13 @@ For post-training (SFT / RLHF / GRPO / online-RL), this is *especially* attracti
 
 Three independent reasons, each load-bearing for a later Step:
 
-1. **Asymmetric activation across ranks.** Different tokens route to different experts → different ranks accumulate gradient on different expert subsets. FSDP2's symmetric `reduce_scatter` requires all ranks to participate with the same shape. The naive `nn.ModuleList[nn.Linear]` layout makes this worse — the gradient *shapes* differ across ranks. Fix: fused `[num_experts, ...]` weight tensors so the gradient buffer is always the same shape (inactive expert slices just hold zeros). transformers 5.6.0 ships this natively. (Step 1.)
-2. **Expert distribution wants its own mesh dimension.** With 128 experts you want some ranks to *own* a slice (Expert Parallelism, EP). EP wants its own mesh, which has to compose with FSDP DP, CP, and SP. Composability between all four is the entire reason §2 has 13 steps. (Step 2 + Step 5.)
+1. **Asymmetric activation across ranks.** Different tokens route to different experts → different ranks accumulate gradient on different expert subsets. FSDP2's symmetric `reduce_scatter` requires all ranks to participate with the same shape. The naive `nn.ModuleList[nn.Linear]` layout makes this worse — the gradient _shapes_ differ across ranks. Fix: fused `[num_experts, ...]` weight tensors so the gradient buffer is always the same shape (inactive expert slices just hold zeros). transformers 5.6.0 ships this natively. (Step 1.)
+2. **Expert distribution wants its own mesh dimension.** With 128 experts you want some ranks to _own_ a slice (Expert Parallelism, EP). EP wants its own mesh, which has to compose with FSDP DP, CP, and SP. Composability between all four is the entire reason §2 has 13 steps. (Step 2 + Step 5.)
 3. **Token routing is a comm pattern, not a forward.** Two camps: (a) **all-to-all dispatch** — ship tokens to wherever the expert lives (DeepSpeed-MoE, Megatron); small comm cost (tokens × hidden), bandwidth-hungry, sensitive to inter-node BW. (b) **Replicate-then-mask** — every rank sees all tokens, masks routing scores for non-local experts, all-reduces partial outputs. Bigger comm but uses all-reduce, which on EFA runs at **96% of intra-node bandwidth** while all-to-all only hits **11%**. transformers picked (b). On EFA, that's the right choice by ~9× on the inter-node leg.
+
+> **Aside — why we don't TP the experts.** Slicing each expert's weights across TP ranks looks tempting in theory but fights the hardware. Each expert is already small (Qwen3-30B-A3B: ~6 MB of `gate_up_proj` per expert per layer, intermediate dim 768); splitting those further across TP produces sub-128-aligned GEMMs that miss Tensor Core alignment, and the post-matmul all-reduce ends up dominating the matmul itself. EP avoids this — each rank owns whole experts, and the only inter-rank comm is the routing all-reduce of expert outputs. ByteDance's **MegaScale-MoE** controlled study makes this concrete: SP+EP delivers **+14.9–32.9% MFU** over TP+TP on six open-source MoE models, with the gap attributed to both communication volume and TP's intermediate-dim partitioning hurting GEMM efficiency ([arXiv 2505.11432](https://arxiv.org/abs/2505.11432)). Real-world SoTA recipes match: DeepSeek-V3 trains with **PP=16 + EP=64 across 8 nodes, no expert TP at all** ([V3 Technical Report](https://arxiv.org/abs/2412.19437)) and added [DualPipe](https://github.com/deepseek-ai/DualPipe) specifically to overlap the cross-node EP comm; Qwen3-235B-A22B Megatron configs keep `ETP=1` (no expert TP) and put EP on top of PP. NVIDIA and vLLM docs both spell out the same diagnosis — pure TP on expert weights forces every rank to receive all tokens' hidden states, which doesn't scale ([NVIDIA TRT-LLM EP guide](https://nvidia.github.io/TensorRT-LLM/advanced/expert-parallelism.html), [vLLM MoE Playbook](https://rocm.blogs.amd.com/software-tools-optimization/vllm-moe-guide/README.html)). Hardware-wise this maps onto **NVLink intra-node (~450 GB/s, where bandwidth-hungry dims like TP-attention and EP belong) vs IB / EFA inter-node (~50–400 GB/s, which tolerates PP's stage-boundary point-to-point and FSDP DP all-gather/reduce-scatter)**. The pattern is consistent across every public MoE training stack since DeepSeek-V3: bandwidth-hungry dims intra-node, communication-tolerant dims inter-node.
+
+> **Aside — and TP is shrinking even on dense layers.** This isn't just an MoE story. The dense-layer side of TP is also getting squeezed out, and not by us — by the frontier training recipes shipping over the last year. **DeepSeek-V3** (671B): TP=0, EP=64, PP=16, ZeRO-1 DP. **Kimi K2** (1T agentic): TP=0, EP=16, PP=16 interleaved 1F1B, ZeRO-1 DP across multiples of 32 nodes ([arXiv 2507.20534](https://arxiv.org/abs/2507.20534)). **GLM-4.5 / 4.5-Air** Megatron recipe: TP=1, EP=16, PP=4, `ETP=1`. Even **Qwen3-235B-A22B**'s vendor default is TP=4, EP=4, PP=2 — small but kept as a leftover, with SP doing the work TP used to. **MegaScale-MoE** (352B, 1440 H800s) goes further: it *replaces* TP on attention with intra-node sequence parallelism and runs PP=15 across nodes. There's also a broader live debate (Seo et al., on X, 2025-11-24, with replies from Horace He, Rosinality, Charles Guille-Escuret, others): once your model is FSDP-sharded and your activations are CP-sharded, what's left for TP to do at 4–8k context that HSDP+CP can't do with leaner comm? The argument turns on whether **HSDP keeping FSDP all-gathers NVLink-local + CP's per-block point-to-point** can hide enough latency to dethrone TP for dense layers entirely. Horace He's pushback in the same thread — *CP doesn't reduce FSDP's world size, that's a real cost not a wash* — keeps the question genuinely open; the [NeMo Video Foundation Models report](https://arxiv.org/abs/2503.12964) and a few other points of evidence are nudging it toward HSDP+CP, but no consensus yet. **The takeaway for this post**: TP's role has shrunk to "the layer is too wide for one device, or the context is too short to amortize CP's P2P." Everywhere else, EP eats it on the expert path and HSDP+CP is starting to eat it on the dense path.
 
 > **Snarky aside the post should keep**: "transformers EP = replicate-mask" is sometimes characterized as "not real EP" by people who think EP must mean all-to-all. On EFA hardware, **replicate-mask is the faster choice**.
 
@@ -59,7 +77,7 @@ Three independent reasons, each load-bearing for a later Step:
 Three lines:
 
 - **SFT is the dense-compute half of every modern post-training recipe.** GRPO, DPO, RLHF, online-RL all interleave SFT-style forward/backward passes through the policy. Optimize `SFTTrainer` and the rest comes "for free."
-- **Long context is the open frontier.** Reasoning RL, long-CoT distillation, agentic traces — all 32k+ and increasingly 128k+. The public guidance for "how to train a 30B MoE at 128k on commodity H100s" is *roughly: don't*.
+- **Long context is the open frontier.** Reasoning RL, long-CoT distillation, agentic traces — all 32k+ and increasingly 128k+. The public guidance for "how to train a 30B MoE at 128k on commodity H100s" is _roughly: don't_.
 - So the focus: `SFTTrainer × Qwen3-30B-A3B × long-context`.
 
 ### 1.4 The model matrix and hardware
@@ -80,7 +98,7 @@ Three lines:
 
 ## 2. The decision tree — one continuous thread
 
-This is the spine of the post. Walk the reader through **the actual decisions a researcher makes** when handed a 30B MoE and a cluster, in the order they're forced to make them. Each step's *output state* (working recipe + measured MFU) becomes the *starting point* for the next step.
+This is the spine of the post. Walk the reader through **the actual decisions a researcher makes** when handed a 30B MoE and a cluster, in the order they're forced to make them. Each step's _output state_ (working recipe + measured MFU) becomes the _starting point_ for the next step.
 
 > **Format**: every step has a **STATE** (where we are now), a **WANT** (what we want next), a **TRY** (the obvious first thing), what **BROKE**, what we **FIXED/PIVOTED** to, and the new **MEASURED state** that the next step inherits. Read top-to-bottom; it's a single thread.
 
@@ -93,7 +111,7 @@ We have **Qwen3-30B-A3B**: 30B total params (60 GB bf16 weights), 128 experts pe
 - **WANT**: shard the model across ranks so it fits.
 - **TRY**: FSDP2 (TRL/accelerate's first-class path). Run baseline.
 - **BROKE**: `RuntimeError: Detected mismatch between collectives on ranks. Rank 12: TensorShape=[505155840], Rank 0: TensorShape=[240914688]`.
-  - **WHY**: Qwen3-30B-A3B stores experts as `nn.ModuleList[nn.Linear]` (384 small weight matrices per layer). MoE routing is data-dependent → different ranks activate different experts → gradient *shapes* differ across ranks → FSDP2's symmetric `reduce_scatter` fails. Architectural incompatibility, not a bug.
+    - **WHY**: Qwen3-30B-A3B stores experts as `nn.ModuleList[nn.Linear]` (384 small weight matrices per layer). MoE routing is data-dependent → different ranks activate different experts → gradient _shapes_ differ across ranks → FSDP2's symmetric `reduce_scatter` fails. Architectural incompatibility, not a bug.
 - **FIX (initial)**: TRL-side `fuse_moe_experts()` helper + a forked checkpoint. Pre-stack 128 experts into `[128, ...]` tensors so all ranks have the same gradient shape (inactive expert slices just hold zeros).
 - **PARALLEL TRY**: DS-ZeRO-3 baseline. Works without a fork, but **1–2% MFU**.
 - **FIX (proper)**: transformers 5.6.0 ships native `Qwen3MoeExperts` with fused `gate_up_proj` (one `[128, 2*intermediate, hidden]` tensor; 2 matmuls per expert instead of 3). Drop our fork.
@@ -101,19 +119,19 @@ We have **Qwen3-30B-A3B**: 30B total params (60 GB bf16 weights), 128 experts pe
 
 ### Step 2 — Reduce per-rank expert memory: turn on Expert Parallelism
 
-- **STATE**: 23% MFU at 16k, but every rank still gathers all 128 expert weights at every layer. We want each rank to *own* only `num_experts/EP` experts → less expert memory per rank → headroom for longer context or bigger batch later.
+- **STATE**: 23% MFU at 16k, but every rank still gathers all 128 expert weights at every layer. We want each rank to _own_ only `num_experts/EP` experts → less expert memory per rank → headroom for longer context or bigger batch later.
 - **WANT**: actual expert sharding (EP), not just DP sharding of the fused tensor.
 - **TRY**: `--enable_expert_parallel`.
 - **BROKE 1**: TRL silently bypassed EP entirely. `create_model_from_path` re-added `device_map="auto"` after SFTTrainer removed it → `from_pretrained` took the device-map path → EP distribution hooks never ran. **All early "EP" wandb runs were plain FSDP2 with replicated experts.** Embarrassing miss.
 - **FIX**: TRL-side check for `distributed_config` in model kwargs.
 - **TRY (again)**: `--enable_expert_parallel`, this time actually wired.
-- **BROKE 2**: forward outputs all-zero at EP=1 (no NaN). Forward outputs *plausible-looking* but bf16-divergent at EP=2/4/8.
+- **BROKE 2**: forward outputs all-zero at EP=1 (no NaN). Forward outputs _plausible-looking_ but bf16-divergent at EP=2/4/8.
 - **DEBUG**: forward-output match against non-EP ground truth (which is the only correctness test that catches this). Five independent transformers bugs found:
-  1. `RouterParallel._prepare_output_fn` — wrong shape under EP remapping.
-  2. Weight-loading plan lookup — TP regex over EP plan → `KeyError`.
-  3. `grouped_mm_experts_forward` — uninit memory in non-local-expert rows.
-  4. `GroupedGemmParallel.shard_tensor` — global rank vs mesh-local rank.
-  5. `num_experts` divided once per weight, not once per module.
+    1. `RouterParallel._prepare_output_fn` — wrong shape under EP remapping.
+    2. Weight-loading plan lookup — TP regex over EP plan → `KeyError`.
+    3. `grouped_mm_experts_forward` — uninit memory in non-local-expert rows.
+    4. `GroupedGemmParallel.shard_tensor` — global rank vs mesh-local rank.
+    5. `num_experts` divided once per weight, not once per module.
 - **FIX**: **[transformers#45436](https://github.com/huggingface/transformers/pull/45436)** + **[#45473](https://github.com/huggingface/transformers/pull/45473)** (both merged). 4 regression tests added — zero EP coverage existed before.
 - **STATE → next step**: EP=4 with TP=4 at 16k = 22.7% MFU, **training-correct**. EP doesn't beat no-EP on throughput yet (we haven't optimized attn or expert kernels), but the EP foundation is now verifiable. **Phase 1 of EP is one PR away from finished — but we won't hit that PR until Step 5.**
 
@@ -134,7 +152,7 @@ We have **Qwen3-30B-A3B**: 30B total params (60 GB bf16 weights), 128 experts pe
 - **MEASURE**: 16k FSDP DP=16 + FA3 + sonicMoE = **34.7%**, vs grouped_mm+FA3 = 28.1%. **+23%** at steady state.
 - **TRY**: stack sonicMoE with EP > 1.
 - **BROKE**: kernel CUDA-illegal-accesses on rows whose `top_k` ids are all EP sentinels.
-- **FIX**: **[transformers#45621](https://github.com/huggingface/transformers/pull/45621)** (Ilyas Moutawwakil's patch — *not* ours; we just pin to it). Kernel-native sentinel handling in metadata stage. (See also Step 5 fix-4/fix-5: backward leaks remained until #45621's 2026-05-01 follow-up commits closed them in the kernel — at which point we dropped the wrapper-side clamp + simplified the grouped_mm wrapper from 4 `masked_fill`s back to 2.)
+- **FIX**: **[transformers#45621](https://github.com/huggingface/transformers/pull/45621)** (Ilyas Moutawwakil's patch — _not_ ours; we just pin to it). Kernel-native sentinel handling in metadata stage. (See also Step 5 fix-4/fix-5: backward leaks remained until #45621's 2026-05-01 follow-up commits closed them in the kernel — at which point we dropped the wrapper-side clamp + simplified the grouped_mm wrapper from 4 `masked_fill`s back to 2.)
 - **STATE → next step**: sonicMoE + EP forward works. We have FA3 + sonicMoE + EP — but they don't compose cleanly with FSDP2 yet, because **EP params are still plain `nn.Parameter` while FSDP DP params are DTensors**. Adam's `_fused_adamw_` rejects mixed lists. We need to close that gap.
 
 ### Step 5 — Compose EP with FSDP2: DTensor wrap → close Phase 1 of EP
@@ -148,8 +166,8 @@ We have **Qwen3-30B-A3B**: 30B total params (60 GB bf16 weights), 128 experts pe
 - **BROKE (second side effect)**: `clip_grad_norm_` calls `_foreach_norm`, which stacks per-param norms across meshes; FSDP-DP-mesh and EP-mesh DTensors error with `RuntimeError: All operands in aten.stack.default must have the same mesh`.
 - **FIX 3**: skip grad-clip when `has_ep`. Local, returns 0 for telemetry. Proper fix is in PyTorch's `clip_grad_norm_`; PyTorch issue queued.
 - **BROKE (kernel backward)**: sonicMoE's hand-written backward produces NaN gradients on EP sentinels through `DTensor.to_local()`. Same bug shape repeats inside `torch._grouped_mm`'s backward path (uninit `d_input` rows past `offsets[-1]`) — once #45621 takes the histogram-tail-drop route in the wrapper, the autograd graph leaks NaN via the gather's `index_add_` backward into `d_hidden_states`.
-- **FIX 4 (workaround, ~2pp MFU cost — *temporary*)**: wrapper-level `clamp(0, num_experts-1)` in `sonicmoe_experts_forward`, plus a 4-`masked_fill` firewall in `grouped_mm_experts_forward`. Diagnosed via vacuum tests + capture-and-replay of production tensors (see `benchmark/study_moe_autograd.md` and `benchmark/grouped_mm_pr45621_comment.md`). Reported to Ilyas via PR #45621 comments.
-- **FIX 5 (proper kernel-side fix, landed 2026-05-01)**: PR #45621 author landed kernel-side fixes that close both the sonic-moe sentinel bug and the grouped_mm autograd leak. Wrapper-side clamp dropped entirely from `sonicmoe.py`; `grouped_mm_experts_forward` simplified to 2 `masked_fill_`s (pre + post) since intermediate sentinel-row NaN is never consumed by the next grouped_mm.
+- **FIX 4 (workaround, ~2pp MFU cost — _temporary_)**: wrapper-level `clamp(0, num_experts-1)` in `sonicmoe_experts_forward`, plus a 4-`masked_fill` firewall in `grouped_mm_experts_forward`. Diagnosed via vacuum tests + capture-and-replay of production tensors (see `benchmark/study_moe_autograd.md` and `benchmark/grouped_mm_pr45621_comment.md`). Reported to Ilyas via PR #45621 comments.
+- **FIX 5 (proper kernel-side fix, landed 2026-05-01)**: PR #45621 author landed kernel-side fixes that close both the sonic-moe sentinel bug and the grouped*mm autograd leak. Wrapper-side clamp dropped entirely from `sonicmoe.py`; `grouped_mm_experts_forward` simplified to 2 `masked_fill*`s (pre + post) since intermediate sentinel-row NaN is never consumed by the next grouped_mm.
 - **MEASURE (clamp era, kept here for narrative)**: 16k FSDP2 + EP=8 + FA3 + sonicMoE + clamp = **40.4 % window MFU**, training-correct.
 - **MEASURE (kernel-fix era, 2026-05-01, no clamp)**: same config = **45.4 / 48.2 % mean / peak window MFU**. **+5–8 pp** recovered — much more than the ~2 pp we initially expected, because the kernel's cleaner sentinel-skip path compounds with FA3 attention. Loss = 13.4, healthy. **The new 16k EP champion. Phase 1 of EP is done.**
 - **STATE → next step**: 40.4% at 16k is great. Now we want longer context (the actual research goal — long-CoT SFT, agentic traces, R1-style reasoning RL all live at 32k+). Per-rank seq doesn't fit on 80 GB GPU at 32k. We need to shard the sequence dim.
@@ -180,7 +198,7 @@ We have **Qwen3-30B-A3B**: 30B total params (60 GB bf16 weights), 128 experts pe
 - **TRY**: stack SP with EP — should compound seq sharding (SP) with expert sharding (EP) for 64k+.
 - **BROKE 3 (architectural, not a bug)**: DS-Z3 + SP + EP produces broken loss (loss=8, token_acc=0.04). Ulysses shards seq across SP, transformers' EP assumes full per-rank batch — the EP all-reduce combines DIFFERENT token subsets → garbage.
 - **PIVOT**: Drop SP+EP stacking. SP alone at long context. Or — find another way to free memory and stay on the EP path.
-- **STATE → next step**: SP path = 22% at 32k, scales to longer context but caps at the SP architectural limit. Meanwhile the EP path is stuck at 32k by the 18.55 GiB buffer. **What's the *other* big tensor we can shrink?** lm_head logits at 64k = ~20 GB.
+- **STATE → next step**: SP path = 22% at 32k, scales to longer context but caps at the SP architectural limit. Meanwhile the EP path is stuck at 32k by the 18.55 GiB buffer. **What's the _other_ big tensor we can shrink?** lm_head logits at 64k = ~20 GB.
 
 ### Step 8 — Free the lm_head: chunked-CE → DS-Z2 pivot → long-context champions
 
@@ -192,9 +210,9 @@ We have **Qwen3-30B-A3B**: 30B total params (60 GB bf16 weights), 128 experts pe
 - **PIVOT**: switch to **DS-Z2**. ZeRO-2 doesn't shard params across DP → no per-chunk all-gather → chunked-CE works.
 - **PRE-REQ for DS-Z2+EP**: a **7-patch recipe across 3 repos** (transformers `tensor_parallel.py` backend branch + DS engine MoE detection + `trainer.py` create_optimizer + `_clip_grad_norm` gating + sonicMoE wrapper-clamp + TRL EP branch + `pre-init deepspeed.comm`). All local; queued as a 3-PR upstream split (transformers / DeepSpeed / TRL).
 - **MEASURE (clamp era)**:
-  - 32k DS-Z2+EP=8+FA3+sonicMoE+chunked = **45.86%**. **+24 pp over the old DS-Z3+SP=2 32k champion.**
-  - 64k = **57.23%**. **+37 pp.**
-  - 128k = **69.10%**. **+50 pp.**
+    - 32k DS-Z2+EP=8+FA3+sonicMoE+chunked = **45.86%**. **+24 pp over the old DS-Z3+SP=2 32k champion.**
+    - 64k = **57.23%**. **+37 pp.**
+    - 128k = **69.10%**. **+50 pp.**
 - **MEASURE (kernel-fix era, 2026-05-01, no clamp)**: 32k DS-Z2+EP=8+FA3+sonicMoE+chunked = ~50.7% mean / ~50.9% peak (job 22099328) — **+5 pp** over the clamp baseline. Loss = 8.0, healthy. The 64k / 128k re-runs are queued; the same +5–8 pp delta is expected to push the 128k record from 69 % → ≥75 %.
 - **WHY this is the largest jump in the post**: chunked-CE removes the lm_head logit tensor; DS-Z2 removes the per-chunk all-gather; together they let the EP path scale to 128k. Each fix individually is small; the stack is the unlock.
 - **STATE → next step**: 128k = 69.10% via the EP+chunked path. Past 128k per-rank seq, the 18.55 GiB EP buffer can't fit even with chunked. **EP path is over.** For 256k+ we have to drop EP entirely.
@@ -225,12 +243,12 @@ We have **Qwen3-30B-A3B**: 30B total params (60 GB bf16 weights), 128 experts pe
 - **DEBUG 2 (with EP)**: built [`test_liger_qwen3_moe_ep.py`](./test_liger_qwen3_moe_ep.py). Crashed only with EP. Real root cause: Liger's `_patch_swiglu_module(experts, LigerExperts)` rebinds `experts.forward = LigerExperts.forward`, **bypassing transformers' `@use_experts_implementation` dispatcher** that routes to the EP-aware kernel under EP. Then `F.one_hot(top_k_index, num_classes=self.num_experts)` collides with the EP sentinel value (= `num_local_experts` = `num_classes`) → out-of-range → device assert.
 - **FIX**: `--liger_kernel_config '{"swiglu":false}'`. Disables only the broken patch. Keeps `LigerRMSNorm` + `liger_rotary_pos_emb` + `LigerFusedLinearCrossEntropyLoss` (the bigger MFU wins anyway). Lets transformers' EP-aware dispatcher handle experts.
 - **MEASURE (clamp era)**: Liger wins at every context 16k–1M, +0.3 to +25 pp peak vs chunked-CE.
-  - 32k: 56.62% (vs 45.86% chunked).
-  - 64k: 66.46% (vs 57.23%).
-  - **128k: 76.29% peak / 74.69% cumulative** — **all-time MoE MFU record on this stack.** (Causal-corrected: 40.5%.)
-- **MEASURE (kernel-fix era, 2026-05-01, no clamp)**: PR #45621's kernel-side fix landed; we re-ran the 32k Liger champion and hit **63.5 % mean / 65.0 % peak window MFU** (+8.4 pp peak over 56.62 %). Loss = 8.0 (vs 11–15 with the clamp wrapper) — gradients are not just clean but *more correct* than the clamp's "expert E−1 with score 0" workaround. **Highest 30B-on-2-node Win MFU we've measured.** A full re-sweep of 64k / 128k / 256k+ with the new kernel is queued as the next batch — expect ~5–10 pp peak gains across the board.
+    - 32k: 56.62% (vs 45.86% chunked).
+    - 64k: 66.46% (vs 57.23%).
+    - **128k: 76.29% peak / 74.69% cumulative** — **all-time MoE MFU record on this stack.** (Causal-corrected: 40.5%.)
+- **MEASURE (kernel-fix era, 2026-05-01, no clamp)**: PR #45621's kernel-side fix landed; we re-ran the 32k Liger champion and hit **63.5 % mean / 65.0 % peak window MFU** (+8.4 pp peak over 56.62 %). Loss = 8.0 (vs 11–15 with the clamp wrapper) — gradients are not just clean but _more correct_ than the clamp's "expert E−1 with score 0" workaround. **Highest 30B-on-2-node Win MFU we've measured.** A full re-sweep of 64k / 128k / 256k+ with the new kernel is queued as the next batch — expect ~5–10 pp peak gains across the board.
 - **UPSTREAM**: file a Liger PR — auto-detect EP via `model.config._experts_implementation` and skip the swiglu patch automatically. Repro included.
-- **LESSON to emphasize in the post**: **the conventional wisdom was wrong, and we repeated it.** Almost shelved Liger for MoE entirely. The single-GPU repro disproved it in 30 minutes. *When debugging composition issues, isolate the smallest crash before believing the dominant explanation.*
+- **LESSON to emphasize in the post**: **the conventional wisdom was wrong, and we repeated it.** Almost shelved Liger for MoE entirely. The single-GPU repro disproved it in 30 minutes. _When debugging composition issues, isolate the smallest crash before believing the dominant explanation._
 
 ### Step 11 — The accessibility question: how far can we push on a single node × 8 GPUs?
 
@@ -240,15 +258,15 @@ We have **Qwen3-30B-A3B**: 30B total params (60 GB bf16 weights), 128 experts pe
 - **TRY**: throw the full optimization stack (FA3 + sonicMoE + EP=8 + Liger + chunked, then add compile + SP at long context) at 1n × 8.
 - **MEASURE**:
 
-  | Context | Recipe | Win MFU peak | Causal-adj | Peak Mem | vs 2n+ |
-  | ------- | ------ | ------------ | ---------- | -------- | ------ |
-  | **16k** | DS-Z2 + EP=8 + FA3 + sonicMoE + Liger | **44.30%** | **29.73%** | 73.5 GB (92%) | matches the 2n FSDP+EP champion (40.4%) |
-  | **32k** | DS-Z2 + EP=8 + FA3 + sonicMoE + Liger | **59.28%** | **35.76%** | 78.1 GB (98%) | **beats 2n by +3 pp** — intra-node EP comm is faster than cross-node |
-  | 64k | DS-Z3 dp=2 sp=4 + compile + Liger | 23.23% | 12.95% | 78.3 GB (98%) | DP=2 lifts MFU 3× over SP=8 DP=1 (DP=1 disables Z3 sharding entirely) |
-  | 64k | DS-Z3 dp=1 sp=8 + compile + Liger | 7.99% | 4.46% | 78.6 GB (99%) | not viable — DP=1 makes Z3 a no-op |
-  | 128k+ | SP=8 / SP=4 + Liger | OOM | — | 100% | over the wall — no offload allowed |
+    | Context | Recipe                                | Win MFU peak | Causal-adj | Peak Mem      | vs 2n+                                                                |
+    | ------- | ------------------------------------- | ------------ | ---------- | ------------- | --------------------------------------------------------------------- |
+    | **16k** | DS-Z2 + EP=8 + FA3 + sonicMoE + Liger | **44.30%**   | **29.73%** | 73.5 GB (92%) | matches the 2n FSDP+EP champion (40.4%)                               |
+    | **32k** | DS-Z2 + EP=8 + FA3 + sonicMoE + Liger | **59.28%**   | **35.76%** | 78.1 GB (98%) | **beats 2n by +3 pp** — intra-node EP comm is faster than cross-node  |
+    | 64k     | DS-Z3 dp=2 sp=4 + compile + Liger     | 23.23%       | 12.95%     | 78.3 GB (98%) | DP=2 lifts MFU 3× over SP=8 DP=1 (DP=1 disables Z3 sharding entirely) |
+    | 64k     | DS-Z3 dp=1 sp=8 + compile + Liger     | 7.99%        | 4.46%      | 78.6 GB (99%) | not viable — DP=1 makes Z3 a no-op                                    |
+    | 128k+   | SP=8 / SP=4 + Liger                   | OOM          | —          | 100%          | over the wall — no offload allowed                                    |
 
-- **HEADLINE FINDING**: **at 32k, a single 1n × 8 H100 node beats the 2n recipe by +3 pp** (59.28% vs 56.62% peak window MFU). EP=8 fits intra-node on NVLink, so the EP all-reduce runs at ~448 GB/s instead of EFA's 431 GB/s — and you save the cross-node hop entirely. **One node is *better* than two for 30B-A3B at 32k.**
+- **HEADLINE FINDING**: **at 32k, a single 1n × 8 H100 node beats the 2n recipe by +3 pp** (59.28% vs 56.62% peak window MFU). EP=8 fits intra-node on NVLink, so the EP all-reduce runs at ~448 GB/s instead of EFA's 431 GB/s — and you save the cross-node hop entirely. **One node is _better_ than two for 30B-A3B at 32k.**
 - **WHERE 1n stops working**: 64k drops sharply because losing DP forces SP=8/DP=1 (which neutralizes Z3 sharding) — only DP=2 SP=4 keeps any throughput. 128k+ OOMs without CPU offload.
 - **STATE → next step**: 1n × 8 GPUs is a viable recipe up to 32k context (ahead of 2n!) and a usable-but-slow recipe at 64k (DP=2 SP=4). For 128k+ we go back to multi-node.
 
@@ -264,13 +282,13 @@ We have **Qwen3-30B-A3B**: 30B total params (60 GB bf16 weights), 128 experts pe
 - **TRY**: scan SP × per-rank-seq across 256k / 512k / 1M.
 - **MEASURE → discovered the per-rank-seq sweet-spot rule**: MFU peaks when `per_rank_seq = 128k`. Tune SP to hit it.
 
-  | Total ctx | Nodes | SP | Per-rank seq | Peak MFU |
-  | --------- | ----- | -- | ------------ | -------- |
-  | 256k | 8 | 8 | 32k | 32.6% |
-  | 256k | 8 | 4 | 64k | 46.6% |
-  | **256k** | **8** | **2** | **128k** | **63.62%** |
-  | **512k** | **8** | **4** | **128k** | **63.26%** |
-  | **1M** | **8** | **8** | **128k** | **62.33%** |
+    | Total ctx | Nodes | SP    | Per-rank seq | Peak MFU   |
+    | --------- | ----- | ----- | ------------ | ---------- |
+    | 256k      | 8     | 8     | 32k          | 32.6%      |
+    | 256k      | 8     | 4     | 64k          | 46.6%      |
+    | **256k**  | **8** | **2** | **128k**     | **63.62%** |
+    | **512k**  | **8** | **4** | **128k**     | **63.26%** |
+    | **1M**    | **8** | **8** | **128k**     | **62.33%** |
 
 - **STATE (final)**: 1M context training works at 62.33% peak window MFU (31.41% causal-corrected). Loss healthy. **New frontier reached.**
 
@@ -280,10 +298,10 @@ We have **Qwen3-30B-A3B**: 30B total params (60 GB bf16 weights), 128 experts pe
 - **OBSERVATION**: the standard MFU formula counts attention as if every token attends to the full seq (the PaLM/Megatron/nanoGPT convention). Causal masking actually halves attention compute → reported MFU is inflated relative to the Llama-2/3 / DS-Ulysses convention.
 - **FIX**: post-hoc helper [`benchmark/adjust_mfu_causal.py`](./adjust_mfu_causal.py). Both columns reported in every headline table.
 - **MEASURE (one more time, with the honesty column)**:
-  - 16k: 40.4% raw → **27.1% causal-adjusted**
-  - 64k: 66.46% raw → **37.1% causal-adjusted**
-  - 128k: **76.29% raw → 40.5% causal-adjusted** (all-time MoE record on this stack)
-  - 1M: 62.33% raw → **31.4% causal-adjusted**
+    - 16k: 40.4% raw → **27.1% causal-adjusted**
+    - 64k: 66.46% raw → **37.1% causal-adjusted**
+    - 128k: **76.29% raw → 40.5% causal-adjusted** (all-time MoE record on this stack)
+    - 1M: 62.33% raw → **31.4% causal-adjusted**
 
 ### One-paragraph summary of the whole thread
 
@@ -316,29 +334,29 @@ This chain has **two distinct phases**. The post should mark them explicitly:
 
 Five transformers PRs, one TRL fix, one accelerate patch. Ordered by what each unblocks:
 
-1. **TRL-side EP bypass** (local, before any transformers PR). `create_model_from_path` re-added `device_map="auto"` *after* SFTTrainer removed it → `from_pretrained` took the device-map path → EP distribution hooks never ran. **All early "EP" wandb runs were plain FSDP2 sharding** with experts replicated everywhere. Embarrassing, but the kind of bug only surfaces under a correctness audit.
-   - **FIX**: TRL-side check for `distributed_config` in model kwargs. Lives on the `benchmark-sft-moe` branch; will land in the upstream TRL G2 PR.
+1. **TRL-side EP bypass** (local, before any transformers PR). `create_model_from_path` re-added `device_map="auto"` _after_ SFTTrainer removed it → `from_pretrained` took the device-map path → EP distribution hooks never ran. **All early "EP" wandb runs were plain FSDP2 sharding** with experts replicated everywhere. Embarrassing, but the kind of bug only surfaces under a correctness audit.
+    - **FIX**: TRL-side check for `distributed_config` in model kwargs. Lives on the `benchmark-sft-moe` branch; will land in the upstream TRL G2 PR.
 2. **[transformers#45436](https://github.com/huggingface/transformers/pull/45436) — Qwen3-MoE EP plan + 2D-mesh fixes** (merged).
-   - Added `base_model_ep_plan` to `Qwen3MoeConfig` (only `gpt_oss` and `llama4` had one before).
-   - Fixed `GroupedGemmParallel.shard_tensor` to use mesh-local rank instead of global CUDA index (so GPU 2 at local-rank-0 stops trying to load experts 128–191).
-   - Fixed `num_experts` divided once per module instead of once per weight tensor (was 128 → 64 → 32 after two weights).
+    - Added `base_model_ep_plan` to `Qwen3MoeConfig` (only `gpt_oss` and `llama4` had one before).
+    - Fixed `GroupedGemmParallel.shard_tensor` to use mesh-local rank instead of global CUDA index (so GPU 2 at local-rank-0 stops trying to load experts 128–191).
+    - Fixed `num_experts` divided once per module instead of once per weight tensor (was 128 → 64 → 32 after two weights).
 3. **[transformers#45473](https://github.com/huggingface/transformers/pull/45473) — EP routing correctness** (merged).
-   - Fixed `RouterParallel._prepare_output_fn` shape (was passing `(seq, num_local_experts)` where the kernel expected `(seq, top_k)` — produced **all-zero expert outputs** at EP=1).
-   - Fixed weight-loading plan lookup (TP-plan regex over EP-plan values → `KeyError` on EP-only configs).
-   - Made `grouped_mm_experts_forward` sentinel-aware (was leaving uninit GPU memory in non-local-expert rows).
-   - **Added 4 regression tests** verifying forward-output match against non-EP ground truth at EP=1,2,4,8,16. **Zero EP test coverage existed before.**
+    - Fixed `RouterParallel._prepare_output_fn` shape (was passing `(seq, num_local_experts)` where the kernel expected `(seq, top_k)` — produced **all-zero expert outputs** at EP=1).
+    - Fixed weight-loading plan lookup (TP-plan regex over EP-plan values → `KeyError` on EP-only configs).
+    - Made `grouped_mm_experts_forward` sentinel-aware (was leaving uninit GPU memory in non-local-expert rows).
+    - **Added 4 regression tests** verifying forward-output match against non-EP ground truth at EP=1,2,4,8,16. **Zero EP test coverage existed before.**
 4. **[transformers#45548](https://github.com/huggingface/transformers/pull/45548) — DS-Z3 + EP loading** (merged).
-   - DS-Z3's env vars forced `from_pretrained` down a ZeRO-3 path at every weight-load decision. EP needs the standard path — it creates the model on meta, loads via `WeightConverter`, then lets `deepspeed.initialize` wrap.
-   - Added `PreTrainedModel.has_ep` property; `from_pretrained` now detects EP+DS and bypasses the Z3-specific loading path.
-   - Without this, DS-Z3+EP hung at 0% GPU utilization for 10+ minutes in `from_pretrained`.
+    - DS-Z3's env vars forced `from_pretrained` down a ZeRO-3 path at every weight-load decision. EP needs the standard path — it creates the model on meta, loads via `WeightConverter`, then lets `deepspeed.initialize` wrap.
+    - Added `PreTrainedModel.has_ep` property; `from_pretrained` now detects EP+DS and bypasses the Z3-specific loading path.
+    - Without this, DS-Z3+EP hung at 0% GPU utilization for 10+ minutes in `from_pretrained`.
 5. **[transformers#45649](https://github.com/huggingface/transformers/pull/45649) — FSDP2 cpu_ram_efficient_loading OOM** (in flight).
-   - Bisected to PR #45050: changed `torch.empty_like` → `torch.zeros_like` for non-rank-0 FSDP placeholders. Benign on small models, but on Linux with anonymous mmap it forces a *physical memory commit* of every byte. For 8 ranks × 30B-A3B per node = ~480 GB CPU peak → cgroup OOM during `from_pretrained`.
-   - Fix: drop the parameter materialization on non-rank-0 ranks (FSDP's broadcast overwrites them anyway); keep buffer materialization (per-rank, not broadcast).
+    - Bisected to PR #45050: changed `torch.empty_like` → `torch.zeros_like` for non-rank-0 FSDP placeholders. Benign on small models, but on Linux with anonymous mmap it forces a _physical memory commit_ of every byte. For 8 ranks × 30B-A3B per node = ~480 GB CPU peak → cgroup OOM during `from_pretrained`.
+    - Fix: drop the parameter materialization on non-rank-0 ranks (FSDP's broadcast overwrites them anyway); keep buffer materialization (per-rank, not broadcast).
 6. **[transformers#45662](https://github.com/huggingface/transformers/pull/45662) — EP + FSDP DTensor wrap** (in flight).
-   - Adam's `_fused_adamw_` rejects mixed Tensor + DTensor parameter lists. Pre-fix: EP params were plain `nn.Parameter`, FSDP DP params were DTensors → Adam blew up under FSDP2.
-   - Fix: wrap EP-sharded experts as `DTensor` on the EP mesh. Now everything is DTensor; Adam is happy.
-   - **Side effect**: accelerate's existing `_prepare_tp` "no DTensor → skip" guard stops firing post-#45662 → ImportError on `ReplicateParallel` (a class added upstream after our fork point).
-   - **FIX (local, queued as standalone accelerate PR)**: 5-line `has_ep` skip in `_prepare_tp`. [§4 of local_only_patches.](./local_only_patches.md)
+    - Adam's `_fused_adamw_` rejects mixed Tensor + DTensor parameter lists. Pre-fix: EP params were plain `nn.Parameter`, FSDP DP params were DTensors → Adam blew up under FSDP2.
+    - Fix: wrap EP-sharded experts as `DTensor` on the EP mesh. Now everything is DTensor; Adam is happy.
+    - **Side effect**: accelerate's existing `_prepare_tp` "no DTensor → skip" guard stops firing post-#45662 → ImportError on `ReplicateParallel` (a class added upstream after our fork point).
+    - **FIX (local, queued as standalone accelerate PR)**: 5-line `has_ep` skip in `_prepare_tp`. [§4 of local_only_patches.](./local_only_patches.md)
 
 **End of Phase 1**: EP=8 trains **correctly** under FSDP2 (verified by forward-output match) and DS-Z2. DS-Z3+EP loads (after #45548) but still hits a rank-ordering issue at the broadcast step — pivoted to DS-Z2+EP for long context (Step 8); proper DS-Z3+EP fix documented in [§D-blocker of todo](./upstream_todo.md).
 
@@ -367,15 +385,15 @@ Two patches that don't fit Phase 1 or Phase 2 cleanly but are part of the EP-cor
 
 #### MEASURE — what each phase actually unlocked
 
-| Phase | What | Impact |
-| ----- | ---- | ------ |
-| Pre-Phase-1 | TRL silently bypassed EP | All early EP numbers were FSDP-with-replicated-experts. Throughput plausible; sharding fictitious. |
-| Phase 1 (#45436 + #45473) | EP forward outputs correct at EP=1,2,4,8,16 | Throughput numbers become **meaningful**. EP=4+TP=4 at 16k = 22.7%. |
-| Phase 1 (#45548) | DS-Z3 + EP loads | Unblocks DS-Z3 + EP exploration (later pivots to DS-Z2 due to Phase 1 limit). |
-| Phase 1 (#45649) | FSDP2 cpu_ram_efficient OOM removed | Unblocks 30B-A3B loading on 8 ranks/node — required for every multi-node EP run. |
-| Phase 1 (#45662) | EP+FSDP composable | **40.4% window MFU at 16k** — the EP champion at short context. |
-| Phase 2 (#45621, Ilyas) | sonicMoE forward sentinel-aware | EP > 1 with sonicMoE no longer segfaults. Unlocks the +23% kernel speedup at EP. |
-| Phase 2 (Dao-AILab issue, pending) | sonicMoE backward sentinel-aware | **+2 pp MFU recovery** when the wrapper clamp can be removed. Open. |
+| Phase                              | What                                        | Impact                                                                                             |
+| ---------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Pre-Phase-1                        | TRL silently bypassed EP                    | All early EP numbers were FSDP-with-replicated-experts. Throughput plausible; sharding fictitious. |
+| Phase 1 (#45436 + #45473)          | EP forward outputs correct at EP=1,2,4,8,16 | Throughput numbers become **meaningful**. EP=4+TP=4 at 16k = 22.7%.                                |
+| Phase 1 (#45548)                   | DS-Z3 + EP loads                            | Unblocks DS-Z3 + EP exploration (later pivots to DS-Z2 due to Phase 1 limit).                      |
+| Phase 1 (#45649)                   | FSDP2 cpu_ram_efficient OOM removed         | Unblocks 30B-A3B loading on 8 ranks/node — required for every multi-node EP run.                   |
+| Phase 1 (#45662)                   | EP+FSDP composable                          | **40.4% window MFU at 16k** — the EP champion at short context.                                    |
+| Phase 2 (#45621, Ilyas)            | sonicMoE forward sentinel-aware             | EP > 1 with sonicMoE no longer segfaults. Unlocks the +23% kernel speedup at EP.                   |
+| Phase 2 (Dao-AILab issue, pending) | sonicMoE backward sentinel-aware            | **+2 pp MFU recovery** when the wrapper clamp can be removed. Open.                                |
 
 ---
 
@@ -403,23 +421,23 @@ PR #45473 added **4 regression tests** comparing forward outputs against the non
 
 Up to 16k per-rank seq, EP=8 trains beautifully (40% MFU). At 32k+ per-rank seq, every EP=8 config OOMs at the **same single allocation**:
 
-| Per-rank seq | EP buffer |
-| ------------ | --------- |
-| 16k | 9.275 GiB |
-| **32k** | **18.55 GiB** |
-| 64k | 37.09 GiB |
+| Per-rank seq | EP buffer     |
+| ------------ | ------------- |
+| 16k          | 9.275 GiB     |
+| **32k**      | **18.55 GiB** |
+| 64k          | 37.09 GiB     |
 
 This is `seq × num_local_experts × moe_intermediate × 2 bytes`, materialized once per rank because EP is replicate-mask (every rank sees the full token batch). **Linear in per-rank seq.** Chunked-CE freed up enough room (by removing the lm_head logit tensor from the activation budget) to fit it through 128k. Past 128k per-rank, even chunked can't save the EP path.
 
 That's where the empirical rule comes in. From a sweep of `(total_ctx, SP) × per-rank-seq`:
 
-| Total ctx | Nodes | SP | Per-rank seq | Peak MFU |
-| --------- | ----- | -- | ------------ | -------- |
-| 256k | 8 | 8 | 32k | 32.6% |
-| 256k | 8 | 4 | 64k | 46.6% |
-| **256k** | **8** | **2** | **128k** | **59.6%** |
-| **512k** | **8** | **4** | **128k** | **58.2%** |
-| **1M** | **8** | **8** | **128k** | **37.5%** |
+| Total ctx | Nodes | SP    | Per-rank seq | Peak MFU  |
+| --------- | ----- | ----- | ------------ | --------- |
+| 256k      | 8     | 8     | 32k          | 32.6%     |
+| 256k      | 8     | 4     | 64k          | 46.6%     |
+| **256k**  | **8** | **2** | **128k**     | **59.6%** |
+| **512k**  | **8** | **4** | **128k**     | **58.2%** |
+| **1M**    | **8** | **8** | **128k**     | **37.5%** |
 
 **MFU is maximized when `per_rank_seq = 128k`.** Tune SP to hit that. We didn't find this from theory; we found it from running ~250 configurations. It's the kind of operational fact that only a sweep produces.
 
@@ -428,10 +446,10 @@ That's where the empirical rule comes in. From a sweep of `(total_ctx, SP) × pe
 (Elaborates Step 9.)
 
 - **Bug 1 — broken FSDP2 hooks**: `accelerate.fsdp2_prepare_model()` was calling `torch.compile(module)` and assigning the returned `OptimizedModule` to `model`. `OptimizedModule.__call__` bypasses `nn.Module._call_impl` → **FSDP2 forward pre/post hooks never fire** → params never gathered → 2.7× slowdown (23.4% → 8.7% MFU).
-  - **Fix**: [accelerate#4022](https://github.com/huggingface/accelerate/pull/4022) — call `torch.compile` at the right level so hooks survive. **+6 pp** confirmed (FSDP DP=16 + FA3 + compile @ 16k = 34.87%).
+    - **Fix**: [accelerate#4022](https://github.com/huggingface/accelerate/pull/4022) — call `torch.compile` at the right level so hooks survive. **+6 pp** confirmed (FSDP DP=16 + FA3 + compile @ 16k = 34.87%).
 - **Bug 2 — Adam mesh-mix under EP+FSDP+compile**: EP DTensors on EP mesh + FSDP DP DTensors on FSDP mesh → `_group_tensors_by_device_and_dtype` strict-asserts under compile. Tried non-fused Adam (`--optim adamw_torch`) — same crash, foreach groups regardless.
-  - **Pivot**: DS-Z2+EP+compile. DS uses plain `nn.Parameter` (no DTensor mesh) → no foreach mesh-mix. **+8 pp** at 16k (28.6 → 36.7%).
-  - **Open issue**: surgical PyTorch patch to `_group_tensors_by_device_and_dtype` to treat EP and FSDP DTensors as compatible if device+dtype match. [§E1 of todo.](./upstream_todo.md)
+    - **Pivot**: DS-Z2+EP+compile. DS uses plain `nn.Parameter` (no DTensor mesh) → no foreach mesh-mix. **+8 pp** at 16k (28.6 → 36.7%).
+    - **Open issue**: surgical PyTorch patch to `_group_tensors_by_device_and_dtype` to treat EP and FSDP DTensors as compatible if device+dtype match. [§E1 of todo.](./upstream_todo.md)
 - **Setup gotchas worth listing in the published post**: `dynamo_config.use_fullgraph: false` + `use_regional_compilation: true` + per-rank `TRITON_CACHE_DIR=/tmp/triton-rank-${RANK}` + `@torch._dynamo.disable` on expert kernels. Without all four, you crash.
 
 ### 3.4 DS-Z2 + EP — the 7-patch recipe behind every long-context champion
@@ -584,7 +602,7 @@ accelerate launch \
 - The transformers core team shipped native `Qwen3MoeExperts` with fused `gate_up_proj` + automatic `WeightConverter` from the original Hub checkpoint.
 - Dropped `fuse_moe_experts` helper and the forked checkpoint. The original `Qwen/Qwen3-30B-A3B` works directly.
 - **MEASURE**: 23% MFU at 16k — **8× over the 2.8% baseline**. One PR bump. Not our PR; we were standing on the core team's work.
-- Important framing: this is the *one* big jump that wasn't ours. We acknowledge it.
+- Important framing: this is the _one_ big jump that wasn't ours. We acknowledge it.
 
 ### 4.4 2026-04-15 — The EP correctness audit: PRs #45436 + #45473 land **(EP-series PRs 1+2 of 5)**
 
@@ -592,11 +610,11 @@ accelerate launch \
 - TRY: `enable_expert_parallel=True`. Ran a forward pass at EP=1 and compared logits to the non-EP baseline.
 - BREAK: **all-zero expert outputs** with no NaN. EP routing was silently broken.
 - DEBUG: read through `RouterParallel` + `GroupedGemmParallel`. Found **five** independent bugs:
-  1. Wrong shape for routing weights under EP remapping.
-  2. Wrong plan looked up during weight loading (TP regex over EP plan).
-  3. Sentinel rows hit uninit GPU memory in `grouped_mm`.
-  4. Global rank vs mesh-local rank in `shard_tensor` (out-of-range expert ids on 2D mesh).
-  5. `num_experts` divided once per weight instead of once per module.
+    1. Wrong shape for routing weights under EP remapping.
+    2. Wrong plan looked up during weight loading (TP regex over EP plan).
+    3. Sentinel rows hit uninit GPU memory in `grouped_mm`.
+    4. Global rank vs mesh-local rank in `shard_tensor` (out-of-range expert ids on 2D mesh).
+    5. `num_experts` divided once per weight instead of once per module.
 - FIX: split into **[transformers#45436](https://github.com/huggingface/transformers/pull/45436)** (Qwen3 EP plan + 2D-mesh fixes) and **[transformers#45473](https://github.com/huggingface/transformers/pull/45473)** (routing correctness + 4 regression tests verifying forward-output match against non-EP at EP=1,2,4,8,16). Both **merged**.
 - MEASURE: EP=4 with TP=4 on 16k = 22.7% MFU, training-correct. EP itself doesn't beat no-EP on throughput yet, but **now it's verifiable.** Zero EP test coverage existed before; we left 4 tests behind.
 - MOOD: we discovered that **all prior "EP" wandb runs were wrong** (loss curves looked plausible, but logits diverged from the no-EP ground truth in bf16). This is the section we're least proud of and most explicit about in the post.
@@ -607,8 +625,8 @@ accelerate launch \
 - WANT: replace sdpa with FA3. Hopper has tensor cores tuned for FA3's GEMM shapes.
 - TRY: `attn_implementation=kernels-community/vllm-flash-attn3`.
 - MEASURE on dense:
-  - Qwen3-4B at 32k: 35.9% (sdpa+Liger) → **56.3%** (FA3+Liger). +57%.
-  - Qwen3-32B at 32k: 43.1% (sdpa+Liger) → **59.0%** (FA3+Liger). +37%.
+    - Qwen3-4B at 32k: 35.9% (sdpa+Liger) → **56.3%** (FA3+Liger). +57%.
+    - Qwen3-32B at 32k: 43.1% (sdpa+Liger) → **59.0%** (FA3+Liger). +37%.
 - MEASURE on MoE: +11% at 16k FSDP DP=16 (23.1 → 25.7%), +6% at 16k EP=8.
 - BREAK: FA3 + CP fails — accelerate hard-guards `cp_size > 1` to `attn_implementation=sdpa`. Filed as a todo (cf. §H2 of `upstream_todo.md`); FA3 is our long-context attention, but only via SP, not CP.
 
@@ -617,9 +635,9 @@ accelerate launch \
 - WANT: a faster expert-dispatch kernel than `grouped_mm`.
 - TRY: `kernels-community/sonic-moe` (CuteDSL fused MoE) via `--experts_implementation sonicmoe`.
 - BREAK 1 (orthogonal, but turns out to be on the EP critical path): FSDP2 OOMs during `from_pretrained` at `Qwen3-30B`-scale on multi-node EP runs.
-  - DEBUG: bisected transformers `5.6.0.dev0` → `5.7.0.dev0` to a single-line change in [PR #45050](https://github.com/huggingface/transformers/pull/45050) — `torch.empty_like` → `torch.zeros_like` on non-rank-0 FSDP placeholder tensors. Benign on small models, but on Linux with anonymous mmap it forces a *physical memory commit* of every byte. For 8 ranks × 30B weights, that's ~480 GB CPU peak per node → cgroup OOM.
-  - FIX: pushed [`AmineDiro/transformers:fix-fsdp2-cpu-ram-zeros-like`](https://github.com/AmineDiro/transformers/tree/fix-fsdp2-cpu-ram-zeros-like) → became **[transformers#45649](https://github.com/huggingface/transformers/pull/45649)** (in flight) — drop the broadcast-bound parameter materialization on non-rank-0 ranks (FSDP overwrites them anyway). Buffers (per-rank) still get zeros.
-  - **THREAD MARKER**: this is **EP-series PR 3 of 5**. It's framed as "an FSDP fix" but in practice every multi-node EP run depended on it — without #45649, you can't even *load* the model on 16+ ranks, let alone train it. Counts as part of the EP-correctness pipeline.
+    - DEBUG: bisected transformers `5.6.0.dev0` → `5.7.0.dev0` to a single-line change in [PR #45050](https://github.com/huggingface/transformers/pull/45050) — `torch.empty_like` → `torch.zeros_like` on non-rank-0 FSDP placeholder tensors. Benign on small models, but on Linux with anonymous mmap it forces a _physical memory commit_ of every byte. For 8 ranks × 30B weights, that's ~480 GB CPU peak per node → cgroup OOM.
+    - FIX: pushed [`AmineDiro/transformers:fix-fsdp2-cpu-ram-zeros-like`](https://github.com/AmineDiro/transformers/tree/fix-fsdp2-cpu-ram-zeros-like) → became **[transformers#45649](https://github.com/huggingface/transformers/pull/45649)** (in flight) — drop the broadcast-bound parameter materialization on non-rank-0 ranks (FSDP overwrites them anyway). Buffers (per-rank) still get zeros.
+    - **THREAD MARKER**: this is **EP-series PR 3 of 5**. It's framed as "an FSDP fix" but in practice every multi-node EP run depended on it — without #45649, you can't even _load_ the model on 16+ ranks, let alone train it. Counts as part of the EP-correctness pipeline.
 - BREAK 2 (the actual sonicMoE issue): kernel cold-start (~25–30s for CuteDSL JIT + autotune + first-touch) made 20-step runs lie about steady-state.
 - MEASURE (early, 20-step): cumulative MFU was confusingly close to grouped_mm. We almost concluded sonicMoE wasn't a win — the cold start dominated the average.
 
@@ -646,16 +664,16 @@ This is the longest entry in the diary. Phase-1 of the EP-PR series **finishes t
 1. **EP-series PR 4: DS-Z3 + EP loading** — **[transformers#45548](https://github.com/huggingface/transformers/pull/45548)** (merged). Before: `from_pretrained` hung at `device_map` checks because DS-Z3's env vars routed every weight through the ZeRO-3 path; EP needs the standard path. Adds `PreTrainedModel.has_ep` and routes EP+DS through the standard loader. **Result**: DS-Z3 + EP now loads (though it'll later run into the rank-ordering issue and force the DS-Z2 pivot).
 2. **FA3 + EP "incompatibility" was self-inflicted** — bisected to `HF_HUB_OFFLINE=1` being set after sonicMoE pre-warmed but before FA3's two-phase kernel load could fetch. Fixed in `trl/scripts/sft.py` by pre-warming both FA3 paths first. **MEASURE**: FA3+EP=8+sonicMoE = 42.66% window MFU peak (the highest pre-correctness-fix number on the stack).
 3. **EP-series PR 5: EP+FSDP DTensor wrap** — **[transformers#45662](https://github.com/huggingface/transformers/pull/45662)** (in flight). EP-sharded experts wrapped as DTensors on the EP mesh so Adam's `_fused_adamw_` doesn't reject mixed Tensor + DTensor lists. **This is the PR that closes Phase 1.**
-4. **Side effect of #45662** (the cascading consequence the post should highlight): now that EP params are DTensors, accelerate's existing `_prepare_tp` "no DTensor → skip" guard stops firing → ImportError on `ReplicateParallel`. Patched locally with a 5-line `has_ep` skip. Queued as a standalone accelerate PR. *Every Phase-1 PR has had a downstream consequence that needed a follow-up patch — this is normal in framework debugging and worth being explicit about.*
+4. **Side effect of #45662** (the cascading consequence the post should highlight): now that EP params are DTensors, accelerate's existing `_prepare_tp` "no DTensor → skip" guard stops firing → ImportError on `ReplicateParallel`. Patched locally with a 5-line `has_ep` skip. Queued as a standalone accelerate PR. _Every Phase-1 PR has had a downstream consequence that needed a follow-up patch — this is normal in framework debugging and worth being explicit about._
 5. **Phase-2 starts on the trainer side: NaN bisect → wrapper-clamp workaround** — Bisected the EP NaN gradient through 4 hypotheses (DTensor-wrap? `to_local()` non-contiguous? sentinel handling?). Landed on: kernel's hand-written backward NaNs on EP sentinels going through `DTensor.to_local()`. Wrapper-level `clamp + masked_fill` on sentinels in `sonicmoe_experts_forward`. **~2 pp MFU cost — the "clamp tax" we'll eventually claw back when Dao-AILab fixes the kernel backward.** Filed the upstream issue with a [standalone repro](./sonic_moe_upstream_repro.md).
 6. **Long-context EP=8 sweep** — every config OOMed at the **same single 18.55 GiB allocation** (the EP-replicated expert buffer). 32k, 64k, 8 nodes — all hit the same wall. (This is the wall chunked-CE will demolish on 04-29.)
-7. **DS-Z3 + EP → dead end → pivot to FSDP+EP+CP** — DS-Z3's broadcast inside `expert_data_parallel_group` overwrites EP slices because rank ordering doesn't match. Documented the rank-ordering analysis (`debug_sp_ep_sonic.md` Iteration 4) and pivoted long-context to FSDP+EP+CP. **Phase-1 #45548 unblocked DS-Z3 *loading*; the rank-ordering issue blocks DS-Z3 *training*. Different problem, separate fix path, deferred.**
+7. **DS-Z3 + EP → dead end → pivot to FSDP+EP+CP** — DS-Z3's broadcast inside `expert_data_parallel_group` overwrites EP slices because rank ordering doesn't match. Documented the rank-ordering analysis (`debug_sp_ep_sonic.md` Iteration 4) and pivoted long-context to FSDP+EP+CP. **Phase-1 #45548 unblocked DS-Z3 _loading_; the rank-ordering issue blocks DS-Z3 _training_. Different problem, separate fix path, deferred.**
 
 **MEASURE end-of-day**: 16k post-correctness-fix EP=8 + FA3 + sonicMoE = **40.4% window MFU**, training-correct. The EP champion that stuck. **Phase 1 of the EP-PR series is complete.** Phase 2 is in progress (clamp tax sitting at ~2 pp).
 
 ### 4.10 2026-04-28 — torch.compile fix + chunked-CE first results
 
-1. **torch.compile + FSDP2 fix lands**: **[accelerate#4022](https://github.com/huggingface/accelerate/pull/4022)** (in flight) — `accelerate.fsdp2_prepare_model` was calling `torch.compile` and breaking FSDP2's forward hooks (2.7× *slowdown*). After the fix: FSDP DP=16 + FA3 + compile = **34.87% window MFU**. +6 pp over no-compile baseline.
+1. **torch.compile + FSDP2 fix lands**: **[accelerate#4022](https://github.com/huggingface/accelerate/pull/4022)** (in flight) — `accelerate.fsdp2_prepare_model` was calling `torch.compile` and breaking FSDP2's forward hooks (2.7× _slowdown_). After the fix: FSDP DP=16 + FA3 + compile = **34.87% window MFU**. +6 pp over no-compile baseline.
 2. **DS-Z2 + EP + compile = new compile-EP champion** at 16k — **36.7% window MFU**. +8 pp over DS-Z2+EP no-compile. (FSDP+EP+compile blocked: Adam's `_group_tensors_by_device_and_dtype` mesh-mix; documented.)
 3. **32k SP=2 unseats CP** as the long-context champion — DS-Z3+SP=2+FA3+sonicMoE @ 32k = 21.98% window MFU. Beats FSDP+EP+CP=2 at 32k (15.6%) by +6 pp.
 4. **256k SP=16 first attempt** — DS-Z3+SP=16+chunked at 256k @ 8n = 1.36% MFU. Cross-node Ulysses dominates. Lesson: SP doesn't scale arbitrarily; need per-rank-seq tuning.
@@ -700,17 +718,17 @@ This is the longest entry in the diary. Phase-1 of the EP-PR series **finishes t
 
 **A standalone callout/sidebar in the published post.** A reader who only reads this box should walk away understanding: **EP wasn't a single fix; it was a five-PR series spanning two weeks**, plus a second-phase kernel-side recovery still in progress.
 
-| # | Date landed | PR | Phase | Author | What it unblocked |
-| --- | --- | --- | --- | --- | --- |
-| 1 | 2026-04-15 | [transformers#45436](https://github.com/huggingface/transformers/pull/45436) | 1 (correct) | us | Qwen3 EP plan; mesh-local rank in `shard_tensor`; single `num_experts` divide |
-| 2 | 2026-04-15 | [transformers#45473](https://github.com/huggingface/transformers/pull/45473) | 1 (correct) | us | Routing-weight shape; weight-loading plan lookup; sentinel-aware grouped_mm; +4 regression tests |
-| 3 | 2026-04-24 | [transformers#45649](https://github.com/huggingface/transformers/pull/45649) (in flight) | 1 (correct) | us | FSDP2 cpu_ram_efficient OOM removed (#45050 regression); required to load 30B-A3B on 16+ ranks |
-| 4 | 2026-04-27 | [transformers#45548](https://github.com/huggingface/transformers/pull/45548) | 1 (correct) | us | DS-Z3 + EP loading via `PreTrainedModel.has_ep` |
-| 5 | 2026-04-27 | [transformers#45662](https://github.com/huggingface/transformers/pull/45662) (in flight) | 1 (correct) | us | EP+FSDP composability via DTensor-wrap on EP mesh — closes Phase 1 |
-| — | 2026-04-26 | [transformers#45621](https://github.com/huggingface/transformers/pull/45621) (in flight) | **2 (fast)** | **Ilyas Moutawwakil** | sonicMoE forward sentinel-aware (kernel revision pin) |
-| — | 2026-04-27 | local — `sonicmoe.py` wrapper clamp ([§1 of local_only_patches](./local_only_patches.md)) | 2 (fast, workaround) | us | Backward NaN on EP sentinels through `DTensor.to_local()`; ~2 pp MFU clamp tax |
-| — | pending | Dao-AILab/sonic-moe upstream issue ([repro](./sonic_moe_upstream_repro.md)) | 2 (fast, root fix) | us (issue), Dao-AILab (fix) | Kernel-native backward sentinel handling → **+2 pp recovery when removed** |
-| — | pending | accelerate `_prepare_tp` `has_ep` skip ([§4 of local_only_patches](./local_only_patches.md)) | 1 (downstream consequence of #45662) | us | Stops `_prepare_tp` from ImportError-ing on EP DTensor params |
+| #   | Date landed | PR                                                                                           | Phase                                | Author                      | What it unblocked                                                                                |
+| --- | ----------- | -------------------------------------------------------------------------------------------- | ------------------------------------ | --------------------------- | ------------------------------------------------------------------------------------------------ |
+| 1   | 2026-04-15  | [transformers#45436](https://github.com/huggingface/transformers/pull/45436)                 | 1 (correct)                          | us                          | Qwen3 EP plan; mesh-local rank in `shard_tensor`; single `num_experts` divide                    |
+| 2   | 2026-04-15  | [transformers#45473](https://github.com/huggingface/transformers/pull/45473)                 | 1 (correct)                          | us                          | Routing-weight shape; weight-loading plan lookup; sentinel-aware grouped_mm; +4 regression tests |
+| 3   | 2026-04-24  | [transformers#45649](https://github.com/huggingface/transformers/pull/45649) (in flight)     | 1 (correct)                          | us                          | FSDP2 cpu_ram_efficient OOM removed (#45050 regression); required to load 30B-A3B on 16+ ranks   |
+| 4   | 2026-04-27  | [transformers#45548](https://github.com/huggingface/transformers/pull/45548)                 | 1 (correct)                          | us                          | DS-Z3 + EP loading via `PreTrainedModel.has_ep`                                                  |
+| 5   | 2026-04-27  | [transformers#45662](https://github.com/huggingface/transformers/pull/45662) (in flight)     | 1 (correct)                          | us                          | EP+FSDP composability via DTensor-wrap on EP mesh — closes Phase 1                               |
+| —   | 2026-04-26  | [transformers#45621](https://github.com/huggingface/transformers/pull/45621) (in flight)     | **2 (fast)**                         | **Ilyas Moutawwakil**       | sonicMoE forward sentinel-aware (kernel revision pin)                                            |
+| —   | 2026-04-27  | local — `sonicmoe.py` wrapper clamp ([§1 of local_only_patches](./local_only_patches.md))    | 2 (fast, workaround)                 | us                          | Backward NaN on EP sentinels through `DTensor.to_local()`; ~2 pp MFU clamp tax                   |
+| —   | pending     | Dao-AILab/sonic-moe upstream issue ([repro](./sonic_moe_upstream_repro.md))                  | 2 (fast, root fix)                   | us (issue), Dao-AILab (fix) | Kernel-native backward sentinel handling → **+2 pp recovery when removed**                       |
+| —   | pending     | accelerate `_prepare_tp` `has_ep` skip ([§4 of local_only_patches](./local_only_patches.md)) | 1 (downstream consequence of #45662) | us                          | Stops `_prepare_tp` from ImportError-ing on EP DTensor params                                    |
 
 **The post's framing of this thread**:
 
@@ -723,26 +741,26 @@ This is the longest entry in the diary. Phase-1 of the EP-PR series **finishes t
 
 For the reader who wants the table-of-PRs to scan in 30 seconds:
 
-| Date | What unlocked | Where the fix lives | Status |
-| ---- | ------------- | ------------------- | ------ |
-| pre-04 | Fused experts as workaround | TRL `fuse_moe_experts` helper | Retired |
-| 2026-04-13 (ish) | Native `Qwen3MoeExperts` | transformers core | Upstream (not us) |
-| 2026-04-15 | EP correctness + 2D mesh | [transformers#45436](https://github.com/huggingface/transformers/pull/45436) [#45473](https://github.com/huggingface/transformers/pull/45473) | **Merged** |
-| 2026-04-17 | FA3 unlock everywhere | `kernels-community/vllm-flash-attn3` wiring | Configured |
-| 2026-04-24 | FSDP2 cpu_ram_efficient OOM | [transformers#45649](https://github.com/huggingface/transformers/pull/45649) | **In flight** |
-| 2026-04-24 | sonicMoE first benchmark | `--experts_implementation sonicmoe` flag in TRL | Local (G2) |
-| 2026-04-25 | Window MFU metric | `SFTTrainer.log` adds `mfu_window` | Local (G2) |
-| 2026-04-26 | sonicMoE EP sentinel-skip | [transformers#45621](https://github.com/huggingface/transformers/pull/45621) | **In flight** |
-| 2026-04-27 | DS-Z3 + EP loading | [transformers#45548](https://github.com/huggingface/transformers/pull/45548) | **Merged** |
-| 2026-04-27 | EP+FSDP DTensor wrap | [transformers#45662](https://github.com/huggingface/transformers/pull/45662) | **In flight** |
-| 2026-04-27 | sonicMoE wrapper-clamp + accelerate `_prepare_tp` skip | local; queued upstream | Local |
-| 2026-04-27 | FA3 + EP self-inflicted offline-mode race | `trl/scripts/sft.py` pre-warm dance | Local (G2) |
-| 2026-04-28 | torch.compile + FSDP2 broken hooks | [accelerate#4022](https://github.com/huggingface/accelerate/pull/4022) | **In flight** |
-| 2026-04-28 | DS-Z2 + EP recipe (3 repos, 7 patches) | local — see [upstream_todo.md §D-works](./upstream_todo.md) | Pending PR split |
-| 2026-04-28 | chunked-CE in SFT (cherry-picked) | [trl#5575](https://github.com/huggingface/trl/pull/5575) | **Merged** |
-| 2026-04-29 | Liger × MoE × EP root cause + workaround | local + Liger PR upcoming | Workaround shipping |
-| 2026-04-29 | Per-rank-seq sweet spot + 1M context | benchmark methodology | Documented |
-| 2026-04-29 | Causal-corrected MFU | `benchmark/adjust_mfu_causal.py` helper | Local |
+| Date             | What unlocked                                          | Where the fix lives                                                                                                                           | Status              |
+| ---------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| pre-04           | Fused experts as workaround                            | TRL `fuse_moe_experts` helper                                                                                                                 | Retired             |
+| 2026-04-13 (ish) | Native `Qwen3MoeExperts`                               | transformers core                                                                                                                             | Upstream (not us)   |
+| 2026-04-15       | EP correctness + 2D mesh                               | [transformers#45436](https://github.com/huggingface/transformers/pull/45436) [#45473](https://github.com/huggingface/transformers/pull/45473) | **Merged**          |
+| 2026-04-17       | FA3 unlock everywhere                                  | `kernels-community/vllm-flash-attn3` wiring                                                                                                   | Configured          |
+| 2026-04-24       | FSDP2 cpu_ram_efficient OOM                            | [transformers#45649](https://github.com/huggingface/transformers/pull/45649)                                                                  | **In flight**       |
+| 2026-04-24       | sonicMoE first benchmark                               | `--experts_implementation sonicmoe` flag in TRL                                                                                               | Local (G2)          |
+| 2026-04-25       | Window MFU metric                                      | `SFTTrainer.log` adds `mfu_window`                                                                                                            | Local (G2)          |
+| 2026-04-26       | sonicMoE EP sentinel-skip                              | [transformers#45621](https://github.com/huggingface/transformers/pull/45621)                                                                  | **In flight**       |
+| 2026-04-27       | DS-Z3 + EP loading                                     | [transformers#45548](https://github.com/huggingface/transformers/pull/45548)                                                                  | **Merged**          |
+| 2026-04-27       | EP+FSDP DTensor wrap                                   | [transformers#45662](https://github.com/huggingface/transformers/pull/45662)                                                                  | **In flight**       |
+| 2026-04-27       | sonicMoE wrapper-clamp + accelerate `_prepare_tp` skip | local; queued upstream                                                                                                                        | Local               |
+| 2026-04-27       | FA3 + EP self-inflicted offline-mode race              | `trl/scripts/sft.py` pre-warm dance                                                                                                           | Local (G2)          |
+| 2026-04-28       | torch.compile + FSDP2 broken hooks                     | [accelerate#4022](https://github.com/huggingface/accelerate/pull/4022)                                                                        | **In flight**       |
+| 2026-04-28       | DS-Z2 + EP recipe (3 repos, 7 patches)                 | local — see [upstream_todo.md §D-works](./upstream_todo.md)                                                                                   | Pending PR split    |
+| 2026-04-28       | chunked-CE in SFT (cherry-picked)                      | [trl#5575](https://github.com/huggingface/trl/pull/5575)                                                                                      | **Merged**          |
+| 2026-04-29       | Liger × MoE × EP root cause + workaround               | local + Liger PR upcoming                                                                                                                     | Workaround shipping |
+| 2026-04-29       | Per-rank-seq sweet spot + 1M context                   | benchmark methodology                                                                                                                         | Documented          |
+| 2026-04-29       | Causal-corrected MFU                                   | `benchmark/adjust_mfu_causal.py` helper                                                                                                       | Local               |
 
 ---
 

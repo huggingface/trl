@@ -1593,49 +1593,7 @@ class SFTTrainer(_BaseTrainer):
                 flush=True,
             )
             self._lt_dl_logged = True
-        # When EP is enabled, every rank within an EP group must see the SAME micro-batch —
-        # EP shards experts only, not data. Accelerate's prepare_data_loader has no concept of
-        # EP and gives every world rank a unique data shard, which causes mismatched per-rank
-        # tensor shapes inside the experts forward and a silent NCCL hang at the EP all-reduce.
-        # Patch accelerator.prepare_data_loader for one call to use EP-corrected
-        # num_processes (= world_size // ep_size) and process_index (= global_rank // ep_size).
-        if not getattr(self.args, "enable_expert_parallel", False):
-            return super()._get_dataloader(dataset, description, batch_size, sampler_fn, is_training, dataloader_key)
-
-        from accelerate.data_loader import prepare_data_loader as _prep_dl
-
-        ep_size = getattr(self.args, "expert_parallel_size", None) or 1
-        eff_num = self.accelerator.num_processes // ep_size
-        eff_idx = self.accelerator.process_index // ep_size
-
-        orig_prepare_dl = self.accelerator.prepare_data_loader
-
-        def _patched(dataloader, device_placement=None, slice_fn_for_dispatch=None):
-            if device_placement is None:
-                device_placement = self.accelerator.device_placement
-            return _prep_dl(
-                dataloader,
-                self.accelerator.device,
-                num_processes=eff_num,
-                process_index=eff_idx,
-                split_batches=self.accelerator.split_batches,
-                put_on_device=device_placement,
-                rng_types=self.accelerator.rng_types.copy(),
-                dispatch_batches=self.accelerator.dispatch_batches,
-                even_batches=self.accelerator.even_batches,
-                slice_fn_for_dispatch=slice_fn_for_dispatch,
-                use_seedable_sampler=self.accelerator.use_seedable_sampler,
-                data_seed=self.accelerator.dataloader_config.data_seed,
-                non_blocking=self.accelerator.non_blocking,
-                use_stateful_dataloader=self.accelerator.use_stateful_dataloader,
-                torch_device_mesh=None,
-            )
-
-        self.accelerator.prepare_data_loader = _patched
-        try:
-            return super()._get_dataloader(dataset, description, batch_size, sampler_fn, is_training, dataloader_key)
-        finally:
-            self.accelerator.prepare_data_loader = orig_prepare_dl
+        return super()._get_dataloader(dataset, description, batch_size, sampler_fn, is_training, dataloader_key)
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"

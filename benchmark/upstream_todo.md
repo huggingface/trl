@@ -97,11 +97,25 @@ Loss was healthy across all runs (8.0–13.4) — the kernel fix is not just fas
 
 **Revert**: `uv pip install --reinstall --no-deps accelerate`
 
-### C2. 🟢 EP + `cpu_ram_efficient_loading=True` — guard + proper coexistence fix
+### C2. 🔴 `tp_plan`-loader duplicates non-plan params on every rank — wastes GPU memory + disk I/O at scale
 
-**Files**: `accelerate/utils/fsdp_utils.py:fsdp2_prepare_model` (proper fix) and `transformers/src/transformers/modeling_utils.py` (`from_pretrained`, immediate guard).
+**Scope**: this is bigger than originally framed. The fix description below targets the FSDP+`cpu_ram_efficient_loading=True` corruption (Layer 2), but the underlying Layer 1 (every rank reads the full dense replica from disk to its own GPU) **affects every EP run we do, every TP run any other team does, regardless of `cpu_ram_efficient_loading`**. It's the canonical TP-plan load behavior, baked into `initialize_tensor_parallelism` since the feature shipped, and nobody noticed because the unit was kicked down the road via the loading-walkthrough doc's "in the canonical FSDP recipe..." framing — but the canonical recipe is broken under EP, so people use the non-canonical recipe, where the problem just sits there silently.
 
-**What's broken**: When `enable_expert_parallel=True` and `cpu_ram_efficient_loading=True` are both set, loading silently produces a broken model — no crash, just degenerate loss / wrong outputs (easy to miss). Two interacting steps in `fsdp2_prepare_model` cause it:
+**Files**: `transformers/src/transformers/integrations/tensor_parallel.py:initialize_tensor_parallelism` (root cause) → `transformers/src/transformers/core_model_loading.py:convert_and_load_state_dict_in_model` (where the duplicate loads happen) → `accelerate/utils/fsdp_utils.py:fsdp2_prepare_model` (where the broadcast clobbers EP).
+
+**The Layer 1 problem (always-on, hits all `tp_plan` users)**: `initialize_tensor_parallelism` unconditionally sets `device_map = cuda:LOCAL_RANK` whenever any of `tp_plan`, `tp_size`, or `device_mesh` is passed to `from_pretrained`. `_materialize_copy` then issues `tensor[...].to("cuda:N")` on every rank, for every parameter — including the **non-plan params** (dense weights — embeddings, q/k/v/o, norms, router gates) that are *replicated*, not sharded. So every rank pulls its own full copy of the dense replica from disk straight to its own GPU. Cost on real workloads:
+
+| Config | Dense per rank | Ranks/node | Duplicate dense GPU mem/node | Duplicate disk I/O/node |
+| --- | --- | --- | --- | --- |
+| Qwen3-30B-A3B EP=8, 1 node  | 2.87 GiB | 8 | 22.96 GiB | 480 GB |
+| Qwen3-30B-A3B EP=8, 2 nodes | 2.87 GiB | 8 | 45.92 GiB | 960 GB |
+| Qwen3-235B-A22B EP=8, 16 nodes | ~5-6 GiB | 8 | ~640 GiB | 7.5 TB |
+
+The 235B numbers match the "25+ min stalls" reported in `report.md:4525` for the 235B no-EP path on FSx, which has the same shape (every rank reads its full copy from FSx).
+
+This wastes both GPU memory (FSDP would later shard the dense replica anyway → only one rank's worth was ever needed) and disk bandwidth (FSx hammered N× redundantly). For large MoEs at scale, this is the biggest single avoidable cost in `from_pretrained` today.
+
+**The Layer 2 problem (silent corruption, fires only with `cpu_ram_efficient_loading=True`)**: when `enable_expert_parallel=True` and `cpu_ram_efficient_loading=True` are both set, loading silently produces a broken model — no crash, just degenerate loss / wrong outputs. Two interacting steps in `fsdp2_prepare_model` cause it:
 
 1. `model.to("meta")` destroys _everything_, including the EP per-rank-local expert slices that were just sharded by transformers' EP plan.
 2. `fsdp2_load_full_state_dict` then broadcasts rank-0's full state dict to every rank, overwriting the per-rank EP partition with rank-0's slice.
@@ -180,18 +194,21 @@ Plus ~3 lines in `fsdp2_load_full_state_dict` to filter non-DTensor params on th
 
 **(Stretch)** Make the transformers loader fully EP-aware so each rank loads its own slice from disk _without_ the rank-0 broadcast roundtrip — would require plumbing the EP mesh into the meta-init path. Larger scope, probably blocked on `#45662`. Track as a follow-up if anyone needs it.
 
-### C3. 🔧 EP-aware DataLoader sharding — local override in TRL, proper fix is two-sided in accelerate + transformers
+### C3. 🔧 EP-aware DataLoader sharding — TRL piggy-backs on accelerate's TP-replication path; clean upstream fix still TBD
 
-**Status**: ✅ ROOT CAUSE FOUND 2026-05-02. ✅ Local workaround in place (TRL only). ⛔ Proper upstream fix NOT YET IMPLEMENTED — needs design discussion.
+**Status**: ✅ ROOT CAUSE FOUND 2026-05-02. ✅ Local fix in place (TRL only). ⛔ Proper upstream fix (first-class `ep_size` in accelerate) NOT YET IMPLEMENTED — design captured below.
 
 **Problem in one line**: when EP > 1 with multi-node, accelerate's dataloader gives every world rank a unique micro-batch, but the 8 ranks of an EP group must see the **same** micro-batch (EP shards experts only, not tokens). Mismatched shapes inside the EP group cause silent NCCL hangs at the EP all-reduce.
 
-**Files**:
-- Local fix: `trl/trainer/sft_trainer.py:1568` — `_get_dataloader` override (~30 lines).
+**Files** (both local fixes now live in transformers — TRL is fully out of the EP-DataLoader business):
+- Local fix (DS path): `transformers/src/transformers/trainer.py::create_accelerator_and_postprocess` — injects the EP mesh (`model._device_mesh`) into `accelerator.state.ds_device_mesh` for DS+EP runs. Sits next to the existing DS+EP `_create_expert_and_data_parallel` block. accelerate's existing TP-replication branch in `prepare_data_loader` does the rest natively.
+- Local fix (FSDP/MULTI_GPU path): `transformers/src/transformers/trainer.py::_get_dataloader` — monkey-patches `accelerator.prepare_data_loader` for one call with EP-corrected `num_processes`/`process_index`. FSDP can't use the mesh-injection trick because `state.device_mesh` is also read by `fsdp2_prepare_model` (`fsdp_utils.py:651`) which would crash without a matching `parallelism_config`.
 - Investigation: `benchmark/report.md` (Tests D + E + F + G section).
-- Primer / study material: `benchmark/dataloader_ep_primer.md` (full walkthrough of how distributed dataloaders work and where EP breaks the assumption).
+- Primer / study material: `benchmark/dataloader_ep_primer.md` (how distributed dataloaders work and where EP breaks the assumption); `benchmark/sftrainer_lifecycle.md` (full lifecycle walkthrough — DS vs FSDP boundaries, where the fix sits in each path).
 
-**Why the bug exists in the first place**: accelerate's `ParallelismConfig` (`accelerate/parallelism_config.py:34`) has fields for `dp_replicate_size`, `dp_shard_size`, `tp_size`, `cp_size`, `sp_size` — **no `ep_size`**. EP isn't a first-class concept anywhere in accelerate. Inside `accelerate/data_loader.py:1119-1155`, the mesh-inspection block only divides `process_index` by `submesh_tp_size * submesh_cp_size` (and the DS branch only by `submesh_tp_size`); there's no `if "ep" in mesh_dim_names:` clause. Transformers builds an EP device mesh internally via `apply_tp_plan` but never registers it with accelerate. So in our 16-GPU EP=8 setup, the dataloader ships 16 unique data shards instead of 2-replicated-8x.
+**Key insight (2026-05-04)**: EP and TP are equivalent for dataloader sharding — both are data-replicate dims (ranks within the dim see the same micro-batch). Accelerate's `prepare_data_loader` already has the right code path for TP (inspects `torch_device_mesh.mesh_dim_names` for `"tp"` at `data_loader.py:1119-1155`, divides `process_index`/`num_processes` by `submesh_tp_size`). We can piggy-back on that path without changing accelerate — just expose a mesh with `"tp"` in its dim names. The proper upstream fix would still rename this to `"ep"` for clarity, but for sharding semantics it's the same divisor.
+
+**Why the bug exists in the first place**: accelerate's `ParallelismConfig` (`accelerate/parallelism_config.py:34`) has fields for `dp_replicate_size`, `dp_shard_size`, `tp_size`, `cp_size`, `sp_size` — **no `ep_size`**. EP isn't a first-class concept anywhere in accelerate. Transformers builds an EP device mesh internally via `apply_tp_plan` (with `mesh_dim_names=("dp", "tp")`) but never registers it with accelerate. So accelerate's `state.device_mesh` is None for EP runs — its TP-replication branch never fires — and in our 16-GPU EP=8 setup the dataloader ships 16 unique data shards instead of 2-replicated-8x.
 
 **Why it stays silent for many steps**: with `--packing --pad_to_multiple_of 1`, each micro-batch packs to a variable seq_len. Most micro-batches happen to pack to exactly `max_length=65536` (LongAlign-10k samples are very long), so most of the time all 8 ranks of an EP group **coincidentally agree** on shape and the EP all-reduce succeeds. The bug fires whenever a single rank's batch packs to a different length — random walk over batches → eventually hits → hang.
 
@@ -201,9 +218,14 @@ Plus ~3 lines in `fsdp2_load_full_state_dict` to filter non-DTensor params on th
 - Different seed → different sample order → bug fires at a different step (Test D step 16 with seed=42, Test E step 10 with seed=99) — confirms data-driven.
 - Identical fingerprint across kernels (sonicmoe vs grouped_mm both hang at step 16, same SeqNum=2201) — confirms the bug is **upstream** of the experts kernel.
 
-**Local fix (in place 2026-05-02)**: override `SFTTrainer._get_dataloader` to monkey-patch `accelerator.prepare_data_loader` for ONE call. The patch replaces it with a version that calls `accelerate.data_loader.prepare_data_loader` directly with `num_processes = world_size // ep_size, process_index = global_rank // ep_size, torch_device_mesh=None`. Crucially `torch_device_mesh=None` skips the mesh-inspection block at lines 1119-1155 so accelerate doesn't override our explicit values. Try/finally restores the original `prepare_data_loader` after the call.
+**Local fix (current, 2026-05-04)**: piggy-back on accelerate's existing TP-replication path by exposing a `"tp"` mesh of size `ep_size` to accelerate's prepare_data_loader. Two paths because the wiring point differs:
 
-**Validated by Test G (job 22102668)**: identical config to the deterministic step-16 hang in Test D, with the override active → completed 30/30 steps cleanly, train_loss=1.555, healthy gradients.
+- **DEEPSPEED path (the common one for EP)**: in `transformers/trainer.py::create_accelerator_and_postprocess`, when `is_deepspeed_enabled and model.has_ep`, assign `accelerator.state.ds_device_mesh = model._device_mesh`. The mesh transformers itself built (1D `("tp",)` of size `ep_size`, set in `tensor_parallel.distribute_model`) is reused — no new NCCL splits. Accelerate's `_prepare_device_mesh` returns `ds_device_mesh` for DS runs (`accelerator.py:2604-2612`), so prepare_data_loader's DEEPSPEED branch (lines 1120-1130) sees `"tp"` in dim names and natively divides `process_index = global_rank // ep_size, num_processes = world_size // ep_size`. **No prepare_data_loader patching, no override.** Lives next to the existing `_create_expert_and_data_parallel` block (~line 835) so the EP-specific accelerator setup is co-located.
+- **FSDP / MULTI_GPU path**: in `transformers/trainer.py::_get_dataloader`, when `model.has_ep and is_fsdp_enabled`, monkey-patch `accelerator.prepare_data_loader` for one call with explicit `num_processes = world_size // ep_size`, `process_index = global_rank // ep_size`, and `torch_device_mesh=None`. Try/finally restores the original after the call. The clean piggy-back is not viable for FSDP because `state.device_mesh` is also read by `fsdp2_prepare_model` at `fsdp_utils.py:651` — slipping a 2D `(dp_shard, tp)` mesh in there would also need a matching `parallelism_config` populated, which changes FSDP wrap semantics. The override is the smaller surgery.
+
+**Validated by Test G (job 22102668, 2026-05-02)**: identical config to the deterministic step-16 hang in Test D, with the override active → completed 30/30 steps cleanly, train_loss=1.555, healthy gradients. **Re-validated post-piggy-back refactor by job 22108306 (2026-05-04)** — same config (DS-Z2 + EP=8 + ctx 64k + sonicmoe + chunked_nll, 2 nodes), `ds_device_mesh` reuses transformers' EP mesh in `__init__`, override disabled for DS. 30/30 steps, `train_loss=1.555` (exact match), step-1 loss `1.973` matches Test G exactly. Confirms accelerate's existing TP-replication path in `prepare_data_loader` handles EP correctly once the mesh is exposed.
+
+**Implementation note (mesh reuse, not creation)**: an earlier attempt (job 22108189) called `dist.init_device_mesh("cuda", (ep_size,), mesh_dim_names=("tp",))` to build a fresh 1D mesh and got `AttributeError: 'NoneType' object has no attribute 'group_name'` from torch's `_init_one_process_group` — `split_group` returns None on the second sub-mesh attempt because transformers' `apply_tp_plan` already consumed the world PG split. Workaround: reuse the mesh transformers itself built (`model._device_mesh`, set in `tensor_parallel.py:distribute_model`). Same dim name "tp", same ranks, no new NCCL groups.
 
 **Proper upstream fix (TWO PRs, deliberately not yet written)**:
 
@@ -221,13 +243,12 @@ Plus ~3 lines in `fsdp2_load_full_state_dict` to filter non-DTensor params on th
 
 1. Open accelerate PR for the `ep_size` ParallelismConfig + data_loader changes. Should be small, easy review (mirrors existing TP handling).
 2. Open transformers PR (depends on 1) wiring `DistributedConfig.enable_expert_parallel` into `ParallelismConfig.ep_size` at trainer init.
-3. Once both merge, delete the `_get_dataloader` override in `trl/trainer/sft_trainer.py`.
+3. Once both merge, delete the local pieces in `transformers/trainer.py`: (a) the `ds_device_mesh` injection block in `create_accelerator_and_postprocess` (~10 lines), and (b) the FSDP-fallback `prepare_data_loader` patch block in `_get_dataloader` (~40 lines). Both are replaced by accelerate's native handling once `ep_size` is a first-class field.
 
-**Revert (local override only)**:
+**Revert (local fix only)**:
 ```bash
-# In /fsx/amine_dirhoussi/trl/trl/trainer/sft_trainer.py, remove the
-# `def _get_dataloader(self, ...):` block added 2026-05-02 (~30 lines).
-git checkout -- trl/trainer/sft_trainer.py
+# Both blocks live in transformers now. TRL's _get_dataloader is empty of EP logic.
+git -C /fsx/amine_dirhoussi/transformers checkout -- src/transformers/trainer.py
 ```
 
 **Multi-night investigation history that this resolves**: D-works.bug (below) and the entire "ROOT CAUSE narrowing" sub-tree. Tests A-F (NCCL state, Triton streams, autograd accumulation, FSDP backend, kernel swap, gc.collect) all confirmed the bug was NOT what they targeted. Test E with seed=99 proved data-dependence (rules out step-counter). Test F with grouped_mm proved kernel-independence. Per-rank EP-boundary debug instrumentation (added in this session — see `tensor_parallel.py::_maybe_log_ep`) plus per-step batch metadata (`sft_trainer.py::compute_loss BATCH_DEBUG_DIR` block) showed rank 4 sending `[1, 54223]` while ranks 0-3,5-7 sent `[1, 65536]`. Hang explained.
@@ -265,7 +286,16 @@ git checkout -- trl/trainer/sft_trainer.py
 **Upstream split** (when ready):
 
 1. Patches (1)+(2)+(4)+(5) → transformers PR depending on `#45662` landing first.
-2. Patch (3) → DS PR (or push our fix into deepspeed `engine.py`'s MoE detection path).
+2. Patch (3) → **DO NOT open a DeepSpeed PR**. Decision 2026-05-05: avoid a deepspeed-side PR at all costs (DS upstreaming has long review cycles, the maintainers don't own external-EP semantics, and we don't want to take on a DS dependency). Keep the workaround on transformers/TRL side. Three options to explore, in order of likely cleanness:
+
+    a. **Post-`deepspeed.initialize` engine attribute patch** (preferred) — after `accelerator.prepare(model, optimizer, ...)` returns the wrapped engine, write `engine.has_moe_layers = True` and `engine.optimizer.expert_data_parallel_group = groups._get_expert_data_parallel_group(f"ep_size_{ep_size}")` directly. Requires that `_create_expert_and_data_parallel(ep_size)` ran beforehand (already done in `create_accelerator_and_postprocess`). DS's auto-detect loop in `engine.py` is consulted only at init; once we set the attributes after, the rest of DS reads them as-is. Lives in `transformers/trainer.py`, ~5 lines.
+
+    b. **Pre-`deepspeed.initialize` module marker** — set `module._has_moe_layers = True` (or whatever attribute DS's detection loop checks) on each EP-experts module before `accelerator.prepare`. Slightly more invasive than (a) because it reaches into DS's internal attribute names, but requires no post-init poking. Survey `engine.py:_configure_distributed_model`'s detection loop first to confirm what attribute name it inspects.
+
+    c. **Wrap external EP modules in a `deepspeed.moe.layer.MoE`-shaped shim** — wraps EP modules in a class that quacks like DS's `MoE` (exposes `deepspeed_moe`, the right `group_name`, etc.) so DS's detection finds them naturally. Most invasive; only consider if (a) and (b) both turn out leaky.
+
+    All three keep the workaround inside transformers/TRL. None requires touching DS. Pick (a) when implementing the DS-Z2+EP transformers PR (item 1 above).
+
 3. TRL side (6) → falls under G2 in this todo.
 4. (7) → A1 in this todo.
 
@@ -879,7 +909,12 @@ These are TRL-repo additions (managed by TRL git, not "uncommitted patches"):
 
 - [ ] **C3 — EP-aware DataLoader sharding (TWO upstream PRs, deliberately not yet written)** → root cause of the multi-night EP-multi-node ALLREDUCE-PG-ID-2 hang. Local override in TRL (`sft_trainer.py:1568::_get_dataloader`, ~30 lines, in place 2026-05-02 and validated by Test G + the entire 235B sweep — every previously-failing EP-multi-node config now trains). Proper fix needs: (a) accelerate PR adding `ep_size` to `ParallelismConfig` + `submesh_ep_size` reduction in `prepare_data_loader` (mirror of TP handling); (b) transformers PR wiring `DistributedConfig(enable_expert_parallel=True)` into `accelerate.state.parallelism_config.ep_size` at trainer init. Design discussion needed first: who owns the multi-dim device mesh — accelerate or transformers — currently both build their own independently. Once both PRs merge, delete the local override. **Highest-leverage upstream PR remaining**.
 - [ ] **C1 — accelerate `_prepare_tp` `has_ep` skip** → open accelerate PR (single check, references `#45662` for context). Revert: `uv pip install --reinstall --no-deps accelerate`.
-- [ ] **C2 — EP + `cpu_ram_efficient_loading=True` (3 PRs, in order)** → (a) transformers `ValueError` guard in `from_pretrained` when both flags set, plus EP doc note (immediate safety net); (b) transformers Patch 1: rank-0 gate in `convert_and_load_state_dict_in_model` so non-rank-0 leaves non-plan params on meta (today it's a no-op, every rank still loads — verified empirically 2026-04-29); (c) accelerate Patch 2: `fsdp2_prepare_model` (~10 lines capture/restore `ignored_params` around meta move) + `fsdp2_load_full_state_dict` filter (~3 lines, rank>0 branch). End-to-end test: peak/rank should drop from 16.4 GiB to ~13.5 GiB on 30B-A3B EP=4.
+- [ ] **C2 — `tp_plan` loader duplicate-load bug (now reframed broader, 4 actions in order)**:
+    - (a) **File upstream issue** at huggingface/transformers — draft in `benchmark/upstream_issue_tp_plan_duplicate_load.md`. Frames Layer 1 as the universal-impact problem, Layer 2 as the EP-specific corruption.
+    - (b) transformers Patch 1: rank-0 gate in `convert_and_load_state_dict_in_model` so non-rank-0 leaves non-plan params on meta. Universal: helps all TP/EP users (FSDP, DS-Z2, DS-Z3), not just `cpu_ram_efficient_loading=True`.
+    - (c) transformers `ValueError` guard in `from_pretrained` when `enable_expert_parallel=True` and `cpu_ram_efficient_loading=True` are both set, plus EP doc note (immediate safety net for Layer 2 until (d) lands).
+    - (d) accelerate Patch 2: `fsdp2_prepare_model` (~10 lines capture/restore `ignored_params` around meta move) + `fsdp2_load_full_state_dict` filter (~3 lines, rank>0 branch).
+    - End-to-end test: peak/rank should drop from 16.4 GiB to ~13.5 GiB on 30B-A3B EP=4 after (b). Layer 2 corruption goes away after (d).
 - [ ] **G1 — SP `--pad_to_multiple_of` auto-default** → TRL PR adding the auto-default in `SFTTrainer` when `accelerator.parallelism_config.sp_size > 1`.
 - [x] **H1 (debug + sweep)** — Liger + Qwen3-MoE under EP: root-cause identified, workaround `--liger_kernel_config '{"swiglu":false}'` validated, full sweep run vs chunked-CE champions. Liger wins at every context 16k–1M (+0.3 to +25 pp peak MFU). New all-time MoE record: 128k @ 76.29 % (40.5 % causal-adjusted). Full investigation in `benchmark/debug_liger_ep.md`, results in `report.md` + `sft_benchmark_notion.md`. **Still TODO**: file a Liger PR/issue with the repro at `benchmark/test_liger_qwen3_moe_ep.py` proposing the dispatcher-aware fix (auto-detect EP via `model.config._experts_implementation`).
 - [x] **TRL `_preparse_dict_args` helper** — added to `trl/scripts/sft.py` to JSON-decode `--liger_kernel_config` before HfArgumentParser sees it (HfArgumentParser falls back to `type=dict` and rejects JSON strings). 12 lines, no other changes. Should also become an upstream TRL PR if HfArgumentParser doesn't fix this.
@@ -889,8 +924,8 @@ These are TRL-repo additions (managed by TRL git, not "uncommitted patches"):
 
 - [ ] **A1 — sonicmoe EP/DTensor support (`.to_local()` + clamp wrapper)** → blocked on `#45621` (sonicmoe Ilyas patch) + `#45662` (EP+FSDP DTensor wrap). Write up follow-up PR explaining the autograd-through-`to_local()` backward gap.
 - [ ] **Deepseep EP-works — DS-Z2 + EP, 7 patches across 3 repos**, the recipe behind every long-context champion in the report. Split into:
-    - [ ] transformers PR — patches 1/2/4/5 (`tensor_parallel.py`, `trainer.py:create_accelerator_and_postprocess`, `trainer.py:create_optimizer`, `trainer.py:_clip_grad_norm`)
-    - [ ] DeepSpeed PR — patch 3 (extend `engine.py:_configure_distributed_model` to detect external EP via `param.allreduce is False`)
+    - [ ] transformers PR — patches 1/2/4/5 (`tensor_parallel.py`, `trainer.py:create_accelerator_and_postprocess`, `trainer.py:create_optimizer`, `trainer.py:_clip_grad_norm`) **+ post-`deepspeed.initialize` engine attribute patch** (replaces the deleted DS PR — see D-works "Upstream split" item 2 for options a/b/c)
+    - [ ] ~~DeepSpeed PR — patch 3~~ — **do not open**. Workaround stays on transformers/TRL side (decided 2026-05-05).
     - [ ] TRL PR — patch 6 (pre-init `deepspeed.comm` in SFTTrainer EP branch — falls under G2 below)
 
 ### 🟡 Keep local (proper fix is upstream elsewhere)
@@ -902,7 +937,7 @@ These are TRL-repo additions (managed by TRL git, not "uncommitted patches"):
 - [ ] **E2 — Triton cache file-not-found at FSDP+EP+CP+compile @ 64k** → try `TORCHINDUCTOR_CACHE_DIR=/tmp/inductor-rank-${RANK}-${HOSTNAME}` next to existing `TRITON_CACHE_DIR`. Cheapest test.
 - [ ] **E1 — FSDP+EP+compile Adam `_group_tensors_by_device_and_dtype`** → try the surgical `_group_tensors_by_device_and_dtype` patch in PyTorch (treat EP and FSDP DTensors as compatible if device+dtype match).
 - [ ] **H3 — multi-node HF Hub cache race** → try per-rank `HF_HOME=/tmp/hf-rank-${RANK}` to avoid lock contention. Investigate whether newer `huggingface_hub` already has `HF_HUB_DOWNLOAD_TIMEOUT` + retries.
-- [ ] **H5 — actually NaN-loss being masked to 0 by trainer downstream** (RE-CLASSIFIED 2026-05-03 morning, **REVISED 2026-05-03 03:15**) → W1 (R4 redo at 30B 128k 8n DS-Z2+EP=64+Liger) reproduced "loss=0" pattern. H5 instrumentation revealed `loss.item()` PRE-backward is **NaN** from step 1, not zero. W2 (22107681) showed step-0 grad_norm = 2.7M → embed/attn weights become NaN at step 2 → loss NaN from step 1. **Isolation test 22104173 (30B 32k 16n FSDP2+EP=8 intra-node + Liger) ALSO loss=0 from step 10 → cross-node EP topology is NOT the trigger.** Revised hypothesis: trigger is **(32k+ context AND 16n+ scale)** regardless of EP topology — gradient-explosion at scale, possibly from EP `_AllReduceBackward` summing without dividing by ep_size, or Liger FLCE reduction acting like sum across long sequences. **User flagged: 1e6 grad norm at step 0 is a real distributed-setup bug, NOT just something to clip.** Next: per-rank LOCAL grad logging (pre-reduction) vs post-reduce to isolate where inflation enters; verify `_AllReduceBackward` math vs `reduction='mean'` semantics. **HIGH PRIORITY**.
+- [ ] **H5 — actually NaN-loss being masked to 0 by trainer downstream** (RE-CLASSIFIED 2026-05-03 morning, REVISED 2026-05-03 03:15, **STATIC ANALYSIS 2026-05-04**) → W1 (R4 redo at 30B 128k 8n DS-Z2+EP=64+Liger) reproduced "loss=0" pattern. H5 instrumentation revealed `loss.item()` PRE-backward is **NaN** from step 1. W2 (22107681) shows step-0 grad_norm=2.66M, step-1 grad_norm=2913 (finite!), step-2 weights NaN — but ONLY for `embed_tokens.weight` + `layers.0.self_attn.{q,k,v,o}_proj.weight` (the 5 FSDP/DS-sharded entry-side params). MoE experts + layer 1+ stay finite. Post-bwd NaN-grad logger never fires → gradients themselves are finite; NaN appears inside Adam's update for those 5 shards specifically. **Static-analysis pass 2026-05-04 ruled out**: EP `_AllReduceBackward`/`_AllReduceForward` math (correct AR_sum semantics), DS-Z3 `reduce_scatter` averaging (`stage3.py:1442-1446` divides correctly), Liger FLCE chain-rule scaling (autograd handles `loss/num_items` correctly), `num_items_in_batch` computation, C3 dataloader (verified by bit-identical loss across rank 0/1/8/16/32/48/63 in W2 logs), `_maybe_log_ep` instrumentation (no compute side-effects). Bug is in `(grad → optim_state → param)` step, not in forward/backward math. Top hypotheses: (a) DS-Z3+EP=world entry-side weight loading puts a few elements out of bf16 normal range, only manifesting after step-1 optim, (b) bf16 v_t overflow on outlier element from step-0 huge grad propagates Inf → NaN at step 1, (c) DS-Z3 `unscale_and_clip_grads` corner case at world=64. Smallest tests to distinguish: add per-param grad-norm log (vs just NaN check), run with `--max_grad_norm 0.1`, run with `--optim adafactor` (rules out v_t overflow), run with FSDP2 instead of DS-Z3 at same shape (rules out DS-specific). **HIGH PRIORITY**. Static analysis is exhausted; needs cluster runs. Full analysis log appended to `report.md` 2026-05-04 section.
 - [ ] **FSDP + per-chunk lm_head NCCL hang** (chunked-CE AND Liger FLCE both hit it). Both `--loss_type chunked_nll` and `--use_liger_kernel true` (FLCE) compute the lm_head matmul in chunks of 256 valid tokens; under FSDP the lm_head weight is sharded across DP, so each chunk triggers an all-gather → ~519 collectives enqueued, only 8 complete → NCCL timeout. **Current workaround: use DS-Z2 instead of FSDP** for the EP+chunked or EP+Liger path (DS-Z2 doesn't shard params across DP, so no per-chunk gather). Proper fix paths: (a) exclude `lm_head` from FSDP wrap, (b) wrap the chunk loop in `model.lm_head.unshard_context()` so the weight stays gathered for all chunks in a step, (c) move the chunked patch before FSDP wrap. See `report.md` for the chunked-CE repro and the 16k FSDP+EP+Liger crash log (job 22094539).
 
 ### ⛔ Larger projects

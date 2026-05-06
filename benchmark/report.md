@@ -4916,3 +4916,91 @@ By step 20, both loss and gradient norm have **doubled twice in a row** while ac
 
 Next step: add a backward hook in `training_step` that logs `param.grad.norm()` for a few representative parameters (embed_tokens, layers.0.q_proj, layers.0.experts.0.gate_proj) BEFORE DeepSpeed's gradient averaging. Compare per-rank norms at step 0 to see if they're already 2.4M or smaller.
 
+---
+
+## 2026-05-04 — H5 static-analysis pass (no cluster runs)
+
+Read W2 (job 22107681) H5 instrumentation logs end-to-end and walked the gradient-flow code path on paper. Result: every analytically-checkable thing is correct. The bug is somewhere only an experiment can find.
+
+**Verified correct (no bug found in any of these)**:
+
+- **C3 dataloader fix is working at world=64**: rank 0/1/8/16/32/48/63 all log bit-identical loss `2.1614296436309814` at step 0, `1.7345236539840698` at step 1. Data is replicated within EP group as designed (`eff_num=1, eff_idx=0` for EP=world).
+- **`_AllReduceBackward` math** (`tensor_parallel.py:495-510`): forward identity, backward `AR_sum`. Correct because forward through MoE is `output = AR_sum_i(local_experts_i(input))`; backward `dL/dinput = SUM_i(dL/dinput_via_rank_i)` requires `AR_sum`. With replicated input each rank's local-expert-contribution is sparse (only positions assigned to local experts non-zero); sum across 64 ranks reconstructs the full per-token gradient.
+- **`_AllReduceForward` math** (`tensor_parallel.py:513-525`): forward `AR_sum`, backward identity. Correct: output is sum of partials, each partial's gradient is dL/d_total.
+- **DeepSpeed-Z3 `reduce_scatter`** (`stage3.py:1442-1446`): `buffer.div_(world_sz / sp_size)` then `dist.all_reduce(SUM)`. Net = pre-divide-then-sum = mean across DP. Correct DP averaging.
+- **Liger FLCE chain rule** (`liger_kernel/transformers/model/loss_utils.py:55-56`): kernel emits `reduction='sum'` form gradient when `num_items_in_batch` provided; outer `loss = loss / num_items_in_batch` triggers PyTorch autograd to scale the saved gradient by `1/num_items` via the chain rule. Mathematically equivalent to `reduction='mean'`. No skew.
+- **`num_items_in_batch` computation** (`transformers/trainer.py:2161-2202`): for our config `tp=cp=sp=1` so `pc.non_data_parallel_size=1`, no division. Per-rank local count of 131,072 valid tokens — correct per-rank divisor for the per-rank-mean loss each rank computes.
+- **`_maybe_log_ep` debug hook** (`tensor_parallel.py:49-78`): shape-only inspection, no `.item()`, no math op on the tensor — does not affect computation.
+
+**The paradox confirmed**:
+
+| step | grad_norm (reported) | post-step result |
+|---|---|---|
+| 0 | 2.66e6 | finite weights → step 1 forward healthy |
+| 1 | 2913 | **layer 0 attn + embed weights are NaN at step 2 forward entry** |
+
+Step 1 grad_norm = 2913 is finite (and reasonable), so all gradients are finite. Yet step 1's optim.step produces NaN weights, but ONLY in the FSDP/DS-sharded entry-side params (`embed_tokens.weight`, `layers.0.self_attn.{q,k,v,o}_proj.weight`). MoE expert params + layer 1+ remain finite. The post-bwd NaN-grad logger never fires (no NaN gradients ever logged), confirming the gradients themselves are fine — the NaN appears specifically inside Adam's update for these 5 specific shards.
+
+**Three top hypotheses (cluster runs needed to distinguish)**:
+
+1. **DS-Z3 + EP=world weight loading partial corruption**. With `expert_data_parallel_group = [[0],[1],...,[63]]` (singleton groups), there's no DS broadcast inside DP-of-EP. But DS-Z3 might still trigger a partition/init path on the entry-side dense params that puts a few elements out of bf16 normal range. Step 0 forward looks healthy (within tolerance) but step 1 optim+update overflows for those specific elements.
+2. **bf16 v_t overflow on outlier element at step 0**. With g² in Adam accumulating into v, a single element with `g ≈ 1.8e19` overflows bf16 to Inf. Then `sqrt(Inf) = Inf`, `update = m_hat / (Inf + eps) = 0` for finite `m_hat` — but if `m_hat` is also Inf, `Inf/Inf = NaN`. The 2.66M reported norm is the L2 over 30B params; if it's concentrated in a few outlier embed/attn elements, those overflow first.
+3. **DS-Z3's `unscale_and_clip_grads` corner case at world=64 + bf16**. DS divides grads by `loss_scale` (often 1.0 for bf16) then clips. If there's a numerical edge case in DS's grad-norm computation for the FSDP-replicated-EP-sharded mixed param topology, it could feed Adam corrupted state for a subset of shards.
+
+Common to all three: only the 5 entry-side FSDP-sharded params NaN, even though gradient is finite globally. The bug is in the `(grad → optim_state → param)` step, not in `(forward → loss → backward → grad)`.
+
+**Smallest test surface to distinguish (next cluster session)**:
+
+- **Per-param post-bwd grad-norm log** (currently only NaN check exists). Add `log(name, p.grad.norm().item())` for a few representative params at step 0/1 — identifies whether `embed_tokens` specifically has the huge gradient or it's spread.
+- **Run W2 with `--max_grad_norm 0.1`** (vs current 1.0). If NaN goes away → step-1 optim is at fault, gradient magnitude past clip threshold matters.
+- **Run W2 with `--optim adafactor`** (no Adam state, no v_t overflow). If healthy → bf16 v_t overflow confirmed (hypothesis 2).
+- **Run W2 with FSDP2 instead of DS-Z3** at the same shape. If FSDP2 healthy → DS-Z3-specific (1 or 3). If FSDP2 also NaN → universal sharding-precision issue.
+
+Until any of these run, H5 stays open as **shape-deterministic at large scale, root cause unknown**. Static analysis ruled out the obvious culprits (EP math, Liger, num_items_in_batch, C3 fix); whatever remains is in the optim/loading subsystem at scale.
+
+
+## 2026-05-04 — EP DataLoader piggy-back: removed override on DS path, re-validated against Test G
+
+Replaced the local `_get_dataloader` monkey-patch (Test G fix) with a smaller piggy-back: in `SFTTrainer.__init__`, reuse transformers EP mesh (`model._device_mesh`, a 1D `("tp",)` mesh of size `ep_size`) and assign it to `accelerator.state.ds_device_mesh`. Accelerate's `prepare_data_loader` DEEPSPEED branch then natively divides `process_index = global_rank // ep_size, num_processes = world_size // ep_size` via the existing TP-replication code (no accelerate change). Override now skipped for DS; kept as fallback for FSDP/MULTI_GPU only (which would need a 2D mesh + parallelism_config — bigger change, deferred).
+
+Key insight: EP and TP are equivalent for dataloader sharding (both are data-replicate dims). Accelerate already handles TP correctly via mesh-name inspection; we just need a mesh with `"tp"` exposed. Transformers already builds one during model load.
+
+Validation (job 22108306, 2026-05-04 ~11:30 UTC): same config as Test G (Qwen3-30B-A3B, ctx 64k, 2 nodes, EP=8, DS-Z2, sonicmoe, chunked_nll, packing wrapped, FA3 attn, max_steps=30, logging_steps=1).
+
+| Run | Override | ds_device_mesh injection | step 1 loss | step 30 loss | train_loss | Result |
+| --- | --- | --- | --- | --- | --- | --- |
+| Test G (22102668) | active | — | 1.973 | 1.380 | 1.555 | ✅ 30/30 steps |
+| Test piggy-back (22108306) | inactive on DS | active | 1.973 | 1.382 | **1.555 (exact match)** | ✅ 30/30 steps |
+
+False-start log (lessons embedded in the test config):
+- 22108178: forgot to drop `--fuse_moe_experts` from extra_args (now rejected by argparse).
+- 22108189: tried `dist.init_device_mesh("cuda", (ep_size,), mesh_dim_names=("tp",))` to construct a fresh 1D mesh — torch's `_init_one_process_group::split_group` returned None ("AttributeError: 'NoneType' object has no attribute 'group_name'"). The world PG had already been split for transformers' EP mesh; second split fails. Fix: reuse `model._device_mesh` instead of creating a new one.
+- 22108231: had `zero_stage: 3` (default) which trips `assert not self.has_moe_layers, "MoE not supported with Stage 3"` in DeepSpeed. EP path is DS-Z2 only (per upstream_todo D-works). Set explicit `zero_stage: 2`.
+- 22108259: missing `--loss_type chunked_nll` → CE loss `logits.float()` OOM at step 0 on 64k ctx. Added `--loss_type chunked_nll` to extra_args.
+
+Files: `trl/trainer/sft_trainer.py:__init__` (mesh reuse block, ~10 lines, replaces the equivalent function of the override on DS path); `_get_dataloader` (override path now skipped when DS, kept for FSDP). Test config: `benchmark/configs/qwen3_30b_a3b_ep_dataloader_test.yaml`. Upstream-fix design unchanged — see `benchmark/upstream_todo.md` C3 for the eventual `ep_size` first-class field in accelerate's `ParallelismConfig`.
+
+## 2026-05-04 evening — Move EP-DataLoader fix entirely into transformers Trainer
+
+Refactored both EP-DataLoader pieces out of TRL's `SFTTrainer` and into transformers `Trainer`, where they belong (transformers already owns `model.has_ep`, `model._device_mesh`, the DS expert process-group setup, and the FSDP `ignored_modules` registration).
+
+Where they live now:
+- **DS+EP**: `transformers/trainer.py::create_accelerator_and_postprocess` (~10 lines, sits next to the existing `_create_expert_and_data_parallel` block). Assigns `accelerator.state.ds_device_mesh = model._device_mesh` so accelerate's native TP-replication branch in `prepare_data_loader` divides correctly.
+- **FSDP+EP** (and any non-DS path): `transformers/trainer.py::_get_dataloader` (~40 lines). Monkey-patches `accelerator.prepare_data_loader` for one call with EP-corrected `num_processes`/`process_index`, restores in try/finally. FSDP can't use the mesh-injection trick because `state.device_mesh` is also read by `fsdp2_prepare_model::fsdp2_kwargs["mesh"]` and would crash without a matching `parallelism_config`.
+- **TRL**: `SFTTrainer._get_dataloader` is now a thin wrapper that only adds the `[LOAD-T]` instrumentation print and delegates to `super()._get_dataloader`. `DistributedType` import removed.
+
+Validation chronology (all on the same Test G config: 30B-A3B, ctx 64k, 2 nodes, DS-Z2, EP=8, sonicmoe, chunked_nll, 30 steps):
+
+| Job | Code state | Nodes | Result |
+| --- | --- | --- | --- |
+| 22108719 | DS injection in transformers (FSDP override still in TRL) | ip-26-0-168-[52,95] | ❌ Diverged: step 1 healthy (1.973, matched Test G), then grad_norm exploded from step 2 onward (193 → 1.8e4 → 1.8e5), loss climbing past 11 by step 22. Cancelled. |
+| 22108824 | DS in transformers + FSDP override moved to transformers | ip-26-0-168-[52,95] (Slurm picked same nodes) | ❌ Same divergence pattern, same fingerprint. Confirms hardware fault on these nodes. |
+| **22109006** | **Same code as 22108824, `--exclude=ip-26-0-168-[52,95]`** | **ip-26-0-162-[46,79]** | **✅ 30/30 steps. `train_loss=1.563` (Test G was 1.555 — within numerical noise from different NCCL reduction order). Step 1 loss=1.973 matches Test G; step 2 grad=334, no divergence.** |
+
+Diagnosis of the divergence: same code reproducing the same fingerprint twice on `ip-26-0-168-[52,95]` and converging on `ip-26-0-162-[46,79]` rules out the refactor. Step 1 forward gives identical loss across all three runs (`1.973`), proving data sharding is correct. Step 2 grad_norm jumps 100x on the bad nodes (193→1.8e4 in 22108824; ~600 elsewhere), which is the signature of corrupt gradient bytes from a faulty NCCL/NVLink path. Adding `ip-26-0-168-[52,95]` to the cluster-ops watchlist alongside the previously-flagged `ip-26-0-172-142`.
+
+Files touched in this session:
+- `transformers/src/transformers/trainer.py` — added DS injection block in `create_accelerator_and_postprocess` (line 843-864) and FSDP-fallback `prepare_data_loader` patch in `_get_dataloader` (line 1043-1092).
+- `trl/trainer/sft_trainer.py` — removed both EP blocks; `_get_dataloader` is now a thin instrumentation wrapper, `DistributedType` import removed.
+- `benchmark/upstream_todo.md` C3 — updated to reflect new file layout (TRL fully out of EP-DataLoader business); proper upstream fix (first-class `ep_size` in `ParallelismConfig`) unchanged as the long-term plan.
+- `benchmark/sftrainer_lifecycle.md` — new doc walking through the full SFTTrainer → train() lifecycle with explicit DS-vs-FSDP boundaries, including the rank-0 broadcast pattern (cross-references `fsdp2_loading_walkthrough.md`).
