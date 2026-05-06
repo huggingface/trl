@@ -126,7 +126,7 @@ class TestRewardTrainer(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            "trl-internal-testing/tiny-Qwen3MoeForSequenceClassification",
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         ],
     )
@@ -286,7 +286,7 @@ class TestRewardTrainer(TrlTestCase):
 
     @require_peft
     def test_train_moe_with_peft_config(self):
-        model_id = "trl-internal-testing/tiny-Qwen3MoeForSequenceClassification"
+        model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
         model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
