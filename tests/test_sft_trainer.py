@@ -571,8 +571,8 @@ class TestSFTTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            # Vision-tower params that are frozen by design across transformers versions; mirrors the skips in
-            # `test_train_vlm`.
+            # For some reason, these params are not updated. This is probably not related to TRL, but to
+            # the model itself. We should investigate this further, but for now we just skip these params.
             # fmt: off
             if (
                 model_id == "trl-internal-testing/tiny-Gemma3ForConditionalGeneration" and "model.vision_tower.vision_model.head" in n or
