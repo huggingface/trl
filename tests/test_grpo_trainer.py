@@ -50,7 +50,6 @@ from .testing_utils import (
     require_liger_kernel,
     require_peft,
     require_torch_accelerator,
-    require_torch_gpu_if_bnb_not_multi_backend_enabled,
     require_vision,
     require_vllm,
 )
@@ -3012,7 +3011,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
     )
     @require_kernels
     @require_bitsandbytes
-    @require_torch_gpu_if_bnb_not_multi_backend_enabled
     @require_peft
     def test_vlm_training(self, model_name):
         """
