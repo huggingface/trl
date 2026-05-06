@@ -236,7 +236,6 @@ def build_config(**overrides):
         uld_teacher_temperature=1.0,
         uld_skip_student_eos=False,
         uld_skip_teacher_eos=False,
-        use_extended_uld=True,
         uld_use_hybrid_loss=False,
         uld_hybrid_matched_weight=None,
         uld_hybrid_unmatched_weight=None,
@@ -765,7 +764,7 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1
 
     collator = DataCollatorForChatML(tokenizer=smollm_tokenizer)
     batch = collator([openr1_examples[0]])
-    batch = {k: v.cpu() for k, v in batch.items()}
+    batch = {k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
     class DummyModel:
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
@@ -937,7 +936,6 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
         uld_use_hybrid_loss=True,
         uld_hybrid_matched_weight=0.0,
         uld_hybrid_unmatched_weight=1.0,
-        use_extended_uld=True,
         uld_crossentropy_weight=0.0,
         uld_distillation_weight=1.0,
         uld_student_temperature=1.0,

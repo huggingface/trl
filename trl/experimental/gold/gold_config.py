@@ -218,17 +218,6 @@ class GOLDConfig(SFTConfig):
             "help": "Whether to use Universal Logit Distillation (ULD) loss instead of Generalized Jensen-Shannon Divergence loss."
         },
     )
-    use_extended_uld: bool = field(
-        default=True,
-        metadata={
-            "help": (
-                "Whether to enable extended ULD alignment that uses tokenizers to align and merge token "
-                "probabilities across student and teacher tokenizations. When True, the trainer will compute "
-                "token mappings and merge probabilities for split tokens; when False, ULD will use simple "
-                "positional truncation like in the original ULD paper."
-            )
-        },
-    )
     uld_use_hybrid_loss: bool = field(
         default=False,
         metadata={

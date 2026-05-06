@@ -168,11 +168,15 @@ class DataCollatorForChatML:
         # positions are (0, 0); completion tokens carry offsets into the assistant
         # content's bytes. Used by GOLD/ULD cross-tokenizer alignment (TRL #4393).
         byte_offsets: list[list[tuple[int, int]]] = []
+        # Forwarded so cross-tokenizer ULD can re-tokenize with the teacher tokenizer
+        # without ever round-tripping through the student tokenizer's decoder.
+        original_prompt_texts: list[str] = []
+        original_completion_texts: list[str] = []
 
         backend = self.tokenizer.backend_tokenizer
 
-        # First pass: render chat templates. For examples that already have input_ids,
-        # `formatted_message` stays None and the encoding slot stays None too.
+        # Render chat templates. For examples that already carry input_ids,
+        # `formatted_message` stays None and we skip re-encoding.
         formatted_prompts: list[str] = []
         formatted_messages: list[str | None] = []
         for example in examples:
@@ -193,12 +197,12 @@ class DataCollatorForChatML:
         # Single Rust call for all non-pre-tokenized samples.
         to_encode = [m for m in formatted_messages if m is not None]
         encs_compact = backend.encode_batch_byte_offsets(to_encode, add_special_tokens=False) if to_encode else []
-        encodings: list[Any] = []
         encs_iter = iter(encs_compact)
-        for fm in formatted_messages:
-            encodings.append(next(encs_iter) if fm is not None else None)
+        encodings: list[Any] = [next(encs_iter) if fm is not None else None for fm in formatted_messages]
 
-        for example, formatted_prompt, encoding in zip(examples, formatted_prompts, encodings, strict=True):
+        for example, formatted_prompt, formatted_message, encoding in zip(
+            examples, formatted_prompts, formatted_messages, encodings, strict=True
+        ):
             if encoding is not None:
                 full_ids = list(encoding.ids)
                 full_offs = list(encoding.offsets)
@@ -212,7 +216,7 @@ class DataCollatorForChatML:
                 # the oldest prompt context first; once the prompt is exhausted, it begins
                 # dropping early completion tokens. We never drop from the END (the
                 # model's recent context).
-                if self.max_length is not None and len(full_ids) > self.max_length:
+                if len(full_ids) > self.max_length:
                     sample_ids = full_ids[-self.max_length :]
                     sample_offs = full_offs[-self.max_length :]
                     current_prompt_len = max(0, completion_start - (len(full_ids) - self.max_length))
@@ -229,6 +233,9 @@ class DataCollatorForChatML:
                 sample_offs = [(0, 0)] * current_prompt_len + completion_offs
 
                 current_prompt_ids = sample_ids[:current_prompt_len]
+                # formatted_message starts with formatted_prompt for typical chat templates;
+                # the suffix is the assistant content the teacher needs to re-tokenize.
+                completion_text = formatted_message[len(formatted_prompt) :]
             else:
                 sample_ids = example["input_ids"]
                 sample_offs = [(0, 0)] * len(sample_ids)
@@ -240,12 +247,16 @@ class DataCollatorForChatML:
                     return_tensors=None,
                     add_special_tokens=False,
                 )["input_ids"]
+                # No rendered message available; fall back to whatever the dataset attached.
+                completion_text = example.get("original_completion_text", "")
 
             input_ids.append(sample_ids)
             attention_mask.append(example.get("attention_mask", [1] * len(sample_ids)))
             byte_offsets.append(sample_offs)
             prompts_input_ids.append(current_prompt_ids)
             prompt_attention_mask.append([1] * len(current_prompt_ids))
+            original_prompt_texts.append(example.get("original_prompt_text", formatted_prompt))
+            original_completion_texts.append(example.get("original_completion_text", completion_text))
 
             label = [self.ignore_index] * len(sample_ids)
             label[len(current_prompt_ids) :] = sample_ids[len(current_prompt_ids) :]
@@ -284,6 +295,8 @@ class DataCollatorForChatML:
             "prompts": prompts_input_ids,
             "prompt_attention_mask": prompt_attention_mask,
             "byte_offsets": byte_offsets_tensor,
+            "original_prompt_text": original_prompt_texts,
+            "original_completion_text": original_completion_texts,
         }
 
 

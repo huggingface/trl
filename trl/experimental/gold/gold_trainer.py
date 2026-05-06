@@ -258,7 +258,6 @@ class ULDLoss(nn.Module):
         self.teacher_temperature = config.uld_teacher_temperature
         self.skip_student_eos = config.uld_skip_student_eos
         self.skip_teacher_eos = config.uld_skip_teacher_eos
-        self.use_extended_uld = config.use_extended_uld
         self.ignore_index = -100
 
         # Add tokenizers for enhanced alignment
@@ -300,11 +299,9 @@ class ULDLoss(nn.Module):
             student_input_ids: Student input token IDs [batch_size, seq_len]
             teacher_input_ids: Teacher input token IDs [batch_size, seq_len]
             student_byte_offsets: Per-token UTF-8 byte offsets ``[batch, seq, 2]``
-                from the data collator (relative to the rendered chat-template message). Required when
-                ``use_extended_uld=True``.
+                from the data collator (relative to the rendered chat-template message). Required.
             teacher_byte_offsets: Per-sample list of completion-relative byte
-                offsets (one list per batch item) from ``build_teacher_inputs_from_texts``. Required when
-                ``use_extended_uld=True``.
+                offsets (one list per batch item) from ``build_teacher_inputs_from_texts``. Required.
 
         Returns:
             Total loss (cross-entropy + distillation)
@@ -422,40 +419,22 @@ class ULDLoss(nn.Module):
             student_probs = F.softmax(student_answer_logits / self.student_temperature, dim=-1)
             teacher_probs = F.softmax(teacher_answer_logits / self.teacher_temperature, dim=-1)
 
-            # Get token IDs for mapping (always use actual input_ids)
+            # Both sides are completion-relative (the collator shifts student offsets, teacher
+            # offsets are emitted relative to completion_text), so plain slicing gives a shared
+            # byte coordinate system for alignment.
+            s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
+            t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
+            student_groups, teacher_groups = self._align_by_byte_offsets(s_answer, t_answer)
+
+            # Pass actual input_ids so split-token groups can multiply conditional probabilities.
             student_token_ids = student_input_ids[i, student_start : student_start + student_size].tolist()
             teacher_token_ids = teacher_input_ids[i, teacher_start : teacher_start + teacher_size].tolist()
-
-            if self.use_extended_uld:
-                if student_byte_offsets is None or teacher_byte_offsets is None:
-                    raise RuntimeError(
-                        "ULDLoss with use_extended_uld=True requires student_byte_offsets and "
-                        "teacher_byte_offsets. DataCollatorForChatML and "
-                        "build_teacher_inputs_from_texts both emit these; ensure compute_loss is "
-                        "forwarding them."
-                    )
-                # Both sides are completion-relative already (collator shifts student offsets,
-                # teacher offsets are emitted relative to completion_text), so plain slicing
-                # gives a shared byte coordinate system for alignment.
-                s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
-                t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
-                student_alignment_groups, teacher_alignment_groups = self._align_by_byte_offsets(s_answer, t_answer)
-
-                # Merge student probabilities using student alignment groups
-                # Pass student_token_ids to enable corrected conditional probability merging
-                student_aligned = self._merge_probabilities_with_alignment_groups(
-                    student_probs, student_alignment_groups, student_token_ids
-                )
-
-                # Merge teacher probabilities using teacher alignment groups
-                # Pass teacher_token_ids to enable corrected conditional probability merging
-                teacher_aligned = self._merge_probabilities_with_alignment_groups(
-                    teacher_probs, teacher_alignment_groups, teacher_token_ids
-                )
-            else:
-                min_length = min(len(student_token_ids), len(teacher_token_ids))
-                student_aligned = student_probs[:min_length, :]
-                teacher_aligned = teacher_probs[:min_length, :]
+            student_aligned = self._merge_probabilities_with_alignment_groups(
+                student_probs, student_groups, student_token_ids
+            )
+            teacher_aligned = self._merge_probabilities_with_alignment_groups(
+                teacher_probs, teacher_groups, teacher_token_ids
+            )
 
             # Apply ULD loss computation
             if self.use_hybrid_loss and self._vocab_mapping is not None:
@@ -487,30 +466,27 @@ class ULDLoss(nn.Module):
     @staticmethod
     def _align_by_byte_offsets(s_offsets, t_offsets):
         """
-        Walk both byte-offset arrays, advancing the side whose current token ends earlier in source bytes. A group
-        closes whenever both sides reach the same byte boundary — exactly the points where the two tokenizers agree on
-        a split.
+        Walk both byte-offset arrays, advancing the side whose current token ends earlier. A group closes when both
+        sides reach the same byte boundary — the points where the two tokenizers agree on a split.
         """
         s_groups, t_groups = [], []
-        i = j = 0
-        n_t, n_s = len(t_offsets), len(s_offsets)
-        while i < n_t and j < n_s:
-            i0, j0 = i, j
-            while i < n_t and j < n_s:
-                t_end, s_end = t_offsets[i][1], s_offsets[j][1]
-                if t_end == s_end:
-                    i += 1
-                    j += 1
-                    break
-                elif t_end < s_end:
-                    i += 1
-                else:
-                    j += 1
-            t_groups.append(list(range(i0, i)))
-            s_groups.append(list(range(j0, j)))
-        if i < n_t or j < n_s:
-            t_groups.append(list(range(i, n_t)))
-            s_groups.append(list(range(j, n_s)))
+        s_start = t_start = s = t = 0
+        n_s, n_t = len(s_offsets), len(t_offsets)
+        while s < n_s and t < n_t:
+            s_end, t_end = s_offsets[s][1], t_offsets[t][1]
+            if s_end < t_end:
+                s += 1
+            elif s_end > t_end:
+                t += 1
+            else:
+                s += 1
+                t += 1
+                s_groups.append(list(range(s_start, s)))
+                t_groups.append(list(range(t_start, t)))
+                s_start, t_start = s, t
+        if s < n_s or t < n_t:
+            s_groups.append(list(range(s_start, n_s)))
+            t_groups.append(list(range(t_start, n_t)))
         return s_groups, t_groups
 
     def _merge_probabilities_with_alignment_groups(self, probs, alignment_groups, token_ids=None):
@@ -1678,28 +1654,16 @@ class GOLDTrainer(SFTTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if self.use_uld_loss and self.teacher_tokenizer is not None:
-            if "original_prompt_text" in inputs and "original_completion_text" in inputs:
-                prompt_texts = inputs["original_prompt_text"]
-                completion_texts = inputs["original_completion_text"]
-                full_texts = [p + c for p, c in zip(prompt_texts, completion_texts, strict=True)]
-            else:
-                # Fallback: decode student input_ids (current approach)
-                # WARNING: This may not work perfectly for cross-tokenizer distillation
-                full_sequences = inputs["input_ids"]
-                full_texts = self.processing_class.batch_decode(full_sequences, skip_special_tokens=False)
-
-                # Try to split prompt/completion using original prompt length
-                prompt_lengths = inputs["prompts"].shape[1]
-                prompt_texts = self.processing_class.batch_decode(inputs["prompts"], skip_special_tokens=False)
-                completion_texts = [
-                    full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
-                ]
+            # Both DataCollatorForChatML and the on-policy generation path attach these
+            # fields, so cross-tokenizer ULD never has to round-trip through batch_decode.
+            prompt_texts = inputs["original_prompt_text"]
+            completion_texts = inputs["original_completion_text"]
 
             (
                 teacher_input_ids,
                 teacher_labels,
                 teacher_attention_mask,
-                teacher_prompt_length,
+                _teacher_prompt_length,
                 teacher_completion_byte_offsets,
             ) = build_teacher_inputs_from_texts(
                 self.teacher_tokenizer,
@@ -1723,12 +1687,6 @@ class GOLDTrainer(SFTTrainer):
                     input_ids=teacher_input_ids,
                     attention_mask=teacher_attention_mask,
                 )
-
-            # These are not used for ULD loss but are needed if JSD loss were to be used in this branch
-            student_prompt_length = inputs["prompts"].shape[1]
-            shifted_student_logits = outputs_student.logits[:, student_prompt_length - 1 : -1, :]
-            shifted_teacher_logits = outputs_teacher.logits[:, teacher_prompt_length - 1 : -1, :]
-            shifted_labels = inputs["labels"][:, student_prompt_length:]
         else:
             if self.use_liger_gkd_loss:
                 # Forward only through the base models (avoid lm_head to save memory)
@@ -1814,31 +1772,21 @@ class GOLDTrainer(SFTTrainer):
                     temperature=self.temperature,
                 )
 
-        if self.use_uld_loss:
-            student_input_ids = inputs["input_ids"]
-
-            teacher_labels_for_loss = teacher_labels if "teacher_labels" in locals() else inputs["labels"]
-            teacher_input_ids_for_loss = teacher_input_ids if "teacher_input_ids" in locals() else inputs["input_ids"]
-
+        if self.use_uld_loss and self.teacher_tokenizer is not None:
             student_labels = inputs["labels"].clone()
-            if hasattr(self.processing_class, "pad_token_id") and self.processing_class.pad_token_id is not None:
+            if self.processing_class.pad_token_id is not None:
                 student_labels[student_labels == self.processing_class.pad_token_id] = -100
-
-            if (
-                hasattr(self, "teacher_tokenizer")
-                and hasattr(self.teacher_tokenizer, "pad_token_id")
-                and self.teacher_tokenizer.pad_token_id is not None
-            ):
+            if self.teacher_tokenizer.pad_token_id is not None:
                 teacher_labels[teacher_labels == self.teacher_tokenizer.pad_token_id] = -100
 
             loss = self.uld_loss_fn(
                 student_logits=outputs_student.logits,
                 teacher_logits=outputs_teacher.logits,
                 student_labels=student_labels,
-                teacher_labels=teacher_labels_for_loss,
-                student_input_ids=student_input_ids,
-                teacher_input_ids=teacher_input_ids_for_loss,
-                student_byte_offsets=inputs.get("byte_offsets"),
+                teacher_labels=teacher_labels,
+                student_input_ids=inputs["input_ids"],
+                teacher_input_ids=teacher_input_ids,
+                student_byte_offsets=inputs["byte_offsets"],
                 teacher_byte_offsets=teacher_completion_byte_offsets,
             )
 
