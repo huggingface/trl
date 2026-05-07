@@ -2552,12 +2552,13 @@ class TestPatchChunkedCELMHead:
         )
         # Base decoder gradients
         for name, ref_param in ref_model.model.named_parameters():
-            if ref_param.grad is None:
-                continue
-            chunked_param = chunked_model.model.get_parameter(name)
-            torch.testing.assert_close(
-                chunked_param.grad, ref_param.grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
-            )
+            chunked_grad = chunked_model.model.get_parameter(name).grad
+            ref_grad = ref_param.grad
+            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
+            if ref_grad is not None:
+                torch.testing.assert_close(
+                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+                )
 
     @pytest.mark.parametrize("model_id", _CHUNKED_CE_VLM_MODEL_IDS)
     def test_forward_matches_reference_vlm(self, model_id):
@@ -2624,12 +2625,13 @@ class TestPatchChunkedCELMHead:
         )
         # Multimodal-wrapper gradients (covers both vision tower and inner text decoder).
         for name, ref_param in ref_model.model.named_parameters():
-            if ref_param.grad is None:
-                continue
-            chunked_param = chunked_model.model.get_parameter(name)
-            torch.testing.assert_close(
-                chunked_param.grad, ref_param.grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
-            )
+            chunked_grad = chunked_model.model.get_parameter(name).grad
+            ref_grad = ref_param.grad
+            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
+            if ref_grad is not None:
+                torch.testing.assert_close(
+                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+                )
 
     def test_forward_without_labels_uses_original_path(self):
         """With labels=None the patched forward returns real logits (for generation / eval)."""
