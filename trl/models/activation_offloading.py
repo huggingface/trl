@@ -303,6 +303,16 @@ class OffloadActivations(saved_tensors_hooks):
                     cpu_tensor = cpu_storage
                 else:
                     # No broadcast - use normal contiguous copy
+                    # .contiguous() can be a no-op for contiguous views with
+                    # non-zero storage_offset. Force a clone for those views
+                    # so later as_strided reconstruction stays in bounds.
+                    if not activation.is_contiguous() or activation.storage_offset() != 0:
+                        if activation.storage_offset() != 0:
+                            activation = activation.clone(memory_format=torch.contiguous_format)
+                        else:
+                            activation = activation.contiguous()
+                        original_stride = activation.stride()
+                        original_storage_offset = activation.storage_offset()
                     cpu_tensor = torch.empty_like(activation, pin_memory=self.use_pin_memory, device="cpu")
                     cpu_tensor.copy_(activation, non_blocking=True)
 
@@ -557,6 +567,23 @@ class OffloadActivations(saved_tensors_hooks):
                 continue
 
         self.param_storages = param_storages
+
+    def __exit__(self, *args, **kwargs):
+        """Sync streams and clear stashes before parent cleanup.
+
+        try/finally ensures the saved_tensors_hooks parent cleanup runs even if stream sync raises — otherwise hooks
+        stay permanently installed, creating a silent memory leak.
+        """
+        try:
+            if self.use_streams:
+                self.s0.synchronize()
+                self.s1.synchronize()
+                self.bwd_tensor_stash.clear()
+                self.bwd_ev_stash.clear()
+                self.fwd_stash.clear()
+        finally:
+            result = super().__exit__(*args, **kwargs)
+        return result
 
 
 class NoOpManager(saved_tensors_hooks):
