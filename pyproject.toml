@@ -56,7 +56,7 @@ kernels = [
     "kernels"
 ]
 liger = [
-    "liger-kernel>=0.7.0"
+    "liger-kernel>=0.8.0"
 ]
 peft = [
     "peft>=0.8.0"
@@ -94,6 +94,9 @@ vlm = [
 math_verify = [
     "math-verify>=0.5.2",
 ]
+openreward = [
+    "openreward>=0.1.109; python_version >= '3.11'",  # openreward requires Python 3.11+
+]
 dev = [
     # bco
     "scikit-learn",
@@ -103,7 +106,9 @@ dev = [
     # kernels
     "kernels",
     # liger
-    "liger-kernel>=0.7.0",
+    "liger-kernel>=0.8.0",
+    # openreward (requires Python 3.11+)
+    "openreward>=0.1.109; python_version >= '3.11'",
     # peft
     "peft>=0.8.0",
     # quality

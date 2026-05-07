@@ -750,14 +750,14 @@ class TestPPOTrainer(TrlTestCase):
         # Check if critic weights have been updated
         critic_weights_updated = False
         for name, param in trainer.model.value_model.named_parameters():
-            if not torch.allclose(initial_critic_weights[name], param.to("cpu")):
+            if not torch.equal(initial_critic_weights[name], param.to("cpu")):
                 critic_weights_updated = True
                 break
 
         # Check if policy weights have been updated
         policy_weights_updated = False
         for name, param in trainer.model.policy.named_parameters():
-            if not torch.allclose(initial_policy_weights[name], param.to("cpu")):
+            if not torch.equal(initial_policy_weights[name], param.to("cpu")):
                 policy_weights_updated = True
                 break
 
@@ -812,7 +812,7 @@ class TestPPOTrainer(TrlTestCase):
         # Check if critic weights have been updated
         critic_weights_updated = False
         for name, param in trainer.model.value_model.named_parameters():
-            if name in initial_critic_weights and not torch.allclose(initial_critic_weights[name], param.to("cpu")):
+            if name in initial_critic_weights and not torch.equal(initial_critic_weights[name], param.to("cpu")):
                 critic_weights_updated = True
                 break
 

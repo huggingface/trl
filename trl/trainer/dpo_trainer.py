@@ -709,6 +709,8 @@ class DPOTrainer(_BaseTrainer):
                     "Liger DPO loss does not support precomputing reference log probabilities. Either disable "
                     "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
                 )
+            if is_peft_model(model):
+                raise NotImplementedError("Liger DPO loss is not implemented for PEFT models.")
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -777,6 +779,11 @@ class DPOTrainer(_BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
+
+        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
+        # self.model_accepts_loss_kwargs to False to enable scaling.
+        self.model_accepts_loss_kwargs = False
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
@@ -1096,16 +1103,13 @@ class DPOTrainer(_BaseTrainer):
         weight = lm_head.weight
         bias = lm_head.bias
 
-        if is_peft_model(model):
-            raise NotImplementedError("Liger DPO loss is not implemented for PEFT models.")
-        else:
-            with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-                ref_decoder = self.ref_model.get_decoder()
-                ref_outputs = ref_decoder(input_ids, attention_mask=attention_mask, use_cache=False)
-                ref_lm_head = self.ref_model.get_output_embeddings()
-                ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
-                ref_weight = ref_lm_head.weight
-                ref_bias = ref_lm_head.bias
+        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
+            ref_decoder = self.ref_model.get_decoder()
+            ref_outputs = ref_decoder(input_ids, attention_mask=attention_mask, use_cache=False)
+            ref_lm_head = self.ref_model.get_output_embeddings()
+            ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
+            ref_weight = ref_lm_head.weight
+            ref_bias = ref_lm_head.bias
 
         shift_completion_mask = completion_mask[:, 1:].contiguous()
         labels = input_ids[:, 1:].clone()
@@ -1368,11 +1372,18 @@ class DPOTrainer(_BaseTrainer):
                 # shape of other losses; only the mean is used, so this is a no-op numerically.
                 per_sequence_loss = batch_loss.expand(chosen_logits.size(0))
 
+            elif loss_type == "sigmoid_norm":
+                chosen_mask, rejected_mask = completion_mask.chunk(2, dim=0)
+                chosen_avg_score = chosen_scores / chosen_mask.sum(dim=1).clamp(min=1.0)
+                rejected_avg_score = rejected_scores / rejected_mask.sum(dim=1).clamp(min=1.0)
+                delta = chosen_avg_score - rejected_avg_score
+                per_sequence_loss = -F.logsigmoid(self.beta * delta)
+
             else:
                 raise ValueError(
                     f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
                     "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired', 'apo_zero', 'apo_down', "
-                    "'discopop', 'sft']"
+                    "'discopop', 'sft', 'sigmoid_norm']"
                 )
 
             if self.use_weighting:
