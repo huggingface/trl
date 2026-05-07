@@ -426,8 +426,7 @@ class GKDTrainer(SFTTrainer):
 
         This method implements the on-policy learning approach described in the GKD paper. With probability
         `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
-        the original inputs. Otherwise, when `self.seq_kd` is enabled, it falls back to teacher-generated sequences
-        (sequence-level KD); without `seq_kd`, the original dataset inputs are kept.
+        the original inputs.
         """
         if random.random() <= self.lmbda:
             with (
