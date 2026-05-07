@@ -571,9 +571,8 @@ class OffloadActivations(saved_tensors_hooks):
     def __exit__(self, *args, **kwargs):
         """Sync streams and clear stashes before parent cleanup.
 
-        try/finally ensures the saved_tensors_hooks parent cleanup runs
-        even if stream sync raises — otherwise hooks stay permanently
-        installed, creating a silent memory leak.
+        try/finally ensures the saved_tensors_hooks parent cleanup runs even if stream sync raises — otherwise hooks
+        stay permanently installed, creating a silent memory leak.
         """
         try:
             if self.use_streams:
