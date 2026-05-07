@@ -1142,6 +1142,7 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",
     "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
+    "trl-internal-testing/tiny-Gemma2ForCausalLM",
 ]
 
 
@@ -1229,8 +1230,6 @@ class TestPatchChunkedLMHead:
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_forward(self, model_id, temperature):
         model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
-        if getattr(model.config, "final_logit_softcapping", None) is not None:
-            pytest.skip("model uses final_logit_softcapping, not supported by chunked LM head")
         model.eval()
 
         B, S, chunk_size = 2, 8, 32
@@ -1259,8 +1258,6 @@ class TestPatchChunkedLMHead:
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, model_id, temperature):
         model_ref = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
-        if getattr(model_ref.config, "final_logit_softcapping", None) is not None:
-            pytest.skip("model uses final_logit_softcapping, not supported by chunked LM head")
         model_chunked = copy.deepcopy(model_ref)
 
         B, S, chunk_size = 2, 8, 32

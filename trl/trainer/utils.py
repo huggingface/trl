@@ -1158,7 +1158,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         targets: torch.Tensor,  # [N]
         temperature: float,
         chunk_size: int,
-        final_logit_softcapping: float | None,
+        final_logit_softcapping: float | None = None,
         logit_scale: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         device = last_hidden.device
