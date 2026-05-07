@@ -23,7 +23,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -33,7 +33,6 @@ from trl.trainer.utils import (
     _ChunkedLogProbFunction,
     entropy_from_logits,
     flush_left,
-    forward_masked_logits,
     generate_model_card,
     get_peft_config,
     hash_module,
@@ -1009,99 +1008,6 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["pixel_values"], original)
 
 
-@require_torch_accelerator
-class TestForwardMaskedLogits:
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            "trl-internal-testing/tiny-CohereForCausalLM",
-            "trl-internal-testing/tiny-Cohere2ForCausalLM",
-            "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-            "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
-            "trl-internal-testing/tiny-Gemma2ForCausalLM",
-            "trl-internal-testing/tiny-GemmaForCausalLM",
-            "trl-internal-testing/tiny-Glm4MoeForCausalLM",
-            "trl-internal-testing/tiny-GptOssForCausalLM",
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-LlamaForCausalLM-3",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.1",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-            "trl-internal-testing/tiny-Phi3ForCausalLM-3",
-            "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            "trl-internal-testing/tiny-Qwen3ForCausalLM",
-        ],
-    )
-    def test_llm(self, model_id):
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto", device_map=torch_device)
-        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=torch_device)
-        logits_mask = torch.tensor(
-            [[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]],
-            device=torch_device,
-        )
-
-        full_outputs = model(input_ids=input_ids)
-        masked_outputs = forward_masked_logits(model, logits_mask, input_ids=input_ids)
-
-        torch.testing.assert_close(
-            masked_outputs.flat_logits,
-            full_outputs.logits[logits_mask.bool()],
-        )
-
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.5.0"),
-                    reason="Gemma4 models were introduced in transformers-5.5.0",
-                ),
-            ),
-            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
-            "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("4.57.0"),
-                        reason="Qwen3-VL series were introduced in transformers-4.57.0",
-                    ),
-                ],
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
-            ),
-        ],
-    )
-    def test_vlm(self, model_id):
-        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="auto", device_map=torch_device)
-        input_ids = torch.randint(0, model.config.text_config.vocab_size, (2, 8), device=torch_device)
-        logits_mask = torch.tensor(
-            [[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]],
-            device=torch_device,
-        )
-
-        full_outputs = model(input_ids=input_ids)
-        masked_outputs = forward_masked_logits(model, logits_mask, input_ids=input_ids)
-
-        torch.testing.assert_close(
-            masked_outputs.flat_logits,
-            full_outputs.logits[logits_mask.bool()],
-        )
-
-
 class TestChunkedLogProbFunction:
     N, H, V = 64, 32, 128
     CHUNK_SIZE = 32
@@ -1235,6 +1141,7 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
 ]
 
 

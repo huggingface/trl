@@ -42,7 +42,7 @@ from .nash_md_config import NashMDConfig
 
 
 if is_peft_available():
-    from peft import PeftModel
+    from peft import PeftConfig, PeftModel
 
 
 class GeometricMixtureWrapper(GenerationMixin):
@@ -133,7 +133,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
-        peft_config (`dict`):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
@@ -177,7 +177,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         | FeatureExtractionMixin
         | ProcessorMixin
         | None = None,
-        peft_config: dict | None = None,
+        peft_config: "PeftConfig | None" = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
