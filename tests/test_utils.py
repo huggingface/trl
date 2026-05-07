@@ -1287,6 +1287,7 @@ class TestPatchChunkedLMHead:
 
         torch.testing.assert_close(chunked_grad, ref_grad, atol=5e-2, rtol=5e-2)
 
+
 class TestComputeFlopsPerToken(TrlTestCase):
     DENSE_MODEL_ID = "trl-internal-testing/tiny-Qwen3ForCausalLM"
     MOE_MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
