@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import random as _random
+import contextlib
 from types import SimpleNamespace
 
 import pytest
@@ -22,7 +22,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.gold import GOLDConfig
 from trl.experimental.gold import gold_trainer as gold_trainer_module
-from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, build_teacher_inputs_from_texts, split_tensor_dict
+from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, build_teacher_inputs_from_texts
 from trl.experimental.utils import DataCollatorForChatML
 
 
@@ -980,17 +980,239 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
 _TINY_MODEL_ID = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
 
-def _build_seq_kd_trainer(
-    tmp_dir,
-    *,
-    seq_kd,
-    lmbda,
-    max_steps,
-    gradient_accumulation_steps=1,
-    per_device_train_batch_size=1,
-    use_uld_loss=False,
-    teacher_tokenizer_name_or_path=None,
-):
+def test_generate_seq_kd_for_slices_writes_canned_completion_to_buffer(monkeypatch):
+    class RecordingTokenizer:
+        pad_token_id = 0
+        pad_token = "<pad>"
+        eos_token_id = 1
+
+        def batch_decode(self, sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            del skip_special_tokens, clean_up_tokenization_spaces
+            return [" ".join(str(int(token)) for token in sequence) for sequence in sequences]
+
+    canned = [7, 8, 9]
+    teacher_calls = {"n": 0}
+
+    class CannedTeacher:
+        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+            teacher_calls["n"] += 1
+            bs = input_ids.shape[0]
+            completions = torch.tensor([canned] * bs, dtype=torch.long, device=input_ids.device)
+            return SimpleNamespace(sequences=torch.cat([input_ids, completions], dim=1))
+
+    tokenizer = RecordingTokenizer()
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+    trainer.processing_class = tokenizer
+    trainer.teacher_tokenizer = None
+    trainer.teacher_model = CannedTeacher()
+    trainer.use_uld_loss = False
+    trainer.generation_config = SimpleNamespace(
+        max_new_tokens=len(canned), eos_token_id=tokenizer.eos_token_id, pad_token_id=tokenizer.pad_token_id
+    )
+    trainer.generation_kwargs = {}
+    trainer.args = SimpleNamespace(max_length=None)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+
+    monkeypatch.setattr(
+        gold_trainer_module,
+        "unwrap_model_for_generation",
+        lambda model, accelerator, generation_kwargs=None: contextlib.nullcontext(model),
+    )
+
+    prompts = torch.tensor([[0, 0, 5, 11, 12]], dtype=torch.long)
+    prompt_attention_mask = torch.tensor([[0, 0, 1, 1, 1]], dtype=torch.long)
+    slices = [{"prompts": prompts, "prompt_attention_mask": prompt_attention_mask}]
+
+    GOLDTrainer._generate_seq_kd_for_slices(trainer, slices, [0])
+
+    assert teacher_calls["n"] == 1
+    buffered = trainer._buffered_inputs[0]
+    assert buffered["input_ids"][0, -len(canned) :].tolist() == canned
+    completion_labels = buffered["labels"][0][buffered["labels"][0] != -100].tolist()
+    assert completion_labels == canned
+
+
+def test_generate_seq_kd_for_slices_cross_tok_round_trips_through_text(llama_tokenizer, qwen_tokenizer, monkeypatch):
+    teacher_completion_ids = qwen_tokenizer.encode("hello", add_special_tokens=False)
+    expected_student_ids = llama_tokenizer.encode(
+        qwen_tokenizer.decode(teacher_completion_ids, skip_special_tokens=True), add_special_tokens=False
+    )
+    assert expected_student_ids
+
+    teacher_calls = {"n": 0}
+
+    class CannedTeacher:
+        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+            teacher_calls["n"] += 1
+            bs = input_ids.shape[0]
+            completions = torch.tensor([teacher_completion_ids] * bs, dtype=torch.long, device=input_ids.device)
+            return SimpleNamespace(sequences=torch.cat([input_ids, completions], dim=1))
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+    trainer.processing_class = llama_tokenizer
+    trainer.teacher_tokenizer = qwen_tokenizer
+    trainer.teacher_model = CannedTeacher()
+    trainer.use_uld_loss = True
+    trainer.generation_config = SimpleNamespace(
+        max_new_tokens=len(expected_student_ids),
+        eos_token_id=llama_tokenizer.eos_token_id,
+        pad_token_id=llama_tokenizer.pad_token_id,
+    )
+    trainer.generation_kwargs = {}
+    trainer.args = SimpleNamespace(max_length=None)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+
+    monkeypatch.setattr(
+        gold_trainer_module,
+        "unwrap_model_for_generation",
+        lambda model, accelerator, generation_kwargs=None: contextlib.nullcontext(model),
+    )
+
+    prompt_ids = llama_tokenizer.encode("Greeting:", add_special_tokens=False)
+    pad_id = llama_tokenizer.pad_token_id
+    prompts = torch.tensor([[pad_id] + prompt_ids], dtype=torch.long)
+    prompt_attention_mask = (prompts != pad_id).long()
+    slices = [{"prompts": prompts, "prompt_attention_mask": prompt_attention_mask}]
+
+    GOLDTrainer._generate_seq_kd_for_slices(trainer, slices, [0])
+
+    assert teacher_calls["n"] == 1
+    buffered = trainer._buffered_inputs[0]
+    completion_labels = buffered["labels"][0][buffered["labels"][0] != -100].tolist()
+    assert completion_labels == expected_student_ids
+
+
+def test_generate_seq_kd_for_slices_batches_single_generate_call_across_slices(monkeypatch):
+    class RecordingTokenizer:
+        pad_token_id = 0
+        pad_token = "<pad>"
+        eos_token_id = 1
+
+        def batch_decode(self, sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            del skip_special_tokens, clean_up_tokenization_spaces
+            return [" ".join(str(int(token)) for token in sequence) for sequence in sequences]
+
+    canned = [50, 60]
+    teacher_calls = {"n": 0}
+
+    class CannedTeacher:
+        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+            teacher_calls["n"] += 1
+            bs = input_ids.shape[0]
+            completions = torch.tensor([canned] * bs, dtype=torch.long, device=input_ids.device)
+            return SimpleNamespace(sequences=torch.cat([input_ids, completions], dim=1))
+
+    tokenizer = RecordingTokenizer()
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+    trainer.processing_class = tokenizer
+    trainer.teacher_tokenizer = None
+    trainer.teacher_model = CannedTeacher()
+    trainer.use_uld_loss = False
+    trainer.generation_config = SimpleNamespace(
+        max_new_tokens=len(canned), eos_token_id=tokenizer.eos_token_id, pad_token_id=tokenizer.pad_token_id
+    )
+    trainer.generation_kwargs = {}
+    trainer.args = SimpleNamespace(max_length=None)
+    trainer._buffered_inputs = [None] * 3
+    trainer._buffered_text_logs = [None] * 3
+
+    monkeypatch.setattr(
+        gold_trainer_module,
+        "unwrap_model_for_generation",
+        lambda model, accelerator, generation_kwargs=None: contextlib.nullcontext(model),
+    )
+
+    def make_slice(prompt_ids):
+        n = len(prompt_ids)
+        prompts = torch.tensor([[0] * (4 - n) + prompt_ids], dtype=torch.long)
+        return {"prompts": prompts, "prompt_attention_mask": (prompts != 0).long()}
+
+    slices = [make_slice([5]), make_slice([5, 6]), make_slice([5, 6, 7])]
+
+    GOLDTrainer._generate_seq_kd_for_slices(trainer, slices, [0, 1, 2])
+
+    assert teacher_calls["n"] == 1
+    for i in range(3):
+        assert trainer._buffered_inputs[i]["input_ids"][0, -len(canned) :].tolist() == canned
+
+
+def test_fill_buffer_routes_indices_to_correct_helper_with_seq_kd(monkeypatch):
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(is_main_process=True)
+    trainer.lmbda = 0.5
+    trainer.seq_kd = True
+    trainer.use_uld_loss = False
+    trainer.teacher_tokenizer = None
+
+    routing = {"on_policy": [], "seq_kd": []}
+    trainer._generate_on_policy_for_slices = lambda slices, ids: routing["on_policy"].extend(ids)
+    trainer._generate_seq_kd_for_slices = lambda slices, ids: routing["seq_kd"].extend(ids)
+
+    # Patch broadcast result, not RNG: survives a refactor of the on-policy flag computation.
+    monkeypatch.setattr(
+        gold_trainer_module,
+        "broadcast_object_list",
+        lambda flags, from_process=0: [True, False, True, False],
+    )
+
+    bs = 4
+    generation_batch = {
+        "prompts": torch.zeros(bs, 4, dtype=torch.long),
+        "prompt_attention_mask": torch.ones(bs, 4, dtype=torch.long),
+        "input_ids": torch.zeros(bs, 8, dtype=torch.long),
+        "attention_mask": torch.ones(bs, 8, dtype=torch.long),
+        "labels": torch.full((bs, 8), -100, dtype=torch.long),
+    }
+
+    GOLDTrainer._fill_buffer(trainer, generation_batch, 4)
+
+    assert trainer._buffered_on_policy == [True, False, True, False]
+    assert routing["on_policy"] == [0, 2]
+    assert routing["seq_kd"] == [1, 3]
+
+
+def test_fill_buffer_off_policy_uses_dataset_when_seq_kd_disabled(monkeypatch):
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(is_main_process=True)
+    trainer.lmbda = 0.5
+    trainer.seq_kd = False
+    trainer.use_uld_loss = False
+    trainer.teacher_tokenizer = None
+
+    routing = {"on_policy": [], "seq_kd": []}
+    trainer._generate_on_policy_for_slices = lambda slices, ids: routing["on_policy"].extend(ids)
+    trainer._generate_seq_kd_for_slices = lambda slices, ids: routing["seq_kd"].extend(ids)
+
+    monkeypatch.setattr(
+        gold_trainer_module,
+        "broadcast_object_list",
+        lambda flags, from_process=0: [True, False],
+    )
+
+    bs = 2
+    generation_batch = {
+        "prompts": torch.zeros(bs, 4, dtype=torch.long),
+        "prompt_attention_mask": torch.ones(bs, 4, dtype=torch.long),
+        "input_ids": torch.zeros(bs, 8, dtype=torch.long),
+        "attention_mask": torch.ones(bs, 8, dtype=torch.long),
+        "labels": torch.full((bs, 8), -100, dtype=torch.long),
+    }
+
+    GOLDTrainer._fill_buffer(trainer, generation_batch, 2)
+
+    assert routing["on_policy"] == [0]
+    assert routing["seq_kd"] == []
+    assert trainer._buffered_inputs[1] is not None
+    assert "input_ids" in trainer._buffered_inputs[1]
+
+
+@pytest.mark.slow
+def test_seq_kd_e2e_smoke(tmp_path):
     tokenizer = AutoTokenizer.from_pretrained(_TINY_MODEL_ID)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -998,31 +1220,27 @@ def _build_seq_kd_trainer(
     teacher = AutoModelForCausalLM.from_pretrained(_TINY_MODEL_ID, dtype="float32")
 
     args = GOLDConfig(
-        output_dir=tmp_dir,
+        output_dir=str(tmp_path),
         report_to="none",
-        max_steps=max_steps,
-        per_device_train_batch_size=per_device_train_batch_size,
-        gradient_accumulation_steps=gradient_accumulation_steps,
+        max_steps=1,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=1,
         max_completion_length=8,
         max_length=64,
-        seq_kd=seq_kd,
-        lmbda=lmbda,
+        seq_kd=True,
+        lmbda=0.0,
         beta=0.5,
         temperature=0.9,
         top_p=1.0,
         top_k=0,
         num_generations=1,
         use_vllm=False,
-        use_uld_loss=use_uld_loss,
-        teacher_tokenizer_name_or_path=teacher_tokenizer_name_or_path,
         log_completions=False,
         dataloader_drop_last=True,
         save_strategy="no",
         eval_strategy="no",
         logging_strategy="no",
-        learning_rate=1e-7,
     )
-
     dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
     trainer = GOLDTrainer(
@@ -1032,313 +1250,17 @@ def _build_seq_kd_trainer(
         train_dataset=dataset,
         processing_class=tokenizer,
     )
-    return trainer
 
+    teacher_calls = {"n": 0}
+    original_gen = trainer.teacher_model.generate
 
-def _spy_generate(trainer):
-    counts = {"teacher": 0, "student": 0}
+    def counting_gen(*args, **kwargs):
+        teacher_calls["n"] += 1
+        return original_gen(*args, **kwargs)
 
-    original_teacher_gen = trainer.teacher_model.generate
-    original_student_gen = trainer.model.generate
-
-    def counted_teacher_gen(*args, **kwargs):
-        counts["teacher"] += 1
-        return original_teacher_gen(*args, **kwargs)
-
-    def counted_student_gen(*args, **kwargs):
-        counts["student"] += 1
-        return original_student_gen(*args, **kwargs)
-
-    trainer.teacher_model.generate = counted_teacher_gen
-    trainer.model.generate = counted_student_gen
-    return counts
-
-
-@pytest.mark.slow
-def test_seq_kd_uses_teacher_generation_when_lmbda_is_zero(tmp_path):
-    _random.seed(0)
-    torch.manual_seed(0)
-    trainer = _build_seq_kd_trainer(
-        str(tmp_path),
-        seq_kd=True,
-        lmbda=0.0,
-        max_steps=2,
-    )
-    counts = _spy_generate(trainer)
+    trainer.teacher_model.generate = counting_gen
 
     trainer.train()
 
-    assert counts["teacher"] >= 1
-    assert counts["student"] == 0
+    assert teacher_calls["n"] >= 1
     assert trainer.state.log_history[-1]["train_loss"] is not None
-
-
-@pytest.mark.slow
-def test_seq_kd_skips_teacher_generation_when_lmbda_is_one(tmp_path):
-    _random.seed(0)
-    torch.manual_seed(0)
-    trainer = _build_seq_kd_trainer(
-        str(tmp_path),
-        seq_kd=True,
-        lmbda=1.0,
-        max_steps=2,
-    )
-    counts = _spy_generate(trainer)
-
-    trainer.train()
-
-    assert counts["teacher"] == 0
-    assert counts["student"] >= 1
-    assert trainer.state.log_history[-1]["train_loss"] is not None
-
-
-@pytest.mark.slow
-def test_seq_kd_mutually_exclusive_per_slice(tmp_path, monkeypatch):
-    grad_accum = 4
-    _random.seed(0)
-    torch.manual_seed(0)
-
-    trainer = _build_seq_kd_trainer(
-        str(tmp_path),
-        seq_kd=True,
-        lmbda=0.5,
-        max_steps=1,
-        gradient_accumulation_steps=grad_accum,
-    )
-
-    # Force [True, False, True, False] routing: random()<=lmbda(0.5) => on-policy.
-    forced_values = iter([0.0, 1.0, 0.0, 1.0])
-
-    def fake_random():
-        return next(forced_values)
-
-    monkeypatch.setattr(gold_trainer_module.random, "random", fake_random)
-
-    routing = {"on_policy_indices": [], "seq_kd_indices": []}
-
-    original_on_policy = trainer._generate_on_policy_for_slices
-    original_seq_kd = trainer._generate_seq_kd_for_slices
-
-    def spy_on_policy(slices, on_policy_indices):
-        routing["on_policy_indices"].extend(on_policy_indices)
-        return original_on_policy(slices, on_policy_indices)
-
-    def spy_seq_kd(slices, seq_kd_indices):
-        routing["seq_kd_indices"].extend(seq_kd_indices)
-        return original_seq_kd(slices, seq_kd_indices)
-
-    trainer._generate_on_policy_for_slices = spy_on_policy
-    trainer._generate_seq_kd_for_slices = spy_seq_kd
-
-    trainer.train()
-
-    on_policy_indices = routing["on_policy_indices"]
-    seq_kd_indices = routing["seq_kd_indices"]
-    flags = list(trainer._buffered_on_policy)
-
-    assert flags == [True, False, True, False]
-    assert not (set(on_policy_indices) & set(seq_kd_indices))
-    assert set(on_policy_indices) | set(seq_kd_indices) == set(range(grad_accum))
-
-    for i, flag in enumerate(flags):
-        if flag:
-            assert i in on_policy_indices and i not in seq_kd_indices
-        else:
-            assert i in seq_kd_indices and i not in on_policy_indices
-
-    assert any(flags) and not all(flags)
-
-
-@pytest.mark.slow
-def test_seq_kd_disabled_uses_dataset_off_policy(tmp_path):
-    _random.seed(0)
-    torch.manual_seed(0)
-    trainer = _build_seq_kd_trainer(
-        str(tmp_path),
-        seq_kd=False,
-        lmbda=0.0,
-        max_steps=2,
-    )
-    counts = _spy_generate(trainer)
-
-    trainer.train()
-
-    assert counts["teacher"] == 0
-    assert counts["student"] == 0
-    assert trainer.state.log_history[-1]["train_loss"] is not None
-
-
-@pytest.mark.slow
-def test_seq_kd_disabled_with_lmbda_one_unchanged(tmp_path):
-    _random.seed(0)
-    torch.manual_seed(0)
-    trainer = _build_seq_kd_trainer(
-        str(tmp_path),
-        seq_kd=False,
-        lmbda=1.0,
-        max_steps=2,
-    )
-    counts = _spy_generate(trainer)
-
-    trainer.train()
-
-    assert counts["teacher"] == 0
-    assert counts["student"] >= 1
-    assert trainer.state.log_history[-1]["train_loss"] is not None
-
-
-@pytest.mark.slow
-def test_seq_kd_batches_teacher_generation_across_slices(tmp_path):
-    _random.seed(0)
-    torch.manual_seed(0)
-    grad_accum = 4
-    trainer = _build_seq_kd_trainer(
-        str(tmp_path),
-        seq_kd=True,
-        lmbda=0.0,
-        max_steps=1,
-        gradient_accumulation_steps=grad_accum,
-    )
-    counts = _spy_generate(trainer)
-
-    trainer.train()
-
-    assert counts["teacher"] == 1
-    assert counts["student"] == 0
-
-
-@pytest.mark.slow
-def test_seq_kd_replaces_dataset_input_ids(tmp_path):
-    _random.seed(0)
-    torch.manual_seed(0)
-    trainer = _build_seq_kd_trainer(
-        str(tmp_path),
-        seq_kd=True,
-        lmbda=0.0,
-        max_steps=1,
-    )
-
-    captured = {"original_input_ids": None, "original_labels": None}
-
-    original_fill = trainer._fill_buffer
-
-    def spy_fill_buffer(generation_batch, buffer_steps):
-        slices = split_tensor_dict(generation_batch, buffer_steps)
-        captured["original_input_ids"] = [s["input_ids"].clone() for s in slices]
-        captured["original_labels"] = [s["labels"].clone() for s in slices]
-        return original_fill(generation_batch, buffer_steps)
-
-    trainer._fill_buffer = spy_fill_buffer
-
-    trainer.train()
-
-    assert captured["original_input_ids"] is not None
-    assert trainer._buffered_inputs is not None and len(trainer._buffered_inputs) >= 1
-
-    for slice_idx, original_input_ids in enumerate(captured["original_input_ids"]):
-        buffered = trainer._buffered_inputs[slice_idx]
-        assert buffered is not None
-        new_input_ids = buffered["input_ids"]
-
-        differs = new_input_ids.shape != original_input_ids.shape or not torch.equal(
-            new_input_ids.cpu(), original_input_ids.cpu()
-        )
-        assert differs
-
-        buffered_labels = buffered["labels"].cpu()
-        original_labels = captured["original_labels"][slice_idx].cpu()
-
-        assert (buffered_labels != -100).any()
-
-        buffered_completion_tokens = sorted(buffered_labels[buffered_labels != -100].tolist())
-        original_completion_tokens = sorted(original_labels[original_labels != -100].tolist())
-        assert buffered_completion_tokens != original_completion_tokens
-
-
-@pytest.mark.slow
-def test_seq_kd_cross_tokenizer_uld(tmp_path):
-    teacher_tok_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
-    try:
-        AutoTokenizer.from_pretrained(teacher_tok_id)
-    except Exception as exc:
-        pytest.skip(f"Teacher tokenizer {teacher_tok_id} unavailable: {exc}")
-
-    _random.seed(0)
-    torch.manual_seed(0)
-    try:
-        trainer = _build_seq_kd_trainer(
-            str(tmp_path),
-            seq_kd=True,
-            lmbda=0.0,
-            max_steps=1,
-            use_uld_loss=True,
-            teacher_tokenizer_name_or_path=teacher_tok_id,
-        )
-    except Exception as exc:
-        pytest.skip(f"Could not construct cross-tokenizer trainer: {exc}")
-
-    counts = _spy_generate(trainer)
-
-    decode_counts = {"teacher": 0}
-    original_teacher_decode = trainer.teacher_tokenizer.batch_decode
-
-    def counted_teacher_decode(*args, **kwargs):
-        decode_counts["teacher"] += 1
-        return original_teacher_decode(*args, **kwargs)
-
-    trainer.teacher_tokenizer.batch_decode = counted_teacher_decode
-
-    baseline_decode_calls = decode_counts["teacher"]
-    trainer.train()
-
-    assert counts["teacher"] >= 1
-    assert counts["student"] == 0
-    assert trainer.state.log_history[-1]["train_loss"] is not None
-
-    # compute_loss may also call batch_decode, so assert > baseline rather than an exact count.
-    assert decode_counts["teacher"] > baseline_decode_calls
-
-
-@pytest.mark.slow
-def test_seq_kd_batches_multiple_prompts_per_slice(tmp_path):
-    _random.seed(0)
-    torch.manual_seed(0)
-    grad_accum = 2
-    per_device_bs = 2
-    trainer = _build_seq_kd_trainer(
-        str(tmp_path),
-        seq_kd=True,
-        lmbda=0.0,
-        max_steps=1,
-        gradient_accumulation_steps=grad_accum,
-        per_device_train_batch_size=per_device_bs,
-    )
-    counts = _spy_generate(trainer)
-
-    captured = {"slice_prompt_counts": None}
-    original_fill = trainer._fill_buffer
-
-    def spy_fill_buffer(generation_batch, buffer_steps):
-        slices = split_tensor_dict(generation_batch, buffer_steps)
-        captured["slice_prompt_counts"] = [s["prompts"].shape[0] for s in slices]
-        return original_fill(generation_batch, buffer_steps)
-
-    trainer._fill_buffer = spy_fill_buffer
-
-    trainer.train()
-
-    assert counts["teacher"] == 1
-    assert counts["student"] == 0
-
-    slice_prompt_counts = captured["slice_prompt_counts"]
-    assert slice_prompt_counts is not None and len(slice_prompt_counts) == grad_accum
-    assert all(c >= 2 for c in slice_prompt_counts)
-
-    assert trainer._buffered_inputs is not None and len(trainer._buffered_inputs) == grad_accum
-    for slice_idx, expected_count in enumerate(slice_prompt_counts):
-        buffered = trainer._buffered_inputs[slice_idx]
-        assert buffered is not None
-        assert buffered["input_ids"].shape[0] == expected_count
-        labels = buffered["labels"].cpu()
-        for row_idx in range(labels.shape[0]):
-            assert (labels[row_idx] != -100).any()
