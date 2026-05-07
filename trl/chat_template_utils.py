@@ -395,7 +395,12 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer.response_schema = gptoss_schema
     elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
         tokenizer.response_schema = llama3_schema
-    elif chat_template in [qwen3_chat_template, qwen3_instruct_2507_chat_template, qwen3_vl_chat_template]:
+    elif chat_template in [
+        qwen2_5_chat_template,
+        qwen3_chat_template,
+        qwen3_instruct_2507_chat_template,
+        qwen3_vl_chat_template,
+    ]:
         tokenizer.response_schema = qwen3_schema
     elif chat_template in [
         qwen3_5_chat_template_2b_and_below,
