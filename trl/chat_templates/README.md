@@ -25,7 +25,7 @@ Original Cohere2 chat template (as shipped by `CohereLabs/c4ai-command-r7b-12-20
 
 Original DeepSeek-V3 chat template.
 
-### `falconmamba.jinja.jinja`
+### `falconmamba.jinja`
 
 Original Falcon Mamba chat template.
 
@@ -99,6 +99,12 @@ Patched DeepSeek-V3 template. Diff vs `deepseekv3.jinja`:
 
 - Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict` (the documented format per [transformers docs](https://huggingface.co/docs/transformers/en/chat_extras#tool-calling-example)). The original template uses raw string concatenation, which crashes on dict inputs.
 - Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss.
+
+### `falconmamba_training.jinja`
+
+Patched Falcon Mamba template. Diff vs `falconmamba.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `gemma_training.jinja`
 
@@ -179,10 +185,3 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 ### `qwen3_6_training.jinja`
 
 Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (require both `<think>` and `</think>` before parsing, drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted, wrap assistant output in `{% generation %}` / `{% endgeneration %}`), applied to the Qwen3.6 base template.
-
-
-### `falconmamba_training.jinja`
-
-Patched Falcon Mamba template. Diff vs `falconmamba.jinja`:
-
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.

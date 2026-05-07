@@ -659,6 +659,9 @@ def get_training_chat_template(
     if processing_class.chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
 
+    if processing_class.chat_template == falconmamba_chat_template:
+        return falconmamba_training_chat_template
+
     if processing_class.chat_template == gemma_chat_template:
         return gemma_training_chat_template
 
@@ -688,9 +691,6 @@ def get_training_chat_template(
 
     if processing_class.chat_template == qwen3_6_chat_template:
         return qwen3_6_training_chat_template
-
-    if processing_class.chat_template == falconmamba_chat_template:
-        return falconmamba_training_chat_template
 
     raise ValueError(
         "The chat template is not training-compatible (missing prefix-preservation or `{% generation %}` markers) "
