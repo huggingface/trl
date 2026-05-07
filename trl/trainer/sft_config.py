@@ -266,8 +266,10 @@ class SFTConfig(_BaseConfig):
         metadata={
             "help": "Type of loss to use. Possible values are `'nll'` (negative log-likelihood, default), `'dft'` "
             "(Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), and `'chunked_nll'` (same math as "
-            "`'nll'` but skips the `'lm_head'` matmul on ignored tokens and chunks the CE to reduce peak memory; not "
-            "compatible with Liger)."
+            "`'nll'`, but the `lm_head` projection is computed on non-ignored tokens only and the cross-entropy is "
+            "processed in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`. "
+            "Under FSDP2, set `fsdp_reshard_after_forward false` in the accelerate config — the chunked path "
+            "otherwise re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time."
         },
     )
     activation_offloading: bool = field(
