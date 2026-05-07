@@ -1287,17 +1287,6 @@ class TestPatchChunkedLMHead:
 
         torch.testing.assert_close(chunked_grad, ref_grad, atol=5e-2, rtol=5e-2)
 
-
-def _load_moe_config(model_id):
-    # Real Qwen3 configs (`Qwen/Qwen3-30B-A3B`, `Qwen3-4B`, etc.) ship with `head_dim` set
-    # explicitly in `config.json`, but the tiny test fixture omits it. Inject the derived
-    # value so `compute_flops_per_token` (which reads `config.head_dim` directly) is happy.
-    cfg = AutoConfig.from_pretrained(model_id)
-    if not hasattr(cfg, "head_dim"):
-        cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
-    return cfg
-
-
 class TestComputeFlopsPerToken(TrlTestCase):
     DENSE_MODEL_ID = "trl-internal-testing/tiny-Qwen3ForCausalLM"
     MOE_MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
@@ -1327,7 +1316,7 @@ class TestComputeFlopsPerToken(TrlTestCase):
         # routed-experts contribution: `num_experts_per_tok × 3 matmuls × 2 × h × moe_intermediate`
         # per MoE layer, ×3 for fwd+bwd. Holding `num_local_experts` constant pins the
         # router term so the delta is purely the active-expert math.
-        cfg = _load_moe_config(self.MOE_MODEL_ID)
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
         cfg.num_experts_per_tok = 1
         f_lo = compute_flops_per_token(cfg, 16384)
         cfg.num_experts_per_tok = 2
@@ -1355,7 +1344,7 @@ class TestAdjustedMfu(TrlTestCase):
         # `adjusted_mfu(mfu, cfg, seq_len) == mfu * (full - half_attn) / full`, with
         # `full = compute_flops_per_token(cfg, seq_len)` and
         # `half_attn = L * 3 * 2 * n_heads * head_dim * seq_len`. Cross-check the two helpers.
-        cfg = _load_moe_config(self.MOE_MODEL_ID)
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
         seq_len = 16384
         flops_full = compute_flops_per_token(cfg, seq_len)
         half_attn = cfg.num_hidden_layers * 3 * 2 * cfg.num_attention_heads * cfg.head_dim * seq_len
@@ -1365,7 +1354,7 @@ class TestAdjustedMfu(TrlTestCase):
     def test_proportional_to_input(self):
         # The correction is purely multiplicative in `mfu`. `adjusted_mfu(2*x, ...)` should
         # equal `2 * adjusted_mfu(x, ...)`.
-        cfg = _load_moe_config(self.MOE_MODEL_ID)
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
         a = adjusted_mfu(50.0, cfg, 16384)
         b = adjusted_mfu(100.0, cfg, 16384)
         assert b == pytest.approx(2 * a)
@@ -1373,7 +1362,7 @@ class TestAdjustedMfu(TrlTestCase):
     def test_decreases_with_seq_len(self):
         # Longer sequences → attention takes a larger share of total compute → causal
         # correction subtracts a larger absolute amount → factor strictly decreases.
-        cfg = _load_moe_config(self.MOE_MODEL_ID)
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
         f_short = adjusted_mfu(100.0, cfg, 4096)
         f_med = adjusted_mfu(100.0, cfg, 16384)
         f_long = adjusted_mfu(100.0, cfg, 65536)
