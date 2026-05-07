@@ -5,8 +5,9 @@ User: ' + message['content'].strip().replace('
 ').replace('
 
 ', '
-') }}{% elif message['role'] == 'assistant' %}{{'\n'}}{% generation %}{{ '
-Assistant: ' + message['content'].strip().replace('
+') }}{% elif message['role'] == 'assistant' %}{{ '
+
+Assistant: ' }}{% generation %}{{ message['content'].strip().replace('
 ', '
 ').replace('
 

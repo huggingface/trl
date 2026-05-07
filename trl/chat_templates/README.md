@@ -25,6 +25,10 @@ Original Cohere2 chat template (as shipped by `CohereLabs/c4ai-command-r7b-12-20
 
 Original DeepSeek-V3 chat template.
 
+### `falconmamba.jinja.jinja`
+
+Original Falcon Mamba chat template.
+
 ### `gemma.jinja`
 
 Original Gemma chat template. Used by both Gemma (v1) and Gemma2, which ship identical templates.
@@ -72,10 +76,6 @@ Original Qwen3.5 chat templates.
 ### `qwen3_6.jinja`
 
 Original Qwen3.6 chat template (shared across `Qwen3.6-27B`, `Qwen3.6-35B-A3B`, and their FP8 variants). Differs from `qwen3_5_4b_and_above.jinja` by adding a `preserve_thinking` flag and tweaking how non-string tool-call argument values are stringified.
-
-### `falconmamba.jinja.jinja`
-
-Original Falcon Mamba chat template.
 
 ## Training templates
 
