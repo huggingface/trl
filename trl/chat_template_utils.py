@@ -343,6 +343,8 @@ qwen3_5_chat_template_4b_and_above = (_CHAT_TEMPLATES_DIR / "qwen3_5_4b_and_abov
 
 qwen3_6_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6.jinja").read_text()
 
+falconmamba_chat_template = (_CHAT_TEMPLATES_DIR / "falconmamba.jinja").read_text()
+
 
 ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizerBase, ProcessorMixin)
 
@@ -564,6 +566,8 @@ qwen3_instruct_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instr
 
 qwen3_6_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6_training.jinja").read_text()
 
+falconmamba_training_chat_template = (_CHAT_TEMPLATES_DIR / "falconmamba_training.jinja").read_text()
+
 
 def get_training_chat_template(
     processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
@@ -575,7 +579,7 @@ def get_training_chat_template(
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
     Currently Cohere, Cohere 2, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Qwen2.5,
-    Qwen3 (including the Instruct-2507 variant), and Qwen3.6 are supported.
+    Qwen3 (including the Instruct-2507 variant), Qwen3.6 and Falcon Mamba are supported.
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
@@ -679,6 +683,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == qwen3_6_chat_template:
         return qwen3_6_training_chat_template
+    
+    if processing_class.chat_template == falconmamba_chat_template:
+        return falconmamba_training_chat_template
 
     raise ValueError(
         "The chat template is not training-compatible (missing prefix-preservation or `{% generation %}` markers) "

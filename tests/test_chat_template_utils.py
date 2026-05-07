@@ -467,6 +467,7 @@ class TestIsChatTemplatePrefixPreserving:
                 reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
             ),
         ),
+        pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", id="falconmamba"),
     ],
 )
 class TestGetTrainingChatTemplate:
