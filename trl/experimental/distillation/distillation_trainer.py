@@ -523,8 +523,6 @@ class DistillationTrainer(_BaseTrainer):
                 init_kwargs = dict(teacher_model_init_kwargs)
                 if args.teacher_model_revision is not None:
                     init_kwargs.setdefault("revision", args.teacher_model_revision)
-                if "dtype" in init_kwargs and "dtype" not in init_kwargs:
-                    init_kwargs["dtype"] = init_kwargs.pop("dtype")
                 teacher_model = create_model_from_path(teacher_model, **init_kwargs)
 
         # Trainer does not need to remove unused columns — the collator handles raw data
