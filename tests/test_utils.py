@@ -23,7 +23,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from packaging.version import Version
-from transformers import AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -31,6 +31,9 @@ from trl import ModelConfig
 from trl.trainer.utils import (
     RepeatSampler,
     _ChunkedLogProbFunction,
+    adjusted_mfu,
+    compute_flops_per_token,
+    compute_mfu,
     entropy_from_logits,
     flush_left,
     generate_model_card,
@@ -1283,3 +1286,85 @@ class TestPatchChunkedLMHead:
         chunked_grad = model_chunked.lm_head.weight.grad.clone()
 
         torch.testing.assert_close(chunked_grad, ref_grad, atol=5e-2, rtol=5e-2)
+
+
+class TestComputeFlopsPerToken(TrlTestCase):
+    DENSE_MODEL_ID = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+    MOE_MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+
+    def test_seq_scaling_linear(self):
+        # Attention-score FLOPs per token scale linearly with seq_len; everything else
+        # is seq-len-independent. Doubling seq_len should double the seq-dependent delta,
+        # which differences cancel out from. `F(32k) - F(16k) == 2 * (F(16k) - F(8k))`.
+        cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
+        f_8k = compute_flops_per_token(cfg, 8192)
+        f_16k = compute_flops_per_token(cfg, 16384)
+        f_32k = compute_flops_per_token(cfg, 32768)
+        assert f_32k - f_16k == 2 * (f_16k - f_8k)
+
+    def test_tied_vs_untied_lm_head(self):
+        # Untied lm_head adds `2 * V * h` forward FLOPs, ×3 for fwd+bwd.
+        cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
+        cfg.tie_word_embeddings = True
+        f_tied = compute_flops_per_token(cfg, 16384)
+        cfg.tie_word_embeddings = False
+        f_untied = compute_flops_per_token(cfg, 16384)
+        expected_delta = 3 * 2 * cfg.vocab_size * cfg.hidden_size
+        assert f_untied - f_tied == expected_delta
+
+    def test_moe_active_vs_total_experts(self):
+        # Doubling `num_experts_per_tok` (active experts) changes FLOPs by exactly the
+        # routed-experts contribution: `num_experts_per_tok × 3 matmuls × 2 × h × moe_intermediate`
+        # per MoE layer, ×3 for fwd+bwd. Holding `num_local_experts` constant pins the
+        # router term so the delta is purely the active-expert math.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        cfg.num_experts_per_tok = 1
+        f_lo = compute_flops_per_token(cfg, 16384)
+        cfg.num_experts_per_tok = 2
+        f_hi = compute_flops_per_token(cfg, 16384)
+        moe_layers = sum(1 for i in range(cfg.num_hidden_layers) if i % cfg.decoder_sparse_step == 0)
+        per_expert_per_layer = 2 * 3 * cfg.hidden_size * cfg.moe_intermediate_size
+        expected_delta = 3 * moe_layers * (2 - 1) * per_expert_per_layer
+        assert f_hi - f_lo == expected_delta
+
+
+class TestComputeMfu(TrlTestCase):
+    def test_perfect_utilization(self):
+        # If aggregate TPS is exactly `peak * world_size / flops_per_token`, MFU is 100%.
+        flops = 100e9
+        peak = 989.5e12
+        world_size = 8
+        tps = peak * world_size / flops
+        assert compute_mfu(flops, tps, world_size, peak_flops_per_device=peak) == pytest.approx(100.0)
+
+
+class TestAdjustedMfu(TrlTestCase):
+    MOE_MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+
+    def test_consistent_with_formula(self):
+        # `adjusted_mfu(mfu, cfg, seq_len) == mfu * (full - half_attn) / full`, with
+        # `full = compute_flops_per_token(cfg, seq_len)` and
+        # `half_attn = L * 3 * 2 * n_heads * head_dim * seq_len`. Cross-check the two helpers.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        seq_len = 16384
+        flops_full = compute_flops_per_token(cfg, seq_len)
+        half_attn = cfg.num_hidden_layers * 3 * 2 * cfg.num_attention_heads * cfg.head_dim * seq_len
+        expected = 100.0 * (flops_full - half_attn) / flops_full
+        assert adjusted_mfu(100.0, cfg, seq_len) == pytest.approx(expected)
+
+    def test_proportional_to_input(self):
+        # The correction is purely multiplicative in `mfu`. `adjusted_mfu(2*x, ...)` should
+        # equal `2 * adjusted_mfu(x, ...)`.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        a = adjusted_mfu(50.0, cfg, 16384)
+        b = adjusted_mfu(100.0, cfg, 16384)
+        assert b == pytest.approx(2 * a)
+
+    def test_decreases_with_seq_len(self):
+        # Longer sequences → attention takes a larger share of total compute → causal
+        # correction subtracts a larger absolute amount → factor strictly decreases.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        f_short = adjusted_mfu(100.0, cfg, 4096)
+        f_med = adjusted_mfu(100.0, cfg, 16384)
+        f_long = adjusted_mfu(100.0, cfg, 65536)
+        assert f_short > f_med > f_long
