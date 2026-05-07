@@ -1142,7 +1142,6 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",
     "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
-    "trl-internal-testing/tiny-Gemma2ForCausalLM",
 ]
 
 
