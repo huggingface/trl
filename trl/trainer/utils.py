@@ -33,7 +33,6 @@ import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
 from huggingface_hub import ModelCard, ModelCardData
-from packaging.version import Version
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
