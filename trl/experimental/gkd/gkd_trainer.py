@@ -148,7 +148,6 @@ class GKDTrainer(SFTTrainer):
             self.liger_jsd_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
-                temperature=1.0,
                 compiled=False,
                 weight_hard_loss=0.0,
                 weight_soft_loss=1.0,
