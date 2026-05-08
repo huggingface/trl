@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,8 +20,11 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+import transformers
 from accelerate import PartialState, logging
+from accelerate.utils import is_peft_model
 from datasets import Dataset, features
+from packaging.version import Version
 from transformers import (
     BaseImageProcessor,
     DataCollator,
@@ -35,14 +38,14 @@ from transformers import (
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ...trainer.base_trainer import BaseTrainer
+from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import disable_dropout_in_model
 from ..utils import prepare_peft_model
 from .prm_config import PRMConfig
 
 
 if is_peft_available():
-    from peft import PeftModel
+    from peft import PeftConfig
 
 logger = logging.get_logger(__name__)
 
@@ -92,7 +95,7 @@ def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
     return {"accuracy": accuracy}
 
 
-class PRMTrainer(BaseTrainer):
+class PRMTrainer(_BaseTrainer):
     """
     Initialize PRMTrainer.
 
@@ -125,7 +128,7 @@ class PRMTrainer(BaseTrainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        peft_config (`dict`, defaults to `None`):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
             a PEFT model.
     """
@@ -165,9 +168,24 @@ class PRMTrainer(BaseTrainer):
             None,
         ),
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
-        peft_config: dict | None = None,
+        peft_config: "PeftConfig | None" = None,
     ):
-        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+
+        # PEFT
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+        if peft_config is not None or is_peft_model(model):
             model = prepare_peft_model(model, peft_config, args)
 
         # Disable dropout in the model
@@ -190,7 +208,6 @@ class PRMTrainer(BaseTrainer):
                     "tokenizer": processing_class,
                     "step_separator": args.step_separator,
                     "max_length": args.max_length,
-                    "max_prompt_length": args.max_prompt_length,
                     "max_completion_length": args.max_completion_length,
                     "train_on_last_step_only": args.train_on_last_step_only,
                 }
@@ -225,6 +242,14 @@ class PRMTrainer(BaseTrainer):
                         ),
                     )
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         super().__init__(
             model=model,
             args=args,
@@ -249,7 +274,6 @@ class PRMTrainer(BaseTrainer):
         tokenizer,
         step_separator,
         max_length,
-        max_prompt_length,
         max_completion_length,
         train_on_last_step_only,
         is_eval,
@@ -266,8 +290,6 @@ class PRMTrainer(BaseTrainer):
                 Separator between steps in the completion.
             max_length (`int` or `None`):
                Maximum length of the sequences (prompt + completion). If `None`, the sequences are not truncated.
-            max_prompt_length (`int` or `None`):
-                Maximum length of the prompt. If `None`, the prompt is not truncated.
             max_completion_length (`int` or `None`):
                 Maximum length of the completion sequences. If `None`, the completion sequences are not truncated.
             train_on_last_step_only (`bool`):
@@ -324,9 +346,7 @@ class PRMTrainer(BaseTrainer):
         if tokenizer.bos_token_id is not None:
             prompt_ids = [tokenizer.bos_token_id] + prompt_ids
 
-        # Truncate prompt and completion sequences
-        if max_prompt_length is not None:
-            prompt_ids = prompt_ids[-max_prompt_length:]
+        # Truncate completion sequences
         if max_completion_length is not None:
             completion_ids = completion_ids[:max_completion_length]
             labels = labels[:max_completion_length]

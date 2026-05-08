@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ python trl/scripts/kto.py \
     --gradient_accumulation_steps 1 \
     --eval_steps 500 \
     --output_dir=kto-aligned-model \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --logging_first_step
 ```
 
@@ -54,7 +54,7 @@ python trl/scripts/kto.py \
     --gradient_accumulation_steps 1 \
     --eval_steps 500 \
     --output_dir=kto-aligned-model-lora \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --logging_first_step \
     --use_peft \
     --load_in_4bit \
@@ -65,30 +65,18 @@ python trl/scripts/kto.py \
 """
 
 import argparse
-import os
-
-from accelerate import logging
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-from trl import (
-    DatasetMixtureConfig,
-    ModelConfig,
-    ScriptArguments,
-    TrlParser,
-    get_dataset,
-    get_peft_config,
-)
-from trl.experimental.kto import KTOConfig, KTOTrainer
-
-
-logger = logging.get_logger(__name__)
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args, dataset_args):
+    from accelerate import logging
+    from datasets import load_dataset
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from trl import get_dataset, get_peft_config
+    from trl.experimental.kto import KTOTrainer
+
+    logger = logging.get_logger(__name__)
+
     # Load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
@@ -145,21 +133,19 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
-def make_parser(subparsers: argparse._SubParsersAction | None = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
+    from trl import DatasetMixtureConfig, ModelConfig, ScriptArguments, TrlParser
+    from trl.experimental.kto import KTOConfig
+
     dataclass_types = (ScriptArguments, KTOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("kto", help="Run the KTO training script", dataclass_types=dataclass_types)
     else:
-        parser = TrlParser(dataclass_types)
+        parser = TrlParser(dataclass_types, prog=prog)
     return parser
 
 
 if __name__ == "__main__":
     parser = make_parser()
-    # When using the trl cli, this script may be run with additional arguments, corresponding accelerate arguments.
-    # To ensure that their parsing does not interfere with the script arguments, parse the arguments with
-    # `return_remaining_strings=True`, then ignore the remaining strings.
-    script_args, training_args, model_args, dataset_args, _ = parser.parse_args_and_config(
-        return_remaining_strings=True
-    )
+    script_args, training_args, model_args, dataset_args = parser.parse_args_and_config(fail_with_unknown_args=False)
     main(script_args, training_args, model_args, dataset_args)

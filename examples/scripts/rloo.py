@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl[vllm]",
-#     "peft",
+#     "trl[vllm,peft]",
 #     "math-verify",
 #     "latex2sympy2_extended",
 #     "trackio",
@@ -24,12 +23,15 @@
 # ///
 
 """
-pip install math_verify num2words==0.5.14 peft trackio vllm
-export TRACKIO_PROJECT="RLOO-NuminaMath-TIR"
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/rloo.py
-"""
+NuminaMath example: RLOO on math dataset with vLLM.
 
-import os
+  pip install math_verify num2words==0.5.14 peft trackio vllm
+  export TRACKIO_PROJECT="RLOO-NuminaMath-TIR"
+  accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/rloo.py
+
+For TL;DR or other datasets with a reward model, use the generic script:
+  python -m trl.scripts.rloo --dataset_name trl-lib/tldr --reward_model_name_or_path ... --model_name_or_path ...
+"""
 
 import torch
 from datasets import load_dataset
@@ -37,10 +39,6 @@ from peft import LoraConfig
 
 from trl import RLOOConfig, RLOOTrainer
 from trl.rewards import accuracy_reward, think_format_reward
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main():
@@ -70,10 +68,8 @@ def main():
         output_dir="Qwen3-0.6B-RLOO",
         model_init_kwargs={"dtype": torch.bfloat16},
         learning_rate=1e-5,
-        gradient_checkpointing_kwargs=dict(use_reentrant=False),
         log_completions=True,
         num_completions_to_print=2,
-        max_prompt_length=2048,
         max_completion_length=1024,
         gradient_accumulation_steps=2,
         steps_per_generation=8,

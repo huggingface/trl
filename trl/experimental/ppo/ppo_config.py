@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,15 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 from dataclasses import dataclass, field
 from typing import Literal
 
-from transformers import TrainingArguments
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class PPOConfig(TrainingArguments):
+class PPOConfig(_BaseConfig):
+    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.ppo.PPOTrainer`].
 
@@ -33,8 +33,6 @@ class PPOConfig(TrainingArguments):
     command line.
 
     Parameters:
-        run_name (`str`, *optional*):
-            Name of the run.
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         num_mini_batches (`int`, *optional*, defaults to `1`):
@@ -82,8 +80,6 @@ class PPOConfig(TrainingArguments):
             Mini batch size across GPUs.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the model to the Hub after training.
-        exp_name (`str`, *optional*, defaults to `os.path.basename(__file__)[:-3]`):
-            Name of this experiment.
         reward_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the reward model.
         model_adapter_name (`str`, *optional*):
@@ -115,45 +111,21 @@ class PPOConfig(TrainingArguments):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
             capacity of a single GPU, albeit at the cost of slower generation.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `3e-6` instead of `5e-5`.
     """
 
     # Parameters whose default values are overridden from TrainingArguments
-    logging_steps: float = field(
-        default=10,
-        metadata={
-            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
-            "will be interpreted as ratio of total training steps."
-        },
-    )
-    gradient_checkpointing: bool = field(
-        default=True,
-        metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
-        },
-    )
-    bf16: bool | None = field(
-        default=None,
-        metadata={
-            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
-            "`fp16` is not set."
-        },
-    )
-    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
-    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
-    lr_scheduler_kwargs: dict | str | None = field(
-        default=None,
-        metadata={
-            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
-            "restarts."
-        },
+    learning_rate: float = field(
+        default=3e-6,
+        metadata={"help": "The initial learning rate for AdamW."},
     )
 
-    run_name: str | None = field(
-        default=None,
-        metadata={"help": "Name of the run."},
-    )
     dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
@@ -245,10 +217,6 @@ class PPOConfig(TrainingArguments):
         default=False,
         metadata={"help": "Whether to push the model to the Hub after training."},
     )
-    exp_name: str = field(
-        default=os.path.basename(__file__)[:-3],
-        metadata={"help": "Name of this experiment."},
-    )
     reward_model_path: str = field(
         default="EleutherAI/pythia-160m",
         metadata={"help": "Path to the reward model."},
@@ -310,8 +278,3 @@ class PPOConfig(TrainingArguments):
             "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation."
         },
     )
-
-    def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        super().__post_init__()

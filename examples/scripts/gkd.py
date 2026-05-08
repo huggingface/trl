@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "trackio",
 #     "kernels",
 # ]
@@ -32,8 +31,7 @@ python examples/scripts/gkd.py \
     --gradient_accumulation_steps 8 \
     --output_dir gkd-model \
     --num_train_epochs 1 \
-    --push_to_hub \
-    --gradient_checkpointing
+    --push_to_hub
 
 # LoRA:
 python examples/scripts/gkd.py \
@@ -46,13 +44,10 @@ python examples/scripts/gkd.py \
     --output_dir gkd-model \
     --num_train_epochs 1 \
     --push_to_hub \
-    --gradient_checkpointing \
     --use_peft \
     --lora_r 64 \
     --lora_alpha 16
 """
-
-import os
 
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
@@ -67,10 +62,6 @@ from trl import (
     get_quantization_config,
 )
 from trl.experimental.gkd import GKDConfig, GKDTrainer
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":

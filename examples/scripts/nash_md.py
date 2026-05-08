@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ python examples/scripts/nash_md.py \
     --gradient_accumulation_steps 32 \
     --num_train_epochs 3 \
     --max_new_tokens 64 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --missing_eos_penalty 1.0 \
     --push_to_hub
 
@@ -49,12 +49,10 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --gradient_accumulation_steps 32 \
     --num_train_epochs 3 \
     --max_new_tokens 64 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --missing_eos_penalty 1.0 \
     --push_to_hub
 """
-
-import os
 
 import torch
 from datasets import load_dataset
@@ -68,15 +66,8 @@ from trl import (
     get_kbit_device_map,
     get_quantization_config,
 )
-from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge, PairRMJudge
 from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
-
-
-JUDGES = {"pair_rm": PairRMJudge, "openai": OpenAIPairwiseJudge, "hf": HfPairwiseJudge}
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, NashMDConfig, ModelConfig))
@@ -113,12 +104,6 @@ if __name__ == "__main__":
     else:
         reward_model = None
 
-    if training_args.judge is not None:
-        judge_cls = JUDGES[training_args.judge]
-        judge = judge_cls()
-    else:
-        judge = None
-
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, padding_side="left", trust_remote_code=model_args.trust_remote_code
     )
@@ -131,7 +116,6 @@ if __name__ == "__main__":
         model=model,
         ref_model=ref_model,
         reward_funcs=reward_model,
-        judge=judge,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,

@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,14 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
-from transformers import TrainingArguments
+from .base_config import _BaseConfig
 
 
 @dataclass
-class SFTConfig(TrainingArguments):
+class SFTConfig(_BaseConfig):
+    # docstyle-ignore
     r"""
     Configuration class for the [`SFTTrainer`].
 
@@ -58,19 +60,21 @@ class SFTConfig(TrainingArguments):
         eos_token (`str`, *optional*):
             Token used to indicate the end of a turn or sequence. If `None`, it defaults to
             `processing_class.eos_token`.
-        pad_token (`str`, *optional*):
-            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
-            it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
-            If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
+            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left
+            or right depending on `truncation_mode`. If `None`, no truncation is applied. When packing is enabled,
+            this value sets the sequence length.
+        truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
+            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is
+            `"keep_start"`. The `"keep_end"` value is deprecated and will be removed in v2.0.0.
         shuffle_dataset (`bool`, *optional*, defaults to `False`):
             Whether to shuffle the dataset.
         packing (`bool`, *optional*, defaults to `False`):
             Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
             padding. Uses `max_length` to define sequence length.
         packing_strategy (`str`, *optional*, defaults to `"bfd"`):
-            Strategy for packing sequences. Can be either `"bfd"` (best-fit decreasing, default), or `"wrapped"`.
+            Strategy for packing sequences. Can be `"bfd"` (best-fit decreasing, truncates overflow), `"bfd_split"`
+            (best-fit decreasing, splits overflow sequences), or `"wrapped"` (aggressive, cuts mid-sequence).
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
@@ -95,53 +99,48 @@ class SFTConfig(TrainingArguments):
             on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
             `False`, loss is computed on the entire sequence.
         loss_type (`str`, *optional*, defaults to `"nll"`):
-            Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` (Dynamic
-            Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629)).
+            Type of loss to use. Possible values are:
+
+            - `"nll"`: standard negative log-likelihood (default).
+            - `"dft"`: Dynamic Fine-Tuning, as described in
+              [this paper](https://huggingface.co/papers/2508.05629).
+            - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
+              only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
+              in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`, PEFT, or
+              VLM models. Under FSDP2, set `fsdp_reshard_after_forward false` in the accelerate config — the chunked
+              path otherwise re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
+
+        > Deprecated parameters
+
+        pad_token:
+
+            <Deprecated version="1.1.0">
+
+            Parameter `pad_token` is deprecated and will be removed in version v2.0.0. Set `tokenizer.pad_token`
+            directly and pass it as `processing_class` to the trainer instead.
+
+            </Deprecated>
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `2e-5` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
         default=2e-5,
         metadata={"help": "The initial learning rate for AdamW."},
     )
-    logging_steps: float = field(
-        default=10,
-        metadata={
-            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
-            "will be interpreted as ratio of total training steps."
-        },
-    )
-    gradient_checkpointing: bool = field(
-        default=True,
-        metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
-        },
-    )
-    bf16: bool | None = field(
-        default=None,
-        metadata={
-            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
-            "`fp16` is not set."
-        },
-    )
-    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
-    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
-    lr_scheduler_kwargs: dict | str | None = field(
-        default=None,
-        metadata={
-            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
-            "restarts."
-        },
-    )
 
     # Parameters that control the model
-    model_init_kwargs: dict[str, Any] | None = field(
+    model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
@@ -184,19 +183,20 @@ class SFTConfig(TrainingArguments):
             "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
         },
     )
-    pad_token: str | None = field(
-        default=None,
-        metadata={
-            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
-            "is also `None`, it falls back to `processing_class.eos_token`."
-        },
-    )
     max_length: int | None = field(
         default=1024,
         metadata={
-            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from"
-            "the right. If `None`, no truncation is applied. When packing is enabled, this value sets the "
-            "sequence length."
+            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
+            "the left or right depending on the `truncation_mode`. If `None`, no truncation is applied. When packing "
+            "is enabled, this value sets the sequence length."
+        },
+    )
+    truncation_mode: str = field(
+        default="keep_start",
+        metadata={
+            "help": "Truncation mode to use when the sequence exceeds `max_length`. The only supported value is "
+            "`'keep_start'`. The `'keep_end'` value is deprecated and will be removed in v2.0.0.",
+            "choices": ["keep_end", "keep_start"],
         },
     )
     shuffle_dataset: bool = field(
@@ -213,8 +213,10 @@ class SFTConfig(TrainingArguments):
     packing_strategy: str = field(
         default="bfd",
         metadata={
-            "help": "Strategy for packing sequences. Can be either `'bfd'` (best-fit decreasing, default), or "
-            "`'wrapped'`."
+            "help": "Strategy for packing sequences. Can be `'bfd'` (best-fit decreasing, truncates overflow), "
+            "`'bfd_split'` (best-fit decreasing, splits overflow sequences), or `'wrapped'` (aggressive, cuts "
+            "mid-sequence).",
+            "choices": ["bfd", "bfd_split", "wrapped"],
         },
     )
     padding_free: bool = field(
@@ -262,10 +264,10 @@ class SFTConfig(TrainingArguments):
     loss_type: str = field(
         default="nll",
         metadata={
-            "help": (
-                'Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` '
-                "(Dynamic Fine-Tuning, as described in https://huggingface.co/papers/2508.05629)."
-            )
+            "help": "Type of loss to use. Possible values are `'nll'` (negative log-likelihood, default), `'dft'` "
+            "(Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), and `'chunked_nll'` (same math as "
+            "`'nll'` but skips the `'lm_head'` matmul on ignored tokens and chunks the CE to reduce peak memory; not "
+            "compatible with Liger, PEFT, or VLM)."
         },
     )
     activation_offloading: bool = field(
@@ -273,6 +275,35 @@ class SFTConfig(TrainingArguments):
         metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
+    # Deprecated parameters
+    pad_token: str | None = field(
+        default=None,
+        metadata={
+            "help": "Deprecated. Set `tokenizer.pad_token` directly and pass it as `processing_class` to the trainer instead."
+        },
+    )
+
     def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
         super().__post_init__()
+        if self.pad_token is not None:
+            warnings.warn(
+                "`pad_token` is deprecated and will be removed in v2.0.0. "
+                "Set `tokenizer.pad_token` directly and pass it as `processing_class` to the trainer instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+        if self.truncation_mode == "keep_end":
+            warnings.warn(
+                "The `'keep_end'` truncation mode is deprecated and will be removed in v2.0.0. "
+                "Use `truncation_mode='keep_start'` (the default) instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+        if self.packing_strategy == "bfd-requeue":
+            warnings.warn(
+                "The `bfd-requeue` packing strategy has been renamed to `bfd_split`. Please update your configuration accordingly. "
+                "The `bfd-requeue` strategy is deprecated and will be removed in v2.0.0.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            self.packing_strategy = "bfd_split"

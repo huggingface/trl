@@ -29,6 +29,9 @@ messages). Important configuration flags on [`GOLDConfig`] include:
   matched/unmatched loss.
 * `beta`, `lmbda`, `seq_kd` – inherited from [`experimental.gkd.GKDConfig`], controlling the generalized JSD interpolation and on-policy
   sampling ratio.
+* `num_generations`, `generation_batch_size` – control buffered rollout generation across gradient accumulation windows.
+  `generation_batch_size` is the number of unique prompts per worker per optimizer step.
+* `model_revision` – controls which student model revision GOLD loads for training and generation.
 
 A minimal end-to-end example:
 
@@ -79,7 +82,7 @@ train_dataset = load_dataset(
 training_args = GOLDConfig(
     output_dir="gold-model",
     per_device_train_batch_size=1,
-    teacher_model=teacher_name,
+    teacher_model_name_or_path=teacher_name,
     teacher_tokenizer_name_or_path=teacher_name,
     use_uld_loss=True,
     uld_use_hybrid_loss=True,
@@ -95,6 +98,11 @@ trainer = GOLDTrainer(
 trainer.train()
 ```
 
+> [!NOTE]
+> GOLD buffers one full optimizer-window generation batch (`per_device_train_batch_size * gradient_accumulation_steps`)
+> and reuses it across accumulation steps. If the final batch is undersized, GOLD warns and drops that last batch
+> (`Dropping last batch due to unexpected batch size`). Set `dataloader_drop_last=True` to avoid this warning.
+
 ### Expected dataset type
 
 GOLD requires a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language_modeling) dataset, e.g.:
@@ -106,6 +114,68 @@ GOLD requires a [conversational](dataset_formats#conversational) [language model
 
 `GOLDTrainer` keeps the raw messages so the ChatML collator can construct prompts and completions with the correct
 boundaries.
+
+## How Token Merging Works
+
+When student and teacher use different tokenizers, the same text may be split differently:
+
+- **Student**: `"Hugging Face"` → 1 token
+- **Teacher**: `"Hugging"`, `" Face"` → 2 tokens
+
+GOLD aligns these sequences and merges the teacher's multi-token probabilities into a single distribution that can be compared with the student's single-token distribution.
+
+### Probability Merging
+
+For a teacher sequence of tokens `[token₀, token₁, ..., tokenₖ]` that maps to a single student token, GOLD computes:
+
+```
+P_merged(y) = P(y | context) × P(token₁ | token₀, context) × ... × P(tokenₖ | ..., context)
+```
+
+where:
+- `P(y | context)` is the marginal probability distribution over all vocabulary tokens at the first position
+- `P(tokenᵢ | ..., context)` are **scalar** conditional probabilities of the actual tokens that were generated
+
+**Key insight**: Only the conditional probabilities of the **actual continuation tokens** are extracted as scalars. The full marginal distribution at the first position is then scaled by multiplying these scalar probabilities.
+
+This ensures:
+1. **Correct joint probability** for the actual generated sequence (by the chain rule)
+2. **Reasonable approximation** for counterfactual tokens (scaled by the same continuation likelihood)
+3. **Unnormalized distributions** that preserve the correct relative probabilities for ULD loss computation
+
+### Example
+
+Given:
+```
+P(x₀):         ["HF": 0.6,  "is": 0.3,  "cool": 0.1]
+P(x₁ | "HF"):  ["HF": 0.05, "is": 0.9,  "cool": 0.05]
+```
+
+If tokens 0 and 1 are merged, and the actual sequence was `["HF", "is"]`:
+```
+P_merged("HF")   = 0.6 × 0.9 = 0.54  ✓ (correct joint probability)
+P_merged("is")   = 0.3 × 0.9 = 0.27
+P_merged("cool") = 0.1 × 0.9 = 0.09
+```
+
+The merged distribution is unnormalized (sums to 0.81), but this is intentional and correct for ULD loss computation, which uses sorting and L1 distance.
+
+## Example script
+
+Use [`trl/experimental/gold/gold.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/gold/gold.py) to launch GOLD training from the command line. The script supports full training and LoRA via the standard `ModelConfig` flags.
+
+```bash
+python trl/experimental/gold/gold.py \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --learning_rate 2e-5 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 8 \
+    --output_dir gold-model \
+    --num_train_epochs 1 \
+    --push_to_hub
+```
 
 ## GOLDTrainer
 

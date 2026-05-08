@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,8 +32,7 @@ python trl/experimental/gold/gold.py \
     --gradient_accumulation_steps 8 \
     --output_dir gold-model \
     --num_train_epochs 1 \
-    --push_to_hub \
-    --gradient_checkpointing
+    --push_to_hub
 
 # LoRA:
 python trl/experimental/gold/gold.py \
@@ -46,11 +45,12 @@ python trl/experimental/gold/gold.py \
     --output_dir gold-model \
     --num_train_epochs 1 \
     --push_to_hub \
-    --gradient_checkpointing \
     --use_peft \
     --lora_r 64 \
     --lora_alpha 16
 """
+
+import logging
 
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
@@ -68,6 +68,9 @@ from trl.experimental.gold.gold_config import GOLDConfig
 from trl.experimental.gold.gold_trainer import GOLDTrainer
 
 
+logger = logging.getLogger(__name__)
+
+
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, GOLDConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
@@ -77,7 +80,7 @@ if __name__ == "__main__":
     ################
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
-        revision=training_args.student_model_revision,
+        revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         torch_dtype=model_args.dtype,
@@ -90,7 +93,7 @@ if __name__ == "__main__":
     if training_args.teacher_tokenizer_name_or_path is None and training_args.use_uld_loss:
         training_args.teacher_tokenizer_name_or_path = training_args.teacher_model_name_or_path
     teacher_model_kwargs = dict(
-        revision=model_args.model_revision,
+        revision=training_args.teacher_model_revision,
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         torch_dtype=model_args.dtype,
@@ -98,13 +101,14 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
+    if training_args.teacher_model_init_kwargs is not None:
+        teacher_model_kwargs.update(training_args.teacher_model_init_kwargs)
     training_args.teacher_model_init_kwargs = teacher_model_kwargs
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
-        padding_side="left",
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -117,19 +121,28 @@ if __name__ == "__main__":
     ################
     # Training
     ################
+    eval_dataset = None
+    if training_args.eval_strategy != "no":
+        if script_args.dataset_test_split in dataset:
+            eval_dataset = dataset[script_args.dataset_test_split]
+        elif "validation" in dataset:
+            eval_dataset = dataset["validation"]
+        elif "dev" in dataset:
+            eval_dataset = dataset["dev"]
+
     trainer = GOLDTrainer(
         model=model_args.model_name_or_path,
         teacher_model=training_args.teacher_model_name_or_path,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        eval_dataset=eval_dataset,
         processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )
 
     if training_args.eval_strategy != "no":
         generation_config = GenerationConfig(
-            max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
+            max_new_tokens=training_args.max_completion_length, do_sample=True, temperature=training_args.temperature
         )
         completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
         trainer.add_callback(completions_callback)

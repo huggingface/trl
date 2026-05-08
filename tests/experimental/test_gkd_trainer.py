@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
         cls.device = "cuda" if torch.cuda.is_available() else "cpu"
         cls.tokenizer = AutoTokenizer.from_pretrained(model_id)
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
-        cls.model = AutoModelForCausalLM.from_pretrained(model_id).to(cls.device)
+        cls.model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32").to(cls.device)
         cls.generation_config = GenerationConfig(
             max_new_tokens=20,
             num_return_sequences=1,
@@ -55,6 +55,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
             num_return_sequences=1,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
+            do_sample=False,
             temperature=0.0,
         )
 
@@ -200,7 +201,7 @@ class TestGeneralizedJSDLoss(TrlTestCase):
 class TestGKDTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.teacher_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -217,14 +218,14 @@ class TestGKDTrainer(TrlTestCase):
             per_device_eval_batch_size=2,
             report_to="none",
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=training_args,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
             processing_class=self.tokenizer,
         )
 
@@ -235,20 +236,19 @@ class TestGKDTrainer(TrlTestCase):
         assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
 
     @require_liger_kernel
-    @pytest.mark.xfail(reason="Computing the Liger loss spikes GPU memory usage, causing the test to run OOM.")
     def test_gkd_trainer_with_liger(self):
         training_args = GKDConfig(
             output_dir=self.tmp_dir,
             report_to="none",
             use_liger_kernel=True,
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=training_args,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dataset,
             processing_class=self.tokenizer,
         )
 
@@ -263,6 +263,36 @@ class TestGKDTrainer(TrlTestCase):
 
     def test_generation_config_init(self):
         training_args = GKDConfig(output_dir=self.tmp_dir)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+
+        trainer = GKDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            processing_class=self.tokenizer,
+        )
+
+        assert trainer.generation_config.pad_token_id == self.tokenizer.eos_token_id
+        assert trainer.generation_config.eos_token_id == self.model.generation_config.eos_token_id
+        assert trainer.generation_config.max_new_tokens == training_args.max_new_tokens
+        assert trainer.generation_config.temperature == training_args.temperature
+        assert trainer.generation_config.top_k == 0
+
+    @require_liger_kernel
+    def test_compute_loss_return_outputs_with_liger(self):
+        """Test that return_outputs=True works correctly with Liger kernel path."""
+        training_args = GKDConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            use_liger_kernel=True,
+            max_steps=2,
+            eval_strategy="steps",
+            eval_steps=1,
+            per_device_train_batch_size=2,
+            per_device_eval_batch_size=2,
+        )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         trainer = GKDTrainer(
@@ -274,8 +304,7 @@ class TestGKDTrainer(TrlTestCase):
             processing_class=self.tokenizer,
         )
 
-        assert trainer.generation_config.pad_token_id == self.tokenizer.eos_token_id
-        assert trainer.generation_config.eos_token_id == self.model.generation_config.eos_token_id
-        assert trainer.generation_config.max_new_tokens == training_args.max_new_tokens
-        assert trainer.generation_config.temperature == training_args.temperature
-        assert trainer.generation_config.top_k == 0
+        # evaluate() calls compute_loss with return_outputs=True; must not raise UnboundLocalError
+        eval_results = trainer.evaluate()
+        assert "eval_loss" in eval_results
+        assert eval_results["eval_loss"] is not None

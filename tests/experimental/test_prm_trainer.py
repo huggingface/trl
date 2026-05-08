@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -136,7 +136,6 @@ class TestTokenizeRow(TrlTestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=None,
-            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
             is_eval=False,
@@ -160,7 +159,6 @@ class TestTokenizeRow(TrlTestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=None,
-            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=True,
             is_eval=False,
@@ -169,31 +167,6 @@ class TestTokenizeRow(TrlTestCase):
         assert result == {
             "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
             "labels": [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0],
-        }
-
-    def test_tokenize_row_prompt_truncation(self):
-        # Define the input features
-        features = {
-            "prompt": "Which number is larger, 9.8 or 9.11?",
-            "completions": ["11 is greater than 8.", "Hence, 9.11 > 9.8."],
-            "labels": [True, False],
-        }
-
-        # Call the method with truncation on the completion
-        result = PRMTrainer.tokenize_row(
-            features=features,
-            tokenizer=self.tokenizer,
-            step_separator="\n",
-            max_length=None,
-            max_prompt_length=3,
-            max_completion_length=None,
-            train_on_last_step_only=False,
-            is_eval=False,
-        )
-
-        assert result == {
-            "input_ids": [6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
-            "labels": [-100, -100, -100, -100, -100, -100, 1, -100, -100, -100, 0],
         }
 
     def test_tokenize_row_completion_truncation(self):
@@ -210,7 +183,6 @@ class TestTokenizeRow(TrlTestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=None,
-            max_prompt_length=None,
             max_completion_length=6,
             train_on_last_step_only=False,
             is_eval=False,
@@ -235,7 +207,6 @@ class TestTokenizeRow(TrlTestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=9,
-            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
             is_eval=False,
@@ -260,7 +231,6 @@ class TestTokenizeRow(TrlTestCase):
             tokenizer=self.tokenizer,
             step_separator="\n\n",
             max_length=None,
-            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
             is_eval=False,
@@ -275,32 +245,32 @@ class TestTokenizeRow(TrlTestCase):
 class TestPRMTrainer(TrlTestCase):
     def setup_method(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForTokenClassification.from_pretrained(model_id)
+        self.model = AutoModelForTokenClassification.from_pretrained(model_id, dtype="float32")
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     @pytest.mark.parametrize("train_on_last_step_only", [True, False])
     def test_train_full(self, train_on_last_step_only):
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
         training_args = PRMConfig(
             output_dir=self.tmp_dir,
             report_to="none",
             train_on_last_step_only=train_on_last_step_only,
         )
         trainer = PRMTrainer(
-            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
         )
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+                assert not torch.equal(param, new_param)
 
     def test_train_full_pretokenized(self):
-        dummy_dataset = Dataset.from_dict(
+        dataset = Dataset.from_dict(
             {
                 "labels": [
                     [-100, -100, -100, -100, -100, -100, -100, -100, -100, 0, -100, -100, 1],
@@ -339,18 +309,18 @@ class TestPRMTrainer(TrlTestCase):
 
         training_args = PRMConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = PRMTrainer(
-            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+                assert not torch.equal(param, new_param)
 
     @require_peft
     def test_train_lora(self):
@@ -361,13 +331,13 @@ class TestPRMTrainer(TrlTestCase):
             lora_alpha=32,
             lora_dropout=0.1,
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
         training_args = PRMConfig(output_dir=self.tmp_dir, max_steps=3, report_to="none")
         trainer = PRMTrainer(
             model=self.model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset,
+            train_dataset=dataset,
             peft_config=peft_config,
         )
         previous_trainable_params = {}
@@ -387,20 +357,20 @@ class TestPRMTrainer(TrlTestCase):
 
         assert trainer.state.log_history[(-1)]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param, atol=1e-12, rtol=1e-12)
+            assert not torch.equal(param, new_param)
 
         # Check that the non trainable parameters have not changed
         for n, param in previous_non_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert torch.allclose(param, new_param, atol=1e-12, rtol=1e-12)
+            torch.testing.assert_close(param, new_param, atol=1e-12, rtol=1e-12)
 
     def test_tags(self):
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
         training_args = PRMConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = PRMTrainer(
-            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
         )
         assert trainer.model.model_tags == trainer._tag_names

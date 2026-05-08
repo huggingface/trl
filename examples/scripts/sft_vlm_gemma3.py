@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,9 +14,8 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[peft]",
 #     "Pillow>=9.4.0",
-#     "peft",
 #     "trackio",
 #     "kernels",
 # ]
@@ -73,10 +72,6 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 # For multi-image example
@@ -143,7 +138,6 @@ def prepare_dataset(dataset: DatasetDict, dataset_name: str) -> DatasetDict:
 def main():
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
-    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     training_args.max_length = None
 
     ################

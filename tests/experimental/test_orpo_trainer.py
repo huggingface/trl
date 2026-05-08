@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -25,13 +25,13 @@ from ..testing_utils import TrlTestCase, require_peft
 class TestORPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
-        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id, dtype="float32")
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     @pytest.mark.parametrize(
@@ -55,7 +55,7 @@ class TestORPOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        dataset = load_dataset("trl-internal-testing/zen", config_name)
 
         if name == "qwen":
             model = self.model
@@ -69,8 +69,8 @@ class TestORPOTrainer(TrlTestCase):
             model=model,
             args=training_args,
             processing_class=tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -79,7 +79,7 @@ class TestORPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -118,14 +118,14 @@ class TestORPOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        dataset = load_dataset("trl-internal-testing/zen", config_name)
 
         trainer = ORPOTrainer(
             model=self.model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
             peft_config=lora_config,
         )
 
@@ -135,7 +135,7 @@ class TestORPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             if "lora" in n:
                 new_param = trainer.model.get_parameter(n)
@@ -143,11 +143,11 @@ class TestORPOTrainer(TrlTestCase):
                     assert not torch.equal(param, new_param)
 
     def test_compute_metrics(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         tokenizer.pad_token = tokenizer.eos_token
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
         def dummy_compute_metrics(*args, **kwargs):
             return {"test": 0.0}
@@ -167,8 +167,8 @@ class TestORPOTrainer(TrlTestCase):
             model=model,
             args=training_args,
             processing_class=tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
             compute_metrics=dummy_compute_metrics,
         )
 
