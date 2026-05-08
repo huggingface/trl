@@ -353,6 +353,9 @@ class TestGKDTrainer(TrlTestCase):
             ref_loss = ref_trainer.compute_loss(ref_trainer.model, batch).item()
             liger_loss = liger_trainer.compute_loss(liger_trainer.model, batch).item()
 
-        assert abs(ref_loss - liger_loss) < 0.02 * max(abs(ref_loss), 1e-6), (
-            f"Liger {liger_loss} disagrees with non-Liger {ref_loss}"
+        torch.testing.assert_close(
+            torch.tensor(liger_loss),
+            torch.tensor(ref_loss),
+            rtol=2e-2,
+            atol=1e-6,
         )
