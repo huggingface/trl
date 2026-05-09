@@ -159,12 +159,12 @@ def build_teacher_inputs_from_texts(
     tokenizer: PreTrainedTokenizerBase,
     prompt_texts: list[str],
     completion_texts: list[str],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Tokenize teacher prompts/completions and produce tensors ready for GOLD loss.
 
-    Returns ``(input_ids, labels, attention_mask, prompt_length, byte_offsets)``. ``byte_offsets`` is a ``[batch, seq,
-    2]`` tensor of UTF-8 byte ``(start, end)`` for each token: prompt and padding positions are filled with ``(0, 0)``;
-    completion tokens carry offsets relative to the corresponding ``completion_text``; the appended EOS gets
+    Returns ``(input_ids, labels, attention_mask, byte_offsets)``. ``byte_offsets`` is a ``[batch, seq, 2]`` tensor of
+    UTF-8 byte ``(start, end)`` for each token: prompt and padding positions are filled with ``(0, 0)``; completion
+    tokens carry offsets relative to the corresponding ``completion_text``; the appended EOS gets
     ``(content_len, content_len)``. Byte offsets are derived from the fast tokenizer's char offsets via
     ``encode_with_byte_offsets``.
     """
@@ -180,7 +180,6 @@ def build_teacher_inputs_from_texts(
     attention_masks: list[torch.Tensor] = []
     labels_list: list[torch.Tensor] = []
     offsets_list: list[list[tuple[int, int]]] = []
-    prompt_lengths: list[int] = []
 
     for prompt_ids, (enc_ids, enc_offs), completion_text in zip(
         prompt_token_ids, completion_encs, completion_texts, strict=True
@@ -193,7 +192,6 @@ def build_teacher_inputs_from_texts(
         completion_offs = list(enc_offs)
         content_len = len(completion_text.encode("utf-8"))
 
-        prompt_lengths.append(len(prompt_ids))
         sequence = list(prompt_ids) + completion_ids
         offsets = [(0, 0)] * len(prompt_ids) + completion_offs
         if eos_token_id is not None:
@@ -235,15 +233,8 @@ def build_teacher_inputs_from_texts(
         [pad_byte_offsets(offs, target_len, padding_side="right") for offs in offsets_list],
         dim=0,
     )
-    teacher_prompt_length = max(prompt_lengths) if prompt_lengths else 0
 
-    return (
-        teacher_input_ids,
-        teacher_labels,
-        teacher_attention_mask,
-        teacher_prompt_length,
-        teacher_byte_offsets,
-    )
+    return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_byte_offsets
 
 
 class ULDLoss(nn.Module):
@@ -1013,51 +1004,6 @@ class GOLDTrainer(SFTTrainer):
         self._step += 1
         return inputs
 
-    def _decode_completion_texts_from_labels(self, slice_inputs: dict[str, torch.Tensor | Any]) -> list[str] | None:
-        """Decode completion text from labels when raw text is absent."""
-        labels = slice_inputs.get("labels")
-        if labels is None or not isinstance(labels, torch.Tensor):
-            return None
-
-        labels_cpu = labels.detach().cpu()
-        decoded_completion_tokens: list[list[int]] = []
-        for row in labels_cpu:
-            token_ids = row[row != -100].tolist()
-            if self.processing_class.pad_token_id is not None:
-                token_ids = [tok for tok in token_ids if tok != self.processing_class.pad_token_id]
-            decoded_completion_tokens.append(token_ids)
-
-        return self.processing_class.batch_decode(
-            decoded_completion_tokens,
-            skip_special_tokens=False,
-            clean_up_tokenization_spaces=False,
-        )
-
-    def _ensure_original_text_fields(
-        self, slice_inputs: dict[str, torch.Tensor | Any]
-    ) -> dict[str, torch.Tensor | Any]:
-        """Populate original prompt/completion text fields when missing."""
-        if "original_prompt_text" in slice_inputs and "original_completion_text" in slice_inputs:
-            return slice_inputs
-
-        prompts = slice_inputs.get("prompts")
-        if prompts is None or not isinstance(prompts, torch.Tensor):
-            return slice_inputs
-
-        prompt_texts = self.processing_class.batch_decode(
-            prompts,
-            skip_special_tokens=False,
-            clean_up_tokenization_spaces=False,
-        )
-        completion_texts = self._decode_completion_texts_from_labels(slice_inputs)
-        if completion_texts is None:
-            return slice_inputs
-
-        updated_slice = dict(slice_inputs)
-        updated_slice["original_prompt_text"] = prompt_texts
-        updated_slice["original_completion_text"] = completion_texts
-        return updated_slice
-
     @staticmethod
     def _build_sequence_batch(
         new_input_ids: torch.Tensor,
@@ -1139,14 +1085,16 @@ class GOLDTrainer(SFTTrainer):
             if not flag:
                 slice_inputs = slices[i]
 
-                if self.use_uld_loss and self.teacher_tokenizer is not None:
-                    slice_inputs = self._ensure_original_text_fields(slice_inputs)
-                    if "original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs:
-                        raise ValueError(
-                            "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
-                            "When using ULD loss with cross-tokenizer alignment, datasets must be prepared with "
-                            "_prepare_dataset_with_original_text(). Ensure your dataset includes these fields."
-                        )
+                if (
+                    self.use_uld_loss
+                    and self.teacher_tokenizer is not None
+                    and ("original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs)
+                ):
+                    raise ValueError(
+                        "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
+                        "Use the default DataCollatorForChatML (or a collator that emits these fields) so the "
+                        "teacher tokenizer has source text to align against."
+                    )
 
                 self._buffered_inputs[i] = slice_inputs
 
@@ -1704,13 +1652,8 @@ class GOLDTrainer(SFTTrainer):
                 teacher_input_ids,
                 teacher_labels,
                 teacher_attention_mask,
-                _teacher_prompt_length,
                 teacher_completion_byte_offsets,
-            ) = build_teacher_inputs_from_texts(
-                self.teacher_tokenizer,
-                prompt_texts,
-                completion_texts,
-            )
+            ) = build_teacher_inputs_from_texts(self.teacher_tokenizer, prompt_texts, completion_texts)
 
             teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
             teacher_labels = teacher_labels.to(self.accelerator.device)

@@ -68,7 +68,7 @@ def _teacher_inputs_from_collator(student_tok, teacher_tok, batch):
         completion_token_ids = [tok for tok, label in zip(input_ids, labels, strict=True) if label != -100]
         completion_texts.append(student_tok.decode(completion_token_ids, skip_special_tokens=False))
 
-    teacher_input_ids, teacher_labels, _, _, teacher_byte_offsets = build_teacher_inputs_from_texts(
+    teacher_input_ids, teacher_labels, _, teacher_byte_offsets = build_teacher_inputs_from_texts(
         teacher_tok, prompt_texts, completion_texts
     )
     return teacher_input_ids, teacher_labels, completion_texts, teacher_byte_offsets
