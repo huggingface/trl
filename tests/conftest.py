@@ -64,7 +64,14 @@ def apply_model_revisions(monkeypatch):
     if not MODEL_REVISIONS:
         return
 
-    from transformers import AutoModelForCausalLM, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
+    from transformers import (
+        AutoConfig,
+        AutoModelForCausalLM,
+        AutoModelForSequenceClassification,
+        PreTrainedModel,
+        PreTrainedTokenizerBase,
+        ProcessorMixin,
+    )
 
     def create_classmethod_wrapper(original_classmethod):
         # Extract the underlying function from the classmethod
@@ -83,7 +90,14 @@ def apply_model_revisions(monkeypatch):
         return classmethod(wrapper)
 
     # Patch all transformers Auto* classes
-    for cls in [AutoModelForCausalLM, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin]:
+    for cls in [
+        AutoConfig,
+        AutoModelForCausalLM,
+        AutoModelForSequenceClassification,
+        PreTrainedModel,
+        PreTrainedTokenizerBase,
+        ProcessorMixin,
+    ]:
         monkeypatch.setattr(cls, "from_pretrained", create_classmethod_wrapper(cls.from_pretrained))
 
 
