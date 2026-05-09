@@ -55,7 +55,7 @@ from ...trainer.utils import (
     pad,
     split_tensor_dict,
 )
-from ..utils import DataCollatorForChatML, empty_cache, pad_byte_offsets, truncate_dataset
+from ..utils import DataCollatorForChatML, empty_cache, encode_with_byte_offsets, pad_byte_offsets, truncate_dataset
 from .gold_config import GOLDConfig
 
 
@@ -165,8 +165,8 @@ def build_teacher_inputs_from_texts(
     Returns ``(input_ids, labels, attention_mask, prompt_length, byte_offsets)``. ``byte_offsets`` is a ``[batch, seq,
     2]`` tensor of UTF-8 byte ``(start, end)`` for each token: prompt and padding positions are filled with ``(0, 0)``;
     completion tokens carry offsets relative to the corresponding ``completion_text``; the appended EOS gets
-    ``(content_len, content_len)``. Requires a fast tokenizer with ``backend_tokenizer.encode_byte_offsets``
-    (tokenizers >= 0.23.2).
+    ``(content_len, content_len)``. Byte offsets are derived from the fast tokenizer's char offsets via
+    ``encode_with_byte_offsets``.
     """
 
     pad_token_id = tokenizer.pad_token_id
@@ -174,7 +174,7 @@ def build_teacher_inputs_from_texts(
     backend = tokenizer.backend_tokenizer
 
     prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
-    completion_encs = backend.encode_batch_byte_offsets(completion_texts, add_special_tokens=False)
+    completion_encs = encode_with_byte_offsets(backend, completion_texts, add_special_tokens=False)
 
     sequences: list[torch.Tensor] = []
     attention_masks: list[torch.Tensor] = []
@@ -182,13 +182,15 @@ def build_teacher_inputs_from_texts(
     offsets_list: list[list[tuple[int, int]]] = []
     prompt_lengths: list[int] = []
 
-    for prompt_ids, enc, completion_text in zip(prompt_token_ids, completion_encs, completion_texts, strict=True):
+    for prompt_ids, (enc_ids, enc_offs), completion_text in zip(
+        prompt_token_ids, completion_encs, completion_texts, strict=True
+    ):
         # Remove trailing EOS from prompt so completions can extend cleanly
         if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
             prompt_ids = prompt_ids[:-1]
 
-        completion_ids = list(enc.ids)
-        completion_offs = [tuple(o) for o in enc.offsets]
+        completion_ids = list(enc_ids)
+        completion_offs = list(enc_offs)
         content_len = len(completion_text.encode("utf-8"))
 
         prompt_lengths.append(len(prompt_ids))
@@ -1084,6 +1086,39 @@ class GOLDTrainer(SFTTrainer):
 
         return new_attention_mask, new_labels
 
+    def _token_byte_length(self, token_id: int) -> int:
+        """Cached UTF-8 byte length of a single token's decoded form. For ByteLevel
+        BPE tokenizers (Llama, Qwen, SmolLM, …) per-token decoding is context-free,
+        so per-token byte lengths sum to the byte length of the decoded sequence."""
+        cache = self.__dict__.setdefault("_token_byte_len_cache", {})
+        if token_id not in cache:
+            text = self.processing_class.decode(
+                [token_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
+            )
+            cache[token_id] = len(text.encode("utf-8"))
+        return cache[token_id]
+
+    def _refresh_byte_offsets(self, updated_slice: dict[str, torch.Tensor | Any]) -> None:
+        """Emit per-token byte offsets for an on-policy slice, computed directly
+        from generated token ids via cached per-token byte lengths. No decode-
+        then-re-encode round-trip — the offsets are guaranteed to describe the
+        same tokens the model's logits do."""
+        new_input_ids = updated_slice["input_ids"]
+        new_labels = updated_slice["labels"]
+        seq_len = new_input_ids.shape[1]
+        rows: list[list[tuple[int, int]]] = []
+        for row_ids, row_labels in zip(new_input_ids.cpu().tolist(), new_labels.cpu().tolist()):
+            offs: list[tuple[int, int]] = [(0, 0)] * seq_len
+            cumulative = 0
+            for pos, (tid, lbl) in enumerate(zip(row_ids, row_labels)):
+                if lbl == -100:
+                    continue
+                nb = self._token_byte_length(tid)
+                offs[pos] = (cumulative, cumulative + nb)
+                cumulative += nb
+            rows.append(offs)
+        updated_slice["byte_offsets"] = torch.tensor(rows, dtype=torch.long, device=new_input_ids.device)
+
     @profiling_decorator
     def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any], buffer_steps: int):
         slices = split_tensor_dict(generation_batch, buffer_steps)
@@ -1193,6 +1228,7 @@ class GOLDTrainer(SFTTrainer):
                 updated_slice["labels"] = new_labels
                 updated_slice["original_prompt_text"] = prompt_texts
                 updated_slice["original_completion_text"] = completion_texts
+                self._refresh_byte_offsets(updated_slice)
 
                 self._buffered_inputs[slice_idx] = updated_slice
                 self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
@@ -1316,6 +1352,7 @@ class GOLDTrainer(SFTTrainer):
             updated_slice["labels"] = new_labels
             updated_slice["original_prompt_text"] = prompt_txts_with_special
             updated_slice["original_completion_text"] = completion_texts
+            self._refresh_byte_offsets(updated_slice)
 
             self._buffered_inputs[slice_idx] = updated_slice
             self._buffered_text_logs[slice_idx] = (prompt_txts, completion_texts)
@@ -1644,7 +1681,11 @@ class GOLDTrainer(SFTTrainer):
 
         # Apply reduction
         if reduction == "batchmean":
-            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / jsd.size(0)
+            # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
+            # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
+            # so 0/1 == 0 with a valid grad path.
+            denom = mask.sum().clamp_min(1) if labels is not None else max(jsd.size(0), 1)
+            return jsd.sum() / denom
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":

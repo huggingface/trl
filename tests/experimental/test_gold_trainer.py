@@ -21,7 +21,7 @@ from transformers import AutoTokenizer
 
 from trl.experimental.gold import gold_trainer as gold_trainer_module
 from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, build_teacher_inputs_from_texts
-from trl.experimental.utils import DataCollatorForChatML, pad_byte_offsets
+from trl.experimental.utils import DataCollatorForChatML, encode_with_byte_offsets, pad_byte_offsets
 
 
 @pytest.fixture(scope="module")
@@ -272,14 +272,14 @@ def smollm_tokenizer():
 def encode_prompt_completion(tokenizer, prompt, completion):
     """Build input_ids, labels, and per-token byte offsets for a (prompt, completion) pair.
 
-    Byte offsets are computed via the fast tokenizer's `encode_byte_offsets` on the completion text only, then padded
-    with (0, 0) for prompt positions and a final (content_len, content_len) for the appended EOS — matching the shape
-    produced by DataCollatorForChatML and build_teacher_inputs_from_texts.
+    Byte offsets are computed via `encode_with_byte_offsets` on the completion text only, then padded with (0, 0) for
+    prompt positions and a final (content_len, content_len) for the appended EOS — matching the shape produced by
+    DataCollatorForChatML and build_teacher_inputs_from_texts.
     """
     prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
-    enc = tokenizer.backend_tokenizer.encode_byte_offsets(completion, add_special_tokens=False)
-    completion_ids = list(enc.ids)
-    completion_offsets = [tuple(o) for o in enc.offsets]
+    [(enc_ids, enc_offsets)] = encode_with_byte_offsets(tokenizer.backend_tokenizer, [completion], add_special_tokens=False)
+    completion_ids = list(enc_ids)
+    completion_offsets = list(enc_offsets)
     content_len = len(completion.encode("utf-8"))
     eos_id = tokenizer.eos_token_id
     if eos_id is not None:
@@ -307,6 +307,10 @@ def test_process_completions_to_buffer_left_pads_prompt_ids():
         def batch_decode(self, sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
             del skip_special_tokens, clean_up_tokenization_spaces
             return [" ".join(str(token) for token in sequence) for sequence in sequences]
+
+        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            del skip_special_tokens, clean_up_tokenization_spaces
+            return " ".join(str(token) for token in ids)
 
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
@@ -365,6 +369,9 @@ def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_promp
                     tokens.append(token_map[token])
                 decoded.append(" ".join(tokens))
             return decoded
+
+        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            return self.batch_decode([ids], skip_special_tokens, clean_up_tokenization_spaces)[0]
 
     captured = {}
 
@@ -454,6 +461,9 @@ def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens()
                     tokens.append(token_map[token])
                 decoded.append(" ".join(tokens))
             return decoded
+
+        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            return self.batch_decode([ids], skip_special_tokens, clean_up_tokenization_spaces)[0]
 
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
@@ -626,8 +636,8 @@ def test_chatml_collator_truncates_keeping_completion_end(llama_tokenizer):
     formatted_message = llama_tokenizer.apply_chat_template(
         examples[0]["messages"], add_generation_prompt=False, tokenize=False
     )
-    full = backend.encode_byte_offsets(formatted_message, add_special_tokens=False)
-    assert batch["input_ids"][0, -1].item() == full.ids[-1]
+    [(full_ids, _)] = encode_with_byte_offsets(backend, [formatted_message], add_special_tokens=False)
+    assert batch["input_ids"][0, -1].item() == full_ids[-1]
     assert tuple(batch["byte_offsets"][0, -1].tolist())[1] > 0  # last completion-relative offset is non-zero
 
 
@@ -636,14 +646,18 @@ def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
     loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
 
     text = "SmolLM3-3B is smaller than Llama 3.2 but still capable."
-    student_enc = llama_tokenizer.backend_tokenizer.encode_byte_offsets(text, add_special_tokens=False)
-    teacher_enc = qwen_tokenizer.backend_tokenizer.encode_byte_offsets(text, add_special_tokens=False)
+    [(student_ids, student_offs)] = encode_with_byte_offsets(
+        llama_tokenizer.backend_tokenizer, [text], add_special_tokens=False
+    )
+    [(teacher_ids, teacher_offs)] = encode_with_byte_offsets(
+        qwen_tokenizer.backend_tokenizer, [text], add_special_tokens=False
+    )
 
-    student_groups, teacher_groups = loss._align_by_byte_offsets(list(student_enc.offsets), list(teacher_enc.offsets))
+    student_groups, teacher_groups = loss._align_by_byte_offsets(student_offs, teacher_offs)
 
     assert len(student_groups) == len(teacher_groups)
-    assert sorted(idx for group in student_groups for idx in group) == list(range(len(student_enc.ids)))
-    assert sorted(idx for group in teacher_groups for idx in group) == list(range(len(teacher_enc.ids)))
+    assert sorted(idx for group in student_groups for idx in group) == list(range(len(student_ids)))
+    assert sorted(idx for group in teacher_groups for idx in group) == list(range(len(teacher_ids)))
 
 
 def test_merge_probabilities_multiplies_split_tokens():

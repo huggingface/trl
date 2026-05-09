@@ -139,6 +139,26 @@ def pad_byte_offsets(offsets: list[tuple[int, int]], target_length: int, padding
     return torch.cat([pad_block, offs], dim=0) if padding_side == "left" else torch.cat([offs, pad_block], dim=0)
 
 
+def encode_with_byte_offsets(backend, texts: list[str], add_special_tokens: bool = False):
+    """Encode ``texts`` and return per-text ``(ids, byte_offsets)`` pairs.
+
+    Byte offsets are derived from the fast tokenizer's character offsets via an
+    O(N) char-to-byte cumulative table, so this works on any stable tokenizers
+    release without depending on a byte-native encode method. Tokens spanning
+    boundaries get the same span the char-offset path reports, just in byte
+    coordinates — which is the shared coordinate system cross-tokenizer
+    alignment needs."""
+    encs = backend.encode_batch(texts, add_special_tokens=add_special_tokens)
+    out = []
+    for text, enc in zip(texts, encs, strict=True):
+        char_to_byte = [0]
+        for ch in text:
+            char_to_byte.append(char_to_byte[-1] + len(ch.encode("utf-8")))
+        byte_offsets = [(char_to_byte[s], char_to_byte[e]) for s, e in enc.offsets]
+        out.append((list(enc.ids), byte_offsets))
+    return out
+
+
 @dataclass
 class DataCollatorForChatML:
     """
@@ -175,8 +195,12 @@ class DataCollatorForChatML:
 
         backend = self.tokenizer.backend_tokenizer
 
-        # Render chat templates. For examples that already carry input_ids,
-        # `formatted_message` stays None and we skip re-encoding.
+        # Render chat templates. We need a rendered message string so the encoder
+        # can produce per-token offsets. If the example is pre-tokenized but
+        # carries `original_prompt_text` + `original_completion_text` (the trainer's
+        # ULD path emits these), reconstruct the message from them so we can still
+        # produce real offsets. Only when source text is unavailable do we fall back
+        # to the input_ids-only path with zero offsets.
         formatted_prompts: list[str] = []
         formatted_messages: list[str | None] = []
         for example in examples:
@@ -186,17 +210,22 @@ class DataCollatorForChatML:
                     example[self.messages_key][:-1], add_generation_prompt=True, tokenize=False
                 )
             )
-            formatted_messages.append(
-                None
-                if "input_ids" in example
-                else self.tokenizer.apply_chat_template(
-                    example[self.messages_key], add_generation_prompt=False, tokenize=False
+            if "input_ids" in example:
+                if "original_prompt_text" in example and "original_completion_text" in example:
+                    formatted_messages.append(example["original_prompt_text"] + example["original_completion_text"])
+                else:
+                    formatted_messages.append(None)
+            else:
+                formatted_messages.append(
+                    self.tokenizer.apply_chat_template(
+                        example[self.messages_key], add_generation_prompt=False, tokenize=False
+                    )
                 )
-            )
 
-        # Single Rust call for all non-pre-tokenized samples.
+        # Single batch call for all non-pre-tokenized samples; byte offsets are
+        # derived from char offsets via encode_with_byte_offsets.
         to_encode = [m for m in formatted_messages if m is not None]
-        encs_compact = backend.encode_batch_byte_offsets(to_encode, add_special_tokens=False) if to_encode else []
+        encs_compact = encode_with_byte_offsets(backend, to_encode, add_special_tokens=False) if to_encode else []
         encs_iter = iter(encs_compact)
         encodings: list[Any] = [next(encs_iter) if fm is not None else None for fm in formatted_messages]
 
@@ -204,8 +233,9 @@ class DataCollatorForChatML:
             examples, formatted_prompts, formatted_messages, encodings, strict=True
         ):
             if encoding is not None:
-                full_ids = list(encoding.ids)
-                full_offs = list(encoding.offsets)
+                full_ids, full_offs = encoding
+                full_ids = list(full_ids)
+                full_offs = list(full_offs)
 
                 prompt_byte_len = len(formatted_prompt.encode("utf-8"))
                 completion_start = next(
