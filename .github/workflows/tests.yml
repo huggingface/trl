@@ -69,8 +69,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@v8
 
       - name: Create Python virtual environment
         run: |
@@ -121,8 +120,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@v8
 
       - name: Create Python virtual environment
         run: |
@@ -178,8 +176,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@v8
 
       - name: Create Python virtual environment
         run: |
@@ -230,8 +227,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@v8
 
       - name: Create Python virtual environment
         run: |
@@ -288,8 +284,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@v8
 
       - name: Create Python virtual environment
         run: |
