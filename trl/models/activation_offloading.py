@@ -540,8 +540,7 @@ class OffloadActivations(saved_tensors_hooks):
         # Drop stale state from any prior step where saved tensors didn't unpack
         # (e.g. MoE expert paths under torch.compile). is_first_forward_call only
         # resets when tracker empties during backward, so leaked entries pin GPU
-        # memory across iterations -> linear VRAM leak (axolotl #3638). Backward
-        # has completed by the time we re-enter, so anything still here is dead.
+        # memory across iterations -> linear VRAM leak
         self.tracker.clear()
         self.storage_to_tensor_id.clear()
         if self.use_streams:
