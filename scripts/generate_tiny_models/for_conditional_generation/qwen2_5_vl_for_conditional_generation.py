@@ -33,6 +33,7 @@ text_config = {
     "hidden_size": 16,
     "num_attention_heads": 4,
     "num_key_value_heads": 2,
+    "layer_types": None,
     "rope_scaling": {"type": "default", "mrope_section": [1, 1], "rope_type": "default"},
 }
 vision_config = {
