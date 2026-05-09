@@ -930,6 +930,7 @@ class GOLDTrainer(SFTTrainer):
             "tools",
             "original_prompt_text",
             "original_completion_text",
+            "byte_offsets",
         ]
         if self._signature_columns is None:
             self._signature_columns = required_columns
@@ -1388,130 +1389,91 @@ class GOLDTrainer(SFTTrainer):
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset (preserving original text)"
 
             def tokenize_with_original_text(example, processing_class, dataset_text_field, assistant_only_loss):
-                """Modified tokenization function that preserves original text."""
+                """Tokenize the chat-template-rendered message and emit:
+                    input_ids, attention_mask, original_prompt_text, original_completion_text,
+                    byte_offsets (per-token, completion-relative).
+
+                Encoding goes through ``encode_with_byte_offsets`` so byte offsets and input_ids
+                come from the same backend call — the tokenization the model trains on is the
+                same one whose offsets feed cross-tokenizer ULD alignment.
+                """
+                del dataset_text_field, assistant_only_loss  # consumed only by the LM path below
+                backend = processing_class.backend_tokenizer
                 result = {}
 
                 if "prompt" in example:  # prompt-completion case
-                    # Store original text
                     result["original_prompt_text"] = example["prompt"]
                     result["original_completion_text"] = example["completion"]
-
                     if is_conversational(example):
-                        prompt_ids = processing_class.apply_chat_template(
-                            example["prompt"], return_dict=False, **example.get("chat_template_kwargs", {})
+                        prompt_text = processing_class.apply_chat_template(
+                            example["prompt"],
+                            add_generation_prompt=True,
+                            tokenize=False,
+                            **example.get("chat_template_kwargs", {}),
                         )
-                        prompt_completion_ids = processing_class.apply_chat_template(
+                        full_text = processing_class.apply_chat_template(
                             example["prompt"] + example["completion"],
-                            return_dict=False,
+                            tokenize=False,
                             **example.get("chat_template_kwargs", {}),
                         )
                     else:
-                        prompt_ids = processing_class(text=example["prompt"]).input_ids
-                        prompt_completion_ids = processing_class(
-                            text=example["prompt"] + example["completion"]
-                        ).input_ids
-
-                    # Check if the tokenized prompt starts with the tokenized prompt+completion
-                    if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                        warnings.warn(
-                            "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
-                            "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                            "token handling. Verify that the tokenizer is processing text consistently.",
-                            stacklevel=2,
-                        )
-
-                    # Create a completion mask
-                    completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                    result.update(
-                        {
-                            "input_ids": prompt_completion_ids,
-                            "completion_mask": completion_mask,
-                            "attention_mask": [1] * len(prompt_completion_ids),  # Add attention mask
-                        }
-                    )
-
-                else:  # language modeling or conversational case
-                    if is_conversational(example):
-                        # For conversational data (ChatML), extract prompt and completion properly
-                        messages = example["messages"]
-
-                        # Extract user and assistant messages separately
-                        user_messages = [msg for msg in messages if msg["role"] != "assistant"]
-                        assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
-
-                        if user_messages and assistant_messages:
-                            # Apply chat template to get the prompt (everything up to assistant)
-                            prompt_text = processing_class.apply_chat_template(
-                                user_messages,
-                                add_generation_prompt=True,  # add assistant prompt
-                                tokenize=False,
-                                **example.get("chat_template_kwargs", {}),
-                            )
-
-                            # Get the full conversation with assistant response
-                            full_text = processing_class.apply_chat_template(
-                                messages,
-                                add_generation_prompt=False,
-                                tokenize=False,
-                                **example.get("chat_template_kwargs", {}),
-                            )
-
-                            # Extract completion as everything after the prompt
-                            # This ensures we capture any extra tokens (like <think> tags) that the template adds
-                            if full_text.startswith(prompt_text):
-                                completion_text = full_text[len(prompt_text) :]
-                            else:
-                                # Fallback: use assistant content + EOS
-                                assistant_content = assistant_messages[0]["content"]
-                                completion_text = (
-                                    assistant_content + processing_class.eos_token
-                                    if hasattr(processing_class, "eos_token")
-                                    else assistant_content
-                                )
-
-                            # Store original text for cross-tokenizer distillation
-                            result["original_prompt_text"] = prompt_text
-                            result["original_completion_text"] = completion_text
-                        else:
-                            # Fallback: use empty prompt and full text as completion
-                            full_text = processing_class.apply_chat_template(
-                                messages, tokenize=False, **example.get("chat_template_kwargs", {})
-                            )
-                            result["original_prompt_text"] = ""
-                            result["original_completion_text"] = full_text
-
-                        # Process the conversation normally
-                        processed = processing_class.apply_chat_template(
-                            example["messages"],
-                            return_dict=True,
-                            return_assistant_tokens_mask=assistant_only_loss,
+                        prompt_text = example["prompt"]
+                        full_text = example["prompt"] + example["completion"]
+                elif is_conversational(example):
+                    messages = example["messages"]
+                    user_messages = [msg for msg in messages if msg["role"] != "assistant"]
+                    assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
+                    if user_messages and assistant_messages:
+                        prompt_text = processing_class.apply_chat_template(
+                            user_messages,
+                            add_generation_prompt=True,
+                            tokenize=False,
                             **example.get("chat_template_kwargs", {}),
                         )
-                        if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
-                            raise RuntimeError(
-                                "You're using `assistant_only_loss=True`, but at least one example has no "
-                                "assistant tokens. This usually means the tokenizer's chat template doesn't "
-                                "generate assistant masks — it may be missing the `{% generation %}` tag. Please "
-                                "check the template and ensure it's correctly configured to support assistant "
-                                "masking."
-                            )
-                        result.update({k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed})
-                        # Add attention_mask if not already present
-                        if "attention_mask" not in result:
-                            result["attention_mask"] = [1] * len(result["input_ids"])
+                        full_text = processing_class.apply_chat_template(
+                            messages,
+                            add_generation_prompt=False,
+                            tokenize=False,
+                            **example.get("chat_template_kwargs", {}),
+                        )
+                        completion_text = (
+                            full_text[len(prompt_text) :]
+                            if full_text.startswith(prompt_text)
+                            else assistant_messages[0]["content"] + getattr(processing_class, "eos_token", "")
+                        )
+                        result["original_prompt_text"] = prompt_text
+                        result["original_completion_text"] = completion_text
                     else:
-                        # For regular language modeling, store the full text as completion and empty prompt
+                        full_text = processing_class.apply_chat_template(
+                            messages, tokenize=False, **example.get("chat_template_kwargs", {})
+                        )
+                        prompt_text = ""
                         result["original_prompt_text"] = ""
-                        result["original_completion_text"] = example.get(dataset_text_field, example.get("text", ""))
+                        result["original_completion_text"] = full_text
+                else:
+                    text = example.get(dataset_text_field, example.get("text", ""))
+                    prompt_text = ""
+                    full_text = text
+                    result["original_prompt_text"] = ""
+                    result["original_completion_text"] = text
 
-                        tokenized = processing_class(text=example[dataset_text_field])
-                        result.update(
-                            {
-                                "input_ids": tokenized.input_ids,
-                                "attention_mask": getattr(tokenized, "attention_mask", [1] * len(tokenized.input_ids)),
-                            }
-                        )
+                # Single backend call: ids and char-derived byte offsets from the same encoding,
+                # so input_ids[i] is described by full_offs[i] without any boundary slop.
+                [(input_ids, full_offs)] = encode_with_byte_offsets(backend, [full_text], add_special_tokens=False)
+                prompt_byte_len = len(prompt_text.encode("utf-8"))
+                completion_start = next(
+                    (idx for idx, (s, _) in enumerate(full_offs) if s >= prompt_byte_len),
+                    len(input_ids),
+                )
+                # Completion-relative: prompt positions zeroed, completion offsets shifted to
+                # the assistant content's first byte (matches build_teacher_inputs_from_texts).
+                byte_offsets = [(0, 0)] * completion_start + [
+                    (s - prompt_byte_len, e - prompt_byte_len) for s, e in full_offs[completion_start:]
+                ]
 
+                result["input_ids"] = input_ids
+                result["attention_mask"] = [1] * len(input_ids)
+                result["byte_offsets"] = byte_offsets
                 return result
 
             dataset = dataset.map(

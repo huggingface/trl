@@ -179,120 +179,78 @@ class DataCollatorForChatML:
             self.max_length = min(self.tokenizer.model_max_length, 1024)
 
     def __call__(self, examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
-        input_ids: list[list[int]] = []
-        attention_mask: list[list[int]] = []
-        prompts_input_ids: list[list[int]] = []
-        prompt_attention_mask: list[list[int]] = []
-        labels: list[list[int]] = []
-        # Per-token UTF-8 byte offsets, completion-relative: prompt and pre-tokenized
-        # positions are (0, 0); completion tokens carry offsets into the assistant
-        # content's bytes. Used by GOLD/ULD cross-tokenizer alignment (TRL #4393).
+        input_ids = []
+        attention_mask = []
+        prompts_input_ids = []
+        prompt_attention_mask = []
+        labels = []
         byte_offsets: list[list[tuple[int, int]]] = []
-        # Forwarded so cross-tokenizer ULD can re-tokenize with the teacher tokenizer
-        # without ever round-tripping through the student tokenizer's decoder.
-        original_prompt_texts: list[str] = []
-        original_completion_texts: list[str] = []
 
-        backend = self.tokenizer.backend_tokenizer
-
-        # Render chat templates. We need a rendered message string so the encoder
-        # can produce per-token offsets. If the example is pre-tokenized but
-        # carries `original_prompt_text` + `original_completion_text` (the trainer's
-        # ULD path emits these), reconstruct the message from them so we can still
-        # produce real offsets. Only when source text is unavailable do we fall back
-        # to the input_ids-only path with zero offsets.
-        formatted_prompts: list[str] = []
-        formatted_messages: list[str | None] = []
         for example in examples:
-            formatted_prompts.append(
-                example.get(self.prompt_key)
-                or self.tokenizer.apply_chat_template(
-                    example[self.messages_key][:-1], add_generation_prompt=True, tokenize=False
-                )
-            )
-            if "input_ids" in example:
-                if "original_prompt_text" in example and "original_completion_text" in example:
-                    formatted_messages.append(example["original_prompt_text"] + example["original_completion_text"])
-                else:
-                    formatted_messages.append(None)
-            else:
-                formatted_messages.append(
-                    self.tokenizer.apply_chat_template(
-                        example[self.messages_key], add_generation_prompt=False, tokenize=False
-                    )
+            formatted_prompt = example.get(self.prompt_key, None)
+            if formatted_prompt is None:
+                prompt = example[self.messages_key][:-1]
+                formatted_prompt = self.tokenizer.apply_chat_template(
+                    prompt, add_generation_prompt=True, tokenize=False
                 )
 
-        # Single batch call for all non-pre-tokenized samples; byte offsets are
-        # derived from char offsets via encode_with_byte_offsets.
-        to_encode = [m for m in formatted_messages if m is not None]
-        encs_compact = encode_with_byte_offsets(backend, to_encode, add_special_tokens=False) if to_encode else []
-        encs_iter = iter(encs_compact)
-        encodings: list[Any] = [next(encs_iter) if fm is not None else None for fm in formatted_messages]
-
-        for example, formatted_prompt, formatted_message, encoding in zip(
-            examples, formatted_prompts, formatted_messages, encodings, strict=True
-        ):
-            if encoding is not None:
-                full_ids, full_offs = encoding
-                full_ids = list(full_ids)
-                full_offs = list(full_offs)
-
+            if "input_ids" not in example:
+                message = example[self.messages_key]
+                formatted_message = self.tokenizer.apply_chat_template(
+                    message, add_generation_prompt=False, tokenize=False
+                )
+                [(message_input_ids_full, full_offs)] = encode_with_byte_offsets(
+                    self.tokenizer.backend_tokenizer, [formatted_message], add_special_tokens=False
+                )
                 prompt_byte_len = len(formatted_prompt.encode("utf-8"))
-                completion_start = next(
+                completion_start_idx_full = next(
                     (idx for idx, (start, _) in enumerate(full_offs) if start >= prompt_byte_len),
-                    len(full_ids),
+                    len(message_input_ids_full),
                 )
-                # Truncate from the front: keep the last max_length tokens. This drops
-                # the oldest prompt context first; once the prompt is exhausted, it begins
-                # dropping early completion tokens. We never drop from the END (the
-                # model's recent context).
-                if len(full_ids) > self.max_length:
-                    sample_ids = full_ids[-self.max_length :]
-                    sample_offs = full_offs[-self.max_length :]
-                    current_prompt_len = max(0, completion_start - (len(full_ids) - self.max_length))
-                else:
-                    sample_ids = full_ids
-                    sample_offs = full_offs
-                    current_prompt_len = completion_start
 
-                # Shift completion-region offsets to be relative to the assistant content's
-                # first byte (= the end of formatted_prompt); zero out prompt offsets.
-                completion_offs = [
-                    (s - prompt_byte_len, e - prompt_byte_len) for s, e in sample_offs[current_prompt_len:]
-                ]
+                # Keep the last max_length tokens — drops oldest prompt context first,
+                # never drops from the END (the model's recent context).
+                if self.max_length is not None and len(message_input_ids_full) > self.max_length:
+                    sample_ids = message_input_ids_full[-self.max_length :]
+                    sample_offs = full_offs[-self.max_length :]
+                    current_prompt_len = max(
+                        0, completion_start_idx_full - (len(message_input_ids_full) - self.max_length)
+                    )
+                else:
+                    sample_ids = message_input_ids_full
+                    sample_offs = full_offs
+                    current_prompt_len = completion_start_idx_full
+
+                # Make completion-relative: prompt positions zeroed, completion offsets shifted.
+                completion_offs = [(s - prompt_byte_len, e - prompt_byte_len) for s, e in sample_offs[current_prompt_len:]]
                 sample_offs = [(0, 0)] * current_prompt_len + completion_offs
 
+                input_ids.append(sample_ids)
+                attention_mask.append([1] * len(sample_ids))
                 current_prompt_ids = sample_ids[:current_prompt_len]
-                # formatted_message starts with formatted_prompt for typical chat templates;
-                # the suffix is the assistant content the teacher needs to re-tokenize.
-                completion_text = formatted_message[len(formatted_prompt) :]
+                byte_offsets.append(sample_offs)
             else:
                 sample_ids = example["input_ids"]
-                sample_offs = [(0, 0)] * len(sample_ids)
-                current_prompt_ids = self.tokenizer(
+                input_ids.append(sample_ids)
+                attention_mask.append(example.get("attention_mask", [1] * len(sample_ids)))
+                tokenized_prompt = self.tokenizer(
                     formatted_prompt,
                     truncation=True,
                     max_length=len(sample_ids),
                     padding=False,
                     return_tensors=None,
                     add_special_tokens=False,
-                )["input_ids"]
-                # No rendered message available; fall back to whatever the dataset attached.
-                completion_text = example.get("original_completion_text", "")
+                )
+                current_prompt_ids = tokenized_prompt["input_ids"]
+                byte_offsets.append(example.get("byte_offsets", [(0, 0)] * len(sample_ids)))
 
-            input_ids.append(sample_ids)
-            attention_mask.append(example.get("attention_mask", [1] * len(sample_ids)))
-            byte_offsets.append(sample_offs)
             prompts_input_ids.append(current_prompt_ids)
             prompt_attention_mask.append([1] * len(current_prompt_ids))
-            original_prompt_texts.append(example.get("original_prompt_text", formatted_prompt))
-            original_completion_texts.append(example.get("original_completion_text", completion_text))
 
             label = [self.ignore_index] * len(sample_ids)
             label[len(current_prompt_ids) :] = sample_ids[len(current_prompt_ids) :]
             labels.append(label)
 
-        # convert to list of tensors and pad
         input_ids = pad(
             [torch.tensor(x, dtype=torch.long) for x in input_ids],
             padding_side="left",
@@ -318,16 +276,19 @@ class DataCollatorForChatML:
             [pad_byte_offsets(offs, target_len, padding_side="left") for offs in byte_offsets], dim=0
         )
 
-        return {
+        out = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
             "prompts": prompts_input_ids,
             "prompt_attention_mask": prompt_attention_mask,
             "byte_offsets": byte_offsets_tensor,
-            "original_prompt_text": original_prompt_texts,
-            "original_completion_text": original_completion_texts,
         }
+        # Forward source text for cross-tokenizer ULD, when the dataset has it.
+        if "original_prompt_text" in examples[0] and "original_completion_text" in examples[0]:
+            out["original_prompt_text"] = [ex["original_prompt_text"] for ex in examples]
+            out["original_completion_text"] = [ex["original_completion_text"] for ex in examples]
+        return out
 
 
 def truncate_right(
