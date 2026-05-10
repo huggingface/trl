@@ -26,7 +26,7 @@ jobs:
     steps:
       - name: Git checkout
         uses: actions/checkout@v6
-        with: { ref: v1.3-release }
+        with: { ref: v1.4-release }
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -39,7 +39,9 @@ jobs:
 
       - name: Install uv
         run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+          curl -LsSf https://astral.sh/uv/install.sh -o uv-installer.sh
+          echo "71625822ec41e0f665ffd5c30c1dd77e135c29c8be6dd2c8b12a7c4178d4e48e  uv-installer.sh" | sha256sum -c -
+          sh uv-installer.sh
 
       - name: Create Python virtual environment
         run: |
