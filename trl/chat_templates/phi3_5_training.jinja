@@ -1,0 +1,21 @@
+{%- for message in messages %}
+    {%- if message['role'] == 'system' and message['content'] %}
+        {{- '<|system|>\n' + message['content'] + '<|end|>\n' }}
+    {%- elif message['role'] == 'user' %}
+        {{- '<|user|>\n' + message['content'] + '<|end|>\n'}}
+    {%- elif message['role'] == 'assistant' %}
+        {{- '<|assistant|>\n' }}
+        {%- generation %}
+        {{- message['content'] + '<|end|>\n' }}
+        {%- endgeneration %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|assistant|>\n'}}
+{%- elif messages[-1]['role'] == 'assistant' %}
+    {%- generation %}
+    {{- eos_token }}
+    {%- endgeneration %}
+{%- else %}
+    {{- eos_token }}
+{%- endif %}
