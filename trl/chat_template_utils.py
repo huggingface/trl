@@ -583,7 +583,7 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    Currently Cohere, Cohere 2, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Phi-3.5 Qwen2.5,
+    Currently Cohere, Cohere 2, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Phi-3.5, Qwen2.5,
     Qwen3 (including the Instruct-2507 variant), and Qwen3.6 are supported.
 
     Args:
