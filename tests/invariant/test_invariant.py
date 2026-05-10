@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -97,10 +98,10 @@ def run(config: CorrectnessConfig) -> Trajectory:
     """Invoke the trl CLI as a subprocess; parse its trainer_state.json into a Trajectory."""
     with tempfile.TemporaryDirectory() as tmpdir:
         cmd = ["trl", config.method]
-        if config.num_processes > 1:
-            cmd += ["--num_processes", str(config.num_processes), "--multi_gpu"]
+        cmd += ["--num_processes", str(config.num_processes)]
         cmd += ["--output_dir", tmpdir, *config.cli_args()]
-        subprocess.run(cmd, check=True)
+        env = {**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(str(i) for i in range(config.num_processes))}
+        subprocess.run(cmd, check=True, env=env)
 
         state_paths = list(Path(tmpdir).glob("**/trainer_state.json"))
         if not state_paths:
