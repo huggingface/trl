@@ -53,7 +53,9 @@ logger = logging.getLogger(__name__)
 
 def _tool_specs_from_session_list_tools(out: Any) -> list[Any]:
     """Normalise ``session.list_tools()`` output to a list of tool specs."""
-    if hasattr(out, "tools"):
+    from openreward.api.environments.types import ListToolsOutput
+
+    if isinstance(out, ListToolsOutput):
         return list(out.tools)
     return list(out)
 
@@ -257,7 +259,7 @@ class OpenRewardSpec:
         key = self._api_key or os.environ.get("OPENREWARD_API_KEY")
         return {"api_key": key} if key else None
 
-    def _task_tools_probe_indices(self, n: int) -> list[int]:
+    def _task_tools_probe_indices(self) -> list[int]:
         """Pick task indices for ``session.list_tools()`` discovery (ORS ``/task_tools``)."""
         if self._task_tools_discovery_index is not None:
             return [self._task_tools_discovery_index]
@@ -285,7 +287,7 @@ class OpenRewardSpec:
         if n <= 0:
             return shared
 
-        probe_indices = self._task_tools_probe_indices(n)
+        probe_indices = self._task_tools_probe_indices()
         bad = [idx for idx in probe_indices if idx < 0 or idx >= n]
         if bad:
             logger.warning(
