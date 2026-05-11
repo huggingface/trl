@@ -22,7 +22,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
 from trl.experimental.gkd import GKDConfig, GKDTrainer
 
-from ..testing_utils import TrlTestCase, require_liger_kernel
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
 
 
 class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
@@ -308,3 +308,54 @@ class TestGKDTrainer(TrlTestCase):
         eval_results = trainer.evaluate()
         assert "eval_loss" in eval_results
         assert eval_results["eval_loss"] is not None
+
+    @require_liger_kernel
+    @require_torch_accelerator
+    def test_liger_loss_matches_non_liger_loss(self):
+        # The Liger fused JSD path must compute the same loss as the non-Liger path
+        # (LigerFusedLinearJSDLoss defaults mix 0.5 * CE + 0.5 * JSD, but GKD wants pure JSD).
+        common = dict(output_dir=self.tmp_dir, report_to="none", per_device_train_batch_size=2, max_length=64)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train").select(
+            range(2)
+        )
+
+        ref_trainer = GKDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=GKDConfig(use_liger_kernel=False, **common),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+        liger_trainer = GKDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=GKDConfig(use_liger_kernel=True, **common),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        # Force student/teacher weights identical between trainers, then diverge teacher
+        # so JSD is well above fp noise.
+        liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in ref_trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+        liger_trainer.teacher_model.load_state_dict(ref_trainer.teacher_model.state_dict())
+
+        device = next(ref_trainer.model.parameters()).device
+        batch = ref_trainer.data_collator([ref_trainer.train_dataset[i] for i in range(2)])
+        batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
+
+        ref_trainer.model.eval()
+        liger_trainer.model.eval()
+        with torch.no_grad():
+            ref_loss = ref_trainer.compute_loss(ref_trainer.model, batch).item()
+            liger_loss = liger_trainer.compute_loss(liger_trainer.model, batch).item()
+
+        torch.testing.assert_close(
+            torch.tensor(liger_loss),
+            torch.tensor(ref_loss),
+            rtol=2e-2,
+            atol=1e-6,
+        )
