@@ -27,7 +27,6 @@ from typing import Any, TypeAlias
 
 import aiohttp
 import numpy as np
-import requests
 from accelerate.logging import get_logger
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
@@ -40,11 +39,6 @@ from trl.chat_template_utils import (
 )
 from trl.import_utils import is_vllm_available
 from trl.trainer.utils import print_prompt_completions_sample
-
-
-if is_vllm_available(min_version="0.17.1"):
-    from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
-    from vllm.utils.network_utils import get_ip, get_open_port
 
 
 logger = get_logger(__name__)
@@ -118,7 +112,6 @@ def _build_child_worker(
     samples_queue,
     model_version_value,
     stop_event,
-    pause_event,
 ) -> "AsyncRolloutWorker":
     """Construct the child's `AsyncRolloutWorker` and wire it to the parent's IPC primitives.
 
@@ -130,7 +123,6 @@ def _build_child_worker(
     worker = AsyncRolloutWorker(_run_in_child=True, **init_kwargs)
     worker._model_version_value = model_version_value
     worker._stop_event_mp = stop_event
-    worker._pause_event_mp = pause_event
     worker.rollout_buffer = samples_queue
     return worker
 
@@ -155,7 +147,6 @@ def _child_main(
     samples_queue: "mp.Queue",
     model_version_value: "mp.Value",  # noqa: F821 (mp.Value is a function, not a type)
     stop_event: "mp.Event",
-    pause_event: "mp.Event",
     child_ready_event: "mp.Event",
 ) -> None:
     """Entry point of the spawned rollout-worker child process.
@@ -170,7 +161,7 @@ def _child_main(
 
     PartialState()
 
-    worker = _build_child_worker(init_kwargs_pkl, samples_queue, model_version_value, stop_event, pause_event)
+    worker = _build_child_worker(init_kwargs_pkl, samples_queue, model_version_value, stop_event)
     child_ready_event.set()
     _spawn_stop_watcher(worker, stop_event)
 
@@ -192,31 +183,19 @@ class AsyncRolloutWorker:
     bursts; running rollout in the same process would starve rank 0's CUDA progress and time out NCCL collectives on
     other ranks.
 
-    Architectural split:
+    Parent (trainer process):
+      - `start()` / `stop()` — spawn / join the child
+      - `update_model_version(v)` — bumps a shared `mp.Value` after each weight sync
+      - `rollout_buffer` — the shared `mp.Queue` the trainer reads scored samples from
 
-      Parent (trainer process):
-        - `init_weight_transfer()` — binds CUDA IPC pages to vLLM
-        - `send_weights(iterator)` — broadcasts `model.named_parameters()` via NCCL; iterator must yield (name, GPU
-          tensor) tuples
-        - `pause()` / `resume()` — HTTP to vLLM
-        - reads scored samples from `rollout_buffer` (an mp.Queue shim)
+    Child (spawned process):
+      - `_generate_loop` — async HTTP to vLLM's `/v1/completions`
+      - `_score_loop` — chat-template parsing + reward functions (the GIL holders)
+      - pushes scored `RolloutSample`s into the shared `mp.Queue`
 
-      Child (spawned process):
-        - `_generate_loop` — async HTTP to vLLM
-        - `_score_loop` — chat-template parsing + reward functions
-                             (the GIL holders)
-        - pushes scored `RolloutSample`s into the shared `mp.Queue`
-
-    Call sequence the trainer must follow:
-
-        worker = AsyncRolloutWorker(...) # cheap; no CUDA, no spawn ... trainer.accelerator.prepare(...)
-        worker.init_weight_transfer() # NCCL setup with vLLM trainer._sync_weight() # cold sync to vLLM worker.start()
-        # spawn the child process ... training loop ... worker.stop() # signal + join the child
-
-    Deferring `init_weight_transfer()` until after `accelerator.prepare()` is required under DeepSpeed-Z2:
-    `Stage1And2ZeroOptimizer.__init__` calls `torch.cuda.empty_cache()` which traverses the rank-0 allocator and would
-    trip on any IPC-bound pages set up before prepare. Doing it after prepare is harmless under FSDP2 / single-node
-    setups too, so the trainer always defers regardless of backend.
+    Weight transfer (NCCL setup with vLLM, the cold sync POST, pause/resume) is owned by a separate
+    `WeightTransferClient` held by the trainer. The rollout worker doesn't need to know about syncs — when vLLM is
+    paused, the worker's in-flight `aiohttp` requests fail and the retry loop in `_generate_one_turn` covers the gap.
     """
 
     def __init__(
@@ -234,15 +213,10 @@ class AsyncRolloutWorker:
         max_tokens: int = 32,
         temperature: float = 1.0,
         request_timeout: int = 120,
-        server_timeout: float = 240.0,
         chat_template_kwargs: dict[str, Any] | None = None,
         max_tool_calling_iterations: int | None = None,
         log_completions: bool = False,
         num_completions_to_print: int = 3,
-        weight_names: list[str] | None = None,
-        weight_dtype_names: list[str] | None = None,
-        weight_shapes: list[list[int]] | None = None,
-        init_weight_transfer_timeout: int = 1800,
         child_ready_timeout: int = 300,
         # Internal flag: True when the worker is being constructed inside the
         # spawned child process (`_child_main`). Skips parent-only IPC setup.
@@ -259,13 +233,6 @@ class AsyncRolloutWorker:
         self._dataset_iter = iter(dataset)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop_event: asyncio.Event | None = None
-        self._weight_update_info = {
-            "names": weight_names,
-            "dtype_names": weight_dtype_names,
-            "shapes": weight_shapes,
-            "packed": True,
-            "is_checkpoint_format": True,
-        }
 
         self.reward_funcs = reward_funcs
         self.reward_func_names = [f.__name__ for f in reward_funcs]
@@ -297,11 +264,9 @@ class AsyncRolloutWorker:
         self.tools = base_tools + (environment_methods[0] if self.environments is not None else [])
 
         self.vllm_server_url = vllm_server_url.rstrip("/")
-        self.model_update_group = None
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.request_timeout = request_timeout
-        self.server_timeout = server_timeout
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.log_completions = log_completions
         self.num_completions_to_print = num_completions_to_print
@@ -320,7 +285,6 @@ class AsyncRolloutWorker:
         self._generation_start_time: float | None = None
         self.session = None
 
-        self.init_weight_transfer_timeout = init_weight_transfer_timeout
         self.child_ready_timeout = child_ready_timeout
         self._is_child = _run_in_child
 
@@ -331,7 +295,6 @@ class AsyncRolloutWorker:
             self._mp_ctx = None
             self._model_version_value = None
             self._stop_event_mp = None
-            self._pause_event_mp = None
             self._child_ready_event = None
             self.rollout_buffer = None
             self._child_init_kwargs = None
@@ -341,12 +304,9 @@ class AsyncRolloutWorker:
         # Parent: build IPC primitives that will be shared with the child.
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
-        # rollout_buffer IS the shared mp.Queue — the trainer's RolloutQueueDataset
-        # reads samples from it via .get(timeout=...) / .qsize() (same API as queue.Queue).
         self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)
         self._model_version_value = ctx.Value("i", 0)
         self._stop_event_mp = ctx.Event()
-        self._pause_event_mp = ctx.Event()
         self._child_ready_event = ctx.Event()
         # Kwargs that re-construct the worker inside the child. Pickled once at
         # `start()` time so all changes between __init__ and start() are captured.
@@ -364,15 +324,10 @@ class AsyncRolloutWorker:
             max_tokens=max_tokens,
             temperature=temperature,
             request_timeout=request_timeout,
-            server_timeout=server_timeout,
             chat_template_kwargs=chat_template_kwargs,
             max_tool_calling_iterations=max_tool_calling_iterations,
             log_completions=log_completions,
             num_completions_to_print=num_completions_to_print,
-            weight_names=weight_names,
-            weight_dtype_names=weight_dtype_names,
-            weight_shapes=weight_shapes,
-            init_weight_transfer_timeout=init_weight_transfer_timeout,
             child_ready_timeout=child_ready_timeout,
         )
         self._process: mp.Process | None = None
@@ -395,103 +350,6 @@ class AsyncRolloutWorker:
     def update_model_version(self, model_version: int) -> None:
         self.model_version = model_version
 
-    def _wait_for_server_ready_sync(self, timeout_s: float = 240.0, poll_interval_s: float = 2.0) -> None:
-        """Block until the vLLM server is healthy."""
-        logger.info(f"Waiting for vLLM server at {self.vllm_server_url} ...")
-        start = time.time()
-        while True:
-            elapsed = time.time() - start
-            try:
-                response = requests.get(f"{self.vllm_server_url}/health", timeout=5)
-                if response.status_code == 200:
-                    logger.info(f"vLLM server ready after {elapsed:.1f}s")
-                    return
-            except (requests.ConnectionError, requests.Timeout, OSError):
-                pass
-            if elapsed >= timeout_s:
-                raise TimeoutError(
-                    f"Timed out after {timeout_s:.0f}s waiting for vLLM server at {self.vllm_server_url}. "
-                    "Make sure the vLLM server is running and reachable. If the server needs more time to load "
-                    "the model, increase `vllm_server_timeout` in your AsyncGRPOConfig."
-                )
-            if int(elapsed) % 10 < poll_interval_s:
-                logger.info(f"Still waiting for vLLM server... ({elapsed:.0f}s)")
-            time.sleep(poll_interval_s)
-
-    def init_weight_transfer(self) -> None:
-        """Wait for vLLM and set up the NCCL weight-transfer process group.
-
-        Called by the trainer from the `on_train_begin` callback, AFTER `accelerator.prepare()`. Binding the SPG's CUDA
-        IPC pages before prepare would crash DeepSpeed-Z2's `Stage1And2ZeroOptimizer.__init__ →
-        torch.cuda.empty_cache()` with `cudaErrorIllegalAddress`.
-
-        No-op when called from the child process — parent owns the group.
-        """
-        if self._is_child:
-            return
-        self._wait_for_server_ready_sync(timeout_s=self.server_timeout)
-        response = requests.get(f"{self.vllm_server_url}/get_world_size")
-        inference_world_size = response.json()["world_size"]
-        world_size = inference_world_size + 1
-        master_address = get_ip()
-        master_port = get_open_port()
-        init_info = {
-            "master_address": master_address,
-            "master_port": master_port,
-            "rank_offset": 1,
-            "world_size": world_size,
-        }
-        t_init = threading.Thread(
-            target=requests.post,
-            args=(f"{self.vllm_server_url}/init_weight_transfer_engine",),
-            kwargs={"json": {"init_info": init_info}, "timeout": self.init_weight_transfer_timeout},
-        )
-        t_init.start()
-        self.model_update_group = NCCLWeightTransferEngine.trainer_init(
-            {
-                "master_address": master_address,
-                "master_port": master_port,
-                "world_size": world_size,
-            }
-        )
-        t_init.join()
-        logger.info("Initialised weight-transfer NCCL group with vLLM")
-
-    def send_weights(self, iterator) -> None:
-        """Broadcast model weights to vLLM. Parent-only — uses parent's NCCL group
-        and the trainer's GPU tensors via the supplied iterator."""
-        if self.model_update_group is None:
-            return
-        t0 = time.time()
-        t_update = threading.Thread(
-            target=requests.post,
-            args=(f"{self.vllm_server_url}/update_weights",),
-            kwargs={"json": {"update_info": self._weight_update_info}, "timeout": 1800},
-        )
-        t_update.start()
-        logger.debug(f"[weight_sync] /update_weights POST sent ({time.time() - t0:.1f}s)")
-        t_nccl = time.time()
-        NCCLWeightTransferEngine.trainer_send_weights(
-            iterator=iterator,
-            trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
-        )
-        logger.debug(f"[weight_sync] NCCL transfer took {time.time() - t_nccl:.1f}s")
-        t_join = time.time()
-        t_update.join()
-        logger.debug(
-            f"[weight_sync] /update_weights join took {time.time() - t_join:.1f}s "
-            f"(total send_weights: {time.time() - t0:.1f}s)"
-        )
-
-    def _destroy_model_update_group(self) -> None:
-        # Critical at shutdown: leaking the SPG store / socket on exit produces
-        # noisy stack traces from NCCL teardown.
-        if self.model_update_group is None:
-            return
-        self.model_update_group.group.store = None
-        self.model_update_group.group.socket = None
-        self.model_update_group = None
-
     def start(self) -> None:
         """Spawn the rollout-worker child process. Idempotent."""
         if self._is_child:
@@ -508,7 +366,6 @@ class AsyncRolloutWorker:
                 self.rollout_buffer,
                 self._model_version_value,
                 self._stop_event_mp,
-                self._pause_event_mp,
                 self._child_ready_event,
             ),
             name="grpo-rollout-worker-child",
@@ -541,11 +398,10 @@ class AsyncRolloutWorker:
         logger.info("AsyncRolloutWorker child is ready")
 
     def stop(self) -> None:
-        """Signal the child to stop, join the process, and destroy the NCCL group."""
+        """Signal the child to stop and join the process."""
         if self._is_child:
             return
         if self._process is None:
-            self._destroy_model_update_group()
             return
         logger.info("Stopping AsyncRolloutWorker child process...")
         self._stop_event_mp.set()
@@ -561,22 +417,6 @@ class AsyncRolloutWorker:
                 if self._process.is_alive():
                     self._process.kill()
         self._process = None
-        self._destroy_model_update_group()
-
-    def pause(self) -> None:
-        """Pause vLLM via HTTP. Called from the parent before each weight sync."""
-        if not self._is_child:
-            self._pause_event_mp.set()
-        t0 = time.time()
-        requests.post(f"{self.vllm_server_url}/pause", params={"mode": "keep"})
-        logger.debug(f"[weight_sync] pause HTTP took {time.time() - t0:.1f}s")
-
-    def resume(self) -> None:
-        if not self._is_child:
-            self._pause_event_mp.clear()
-        t0 = time.time()
-        requests.post(f"{self.vllm_server_url}/resume")
-        logger.debug(f"[weight_sync] resume HTTP took {time.time() - t0:.1f}s")
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
         async with aiohttp.ClientSession() as session:

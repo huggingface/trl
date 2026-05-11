@@ -18,7 +18,7 @@ import queue
 import textwrap
 import time
 from collections import defaultdict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -35,6 +35,7 @@ from trl.trainer.utils import pad, patch_chunked_lm_head
 
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
+from .weight_transfer import WeightTransferClient
 
 
 logger = get_logger(__name__)
@@ -57,9 +58,6 @@ class RolloutWorkerProtocol(Protocol):
 
     def start(self) -> None: ...
     def stop(self) -> None: ...
-    def pause(self) -> None: ...
-    def resume(self) -> None: ...
-    def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None: ...
     def update_model_version(self, version: int) -> None: ...
     def check_health(self, stale_after_s: float) -> None: ...
 
@@ -96,8 +94,8 @@ class _DeferredWorkerInitCallback(TrainerCallback):
 
     def on_train_begin(self, _args, _state, _control, **_kwargs):
         trainer = self.trainer
-        if trainer.accelerator.is_main_process and trainer.rollout_worker is not None:
-            trainer.rollout_worker.init_weight_transfer()
+        if trainer.accelerator.is_main_process and trainer.weight_transfer is not None:
+            trainer.weight_transfer.init_weight_transfer()
         # _sync_weight participates from every rank (FSDP2 ranks must drive
         # full_tensor collectives); only rank 0 actually broadcasts to vLLM.
         trainer._sync_weight()
@@ -390,7 +388,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
+                # Weight transfer is also expected to be wired by the test fixture (or left as None
+                # if the stub doesn't sync to a real vLLM).
                 self.rollout_worker = rollout_worker
+                self.weight_transfer = None
             else:
                 # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
                 # DTensor.shape returns the global shape without triggering any all-gather.
@@ -401,6 +402,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     weight_names.append(name)
                     weight_dtype_names.append(str(param.dtype).split(".")[-1])
                     weight_shapes.append(list(param.shape))
+                self.weight_transfer = WeightTransferClient(
+                    vllm_server_url=self.args.vllm_server_base_url,
+                    server_timeout=self.args.vllm_server_timeout,
+                    weight_update_info={
+                        "names": weight_names,
+                        "dtype_names": weight_dtype_names,
+                        "shapes": weight_shapes,
+                        "packed": True,
+                        "is_checkpoint_format": True,
+                    },
+                )
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=model_name,
                     dataset=train_dataset,
@@ -415,19 +427,16 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     max_tokens=self.args.max_completion_length,
                     temperature=self.args.temperature,
                     request_timeout=self.args.request_timeout,
-                    server_timeout=self.args.vllm_server_timeout,
                     chat_template_kwargs=self.args.chat_template_kwargs,
                     max_tool_calling_iterations=self.args.max_tool_calling_iterations,
                     log_completions=self.args.log_completions,
                     num_completions_to_print=self.args.num_completions_to_print,
-                    weight_names=weight_names,
-                    weight_dtype_names=weight_dtype_names,
-                    weight_shapes=weight_shapes,
                 )
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
             self.rollout_queue = None
             self.rollout_worker = None
+            self.weight_transfer = None
 
         # Add callbacks
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
@@ -626,8 +635,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def _sync_weight(self):
         t0 = time.time()
         logger.info("Weight sync: pausing vLLM...")
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.pause()
+        if self.accelerator.is_main_process and self.weight_transfer:
+            self.weight_transfer.pause()
         t_pause = time.time()
         logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
 
@@ -635,8 +644,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         t_barrier = time.time()
 
         logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.send_weights(self._streaming_iter())
+        if self.accelerator.is_main_process and self.weight_transfer:
+            self.weight_transfer.send_weights(self._streaming_iter())
         else:
             # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
             for _ in self._streaming_iter():
@@ -646,10 +655,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.accelerator.wait_for_everyone()
 
         logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.resume()
+        if self.accelerator.is_main_process:
+            if self.weight_transfer:
+                self.weight_transfer.resume()
             self.model_version += 1
-            self.rollout_worker.update_model_version(self.model_version)
+            if self.rollout_worker:
+                self.rollout_worker.update_model_version(self.model_version)
         weight_sync_time_s = time.time() - t0
         self._metrics["train"]["weight_sync_time_s"].append(weight_sync_time_s)
         logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
@@ -665,5 +676,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
-            if self.accelerator.is_main_process and self.rollout_worker:
-                self.rollout_worker.stop()
+            if self.accelerator.is_main_process:
+                if self.rollout_worker:
+                    self.rollout_worker.stop()
+                if self.weight_transfer:
+                    self.weight_transfer.destroy()
