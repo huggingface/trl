@@ -131,11 +131,20 @@ class TestOpenRewardSpec(TrlTestCase):
     def test_environment_factory_returns_rollout_env_with_bound_tools(self, echo_env_url):
         spec = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=2)
         env = spec.environment_factory()
-        # The single ORS tool is bound as a Python method with a typed signature.
+        # Shared + task-scoped ORS tools (ORS /tools vs /task_tools) are both bound for GRPO.
         assert callable(env.echo)
         sig = env.echo.__annotations__
         assert sig["text"] is str
         assert sig["return"] is str
+        assert callable(env.hint)
+
+    def test_discover_task_tools_false_skips_task_scoped_binding(self, echo_env_url):
+        spec = OpenRewardSpec(
+            echo_env_url, env_name="echoenvironment", num_tasks=1, discover_task_tools=False
+        )
+        env = spec.environment_factory()
+        assert callable(env.echo)
+        assert not hasattr(env, "hint")
 
     def test_reset_returns_prompt_and_opens_session(self, echo_env_url):
         spec = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=1)
