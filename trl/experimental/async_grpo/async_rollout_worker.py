@@ -81,17 +81,10 @@ class RolloutSample:
     metrics: dict[str, float]  # logging metadata only, not used in loss computation
 
 
-# ---------------------------------------------------------------------------
-# Queue shims
-#
 # The trainer's `RolloutQueueDataset.__iter__` reads from `rollout_worker.rollout_buffer`
-# as if it were a `queue.Queue` (calls `.get(timeout=...)` and `.qsize()`). The
-# child process's `_score_loop` writes to `self.rollout_buffer` with `.put_nowait()`
-# and reads `.maxsize`. We adapt the shared `mp.Queue` to both interfaces with
-# tiny shims — one for each end.
-# ---------------------------------------------------------------------------
-
-
+# as if it were a `queue.Queue` (calls `.get(timeout=...)` and `.qsize()`). The child
+# process's `_score_loop` writes via `.put_nowait()` and reads `.maxsize`. The shims below
+# adapt the shared `mp.Queue` to both interfaces — one for each end.
 class _MPQueueParentShim:
     """Parent-side adapter so the trainer reads the shared `mp.Queue` via
     the `queue.Queue` interface (`.get()`, `.qsize()`, `.empty()`)."""
@@ -428,8 +421,8 @@ class AsyncRolloutWorker:
         )
         self._process: mp.Process | None = None
 
-    # ---------------- model_version (parent writes; child reads via mp.Value) ----------------
-
+    # model_version is backed by a shared mp.Value: parent writes after each weight
+    # sync, child reads when tagging new rollout groups.
     @property
     def model_version(self) -> int:
         if self._model_version_value is None:
@@ -445,8 +438,6 @@ class AsyncRolloutWorker:
 
     def update_model_version(self, model_version: int) -> None:
         self.model_version = model_version
-
-    # ---------------- parent-side weight transfer ----------------
 
     def _wait_for_server_ready_sync(self, timeout_s: float = 240.0, poll_interval_s: float = 2.0) -> None:
         """Block until the vLLM server is healthy."""
@@ -545,8 +536,6 @@ class AsyncRolloutWorker:
         self.model_update_group.group.socket = None
         self.model_update_group = None
 
-    # ---------------- lifecycle ----------------
-
     def start(self) -> None:
         """Spawn the rollout-worker child process. Idempotent."""
         if self._is_child:
@@ -632,8 +621,6 @@ class AsyncRolloutWorker:
         t0 = time.time()
         requests.post(f"{self.vllm_server_url}/resume")
         logger.debug(f"[weight_sync] resume HTTP took {time.time() - t0:.1f}s")
-
-    # ---------------- child-side asyncio loops ----------------
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
         async with aiohttp.ClientSession() as session:
