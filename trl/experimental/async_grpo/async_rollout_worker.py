@@ -145,6 +145,75 @@ class _MPQueueChildShim:
             return False
 
 
+# Env vars the child must unset so accelerate's `PartialState()` initialises in
+# single-process mode instead of trying to join the parent's process group.
+_CHILD_ENV_TO_STRIP = (
+    "RANK",
+    "WORLD_SIZE",
+    "LOCAL_RANK",
+    "LOCAL_WORLD_SIZE",
+    "MASTER_ADDR",
+    "MASTER_PORT",
+    "GROUP_RANK",
+    "ROLE_RANK",
+    "ROLE_WORLD_SIZE",
+    "TORCHELASTIC_RUN_ID",
+    "TORCHELASTIC_RESTART_COUNT",
+    "TORCHELASTIC_MAX_RESTARTS",
+    # Don't share parent's flight-recorder dump path / NCCL debug log.
+    "TORCH_FR_DUMP_TEMP_FILE",
+    "NCCL_DEBUG_FILE",
+)
+
+
+def _scrub_child_env() -> None:
+    """Hide GPUs and strip distributed env vars from the child's environment.
+
+    The child has no business touching CUDA — any library that imports `torch` and lazily probes devices would race the
+    parent's allocator. spawn already gave us a fresh process; this makes it definitively CPU-only and single-process.
+    """
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    for k in _CHILD_ENV_TO_STRIP:
+        os.environ.pop(k, None)
+
+
+def _build_child_worker(
+    init_kwargs_pkl: bytes,
+    samples_queue,
+    model_version_value,
+    stop_event,
+    pause_event,
+) -> "AsyncRolloutWorker":
+    """Construct the child's `AsyncRolloutWorker` and wire it to the parent's IPC primitives.
+
+    `mp.Value` / `mp.Queue` aren't pickled reliably inside `init_kwargs_pkl` — they're shared by being passed as
+    positional args to the Process target, which the multiprocessing runtime sets up correctly across the spawn
+    boundary.
+    """
+    init_kwargs = pickle.loads(init_kwargs_pkl)
+    worker = AsyncRolloutWorker(_run_in_child=True, **init_kwargs)
+    worker._model_version_value = model_version_value
+    worker._stop_event_mp = stop_event
+    worker._pause_event_mp = pause_event
+    worker.rollout_buffer = _MPQueueChildShim(samples_queue)
+    return worker
+
+
+def _spawn_stop_watcher(worker: "AsyncRolloutWorker", stop_event) -> None:
+    """Daemon thread that translates `mp.Event` (set by parent's `stop()`) into
+    the child's `asyncio.Event` so `_run_loops` breaks out of its `gather`."""
+
+    def _watch():
+        stop_event.wait()
+        if worker._loop is not None and worker._stop_event is not None:
+            try:
+                worker._loop.call_soon_threadsafe(worker._stop_event.set)
+            except Exception:
+                pass
+
+    threading.Thread(target=_watch, daemon=True, name="grpo-mp-stop-watcher").start()
+
+
 def _child_main(
     init_kwargs_pkl: bytes,
     samples_queue: "mp.Queue",
@@ -158,71 +227,23 @@ def _child_main(
     The child runs the asyncio generate + score loops in isolation from the trainer's GIL. It never touches CUDA — only
     HTTP to vLLM and pure Python work (chat parsing, reward computation).
     """
-    # Hide GPUs from the child: it has no business touching CUDA, and any
-    # library that imports `torch` and lazily probes devices would race the
-    # parent's allocator state. spawn already gave us a fresh process; this
-    # makes it definitively CPU-only.
-    os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
-    # Strip distributed env so accelerate's `PartialState()` initialises in
-    # single-process mode rather than trying to join the parent's process group.
-    for _k in (
-        "RANK",
-        "WORLD_SIZE",
-        "LOCAL_RANK",
-        "LOCAL_WORLD_SIZE",
-        "MASTER_ADDR",
-        "MASTER_PORT",
-        "GROUP_RANK",
-        "ROLE_RANK",
-        "ROLE_WORLD_SIZE",
-        "TORCHELASTIC_RUN_ID",
-        "TORCHELASTIC_RESTART_COUNT",
-        "TORCHELASTIC_MAX_RESTARTS",
-    ):
-        os.environ.pop(_k, None)
-    # Avoid sharing parent's flight-recorder dump path / NCCL debug log.
-    os.environ.pop("TORCH_FR_DUMP_TEMP_FILE", None)
-    os.environ.pop("NCCL_DEBUG_FILE", None)
-
+    _scrub_child_env()
     # `accelerate.logging.get_logger` requires `PartialState()` to have been
-    # called at least once. Do it after env scrubbing so it picks up
-    # single-process mode.
+    # called at least once. Do it after env scrubbing so it picks up single-process mode.
     from accelerate.state import PartialState
 
     PartialState()
 
-    init_kwargs = pickle.loads(init_kwargs_pkl)
-    worker = AsyncRolloutWorker(_run_in_child=True, **init_kwargs)
-    # Inject the parent-owned IPC primitives. The mp.Value and mp.Queue can't
-    # be pickled inside `init_kwargs_pkl` reliably — they're shared by being
-    # passed as positional args to the Process target, which the multiprocessing
-    # runtime sets up correctly across the spawn boundary.
-    worker._model_version_value = model_version_value
-    worker._stop_event_mp = stop_event
-    worker._pause_event_mp = pause_event
-    worker.rollout_buffer = _MPQueueChildShim(samples_queue)
-
+    worker = _build_child_worker(init_kwargs_pkl, samples_queue, model_version_value, stop_event, pause_event)
     child_ready_event.set()
-
-    # Translate the parent's mp.Event into the worker's asyncio.Event so a
-    # call to `worker.stop()` in the parent breaks out of `_run_loops` here.
-    def _stop_watcher():
-        stop_event.wait()
-        if worker._loop is not None and worker._stop_event is not None:
-            try:
-                worker._loop.call_soon_threadsafe(worker._stop_event.set)
-            except Exception:
-                pass
-
-    threading.Thread(target=_stop_watcher, daemon=True, name="grpo-mp-stop-watcher").start()
+    _spawn_stop_watcher(worker, stop_event)
 
     try:
         worker._run()
     except Exception:
-        # Print the traceback so it shows up in the child's stderr. The parent
-        # already monitors `_process.is_alive()` and reports exit codes from
-        # `start()` / `stop()`, but the traceback is what's actually useful.
+        # Surface the traceback in the child's stderr. The parent monitors
+        # `_process.is_alive()` and reports exit codes, but the actual stack is
+        # what's useful for debugging.
         traceback.print_exc()
         raise
 
@@ -296,7 +317,6 @@ class AsyncRolloutWorker:
                 "vLLM >= 0.17.1 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.17.1'"
             )
 
-        # ---- state shared by parent and child ----
         self.model_name = model_name
         self.max_tool_calling_iterations = max_tool_calling_iterations
         self.dataset = dataset
