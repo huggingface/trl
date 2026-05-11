@@ -48,8 +48,6 @@ Messages: TypeAlias = list[dict[str, str]]
 
 @dataclass(slots=True)
 class RolloutGroup:
-    """Single GRPO group for one prompt with multiple completions."""
-
     prompt: Messages
     prompt_ids: list[int]
     reward_kwargs: dict[str, list[Any]]
@@ -72,10 +70,10 @@ class RolloutSample:
     old_log_probs: list[float]
     advantage: float
     model_version: int
-    metrics: dict[str, float]  # logging metadata only, not used in loss computation
+    metrics: dict[str, float]
 
 
-# Env vars the child must unset so accelerate's `PartialState()` initialises in
+# Env vars the child must drop so accelerate's `PartialState()` initialises in
 # single-process mode instead of trying to join the parent's process group.
 _CHILD_ENV_TO_STRIP = (
     "RANK",
@@ -90,52 +88,27 @@ _CHILD_ENV_TO_STRIP = (
     "TORCHELASTIC_RUN_ID",
     "TORCHELASTIC_RESTART_COUNT",
     "TORCHELASTIC_MAX_RESTARTS",
-    # Don't share parent's flight-recorder dump path / NCCL debug log.
     "TORCH_FR_DUMP_TEMP_FILE",
     "NCCL_DEBUG_FILE",
 )
 
 
 def _scrub_child_env() -> None:
-    """Hide GPUs and strip distributed env vars from the child's environment.
-
-    The child has no business touching CUDA — any library that imports `torch` and lazily probes devices would race the
-    parent's allocator. spawn already gave us a fresh process; this makes it definitively CPU-only and single-process.
-    """
+    # The child has no business touching CUDA; any library that imports torch
+    # and lazily probes devices would race the parent's allocator.
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     for k in _CHILD_ENV_TO_STRIP:
         os.environ.pop(k, None)
 
 
-def _build_child_worker(
-    init_kwargs_pkl: bytes,
-    samples_queue,
-    model_version_value,
-    stop_event,
-) -> "AsyncRolloutWorker":
-    """Construct the child's `AsyncRolloutWorker` and wire it to the parent's IPC primitives.
-
-    `mp.Value` / `mp.Queue` aren't pickled reliably inside `init_kwargs_pkl` — they're shared by being passed as
-    positional args to the Process target, which the multiprocessing runtime sets up correctly across the spawn
-    boundary.
-    """
-    init_kwargs = pickle.loads(init_kwargs_pkl)
-    worker = AsyncRolloutWorker(_run_in_child=True, **init_kwargs)
-    worker._model_version_value = model_version_value
-    worker._stop_event_mp = stop_event
-    worker.rollout_buffer = samples_queue
-    return worker
-
-
-def _spawn_stop_watcher(worker: "AsyncRolloutWorker", stop_event) -> None:
-    """Daemon thread that translates `mp.Event` (set by parent's `stop()`) into
-    the child's `asyncio.Event` so `_run_loops` breaks out of its `gather`."""
-
+def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event) -> None:
+    # Daemon thread that translates the parent's mp.Event into the child's
+    # asyncio.Event so _run_loops breaks out of its gather.
     def _watch():
         stop_event.wait()
-        if worker._loop is not None and worker._stop_event is not None:
+        if rollout_loop._loop is not None and rollout_loop._stop_event is not None:
             try:
-                worker._loop.call_soon_threadsafe(worker._stop_event.set)
+                rollout_loop._loop.call_soon_threadsafe(rollout_loop._stop_event.set)
             except Exception:
                 pass
 
@@ -143,67 +116,51 @@ def _spawn_stop_watcher(worker: "AsyncRolloutWorker", stop_event) -> None:
 
 
 def _child_main(
-    init_kwargs_pkl: bytes,
+    loop_kwargs_pkl: bytes,
     samples_queue: "mp.Queue",
     model_version_value: "mp.Value",  # noqa: F821 (mp.Value is a function, not a type)
     stop_event: "mp.Event",
     child_ready_event: "mp.Event",
 ) -> None:
-    """Entry point of the spawned rollout-worker child process.
-
-    The child runs the asyncio generate + score loops in isolation from the trainer's GIL. It never touches CUDA — only
-    HTTP to vLLM and pure Python work (chat parsing, reward computation).
-    """
+    """Spawned child entry point. Constructs `_AsyncRolloutLoop` and runs it."""
     _scrub_child_env()
-    # `accelerate.logging.get_logger` requires `PartialState()` to have been
-    # called at least once. Do it after env scrubbing so it picks up single-process mode.
+    # `accelerate.logging.get_logger` requires `PartialState()` to have been called.
     from accelerate.state import PartialState
 
     PartialState()
 
-    worker = _build_child_worker(init_kwargs_pkl, samples_queue, model_version_value, stop_event)
+    loop_kwargs = pickle.loads(loop_kwargs_pkl)
+    rollout_loop = _AsyncRolloutLoop(
+        **loop_kwargs,
+        rollout_buffer=samples_queue,
+        model_version_value=model_version_value,
+    )
     child_ready_event.set()
-    _spawn_stop_watcher(worker, stop_event)
-
+    _spawn_stop_watcher(rollout_loop, stop_event)
     try:
-        worker._run()
+        rollout_loop.run()
     except Exception:
-        # Surface the traceback in the child's stderr. The parent monitors
-        # `_process.is_alive()` and reports exit codes, but the actual stack is
-        # what's useful for debugging.
         traceback.print_exc()
         raise
 
 
-class AsyncRolloutWorker:
-    """Asynchronous rollout worker for AsyncGRPO.
+class _AsyncRolloutLoop:
+    """Asyncio generate + score loops. Lives entirely inside the spawned child process.
 
-    The worker generates samples in an OS-level child process so its Python GIL is isolated from the trainer's autograd
-    engine. At Qwen3-30B-A3B scale with 16 k completion length, the trainer's backward pass holds the GIL in 1–5 s
-    bursts; running rollout in the same process would starve rank 0's CUDA progress and time out NCCL collectives on
-    other ranks.
-
-    Parent (trainer process):
-      - `start()` / `stop()` — spawn / join the child
-      - `update_model_version(v)` — bumps a shared `mp.Value` after each weight sync
-      - `rollout_buffer` — the shared `mp.Queue` the trainer reads scored samples from
-
-    Child (spawned process):
-      - `_generate_loop` — async HTTP to vLLM's `/v1/completions`
-      - `_score_loop` — chat-template parsing + reward functions (the GIL holders)
-      - pushes scored `RolloutSample`s into the shared `mp.Queue`
-
-    Weight transfer (NCCL setup with vLLM, the cold sync POST, pause/resume) is owned by a separate
-    `WeightTransferClient` held by the trainer. The rollout worker doesn't need to know about syncs — when vLLM is
-    paused, the worker's in-flight `aiohttp` requests fail and the retry loop in `_generate_one_turn` covers the gap.
+    Owns the tokenizer, dataset iterator, reward funcs, environments, and the asyncio event loop. Talks to vLLM via
+    `/v1/completions`. Pushes scored `RolloutSample`s into the shared `mp.Queue` (`rollout_buffer`); reads the bumped
+    policy version from the shared `mp.Value` (`model_version_value`).
     """
 
     def __init__(
         self,
+        *,
         model_name: str,
         dataset: Dataset,
         reward_funcs: list[Callable[..., list[float]]],
         processing_class: PreTrainedTokenizerBase,
+        rollout_buffer: "mp.Queue",
+        model_version_value: "mp.Value",  # noqa: F821
         tools: list[Callable] | None = None,
         environment_factory: Callable[[], object] | None = None,
         num_generations: int = 8,
@@ -217,31 +174,32 @@ class AsyncRolloutWorker:
         max_tool_calling_iterations: int | None = None,
         log_completions: bool = False,
         num_completions_to_print: int = 3,
-        child_ready_timeout: int = 300,
-        # Internal flag: True when the worker is being constructed inside the
-        # spawned child process (`_child_main`). Skips parent-only IPC setup.
-        _run_in_child: bool = False,
     ):
-        if not is_vllm_available(min_version="0.17.1"):
-            raise ImportError(
-                "vLLM >= 0.17.1 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.17.1'"
-            )
-
         self.model_name = model_name
-        self.max_tool_calling_iterations = max_tool_calling_iterations
         self.dataset = dataset
         self._dataset_iter = iter(dataset)
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._stop_event: asyncio.Event | None = None
-
         self.reward_funcs = reward_funcs
         self.reward_func_names = [f.__name__ for f in reward_funcs]
+        self.tokenizer = add_response_schema(processing_class)
+        self.rollout_buffer = rollout_buffer  # shared mp.Queue
+        self._model_version_value = model_version_value  # shared mp.Value
+
         self.num_generations = num_generations
         self.max_inflight_tasks = max_inflight_tasks
+        self.queue_maxsize = queue_maxsize
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.request_timeout = request_timeout
+        self.chat_template_kwargs = chat_template_kwargs or {}
+        self.max_tool_calling_iterations = max_tool_calling_iterations
+        self.log_completions = log_completions
+        self.num_completions_to_print = num_completions_to_print
+        self.vllm_server_url = vllm_server_url.rstrip("/")
+
         self.environments = None
-        environment_methods = [[] for _ in range(self.max_inflight_tasks)]
+        environment_methods = [[] for _ in range(max_inflight_tasks)]
         if environment_factory is not None:
-            self.environments = [environment_factory() for _ in range(self.max_inflight_tasks)]
+            self.environments = [environment_factory() for _ in range(max_inflight_tasks)]
             for i, environment in enumerate(self.environments):
                 has_reset = False
                 for name, member in inspect.getmembers(environment, predicate=inspect.ismethod):
@@ -255,25 +213,16 @@ class AsyncRolloutWorker:
                     )
 
         base_tools = tools or []
-        self._sync_tool_dicts = [{} for _ in range(self.max_inflight_tasks)]
-        for i in range(self.max_inflight_tasks):
+        self._sync_tool_dicts = [{} for _ in range(max_inflight_tasks)]
+        for i in range(max_inflight_tasks):
             for tool in base_tools + (environment_methods[i] if self.environments is not None else []):
                 if inspect.iscoroutinefunction(tool):
-                    raise ValueError("Asynchronous tools are not supported in AsyncRolloutWorker yet.")
+                    raise ValueError("Asynchronous tools are not supported yet.")
                 self._sync_tool_dicts[i][tool.__name__] = tool
         self.tools = base_tools + (environment_methods[0] if self.environments is not None else [])
 
-        self.vllm_server_url = vllm_server_url.rstrip("/")
-        self.max_tokens = max_tokens
-        self.temperature = temperature
-        self.request_timeout = request_timeout
-        self.chat_template_kwargs = chat_template_kwargs or {}
-        self.log_completions = log_completions
-        self.num_completions_to_print = num_completions_to_print
-        self.tokenizer = processing_class
-        self.tokenizer = add_response_schema(self.tokenizer)
-        # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
-        # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
+        # The chat template must be prefix-preserving in multi-turn training; if the tokenizer's
+        # template isn't, swap in a training-safe one.
         if self.tools and not is_chat_template_prefix_preserving(self.tokenizer):
             self.chat_template = get_training_chat_template(self.tokenizer)
         else:
@@ -283,140 +232,27 @@ class AsyncRolloutWorker:
         self._total_completion_tokens = 0
         self._total_groups_scored = 0
         self._generation_start_time: float | None = None
-        self.session = None
+        self.session: aiohttp.ClientSession | None = None
 
-        self.child_ready_timeout = child_ready_timeout
-        self._is_child = _run_in_child
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop_event: asyncio.Event | None = None
 
-        self.queue_maxsize = queue_maxsize  # exposed for log lines; mp.Queue hides it in _maxsize
-
-        if _run_in_child:
-            # Child: IPC primitives are patched by `_child_main` after construction.
-            self._mp_ctx = None
-            self._model_version_value = None
-            self._stop_event_mp = None
-            self._child_ready_event = None
-            self.rollout_buffer = None
-            self._child_init_kwargs = None
-            self._process: mp.Process | None = None
-            return
-
-        # Parent: build IPC primitives that will be shared with the child.
-        ctx = mp.get_context("spawn")
-        self._mp_ctx = ctx
-        self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)
-        self._model_version_value = ctx.Value("i", 0)
-        self._stop_event_mp = ctx.Event()
-        self._child_ready_event = ctx.Event()
-        # Kwargs that re-construct the worker inside the child. Pickled once at
-        # `start()` time so all changes between __init__ and start() are captured.
-        self._child_init_kwargs = dict(
-            model_name=model_name,
-            dataset=dataset,
-            reward_funcs=reward_funcs,
-            processing_class=processing_class,
-            tools=tools,
-            environment_factory=environment_factory,
-            num_generations=num_generations,
-            max_inflight_tasks=max_inflight_tasks,
-            queue_maxsize=queue_maxsize,
-            vllm_server_url=vllm_server_url,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            request_timeout=request_timeout,
-            chat_template_kwargs=chat_template_kwargs,
-            max_tool_calling_iterations=max_tool_calling_iterations,
-            log_completions=log_completions,
-            num_completions_to_print=num_completions_to_print,
-            child_ready_timeout=child_ready_timeout,
-        )
-        self._process: mp.Process | None = None
-
-    # model_version is backed by a shared mp.Value: parent writes after each weight
-    # sync, child reads when tagging new rollout groups.
     @property
     def model_version(self) -> int:
-        if self._model_version_value is None:
-            return 0
         return int(self._model_version_value.value)
 
-    @model_version.setter
-    def model_version(self, value: int) -> None:
-        if self._model_version_value is None:
-            return
-        with self._model_version_value.get_lock():
-            self._model_version_value.value = int(value)
-
-    def update_model_version(self, model_version: int) -> None:
-        self.model_version = model_version
-
-    def start(self) -> None:
-        """Spawn the rollout-worker child process. Idempotent."""
-        if self._is_child:
-            # Child reaches its loop via `_child_main → worker._run()` directly.
-            return
-        if self._process is not None:
-            logger.warning("AsyncRolloutWorker.start() called but child process is already running; ignoring.")
-            return
-        init_kwargs_pkl = pickle.dumps(self._child_init_kwargs)
-        self._process = self._mp_ctx.Process(
-            target=_child_main,
-            args=(
-                init_kwargs_pkl,
-                self.rollout_buffer,
-                self._model_version_value,
-                self._stop_event_mp,
-                self._child_ready_event,
-            ),
-            name="grpo-rollout-worker-child",
-            daemon=True,
-        )
-        self._process.start()
-        logger.info(
-            f"AsyncRolloutWorker spawned child pid={self._process.pid}; "
-            f"waiting up to {self.child_ready_timeout}s for the ready signal"
-        )
-        # spawn re-imports the parent script in the child (torch, transformers,
-        # accelerate, trl, vllm — 60–90 s at Qwen3-30B-A3B scale). Poll the
-        # child's liveness so an early crash surfaces immediately rather than
-        # after the full timeout.
-        deadline = time.monotonic() + self.child_ready_timeout
-        while not self._child_ready_event.wait(timeout=1.0):
-            if not self._process.is_alive():
-                exit_code = self._process.exitcode
-                self._process = None  # so a retry can re-spawn
-                raise RuntimeError(
-                    f"AsyncRolloutWorker child exited during init (exitcode={exit_code}). "
-                    "Check the child's stderr for the traceback."
-                )
-            if time.monotonic() >= deadline:
-                raise RuntimeError(
-                    f"AsyncRolloutWorker child did not signal ready within {self.child_ready_timeout}s. "
-                    "spawn re-imports torch+transformers+trl+vllm in the child — slow at first launch; "
-                    "increase `child_ready_timeout` if needed."
-                )
-        logger.info("AsyncRolloutWorker child is ready")
-
-    def stop(self) -> None:
-        """Signal the child to stop and join the process."""
-        if self._is_child:
-            return
-        if self._process is None:
-            return
-        logger.info("Stopping AsyncRolloutWorker child process...")
-        self._stop_event_mp.set()
-        # Guard: if start() raised before `Process.start()` returned (e.g. pickle
-        # failure during spawn), `_process` is set but `_popen` is None. Calling
-        # `.join()` then asserts and masks the real exception.
-        if self._process._popen is not None:
-            self._process.join(timeout=15)
-            if self._process.is_alive():
-                logger.warning("Child did not exit within 15s; terminating.")
-                self._process.terminate()
-                self._process.join(timeout=5)
-                if self._process.is_alive():
-                    self._process.kill()
-        self._process = None
+    def run(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._loop = loop
+        self._stop_event = asyncio.Event()
+        try:
+            loop.run_until_complete(self._run_loops(stop_event=self._stop_event))
+        except Exception as e:
+            logger.exception(f"Worker process failed: {e}")
+            raise
+        finally:
+            loop.close()
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
         async with aiohttp.ClientSession() as session:
@@ -429,20 +265,6 @@ class AsyncRolloutWorker:
                 asyncio.create_task(self._generate_loop(stop_event=stop_event)),
                 asyncio.create_task(self._score_loop(stop_event=stop_event)),
             )
-
-    def _run(self) -> None:
-        """Run the asyncio event loop until `stop_event` fires. Child-only."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        self._loop = loop
-        self._stop_event = asyncio.Event()
-        try:
-            loop.run_until_complete(self._run_loops(stop_event=self._stop_event))
-        except Exception as e:
-            logger.exception(f"Worker process failed: {e}")
-            raise
-        finally:
-            loop.close()
 
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         pending_groups: dict[int, RolloutGroup] = {}
@@ -463,7 +285,7 @@ class AsyncRolloutWorker:
                             prompt,
                             return_dict=False,
                             add_generation_prompt=True,
-                            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+                            tools=self.tools or None,  # `or None`: Llama bug: renders tool boilerplate for tools=[]
                             chat_template=self.chat_template,
                             **self.chat_template_kwargs,
                         )
@@ -485,14 +307,11 @@ class AsyncRolloutWorker:
                             model_version=self.model_version,
                         )
                         pending_completed[group_id] = 0
-                        logger.debug(f"Started group {group_id}; pending_groups={len(pending_groups)}")
 
                     slot = free_slots.pop()
                     if self.environments is not None:
-                        # Current assumption: reset side effects matter, return value is ignored.
                         self.environments[slot].reset(**row)
 
-                    logger.info(f"[slot] assigned slot={slot} group={group_id} free_after={len(free_slots)}")
                     task = asyncio.create_task(
                         self._generate_one(pending_groups[group_id].prompt, tool_dict=self._sync_tool_dicts[slot])
                     )
@@ -506,17 +325,11 @@ class AsyncRolloutWorker:
 
                 done, _ = await asyncio.wait(inflight_tasks, return_when=asyncio.FIRST_COMPLETED, timeout=0.1)
                 if not done:
-                    if not free_slots:
-                        logger.debug(
-                            f"[generate] all {self.max_inflight_tasks} slots busy, "
-                            f"pending_groups={len(pending_groups)}, waiting for completions..."
-                        )
                     continue
 
                 for task in done:
                     group_id, slot = inflight_tasks.pop(task)
                     free_slots.add(slot)
-                    logger.debug(f"[slot] freed   slot={slot} group={group_id} free_after={len(free_slots)}")
                     if task.exception() is not None:
                         raise task.exception()
 
@@ -535,7 +348,6 @@ class AsyncRolloutWorker:
                     group.tool_mask.append(tool_mask)
                     group.tool_call_counts.append(tool_call_count)
                     group.tool_failure_counts.append(tool_failure_count)
-                    # TODO: move this in generation task, shouldn't matter but is correct
                     self._total_completion_tokens += sum(tool_mask)
                     pending_completed[group_id] += 1
 
@@ -549,7 +361,6 @@ class AsyncRolloutWorker:
                                 if stop_event.is_set():
                                     return
                                 await asyncio.sleep(0.1)
-                        logger.debug(f"Group {group_id} complete; queued_for_scoring={self._groups_to_score.qsize()}")
                         del pending_groups[group_id]
                         del pending_completed[group_id]
         finally:
@@ -557,32 +368,10 @@ class AsyncRolloutWorker:
                 task.cancel()
             if inflight_tasks:
                 await asyncio.gather(*inflight_tasks, return_exceptions=True)
-            # Use put_nowait: if the queue is full at shutdown, skip the sentinel —
-            # _score_loop will exit via stop_event check in its outer loop.
             try:
                 self._groups_to_score.put_nowait(None)
             except asyncio.QueueFull:
                 pass
-
-    def _compute_rollout_metrics(self, samples: list[RolloutSample], scoring_time: float, wait_scoring: float) -> None:
-        assert self._generation_start_time is not None, "generation_start_time init in run()"
-        elapsed = time.monotonic() - self._generation_start_time
-        generation_tok_per_sec = self._total_completion_tokens / elapsed if elapsed > 0 else 0.0
-
-        scoring_time_ms = scoring_time * 1000
-        wait_scoring_ms = wait_scoring * 1000
-
-        for sample in samples:
-            sample.metrics["generation_tok_per_s"] = generation_tok_per_sec
-            sample.metrics["scoring_time_ms"] = scoring_time_ms
-            sample.metrics["wait_scoring_ms"] = wait_scoring_ms
-            sample.metrics["buffer_qsize"] = self.rollout_buffer.qsize()
-
-        logger.info(
-            f"[inference] total_completion_tokens={self._total_completion_tokens}, "
-            f"generation_tok/s={generation_tok_per_sec:.1f}, scoring_time={scoring_time_ms:.1f}ms, "
-            f"wait_scoring={wait_scoring_ms:.1f}ms"
-        )
 
     async def _score_loop(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
@@ -595,7 +384,6 @@ class AsyncRolloutWorker:
             if group is None:
                 return
             score_queue_wait = time.monotonic() - t_wait
-
             wait_scoring = time.monotonic() - group.queued_at
 
             if score_queue_wait > 0.5:
@@ -630,16 +418,21 @@ class AsyncRolloutWorker:
                     except queue.Full:
                         if stop_event.is_set():
                             return
-                        # Wait for trainer to consume loop
                         logger.info(
                             f"[score] rollout buffer full (maxsize={self.queue_maxsize}), "
                             "waiting for trainer to consume..."
                         )
                         await asyncio.sleep(0.1)
 
-            logger.debug(
-                f"Scored group with {len(samples)} samples; rollout_buffer_qsize={self.rollout_buffer.qsize()}"
-            )
+    def _compute_rollout_metrics(self, samples: list[RolloutSample], scoring_time: float, wait_scoring: float) -> None:
+        assert self._generation_start_time is not None
+        elapsed = time.monotonic() - self._generation_start_time
+        generation_tok_per_sec = self._total_completion_tokens / elapsed if elapsed > 0 else 0.0
+        for sample in samples:
+            sample.metrics["generation_tok_per_s"] = generation_tok_per_sec
+            sample.metrics["scoring_time_ms"] = scoring_time * 1000
+            sample.metrics["wait_scoring_ms"] = wait_scoring * 1000
+            sample.metrics["buffer_qsize"] = self.rollout_buffer.qsize()
 
     def _repeat_iterator(self) -> Iterator[tuple[int, dict[str, Any]]]:
         group_id = 0
@@ -665,7 +458,7 @@ class AsyncRolloutWorker:
             prompt,
             return_dict=False,
             add_generation_prompt=True,
-            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+            tools=self.tools or None,
             chat_template=self.chat_template,
             **self.chat_template_kwargs,
         )
@@ -692,19 +485,14 @@ class AsyncRolloutWorker:
             iteration_num += 1
 
     def _get_tool_suffix_ids(self, tool_messages: list[dict[str, Any]]) -> list[int]:
-        """Get token IDs for tool result formatting by using a minimal dummy conversation."""
-        # Use the real tool name instead of a dummy: some templates (e.g. GPT-OSS) derive the tool response
-        # header from the assistant's tool call name.
+        # Use the real tool name: some templates (e.g. GPT-OSS) derive the tool response header from
+        # the assistant's tool call name.
         dummy_tool_calls = [{"type": "function", "function": {"name": tool_messages[0]["name"], "arguments": {}}}]
         dummy_messages = [
             {"role": "user", "content": "dummy"},
-            {
-                "role": "assistant",
-                # "content" is required here because VLM processors crash on tokenize=True without it
-                # (KeyError in processing_utils.py). See huggingface/transformers#45290.
-                "content": "",
-                "tool_calls": dummy_tool_calls,
-            },
+            # `content: ""` is required: VLM processors crash on tokenize=True without it
+            # (KeyError in processing_utils.py, see huggingface/transformers#45290).
+            {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
         ]
         prefix_ids = self.tokenizer.apply_chat_template(
             dummy_messages,
@@ -722,18 +510,13 @@ class AsyncRolloutWorker:
             return_dict=False,
             **self.chat_template_kwargs,
         )
-
-        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
-        # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
-        # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
-        # <turn|>) skip this trimming.
+        # Some chat templates (Qwen3/Qwen3.5) render "...<|im_end|>\n" after assistant/tool blocks.
+        # Align the slicing boundary to EOS, not EOS + newline.
         eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self.tokenizer.eos_token_id]
         if eos_positions:
             prefix_ids = prefix_ids[: eos_positions[-1] + 1]
-
         if full_ids[: len(prefix_ids)] != prefix_ids:
             raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
-
         return full_ids[len(prefix_ids) :]
 
     def _execute_tool_calls(
@@ -770,13 +553,10 @@ class AsyncRolloutWorker:
                 output = await self._post("/v1/completions", payload, self.request_timeout)
                 break
             except (aiohttp.ServerDisconnectedError, aiohttp.ClientConnectionError, aiohttp.ClientResponseError):
-                # vLLM drops connections or returns 503 during weight sync (/pause). Wait briefly and retry.
-                logger.debug("Server unavailable (likely weight sync pause), retrying...")
+                # vLLM drops connections / returns 503 during weight sync (/pause). Retry.
                 await asyncio.sleep(1.0)
         choice = output["choices"][0]
-        completion_ids = choice["token_ids"]
-        completion_logprobs = choice["logprobs"]["token_logprobs"]
-        return completion_ids, completion_logprobs
+        return choice["token_ids"], choice["logprobs"]["token_logprobs"]
 
     async def _score_group(self, group: RolloutGroup) -> list[RolloutSample]:
         kwargs = dict(
@@ -795,9 +575,8 @@ class AsyncRolloutWorker:
             ]
         )
 
-        # Sum rewards across all reward functions. Reward functions may return None for individual
-        # samples (e.g. accuracy_reward when the gold solution is unparseable). Convert None → nan
-        # and use nansum so that a None from one function doesn't affect the others, matching TRL.
+        # Reward funcs may return None per-sample (unparseable gold); convert to NaN so nansum across
+        # funcs ignores that contribution without zeroing the row.
         all_rewards = [[r if r is not None else float("nan") for r in row] for row in all_rewards]
         rewards = np.nansum(np.array(all_rewards, dtype=float), axis=0)
         advantages = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
@@ -805,9 +584,6 @@ class AsyncRolloutWorker:
         reward_std = float(rewards.std())
         logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
 
-        # tools/call_frequency: mean calls per completion (matches TRL's total_calls / num_completions)
-        # tools/failure_frequency: per-completion failure rate; averaged across samples in compute_loss
-        #   (TRL uses total_failures / total_calls, ours weights equally per completion — close enough)
         total_calls = sum(group.tool_call_counts)
         tool_metrics = (
             [
@@ -821,8 +597,7 @@ class AsyncRolloutWorker:
             else [{}] * len(group.completions)
         )
 
-        per_func_rewards = np.array(all_rewards, dtype=float)  # shape (num_funcs, num_completions)
-
+        per_func_rewards = np.array(all_rewards, dtype=float)
         return [
             RolloutSample(
                 prompt=group.prompt,
@@ -872,3 +647,107 @@ class AsyncRolloutWorker:
                     await asyncio.sleep(1)
                 else:
                     raise
+
+
+class AsyncRolloutWorker:
+    """Parent-side controller: spawns a child process running `_AsyncRolloutLoop`.
+
+    The trainer holds this object on rank 0. The child does the actual rollout work; this class only manages lifecycle
+    (start/stop) and exposes the shared `mp.Queue` (`rollout_buffer`) and `mp.Value` (`model_version`) the trainer
+    reads/writes.
+
+    Constructor kwargs are forwarded as-is to `_AsyncRolloutLoop` when the child spawns; only `queue_maxsize` and
+    `child_ready_timeout` are consumed here.
+    """
+
+    def __init__(
+        self,
+        *,
+        queue_maxsize: int = 0,
+        child_ready_timeout: int = 300,
+        **loop_kwargs: Any,
+    ):
+        if not is_vllm_available(min_version="0.17.1"):
+            raise ImportError(
+                "vLLM >= 0.17.1 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.17.1'"
+            )
+        ctx = mp.get_context("spawn")
+        self._mp_ctx = ctx
+        self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)
+        self._model_version_value = ctx.Value("i", 0)
+        self._stop_event_mp = ctx.Event()
+        self._child_ready_event = ctx.Event()
+        # Forwarded verbatim to _AsyncRolloutLoop in the child. queue_maxsize is also
+        # forwarded — the child reads it for "rollout buffer full" log lines.
+        loop_kwargs["queue_maxsize"] = queue_maxsize
+        self._loop_kwargs = loop_kwargs
+        self._child_ready_timeout = child_ready_timeout
+        self._process: mp.Process | None = None
+
+    @property
+    def model_version(self) -> int:
+        return int(self._model_version_value.value)
+
+    @model_version.setter
+    def model_version(self, value: int) -> None:
+        with self._model_version_value.get_lock():
+            self._model_version_value.value = int(value)
+
+    def update_model_version(self, model_version: int) -> None:
+        self.model_version = model_version
+
+    def start(self) -> None:
+        if self._process is not None:
+            logger.warning("AsyncRolloutWorker.start() called but child process is already running; ignoring.")
+            return
+        loop_kwargs_pkl = pickle.dumps(self._loop_kwargs)
+        self._process = self._mp_ctx.Process(
+            target=_child_main,
+            args=(
+                loop_kwargs_pkl,
+                self.rollout_buffer,
+                self._model_version_value,
+                self._stop_event_mp,
+                self._child_ready_event,
+            ),
+            name="grpo-rollout-worker-child",
+            daemon=True,
+        )
+        self._process.start()
+        logger.info(
+            f"AsyncRolloutWorker spawned child pid={self._process.pid}; "
+            f"waiting up to {self._child_ready_timeout}s for the ready signal"
+        )
+        # spawn re-imports torch+transformers+trl+vllm in the child — slow on cold launch. Poll
+        # liveness so an early crash surfaces immediately instead of after the full timeout.
+        deadline = time.monotonic() + self._child_ready_timeout
+        while not self._child_ready_event.wait(timeout=1.0):
+            if not self._process.is_alive():
+                exit_code = self._process.exitcode
+                self._process = None
+                raise RuntimeError(
+                    f"AsyncRolloutWorker child exited during init (exitcode={exit_code}). "
+                    "Check the child's stderr for the traceback."
+                )
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"AsyncRolloutWorker child did not signal ready within {self._child_ready_timeout}s."
+                )
+        logger.info("AsyncRolloutWorker child is ready")
+
+    def stop(self) -> None:
+        if self._process is None:
+            return
+        logger.info("Stopping AsyncRolloutWorker child process...")
+        self._stop_event_mp.set()
+        # If start() raised before Process.start() returned (e.g. pickle failure during spawn),
+        # _popen is None and .join() would assert — skip cleanly.
+        if self._process._popen is not None:
+            self._process.join(timeout=15)
+            if self._process.is_alive():
+                logger.warning("Child did not exit within 15s; terminating.")
+                self._process.terminate()
+                self._process.join(timeout=5)
+                if self._process.is_alive():
+                    self._process.kill()
+        self._process = None
