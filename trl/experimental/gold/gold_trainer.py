@@ -845,7 +845,7 @@ class GOLDTrainer(SFTTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
         if not args.use_uld_loss:
-            teacher_model.resize_token_embeddings(self.model.config.vocab_size)
+            teacher_model.resize_token_embeddings(self.model.config.get_text_config().vocab_size)
 
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)

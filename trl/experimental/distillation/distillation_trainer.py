@@ -549,7 +549,7 @@ class DistillationTrainer(_BaseTrainer):
         # ── Prepare teacher model (after super().__init__ so accelerator is ready) ──
         if teacher_model is not None:
             if self._local_teacher_tokenizer_matches_student:
-                teacher_model.resize_token_embeddings(self.model.config.vocab_size)
+                teacher_model.resize_token_embeddings(self.model.config.get_text_config().vocab_size)
             if self.is_deepspeed_enabled:
                 self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
             else:
