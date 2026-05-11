@@ -313,6 +313,8 @@ cohere2_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2.jinja").read_text()
 
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
 
+falconmamba_chat_template = (_CHAT_TEMPLATES_DIR / "falconmamba.jinja").read_text()
+
 gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text()
 
 gemma3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3.jinja").read_text()
@@ -549,6 +551,8 @@ cohere2_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2_training.jinja"
 
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text()
 
+falconmamba_training_chat_template = (_CHAT_TEMPLATES_DIR / "falconmamba_training.jinja").read_text()
+
 gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma_training.jinja").read_text()
 
 gemma3_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3_training.jinja").read_text()
@@ -579,8 +583,8 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    Currently Cohere, Cohere 2, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Qwen2.5,
-    Qwen3 (including the Instruct-2507 variant), and Qwen3.6 are supported.
+    Currently Cohere, Cohere 2, DeepSeek-V3, Falcon Mamba, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3,
+    Qwen2.5, Qwen3 (including the Instruct-2507 variant), and Qwen3.6 are supported.
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
@@ -654,6 +658,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
+
+    if processing_class.chat_template == falconmamba_chat_template:
+        return falconmamba_training_chat_template
 
     if processing_class.chat_template == gemma_chat_template:
         return gemma_training_chat_template
