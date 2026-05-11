@@ -81,70 +81,6 @@ class RolloutSample:
     metrics: dict[str, float]  # logging metadata only, not used in loss computation
 
 
-# The trainer's `RolloutQueueDataset.__iter__` reads from `rollout_worker.rollout_buffer`
-# as if it were a `queue.Queue` (calls `.get(timeout=...)` and `.qsize()`). The child
-# process's `_score_loop` writes via `.put_nowait()` and reads `.maxsize`. The shims below
-# adapt the shared `mp.Queue` to both interfaces — one for each end.
-class _MPQueueParentShim:
-    """Parent-side adapter so the trainer reads the shared `mp.Queue` via
-    the `queue.Queue` interface (`.get()`, `.qsize()`, `.empty()`)."""
-
-    def __init__(self, mp_q):
-        self._q = mp_q
-
-    def get(self, block: bool = True, timeout: float | None = None):
-        return self._q.get(block=block, timeout=timeout)
-
-    def qsize(self) -> int:
-        try:
-            return self._q.qsize()
-        except (NotImplementedError, OSError):
-            # macOS doesn't support qsize() on mp.Queue.
-            return 0
-
-    def empty(self) -> bool:
-        try:
-            return self._q.empty()
-        except (NotImplementedError, OSError):
-            return False
-
-
-class _MPQueueChildShim:
-    """Child-side adapter so `_score_loop` can `.put_nowait()` into the shared
-    `mp.Queue` and read `.maxsize` the same way it would on a stdlib `queue.Queue`."""
-
-    def __init__(self, mp_q):
-        self._q = mp_q
-        # `_score_loop` reads `rollout_buffer.maxsize` for log lines.
-        # `mp.Queue` stores its capacity in the private `_maxsize`.
-        self.maxsize = getattr(mp_q, "_maxsize", 0)
-
-    def put(self, item, block: bool = True, timeout: float | None = None):
-        self._q.put(item, block=block, timeout=timeout)
-
-    def put_nowait(self, item):
-        # `mp.Queue.put_nowait` raises `queue.Full` on overflow, matching stdlib.
-        self._q.put_nowait(item)
-
-    def qsize(self) -> int:
-        try:
-            return self._q.qsize()
-        except (NotImplementedError, OSError):
-            return 0
-
-    def empty(self) -> bool:
-        try:
-            return self._q.empty()
-        except (NotImplementedError, OSError):
-            return False
-
-    def full(self) -> bool:
-        try:
-            return self._q.full()
-        except (NotImplementedError, OSError):
-            return False
-
-
 # Env vars the child must unset so accelerate's `PartialState()` initialises in
 # single-process mode instead of trying to join the parent's process group.
 _CHILD_ENV_TO_STRIP = (
@@ -195,7 +131,7 @@ def _build_child_worker(
     worker._model_version_value = model_version_value
     worker._stop_event_mp = stop_event
     worker._pause_event_mp = pause_event
-    worker.rollout_buffer = _MPQueueChildShim(samples_queue)
+    worker.rollout_buffer = samples_queue
     return worker
 
 
@@ -388,11 +324,11 @@ class AsyncRolloutWorker:
         self.child_ready_timeout = child_ready_timeout
         self._is_child = _run_in_child
 
+        self.queue_maxsize = queue_maxsize  # exposed for log lines; mp.Queue hides it in _maxsize
+
         if _run_in_child:
             # Child: IPC primitives are patched by `_child_main` after construction.
-            # `rollout_buffer` is overridden there with the shared mp.Queue shim.
             self._mp_ctx = None
-            self._samples_queue = None
             self._model_version_value = None
             self._stop_event_mp = None
             self._pause_event_mp = None
@@ -405,13 +341,13 @@ class AsyncRolloutWorker:
         # Parent: build IPC primitives that will be shared with the child.
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
-        self._samples_queue = ctx.Queue(maxsize=queue_maxsize)
+        # rollout_buffer IS the shared mp.Queue — the trainer's RolloutQueueDataset
+        # reads samples from it via .get(timeout=...) / .qsize() (same API as queue.Queue).
+        self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)
         self._model_version_value = ctx.Value("i", 0)
         self._stop_event_mp = ctx.Event()
         self._pause_event_mp = ctx.Event()
         self._child_ready_event = ctx.Event()
-        # The trainer's `RolloutQueueDataset` reads samples through this attribute.
-        self.rollout_buffer = _MPQueueParentShim(self._samples_queue)
         # Kwargs that re-construct the worker inside the child. Pickled once at
         # `start()` time so all changes between __init__ and start() are captured.
         self._child_init_kwargs = dict(
@@ -569,7 +505,7 @@ class AsyncRolloutWorker:
             target=_child_main,
             args=(
                 init_kwargs_pkl,
-                self._samples_queue,
+                self.rollout_buffer,
                 self._model_version_value,
                 self._stop_event_mp,
                 self._pause_event_mp,
@@ -856,7 +792,7 @@ class AsyncRolloutWorker:
                             return
                         # Wait for trainer to consume loop
                         logger.info(
-                            f"[score] rollout buffer full (maxsize={self.rollout_buffer.maxsize}), "
+                            f"[score] rollout buffer full (maxsize={self.queue_maxsize}), "
                             "waiting for trainer to consume..."
                         )
                         await asyncio.sleep(0.1)
