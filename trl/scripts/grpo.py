@@ -30,10 +30,6 @@ from dataclasses import dataclass, field
 from trl import ScriptArguments
 
 
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
-
-
 @dataclass
 class GRPOScriptArguments(ScriptArguments):
     """

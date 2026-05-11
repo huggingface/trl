@@ -92,10 +92,11 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                     "template internally."
                 )
             prompts = [
-                prepare_multimodal_messages(prompt, image_list)
+                prepare_multimodal_messages(prompt, images=image_list)
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
+        dataset_images = images  # preserve dataset images before _generate may overwrite
         (
             prompt_ids_list,
             completion_ids_list,
@@ -104,14 +105,18 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             num_items_in_batch,
             sampling_per_token_logps_list,
             extra_fields,
+            images,
+            tool_images,
         ) = self._generate(prompts)
+        if images is None:
+            images = dataset_images  # restore dataset images (rollout_func path returns None)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
         prompt_ids = pad(
             prompt_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="left",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -125,7 +130,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         completion_ids = pad(
             completion_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -156,7 +161,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
-            eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
@@ -167,7 +172,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
-        num_images = [len(img_list) for img_list in images] if images is not None else None
+        num_images = [len(img_list) if img_list else 0 for img_list in images] if images is not None else None
 
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
@@ -660,7 +665,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         if target_prompt_len > current_batch_prompt_seq_len:
             prompt_ids = pad(
                 list(prompt_ids.unbind(0)),
-                padding_value=self.pad_token_id,
+                padding_value=self._tokenizer.pad_token_id,
                 pad_to_multiple_of=target_prompt_len,
                 padding_side="left",
             )
@@ -671,7 +676,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         if target_completion_len > current_batch_completion_seq_len:
             completion_ids = pad(
                 list(completion_ids.unbind(0)),
-                padding_value=self.pad_token_id,
+                padding_value=self._tokenizer.pad_token_id,
                 pad_to_multiple_of=target_completion_len,
                 padding_side="right",
             )
@@ -706,7 +711,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             if sampled_data["prompt_ids"][i].size(1) < target_prompt_len:
                 sampled_data["prompt_ids"][i] = pad(
                     sampled_data["prompt_ids"][i],
-                    padding_value=self.pad_token_id,
+                    padding_value=self._tokenizer.pad_token_id,
                     pad_to_multiple_of=target_prompt_len,
                     padding_side="left",
                 )
@@ -721,7 +726,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             if sampled_data["completion_ids"][i].size(1) < target_completion_len:
                 sampled_data["completion_ids"][i] = pad(
                     sampled_data["completion_ids"][i],
-                    padding_value=self.pad_token_id,
+                    padding_value=self._tokenizer.pad_token_id,
                     pad_to_multiple_of=target_completion_len,
                     padding_side="right",
                 )

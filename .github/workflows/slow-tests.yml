@@ -11,6 +11,7 @@ env:
   RUN_SLOW: "yes"
   IS_GITHUB_CI: "1"
   SLACK_API_TOKEN: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
   TRL_EXPERIMENTAL_SILENCE: 1
 
 jobs:
@@ -109,4 +110,3 @@ jobs:
           source .venv/bin/activate
           uv pip install slack_sdk tabulate
           python scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
-          rm *.txt

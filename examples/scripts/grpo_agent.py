@@ -36,7 +36,6 @@ python examples/scripts/grpo_agent.py \
 ```
 """
 
-import os
 import re
 import signal
 import sqlite3
@@ -46,10 +45,6 @@ from contextlib import contextmanager
 from datasets import load_dataset
 
 from trl import GRPOConfig, GRPOTrainer, ModelConfig, ScriptArguments, TrlParser
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def query_reward(completions, answer, **kwargs):

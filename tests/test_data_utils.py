@@ -219,7 +219,7 @@ class TestPrepareMultimodalMessages:
             {"role": "assistant", "content": "The current weather in New York is 22.0 degrees Celsius."},
         ]
 
-        messages = prepare_multimodal_messages(messages, images=[])
+        messages = prepare_multimodal_messages(messages)
 
         expected = [
             {
@@ -235,11 +235,34 @@ class TestPrepareMultimodalMessages:
                     }
                 ],
             },
-            {"role": "tool", "name": "get_current_weather", "content": "22.0"},
+            {"role": "tool", "name": "get_current_weather", "content": [{"type": "text", "text": "22.0"}]},
             {
                 "role": "assistant",
                 "content": [{"type": "text", "text": "The current weather in New York is 22.0 degrees Celsius."}],
             },
+        ]
+
+        assert messages == expected
+
+    def test_prepared_image_blocks_without_new_images(self):
+        """Test that existing image payloads are preserved when no new images are provided."""
+        image = Image.new("RGB", (10, 10), color="blue")
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {"role": "assistant", "content": "It is blue."},
+        ]
+
+        messages = prepare_multimodal_messages(messages)
+
+        expected = [
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
         ]
 
         assert messages == expected
@@ -519,11 +542,20 @@ class TestApplyChatTemplate(TrlTestCase):
         "trl-internal-testing/tiny-LlamaForCausalLM-3",
         "trl-internal-testing/tiny-MistralForCausalLM-0.1",
         "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-        "trl-internal-testing/tiny-Phi3ForCausalLM",
+        "trl-internal-testing/tiny-Phi3ForCausalLM-3",
+        "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
         "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
         "trl-internal-testing/tiny-Qwen3ForCausalLM",
+        "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.0.0"),
                 reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
@@ -695,7 +727,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -725,7 +757,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -758,7 +790,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -796,7 +828,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -836,7 +868,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -885,7 +917,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )

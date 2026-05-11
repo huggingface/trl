@@ -13,10 +13,27 @@
 # limitations under the License.
 
 import gc
+import traceback
 from functools import wraps
 
 import pytest
 import torch
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Clear traceback frame locals after a failed test to release CUDA tensor references.
+
+    When a test fails (especially with OOM), the exception traceback holds references to every local variable in every
+    frame on the call stack at the time of failure — including the model, trainer, and all intermediate tensors.
+    gc.collect() cannot free objects that are still reachable through a live traceback, so memory accumulates across
+    reruns (~2 GiB per rerun for Gemma4, reaching 5 × 2.38 GiB = 11.89 GiB after 5 reruns). Clearing the frame locals
+    breaks those reference chains so that the subsequent gc.collect() + empty_cache() in cleanup_gpu can actually
+    reclaim the CUDA memory before the next attempt.
+    """
+    yield
+    if call.when == "call" and call.excinfo is not None:
+        traceback.clear_frames(call.excinfo.tb)
 
 
 # ============================================================================
@@ -46,7 +63,14 @@ def apply_model_revisions(monkeypatch):
     if not MODEL_REVISIONS:
         return
 
-    from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
+    from transformers import (
+        AutoConfig,
+        AutoModelForCausalLM,
+        AutoModelForSequenceClassification,
+        PreTrainedModel,
+        PreTrainedTokenizerBase,
+        ProcessorMixin,
+    )
 
     def create_classmethod_wrapper(original_classmethod):
         # Extract the underlying function from the classmethod
@@ -66,6 +90,9 @@ def apply_model_revisions(monkeypatch):
 
     # Patch all transformers Auto* classes
     for cls in [
+        AutoConfig,
+        AutoModelForCausalLM,
+        AutoModelForSequenceClassification,
         PreTrainedModel,
         PreTrainedTokenizerBase,
         ProcessorMixin,

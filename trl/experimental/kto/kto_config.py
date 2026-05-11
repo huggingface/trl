@@ -33,12 +33,32 @@ class KTOConfig(_BaseConfig):
     command line.
 
     Parameters:
+        > Parameters that control the model
+
+        model_init_kwargs (`dict[str, Any]`, *optional*):
+            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
+            argument of the [`KTOTrainer`] is provided as a string.
+        disable_dropout (`bool`, *optional*, defaults to `True`):
+            Whether to disable dropout in the model and reference model.
+
+        > Parameters that control the data preprocessing
+
+        dataset_num_proc (`int`, *optional*):
+            Number of processes to use for processing the dataset.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
-            to use the default data collator.
-        beta (`float`, *optional*, defaults to `0.1`):
-            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
-            reference model.
+            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left.
+            If `None`, no truncation is applied.
+        precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
+            Whether to precompute the reference model log probabilities for the entire training dataset before
+            training. This allows to save memory during training, as the reference model does not need to be kept in
+            memory.
+        precompute_ref_batch_size (`int`, *optional*):
+            Batch size to use when precomputing reference model log probabilities. This can be set higher than the
+            training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
+            training and `per_device_eval_batch_size` for evaluation.
+
+        > Parameters that control the training
+
         loss_type (`str`, *optional*, defaults to `"kto"`):
             Type of loss to use. Possible values are:
 
@@ -46,24 +66,13 @@ class KTOConfig(_BaseConfig):
                 - `"apo_zero_unpaired"`: Unpaired variant of APO-zero loss from the
                   [APO](https://huggingface.co/papers/2408.06266) paper.
 
+        beta (`float`, *optional*, defaults to `0.1`):
+            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
+            reference model.
         desirable_weight (`float`, *optional*, defaults to `1.0`):
-            Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
+            Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
         undesirable_weight (`float`, *optional*, defaults to `1.0`):
             Undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
-        generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
-            during evaluation.
-        precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
-            Whether to precompute reference model log probabilities for training and evaluation datasets. This is
-            useful when training without the reference model to reduce the total GPU memory needed.
-        model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
-            string.
-        dataset_num_proc: (`int`, *optional*):
-            Number of processes to use for processing the dataset.
-        disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether to disable dropout in the model and reference model.
-
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
     > - `logging_steps`: Defaults to `10` instead of `500`.
@@ -80,22 +89,61 @@ class KTOConfig(_BaseConfig):
         metadata={"help": "The initial learning rate for AdamW."},
     )
 
+    # Parameters that control the model
+    model_init_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
+            "the `KTOTrainer` is provided as a string."
+        },
+    )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Whether to disable dropout in the model and reference model."},
+    )
+
+    # Parameters that control the data preprocessing
+    dataset_num_proc: int | None = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
     max_length: int | None = field(
         default=1024,
-        metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
+        metadata={
+            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
+            "the left. If `None`, no truncation is applied."
+        },
+    )
+    precompute_ref_log_probs: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to precompute the reference model log probabilities for the entire training dataset "
+            "before training. This allows to save memory during training, as the reference model does not need to be "
+            "kept in memory."
+        },
+    )
+    precompute_ref_batch_size: int | None = field(
+        default=None,
+        metadata={
+            "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
+            "than the training batch size to speed up preprocessing. If `None`, defaults to "
+            "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
+        },
+    )
+
+    # Parameters that control the training
+    loss_type: str = field(
+        default="kto",
+        metadata={
+            "help": "Type of loss to use.",
+            "choices": ["kto", "apo_zero_unpaired"],
+        },
     )
     beta: float = field(
         default=0.1,
         metadata={
             "help": "Parameter controlling the deviation from the reference model. Higher β means less deviation from "
             "the reference model."
-        },
-    )
-    loss_type: str = field(
-        default="kto",
-        metadata={
-            "help": "Type of loss to use.",
-            "choices": ["kto", "apo_zero_unpaired"],
         },
     )
     desirable_weight: float = field(
@@ -111,33 +159,4 @@ class KTOConfig(_BaseConfig):
             "help": "Undesirable losses are weighed by this factor to counter unequal number of desirable and "
             "undesirable pairs.",
         },
-    )
-    generate_during_eval: bool = field(
-        default=False,
-        metadata={
-            "help": "If `True`, generates and logs completions from both the model and the reference model to W&B "
-            "during evaluation."
-        },
-    )
-    disable_dropout: bool = field(
-        default=True,
-        metadata={"help": "Whether to disable dropout in the model."},
-    )
-    precompute_ref_log_probs: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to precompute reference model log probabilities for training and evaluation datasets. "
-            "This is useful when training without the reference model to reduce the total GPU memory needed."
-        },
-    )
-    model_init_kwargs: dict[str, Any] | str | None = field(
-        default=None,
-        metadata={
-            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
-            "from a string."
-        },
-    )
-    dataset_num_proc: int | None = field(
-        default=None,
-        metadata={"help": "Number of processes to use for processing the dataset."},
     )

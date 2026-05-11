@@ -47,6 +47,39 @@ class OnlineRolloutMixin:
         return self._generate_and_score_completions(generation_batch)
 
     def _generate(self, prompts):
+        if self.use_vllm:
+            return self._generate_vllm(prompts)
+        return self._generate_transformers(prompts)
+
+    def _generate_vllm(self, prompts):
+        # Sync weights if training step changed
+        if self.state.global_step != self._last_loaded_step:
+            self.vllm_generation.sync_weights()
+            self._last_loaded_step = self.state.global_step
+
+        # Tokenize prompts to token IDs
+        prompts_text = self._apply_prompt_template(prompts)
+        tokenized = self.processing_class(
+            text=prompts_text,
+            return_tensors=None,
+            padding=False,
+            max_length=self.max_prompt_length,
+            truncation=True,
+            add_special_tokens=False,
+        )
+        prompt_ids = tokenized["input_ids"]  # list of list[int]
+
+        # Generate via vLLM — it deduplicates repeated prompts from RepeatSampler internally
+        mode = "train" if self.model.training else "eval"
+        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+        prompt_ids_out, completion_ids_list, _, _ = self.vllm_generation.generate(
+            prompts=prompt_ids,
+            images=None,
+            num_generations=num_generations,
+        )
+        return prompt_ids_out, completion_ids_list
+
+    def _generate_transformers(self, prompts):
         # Keep the generation path aligned with the reference trainers: generate from left-padded prompts,
         # then recover completion token spans by trimming prompt tokens and stopping at the first EOS.
         prompts_text = self._apply_prompt_template(prompts)
@@ -71,15 +104,13 @@ class OnlineRolloutMixin:
             torch.no_grad(),
         ):
             prompt_completion_ids = unwrapped_model.generate(
-                **generate_inputs,
-                generation_config=self.generation_config,
-                disable_compile=True,
+                **generate_inputs, generation_config=self.generation_config
             )
         prompt_ids = generate_inputs["input_ids"]
         prompt_mask = generate_inputs["attention_mask"]
         prompt_length = prompt_ids.size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
-        is_eos = completion_ids == self.eos_token_id
+        is_eos = completion_ids == self._tokenizer.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=completion_ids.device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         seq_idx = torch.arange(is_eos.size(1), device=completion_ids.device).expand(is_eos.size(0), -1)
@@ -142,15 +173,17 @@ class OnlineRolloutMixin:
 
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
-        prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left").to(device=device)
+        prompt_ids = pad(prompt_ids, padding_value=self._tokenizer.pad_token_id, padding_side="left").to(device=device)
         prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left").to(device=device)
         completion_ids = [torch.tensor(ids) for ids in completion_ids_list]
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
-        completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right").to(device=device)
+        completion_ids = pad(completion_ids, padding_value=self._tokenizer.pad_token_id, padding_side="right").to(
+            device=device
+        )
         completion_mask = pad(completion_mask, padding_value=0, padding_side="right").to(device=device)
 
         if self.mask_truncated_completions:
-            eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
@@ -209,7 +242,7 @@ class OnlineRolloutMixin:
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
-        eos_and_pad = [self.eos_token_id, self.pad_token_id]
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())

@@ -9,6 +9,7 @@ on:
 env:
   TQDM_DISABLE: 1
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
   TRL_EXPERIMENTAL_SILENCE: 1
 
 jobs:
@@ -25,7 +26,7 @@ jobs:
     steps:
       - name: Git checkout
         uses: actions/checkout@v6
-        with: { ref: v0.29-release }
+        with: { ref: v1.4-release }
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -38,7 +39,9 @@ jobs:
 
       - name: Install uv
         run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+          curl -LsSf https://astral.sh/uv/install.sh -o uv-installer.sh
+          echo "71625822ec41e0f665ffd5c30c1dd77e135c29c8be6dd2c8b12a7c4178d4e48e  uv-installer.sh" | sha256sum -c -
+          sh uv-installer.sh
 
       - name: Create Python virtual environment
         run: |
@@ -48,10 +51,11 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install ".[dev]"
-          uv pip install -U git+https://github.com/huggingface/accelerate.git
-          uv pip install -U git+https://github.com/huggingface/datasets.git
-          uv pip install -U git+https://github.com/huggingface/transformers.git
+          uv pip install -U \
+            ".[dev]" \
+            "accelerate @ git+https://github.com/huggingface/accelerate.git" \
+            "datasets @ git+https://github.com/huggingface/datasets.git" \
+            "transformers @ git+https://github.com/huggingface/transformers.git"
 
       - name: Test with pytest
         run: |
