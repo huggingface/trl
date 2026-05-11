@@ -486,7 +486,9 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
 
     class DummyStudentModel:
         def __init__(self):
-            self.config = SimpleNamespace(_name_or_path="student", vocab_size=17)
+            config = SimpleNamespace(_name_or_path="student", vocab_size=17)
+            config.get_text_config = lambda: config
+            self.config = config
             self.generation_config = SimpleNamespace(eos_token_id=2)
             self.name_or_path = "student"
 
