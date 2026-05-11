@@ -32,7 +32,7 @@ MODEL_ID = "Qwen/Qwen3-30B-A3B"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = Qwen3MoeConfig(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=151936,
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
@@ -40,6 +40,14 @@ config = Qwen3MoeConfig(
     intermediate_size=32,
     num_experts=4,
     num_experts_per_tok=2,
+    max_position_embeddings=40960,
+    rope_theta=1000000.0,
+    norm_topk_prob=True,
+    bos_token_id=151643,
+    eos_token_id=151645,
+    # Forwarded via kwargs (not Qwen3MoeConfig fields, but PretrainedConfig accepts arbitrary kwargs):
+    head_dim=128,
+    max_window_layers=48,
 )
 model = Qwen3MoeForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
