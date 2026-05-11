@@ -101,7 +101,7 @@ def _scrub_child_env() -> None:
         os.environ.pop(k, None)
 
 
-def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event) -> None:
+def _spawn_stop_watcher(rollout_loop, stop_event) -> None:
     # Daemon thread that translates the parent's mp.Event into the child's
     # asyncio.Event so _run_loops breaks out of its gather.
     def _watch():
@@ -117,10 +117,10 @@ def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event) -> None:
 
 def _child_main(
     loop_kwargs_pkl: bytes,
-    samples_queue: "mp.Queue",
-    model_version_value: "mp.Value",  # noqa: F821
-    stop_event: "mp.Event",
-    child_ready_event: "mp.Event",
+    samples_queue,
+    model_version_value,
+    stop_event,
+    child_ready_event,
 ) -> None:
     _scrub_child_env()
     # `accelerate.logging.get_logger` requires `PartialState()` to have been called.
@@ -158,8 +158,8 @@ class _AsyncRolloutLoop:
         dataset: Dataset,
         reward_funcs: list[Callable[..., list[float]]],
         processing_class: PreTrainedTokenizerBase,
-        rollout_buffer: "mp.Queue",
-        model_version_value: "mp.Value",  # noqa: F821
+        rollout_buffer,
+        model_version_value,
         tools: list[Callable] | None = None,
         environment_factory: Callable[[], object] | None = None,
         num_generations: int = 8,
