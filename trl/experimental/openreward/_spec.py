@@ -52,11 +52,10 @@ logger = logging.getLogger(__name__)
 
 
 def _tool_specs_from_session_list_tools(out: Any) -> list[Any]:
-    """Normalise ``session.list_tools()`` output to a list of tool specs."""
-    from openreward.api.environments.types import ListToolsOutput
+    """Normalise ``session.list_tools()`` / ``environment.list_tools()`` to a flat list.
 
-    if isinstance(out, ListToolsOutput):
-        return list(out.tools)
+    The client SDK (``openreward.api``) returns ``list[ToolSpec]`` directly.
+    """
     return list(out)
 
 
