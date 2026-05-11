@@ -138,7 +138,7 @@ class AsyncRolloutWorker:
         if tools or environment_factory:
             if not is_jmespath_available():
                 raise ImportError(
-                    "Using tools with GRPOTrainer requires the jmespath library for response parsing. Please install "
+                    "Using tools with AsyncRolloutWorker requires the jmespath library for response parsing. Please install "
                     "it with `pip install jmespath` to use this feature."
                 )
             if not supports_tool_calling(processing_class):
