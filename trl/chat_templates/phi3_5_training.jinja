@@ -1,3 +1,8 @@
+{#- Training variant of the Phi-3.5 chat template (see phi3_5.jinja for the original).
+    Modifications vs the original:
+    - Added {% generation %} / {% endgeneration %} around assistant message output to support
+      assistant-only loss masking in SFT training.
+-#}
 {%- for message in messages %}
     {%- if message['role'] == 'system' and message['content'] %}
         {{- '<|system|>\n' + message['content'] + '<|end|>\n' }}
