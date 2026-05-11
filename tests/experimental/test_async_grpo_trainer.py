@@ -14,20 +14,26 @@
 
 import itertools
 import queue
+from unittest.mock import patch
 
 import numpy as np
+import pytest
 import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
+from trl.experimental.async_grpo.async_rollout_worker import AsyncRolloutWorker, RolloutSample
 
 from ..testing_utils import TrlTestCase
 
 
 def dummy_reward_func(completions, **kwargs):
     return [float(hash(c[0]["content"]) % 100) / 100.0 for c in completions]
+
+
+def dummy_tool(x: int) -> int:
+    return x
 
 
 class _StubRolloutWorker:
@@ -137,3 +143,53 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+
+class TestAsyncRolloutWorker(TrlTestCase):
+    def test_init_with_unsupported_template_and_no_tools(self):
+        """tools=None + unrecognized template must NOT call add_response_schema."""
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.chat_template = None
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        with (
+            patch(
+                "trl.experimental.async_grpo.async_rollout_worker.is_vllm_available",
+                return_value=True,
+            ),
+            patch.object(AsyncRolloutWorker, "_wait_for_server_ready_sync"),
+            patch.object(AsyncRolloutWorker, "_init_weight_transfer"),
+        ):
+            # Must not raise ValueError
+            # The gate before add_response_schema must skip it when tools is None.
+            AsyncRolloutWorker(
+                model_name=model_id,
+                dataset=dataset,
+                reward_funcs=[dummy_reward_func],
+                processing_class=tokenizer,
+                tools=None,
+            )
+
+    def test_init_with_unsupported_template_and_tools_fails_at_init(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.chat_template = None
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        with (
+            patch(
+                "trl.experimental.async_grpo.async_rollout_worker.is_vllm_available",
+                return_value=True,
+            ),
+            patch.object(AsyncRolloutWorker, "_wait_for_server_ready_sync"),
+            patch.object(AsyncRolloutWorker, "_init_weight_transfer"),
+            pytest.raises(ValueError, match="does not support tool calling"),
+        ):
+            AsyncRolloutWorker(
+                model_name=model_id,
+                dataset=dataset,
+                reward_funcs=[dummy_reward_func],
+                processing_class=tokenizer,
+                tools=[dummy_tool],
+            )
