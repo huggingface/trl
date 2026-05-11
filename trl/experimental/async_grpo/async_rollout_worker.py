@@ -118,11 +118,10 @@ def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event) -> None:
 def _child_main(
     loop_kwargs_pkl: bytes,
     samples_queue: "mp.Queue",
-    model_version_value: "mp.Value",  # noqa: F821 (mp.Value is a function, not a type)
+    model_version_value: "mp.Value",  # noqa: F821
     stop_event: "mp.Event",
     child_ready_event: "mp.Event",
 ) -> None:
-    """Spawned child entry point. Constructs `_AsyncRolloutLoop` and runs it."""
     _scrub_child_env()
     # `accelerate.logging.get_logger` requires `PartialState()` to have been called.
     from accelerate.state import PartialState
@@ -145,7 +144,7 @@ def _child_main(
 
 
 class _AsyncRolloutLoop:
-    """Asyncio generate + score loops. Lives entirely inside the spawned child process.
+    """Asyncio generate and score loops. Lives entirely inside the spawned child process.
 
     Owns the tokenizer, dataset iterator, reward funcs, environments, and the asyncio event loop. Talks to vLLM via
     `/v1/completions`. Pushes scored `RolloutSample`s into the shared `mp.Queue` (`rollout_buffer`); reads the bumped
@@ -690,6 +689,7 @@ class AsyncRolloutWorker:
 
     @model_version.setter
     def model_version(self, value: int) -> None:
+        # NOTE(@aminediro) Read/write ops like += are not atomic with mp.Value
         with self._model_version_value.get_lock():
             self._model_version_value.value = int(value)
 
