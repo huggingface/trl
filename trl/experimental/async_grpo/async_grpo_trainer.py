@@ -77,28 +77,34 @@ class StepIntervalCallback(TrainerCallback):
 
 
 class _InitialWeightSyncCallback(TrainerCallback):
-    """One-shot: NCCL group setup + cold weight sync to vLLM on train begin."""
+    """Idempotent: NCCL group setup + cold weight sync to vLLM on train begin."""
 
     def __init__(self, trainer: "AsyncGRPOTrainer"):
         self._trainer = trainer
+        self._fired = False
 
     def on_train_begin(self, _args, _state, _control, **_kwargs):
+        if self._fired:
+            return
+        self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
             self._trainer.weight_transfer.init_weight_transfer()
         self._trainer._sync_weight()
-        self._trainer.remove_callback(type(self))
 
 
 class _StartRolloutWorkerCallback(TrainerCallback):
-    """One-shot: starts the rollout worker. Must be registered AFTER `_InitialWeightSyncCallback`."""
+    """Idempotent: starts the rollout worker. Must be registered AFTER `_InitialWeightSyncCallback`."""
 
     def __init__(self, trainer: "AsyncGRPOTrainer"):
         self._trainer = trainer
+        self._fired = False
 
     def on_train_begin(self, _args, _state, _control, **_kwargs):
+        if self._fired:
+            return
+        self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker is not None:
             self._trainer.rollout_worker.start()
-        self._trainer.remove_callback(type(self))
 
 
 class RolloutQueueDataset(torch.utils.data.IterableDataset):
@@ -430,6 +436,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     log_completions=self.args.log_completions,
                     num_completions_to_print=self.args.num_completions_to_print,
                 )
+            # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
             self.rollout_queue = None
