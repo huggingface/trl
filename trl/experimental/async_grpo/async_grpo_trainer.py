@@ -78,6 +78,33 @@ class StepIntervalCallback(TrainerCallback):
             self.fn()
 
 
+class _DeferredWorkerInitCallback(TrainerCallback):
+    """Runs the rollout worker's NCCL weight-transfer setup, the cold weight
+    sync to vLLM, and the worker process start in `on_train_begin` — i.e. AFTER `accelerator.prepare()` has finished.
+
+    Doing this earlier (e.g. in `__init__` or before super's `_inner_training_loop`) binds CUDA IPC pages on rank 0
+    BEFORE DeepSpeed-Z2 runs its `Stage1And2ZeroOptimizer.__init__ → torch.cuda.empty_cache()`, which then traverses
+    the rank-0 allocator and crashes with `cudaErrorIllegalAddress` on the SPG's pages. Deferring is harmless under
+    FSDP2 / single-node so we always defer regardless of backend.
+
+    `on_train_begin` also fires after `Trainer.train()` has restored any checkpoint weights — the cold sync from here
+    still gives vLLM the current policy before the first rollouts.
+    """
+
+    def __init__(self, trainer: "AsyncGRPOTrainer"):
+        self.trainer = trainer
+
+    def on_train_begin(self, _args, _state, _control, **_kwargs):
+        trainer = self.trainer
+        if trainer.accelerator.is_main_process and trainer.rollout_worker is not None:
+            trainer.rollout_worker.init_weight_transfer()
+        # _sync_weight participates from every rank (FSDP2 ranks must drive
+        # full_tensor collectives); only rank 0 actually broadcasts to vLLM.
+        trainer._sync_weight()
+        if trainer.accelerator.is_main_process and trainer.rollout_worker is not None:
+            trainer.rollout_worker.start()
+
+
 class RolloutQueueDataset(torch.utils.data.IterableDataset):
     def __init__(
         self,
@@ -404,6 +431,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Add callbacks
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
+        # `_DeferredWorkerInitCallback` runs `init_weight_transfer → cold sync → worker.start`
+        # AFTER `accelerator.prepare`. Doing those before prepare binds CUDA IPC pages on
+        # rank 0, which DeepSpeed-Z2's `Stage1And2ZeroOptimizer.__init__ → empty_cache()`
+        # then trips on with `cudaErrorIllegalAddress`. The deferred sequence is safe on
+        # FSDP2 / single-node too, so we use it unconditionally.
+        self.add_callback(_DeferredWorkerInitCallback(self))
 
     def get_train_dataloader(self) -> DataLoader:
         if self.accelerator.is_main_process:
@@ -622,13 +655,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
         logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
 
     def _inner_training_loop(self, *args, **kwargs):
-        # Start the rollout worker here (not in __init__) so that checkpoint loading in Trainer.train()
-        # has already restored the model weights. The sequence is: start worker thread → wait for NCCL
-        # init → sync weights to vLLM → begin generation. This ensures vLLM always uses the current
-        # policy before producing any samples (matters for resumed runs, harmless for fresh ones).
-        self._sync_weight()
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.start()
+        # `init_weight_transfer → cold sync → worker.start` are deferred to the
+        # `on_train_begin` callback (see `_DeferredWorkerInitCallback`) so they
+        # run AFTER `accelerator.prepare` — required to avoid the DeepSpeed-Z2
+        # `Stage1And2ZeroOptimizer.__init__ → empty_cache()` crash on rank 0.
+        # `on_train_begin` also fires after Trainer.train() has restored any
+        # checkpoint weights, so vLLM still gets the current policy before the
+        # first rollouts (matters for resumed runs, harmless for fresh ones).
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
