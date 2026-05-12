@@ -20,7 +20,7 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 ## Supported model families
 
-TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3, Gemma, Gemma3, GLM-4-MoE, GPT-OSS, Llama 3 / 3.1 / 3.2, Phi-3, Qwen2.5, Qwen3 (including the Instruct-2507 variant), Qwen3.6.
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3, Gemma, Gemma3, GLM-4-MoE, GPT-OSS, Llama 3 / 3.1 / 3.2, Phi-3, Phi-3.5, Qwen2.5, Qwen3 (including the Instruct-2507 variant), Qwen3.6.
 
 ## Training templates
 
@@ -111,6 +111,12 @@ Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endge
 ### `phi3_training.jinja`
 
 Patched Phi-3 template. Diff vs `phi3.jinja`:
+
+Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `phi3_5_training.jinja`
+
+Patched Phi-3.5 template. Diff vs `phi3_5.jinja`:
 
 Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
