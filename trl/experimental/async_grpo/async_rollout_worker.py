@@ -23,6 +23,9 @@ import time
 import traceback
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from multiprocessing.queues import Queue as MPQueue
+from multiprocessing.sharedctypes import Synchronized as MPValue
+from multiprocessing.synchronize import Event as MPEvent
 from typing import Any, TypeAlias
 
 import aiohttp
@@ -101,11 +104,9 @@ def _scrub_child_env() -> None:
         os.environ.pop(k, None)
 
 
-def _spawn_stop_watcher(rollout_loop, stop_event) -> None:
+def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event: MPEvent) -> None:
     # Daemon thread that translates the parent's mp.Event into the child's
-    # asyncio.Event so _run_loops breaks out of its gather. `_loop` and
-    # `_stop_event` are created in `_AsyncRolloutLoop.__init__`, before this
-    # watcher is spawned, so no race with run().
+    # asyncio.Event so _run_loops breaks out of its gather.
     def _watch():
         stop_event.wait()
         try:
@@ -119,10 +120,10 @@ def _spawn_stop_watcher(rollout_loop, stop_event) -> None:
 
 def _child_main(
     loop_kwargs_pkl: bytes,
-    samples_queue,
-    model_version_value,
-    stop_event,
-    child_ready_event,
+    samples_queue: MPQueue,
+    model_version_value: MPValue,
+    stop_event: MPEvent,
+    child_ready_event: MPEvent,
 ) -> None:
     _scrub_child_env()
     # `accelerate.logging.get_logger` requires `PartialState()` to have been called.
@@ -160,8 +161,8 @@ class _AsyncRolloutLoop:
         dataset: Dataset,
         reward_funcs: list[Callable[..., list[float]]],
         processing_class: PreTrainedTokenizerBase,
-        rollout_buffer,
-        model_version_value,
+        rollout_buffer: MPQueue,
+        model_version_value: MPValue,
         tools: list[Callable] | None = None,
         environment_factory: Callable[[], object] | None = None,
         num_generations: int = 8,
@@ -235,8 +236,6 @@ class _AsyncRolloutLoop:
         self._generation_start_time: float | None = None
         self.session: aiohttp.ClientSession | None = None
 
-        # Created here, not in run(), so _spawn_stop_watcher can rely on them being
-        # present before the parent has a chance to set the mp stop_event.
         self._loop = asyncio.new_event_loop()
         self._stop_event = asyncio.Event()
 
