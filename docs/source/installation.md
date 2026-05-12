@@ -40,3 +40,7 @@ If you want the development install you can replace the pip install with the fol
 ```bash
 pip install -e ".[dev]"
 ```
+
+## Telemetry
+
+TRL sends one anonymous ping per trainer instantiation (rank 0 only, skipped when `CI` is set) containing the trainer class, TRL version, model architecture, PEFT usage, and distributed backend. No user data, paths, or hyperparameters are sent. Opt out with `HF_HUB_DISABLE_TELEMETRY=1` or `HF_HUB_OFFLINE=1`.

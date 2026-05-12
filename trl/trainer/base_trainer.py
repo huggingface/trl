@@ -14,8 +14,11 @@
 
 import os
 
+from accelerate.utils import is_peft_model
+from huggingface_hub.utils import send_telemetry
 from transformers import Trainer, is_wandb_available
 
+from .. import __version__
 from .utils import generate_model_card, get_comet_experiment_url, get_config_model_id, get_trackio_space_url
 
 
@@ -28,6 +31,35 @@ class _BaseTrainer(Trainer):
     _name = "Base"
     _paper = {}
     _template_file = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._send_telemetry()
+
+    def _send_telemetry(self):
+        # Only send from rank 0 to avoid multiplying pings by world size, and skip CI runs so automated tests don't
+        # bias the data. Honors `HF_HUB_DISABLE_TELEMETRY=1` and `HF_HUB_OFFLINE=1` (handled by `send_telemetry`).
+        if not self.accelerator.is_main_process or os.environ.get("CI"):
+            return
+        if self.is_deepspeed_enabled:
+            distributed = "deepspeed"
+        elif self.is_fsdp_enabled:
+            distributed = "fsdp"
+        elif self.accelerator.num_processes > 1:
+            distributed = "ddp"
+        else:
+            distributed = "none"
+        send_telemetry(
+            topic=f"trl/{type(self).__name__}",
+            library_name="trl",
+            library_version=__version__,
+            user_agent={
+                "model_arch": self.model.config.model_type,
+                "peft": str(is_peft_model(self.model)).lower(),
+                "distributed": distributed,
+                "world_size": str(self.accelerator.num_processes),
+            },
+        )
 
     def create_model_card(
         self,
