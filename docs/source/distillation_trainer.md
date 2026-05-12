@@ -38,7 +38,7 @@ config = DistillationConfig(
     lmbda=1.0,                      # fully on-policy (student generates)
     beta=1.0,                       # reverse KL
     # Teacher
-    teacher_model_init_kwargs={"torch_dtype": "bfloat16"},
+    teacher_model_init_kwargs={"dtype": "bfloat16"},
 )
 
 # 3. Train
