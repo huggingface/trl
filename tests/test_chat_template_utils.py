@@ -717,7 +717,7 @@ class TestParseResponse:
         return processing_class
 
     def test_parse_response(self, model_name):
-        if model_name in ("trl-internal-testing/tiny-GptOssForCausalLM") and Version(
+        if model_name in ("trl-internal-testing/tiny-GptOssForCausalLM",) and Version(
             transformers.__version__
         ) < Version("5.5.0"):
             pytest.skip("Upstream bug in response parsing (see #5753; fixed in transformers#45166)")
@@ -812,7 +812,7 @@ class TestParseResponse:
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         ):
             pytest.skip("Llama 3.1 / 3.2 templates only allow a single tool call per assistant turn, with no content.")
-        if model_name in ("trl-internal-testing/tiny-GptOssForCausalLM") and Version(
+        if model_name in ("trl-internal-testing/tiny-GptOssForCausalLM",) and Version(
             transformers.__version__
         ) < Version("5.5.0"):
             pytest.skip("Upstream bug in response parsing (see #5753; fixed in transformers#45166)")
@@ -837,7 +837,7 @@ class TestParseResponse:
         assert parsed == expected
 
     def test_parse_response_tool_call_without_arguments(self, model_name):
-        if model_name in ("trl-internal-testing/tiny-GptOssForCausalLM") and Version(
+        if model_name in ("trl-internal-testing/tiny-GptOssForCausalLM",) and Version(
             transformers.__version__
         ) < Version("5.5.0"):
             pytest.skip("Upstream bug in response parsing (see #5753; fixed in transformers#45166)")
