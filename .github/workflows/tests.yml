@@ -80,7 +80,7 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install ".[dev]" "transformers==5.0.0"
+          uv pip install ".[dev]" "transformers==5.5.0"
 
       - name: Test with pytest
         run: |
@@ -189,7 +189,7 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install ".[test]" "transformers==5.0.0"
+          uv pip install ".[test]" "transformers==5.5.0"
 
       - name: Test with pytest
         run: |
@@ -299,7 +299,7 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install ".[dev]" "transformers==5.0.0"
+          uv pip install ".[dev]" "transformers==5.5.0"
 
       - name: Run distributed smoke tests
         run: |
