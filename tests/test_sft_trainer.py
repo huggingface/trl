@@ -2511,7 +2511,14 @@ class TestPatchChunkedCELMHead:
         "model_id",
         [
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            "trl-internal-testing/tiny-GptOssForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-GptOssForCausalLM",
+                marks=pytest.mark.xfail(
+                    Version("5.0.0") <= Version(transformers.__version__) < Version("5.6.0"),
+                    reason="Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754",
+                    strict=True,
+                ),
+            ),
         ],
     )
     def test_forward_matches_reference_with_aux_loss(self, model_id):
