@@ -53,6 +53,10 @@ Original Llama 3.1 / 3.2 chat templates. Both render tool calls as a single bare
 
 Original Phi-3 chat template.
 
+### `phi3_5.jinja`
+
+Original Phi-3.5 chat template.
+
 ### `qwen2_5.jinja`
 
 Original Qwen2.5 chat template.
@@ -134,6 +138,13 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 ### `phi3_training.jinja`
 
 Patched Phi-3 template. Diff vs `phi3.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
+`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `phi3_5_training.jinja`
+
+Patched Phi-3.5 template. Diff vs `phi3.5.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
 `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
