@@ -14,6 +14,7 @@
 
 import os
 
+import torch
 from accelerate.utils import is_peft_model
 from huggingface_hub.utils import send_telemetry
 from transformers import Trainer, is_wandb_available
@@ -49,6 +50,13 @@ class _BaseTrainer(Trainer):
             distributed = "ddp"
         else:
             distributed = "none"
+        device = self.accelerator.device.type
+        # Each accelerator backend (cuda, xpu, npu, mlu, …) exposes its own `torch.<device>.get_device_name`. MPS and
+        # CPU do not, hence the broad except.
+        try:
+            gpu = getattr(torch, device).get_device_name(0)
+        except (AttributeError, RuntimeError):
+            gpu = ""
         send_telemetry(
             topic=f"trl/{type(self).__name__}",
             library_name="trl",
@@ -58,6 +66,8 @@ class _BaseTrainer(Trainer):
                 "peft": str(is_peft_model(self.model)).lower(),
                 "distributed": distributed,
                 "world_size": str(self.accelerator.num_processes),
+                "device": device,
+                "gpu": gpu,
             },
         )
 
