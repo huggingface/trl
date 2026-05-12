@@ -2037,17 +2037,32 @@ class GRPOTrainer(_BaseTrainer):
         # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
         # Temporarily disable checkpointing to avoid this warning during inference.
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
-            # a full optimizer step (when gradient_accumulation_steps is not a multiple of generate_every)—then the
-            # samples may come from an earlier version of the model. In that case, we need to track old_per_token_logps
-            # for importance sampling. If the steps are aligned, importance sampling isn't necessary and we set
-            # old_per_token_logps to None.
-            # When using vLLM, we always compute old_per_token_logps for importance sampling, it was shown that the
-            # distribution mismatch between vLLM and the training model can be large and harm the training.
+            # Decide whether to compute old_per_token_logps:
+            # 1. "Time-domain old": if optimizer.step() fires *during* this rollout's consumption window
+            #    (i.e., after some micro-step strictly before the last one), the model weights change
+            #    while the rollout is being reused, so we need a logπ snapshot at sampling time.
+            # 2. "Engine-domain old": with vLLM + importance sampling correction, the vLLM sampling
+            #    distribution differs numerically from the training model's distribution even at
+            #    identical weights, so we always need the snapshot.
+            #
+            # For (1) we judge per-rollout instead of relying on the coarser
+            # `gradient_accumulation_steps % generate_every == 0` modulo check. The rollout will be
+            # consumed at micro-steps [a, b]: a = self._step at generation time, b = the last
+            # micro-step before the next generate_every boundary. An optimizer.step() fires after
+            # micro-step s iff (s + 1) % grad_accum == 0; it is harmless when s == b (the rollout is
+            # already fully consumed), so old==current iff [a, b-1] contains no such s, i.e. iff
+            # ⌊a / grad_accum⌋ == ⌊b / grad_accum⌋ (the window does not cross a sync boundary).
+            #
+            # The b formula `((a // generate_every) + 1) * generate_every - 1` reduces to
+            # `a + generate_every - 1` whenever a is aligned to a generate_every boundary (the
+            # default path), and shrinks correctly in partial-cycle cases (e.g., forks that restore
+            # _step from checkpoint while _buffered_inputs is None forces mid-cycle regeneration).
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
-            if self.args.gradient_accumulation_steps % generate_every != 0 or (
-                self.use_vllm and self.vllm_importance_sampling_correction
-            ):
+            a = self._step
+            b = ((a // generate_every) + 1) * generate_every - 1
+            grad_accum = self.args.gradient_accumulation_steps
+            weights_change_mid_rollout = (a // grad_accum) != (b // grad_accum)
+            if weights_change_mid_rollout or (self.use_vllm and self.vllm_importance_sampling_correction):
                 old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,
