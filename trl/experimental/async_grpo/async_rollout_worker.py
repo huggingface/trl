@@ -103,14 +103,16 @@ def _scrub_child_env() -> None:
 
 def _spawn_stop_watcher(rollout_loop, stop_event) -> None:
     # Daemon thread that translates the parent's mp.Event into the child's
-    # asyncio.Event so _run_loops breaks out of its gather.
+    # asyncio.Event so _run_loops breaks out of its gather. `_loop` and
+    # `_stop_event` are created in `_AsyncRolloutLoop.__init__`, before this
+    # watcher is spawned, so no race with run().
     def _watch():
         stop_event.wait()
-        if rollout_loop._loop is not None and rollout_loop._stop_event is not None:
-            try:
-                rollout_loop._loop.call_soon_threadsafe(rollout_loop._stop_event.set)
-            except Exception:
-                pass
+        try:
+            rollout_loop._loop.call_soon_threadsafe(rollout_loop._stop_event.set)
+        except RuntimeError:
+            # Loop already closed (run() returned before stop fired). Nothing to do.
+            pass
 
     threading.Thread(target=_watch, daemon=True, name="grpo-mp-stop-watcher").start()
 
@@ -233,25 +235,24 @@ class _AsyncRolloutLoop:
         self._generation_start_time: float | None = None
         self.session: aiohttp.ClientSession | None = None
 
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._stop_event: asyncio.Event | None = None
+        # Created here, not in run(), so _spawn_stop_watcher can rely on them being
+        # present before the parent has a chance to set the mp stop_event.
+        self._loop = asyncio.new_event_loop()
+        self._stop_event = asyncio.Event()
 
     @property
     def model_version(self) -> int:
         return int(self._model_version_value.value)
 
     def run(self) -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        self._loop = loop
-        self._stop_event = asyncio.Event()
+        asyncio.set_event_loop(self._loop)
         try:
-            loop.run_until_complete(self._run_loops(stop_event=self._stop_event))
+            self._loop.run_until_complete(self._run_loops(stop_event=self._stop_event))
         except Exception as e:
             logger.exception(f"Worker process failed: {e}")
             raise
         finally:
-            loop.close()
+            self._loop.close()
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
         async with aiohttp.ClientSession() as session:
