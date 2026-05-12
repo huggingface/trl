@@ -105,6 +105,14 @@ These scripts demonstrate how to train models with [OpenEnv](openenv) environmen
 | [`examples/scripts/openenv/carla_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla_vlm.py) | GRPO training with CARLA for VLMs with multimodal tool responses (camera images). |
 | [`examples/scripts/openenv/carla_vlm_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla_vlm_gemma.py) | GRPO training with CARLA for Gemma 4 with multimodal tool responses (camera images). |
 
+### OpenReward Scripts
+
+These scripts demonstrate how to train models with [OpenReward](openreward) environments using [`GRPOTrainer`]'s `environment_factory`. See the [OpenReward Integration](openreward) guide for more details.
+
+| File | Description |
+| --- | --- |
+| [`examples/scripts/openreward/seta.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openreward/seta.py) | GRPO training against the SETA ORS environment on the openreward.ai catalog. |
+
 ## Distributed Training (for scripts)
 
 You can run scripts on multiple GPUs with 🤗 Accelerate:
