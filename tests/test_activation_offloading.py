@@ -197,6 +197,34 @@ class TestActivationOffloading(TrlTestCase):
         loss.backward()
 
     @require_torch_accelerator
+    def test_stale_tracker_state_is_cleared_between_forwards(self):
+        """Test that tensors from unused graph branches don't accumulate across steps."""
+
+        class ModelWithUnusedBranch(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.used = nn.Linear(8, 8)
+                self.unused = nn.Linear(8, 8)
+
+            def forward(self, x):
+                return self.used(x).sum(), self.unused(x).sum()
+
+        model = ModelWithUnusedBranch().to(torch_device)
+        offload_ctx = OffloadActivations(use_pin_memory=False, use_streams=False, min_offload_size=1)
+        offload_ctx.update_model_params(model)
+        inp = torch.randn(4, 8, device=torch_device)
+
+        tracker_counts = []
+        for _ in range(3):
+            model.zero_grad(set_to_none=True)
+            with offload_ctx:
+                loss, _ = model(inp)
+            loss.backward()
+            tracker_counts.append(len(offload_ctx.tracker))
+
+        assert tracker_counts == [tracker_counts[0]] * len(tracker_counts)
+
+    @require_torch_accelerator
     def test_parameter_filtering(self):
         """Test that model parameters are filtered during offloading"""
         model = nn.Sequential(nn.Linear(10, 20), nn.Linear(20, 10)).to(torch_device)
