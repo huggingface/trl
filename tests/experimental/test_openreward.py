@@ -139,9 +139,7 @@ class TestOpenRewardSpec(TrlTestCase):
         assert callable(env.hint)
 
     def test_discover_task_tools_false_skips_task_scoped_binding(self, echo_env_url):
-        spec = OpenRewardSpec(
-            echo_env_url, env_name="echoenvironment", num_tasks=1, discover_task_tools=False
-        )
+        spec = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=1, discover_task_tools=False)
         env = spec.environment_factory()
         assert callable(env.echo)
         assert not hasattr(env, "hint")
@@ -217,9 +215,7 @@ class TestOpenRewardSpec(TrlTestCase):
         # tool discovery (ORS /task_tools), regardless of how many tasks are in
         # the dataset. This is the Toolathlon pattern: all tasks expose the same
         # meta-tools, so probing one is sufficient and avoids N sessions.
-        spec = OpenRewardSpec(
-            echo_env_url, env_name="echoenvironment", num_tasks=4, task_tools_discovery_index=0
-        )
+        spec = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=4, task_tools_discovery_index=0)
         env = spec.environment_factory()
         # Shared tool (echo) and task-specific tool (hint) are both bound.
         assert callable(env.echo)
