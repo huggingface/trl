@@ -21,7 +21,7 @@ import queue
 import threading
 import time
 import traceback
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from multiprocessing.queues import Queue as MPQueue
 from multiprocessing.sharedctypes import Synchronized as MPValue
@@ -47,6 +47,21 @@ from trl.trainer.utils import print_prompt_completions_sample
 logger = get_logger(__name__)
 
 Messages: TypeAlias = list[dict[str, str]]
+
+_RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
+
+
+async def _retry_on_http_error(coro_factory: Callable[[], Awaitable], *, max_attempts: int, label: str):
+    """Retry an aiohttp coroutine on transport errors with bounded exponential backoff."""
+    for attempt in range(max_attempts):
+        try:
+            return await coro_factory()
+        except _RETRYABLE_HTTP_ERRORS as e:
+            if attempt >= max_attempts - 1:
+                raise
+            sleep = min(2 ** min(attempt, 4), 16)
+            logger.warning(f"{label} failed ({type(e).__name__}: {e}); retry {attempt + 1}/{max_attempts} in {sleep}s")
+            await asyncio.sleep(sleep)
 
 
 @dataclass(slots=True)
@@ -547,13 +562,11 @@ class _AsyncRolloutLoop:
             "return_token_ids": True,
             "logprobs": 0,
         }
-        while True:
-            try:
-                output = await self._post("/v1/completions", payload, self.request_timeout)
-                break
-            except (aiohttp.ServerDisconnectedError, aiohttp.ClientConnectionError, aiohttp.ClientResponseError):
-                # vLLM drops connections / returns 503 during weight sync (/pause). Retry.
-                await asyncio.sleep(1.0)
+        output = await _retry_on_http_error(
+            lambda: self._post("/v1/completions", payload, self.request_timeout),
+            max_attempts=30,
+            label="vllm /v1/completions",
+        )
         choice = output["choices"][0]
         return choice["token_ids"], choice["logprobs"]["token_logprobs"]
 
@@ -574,13 +587,26 @@ class _AsyncRolloutLoop:
             ]
         )
 
-        # Reward funcs may return None per-sample (unparseable gold); convert to NaN so nansum across
-        # funcs ignores that contribution without zeroing the row.
+        # Reward funcs may return None per-sample (unparseable gold). Convert to NaN. A completion
+        # for which every func returned None is unscorable: nansum would give 0 and the row would
+        # pull the policy away from actually-correct answers.
+        # Mark such rows NaN, then compute advantage on the scorable subset only.
         all_rewards = [[r if r is not None else float("nan") for r in row] for row in all_rewards]
-        rewards = np.nansum(np.array(all_rewards, dtype=float), axis=0)
-        advantages = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
-        reward_mean = float(rewards.mean())
-        reward_std = float(rewards.std())
+        arr = np.array(all_rewards, dtype=float)
+        all_nan_mask = np.all(np.isnan(arr), axis=0)
+        rewards = np.nansum(arr, axis=0)
+        rewards[all_nan_mask] = np.nan
+
+        scored_mask = ~np.isnan(rewards)
+        # NOTE: for NaN reward we set advantage to 0 !
+        advantages = np.zeros_like(rewards)
+        if scored_mask.any():
+            scored = rewards[scored_mask]
+            advantages[scored_mask] = (scored - scored.mean()) / (scored.std() + 1e-8)
+            reward_mean = float(scored.mean())
+            reward_std = float(scored.std())
+        else:
+            reward_mean = reward_std = float("nan")
         logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
 
         total_calls = sum(group.tool_call_counts)
@@ -632,20 +658,16 @@ class _AsyncRolloutLoop:
 
     async def _post(self, path: str, payload: dict, timeout: float, max_retries: int = 3) -> dict:
         client_timeout = aiohttp.ClientTimeout(total=timeout)
-        for attempt in range(max_retries):
-            try:
-                async with self.session.post(
-                    f"{self.vllm_server_url}{path}", json=payload, timeout=client_timeout
-                ) as response:
-                    response.raise_for_status()
-                    content = await response.json()
-                    return content if content else {}
-            except (TimeoutError, asyncio.TimeoutError):
-                if attempt < max_retries - 1:
-                    logger.warning(f"POST {path} timed out (attempt {attempt + 1}/{max_retries}), retrying...")
-                    await asyncio.sleep(1)
-                else:
-                    raise
+
+        async def _do_post():
+            async with self.session.post(
+                f"{self.vllm_server_url}{path}", json=payload, timeout=client_timeout
+            ) as response:
+                response.raise_for_status()
+                content = await response.json()
+                return content if content else {}
+
+        return await _retry_on_http_error(_do_post, max_attempts=max_retries, label=f"POST {path}")
 
 
 class AsyncRolloutWorker:
