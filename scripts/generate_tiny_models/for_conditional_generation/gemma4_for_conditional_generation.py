@@ -55,7 +55,8 @@ vision_config = {
     "default_output_length": IMAGE_TOKENS,  # 70
 }
 
-processor.image_processor.image_seq_length = IMAGE_TOKENS
+processor.image_seq_length = IMAGE_TOKENS  # top-level Gemma4Processor attribute (serialized to processor_config.json)
+processor.image_processor.image_seq_length = IMAGE_TOKENS  # nested Gemma4ImageProcessor attribute
 processor.image_processor.max_soft_tokens = IMAGE_TOKENS
 
 config = AutoConfig.from_pretrained(MODEL_ID)
