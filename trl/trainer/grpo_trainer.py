@@ -564,10 +564,10 @@ class GRPOTrainer(_BaseTrainer):
         self.repetition_penalty = args.repetition_penalty
         self.use_transformers_continuous_batching = args.use_transformers_continuous_batching
         if self.use_transformers_continuous_batching:
-            if not Version(transformers.__version__) >= Version("5.4.0"):
+            if not Version(transformers.__version__) >= Version("5.8.0"):
                 raise ImportError(
-                    "Using `use_transformers_continuous_batching` requires transformers>=5.4.0 (for `return_logprobs` "
-                    "support in `ContinuousBatchingConfig`). Please upgrade with `pip install --upgrade transformers`."
+                    "Using `use_transformers_continuous_batching` requires transformers>=5.8.0. "
+                    "Please upgrade with `pip install --upgrade transformers`."
                 )
             from transformers.generation import ContinuousBatchingConfig
 
@@ -1395,9 +1395,6 @@ class GRPOTrainer(_BaseTrainer):
                     unwrapped_model.to(torch.float16)
                 if self.args.cast_lm_head_to_fp32:
                     unwrapped_model.lm_head.to(torch.float32)
-                # generate_batch() sets _attn_implementation to "paged|X" and never restores it;
-                # save/restore so the training forward pass doesn't crash (upstream bug).
-                base_attn_impl = unwrapped_model.config._attn_implementation.removeprefix("paged|")
                 with torch.inference_mode():
                     all_outputs = unwrapped_model.generate_batch(
                         prompt_ids,
@@ -1405,7 +1402,6 @@ class GRPOTrainer(_BaseTrainer):
                         continuous_batching_config=self.continuous_batching_config,
                         progress_bar=False,
                     )
-                unwrapped_model.config._attn_implementation_internal = base_attn_impl
                 unwrapped_model.train()
             ordered_outputs = [all_outputs[f"req_{i}"] for i in range(len(all_outputs))]
             completion_ids = [output.generated_tokens for output in ordered_outputs]

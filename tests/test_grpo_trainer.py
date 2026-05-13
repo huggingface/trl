@@ -238,8 +238,8 @@ class TestGRPORolloutDispatch:
 
 
 @pytest.mark.skipif(
-    Version(transformers.__version__) < Version("5.4.0"),
-    reason="transformers continuous batching requires transformers>=5.4.0",
+    Version(transformers.__version__) < Version("5.8.0"),
+    reason="transformers continuous batching requires transformers>=5.8.0",
 )
 class TestTransformersContinuousBatchingContract:
     """Contract tests for the transformers CB API that GRPOTrainer depends on."""
@@ -3010,8 +3010,8 @@ class TestGRPOTrainerSlow(TrlTestCase):
     )
     def test_train_with_transformers_continuous_batching(self, model_name):
         """Test that training works with transformers continuous batching (requires GPU)."""
-        if not Version(transformers.__version__) >= Version("5.4.0"):
-            pytest.skip("transformers continuous batching requires transformers>=5.4.0.")
+        if not Version(transformers.__version__) >= Version("5.8.0"):
+            pytest.skip("transformers continuous batching requires transformers>=5.8.0.")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
