@@ -21,7 +21,7 @@ from transformers import AutoConfig, AutoProcessor, Gemma4ForConditionalGenerati
 from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub, smoke_test
 
 
-TRANSFORMERS_VERSION = "5.6.0"
+TRANSFORMERS_VERSION = "5.5.0"  # PR transformers#45192 was backported to 5.5.0 with commit 5135e5e
 check_transformers_version(TRANSFORMERS_VERSION)
 
 MODEL_ID = "google/gemma-4-E2B-it"
