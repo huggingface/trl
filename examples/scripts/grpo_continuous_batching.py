@@ -72,7 +72,7 @@ def extract_answer(text: str) -> str | None:
 
 def correctness_reward(completions, reference_answer, **kwargs):
     rewards = []
-    for completion, ref in zip(completions, reference_answer):
+    for completion, ref in zip(completions, reference_answer, strict=False):
         predicted = extract_answer(completion if isinstance(completion, str) else completion[-1]["content"])
         rewards.append(1.0 if predicted is not None and predicted == ref else 0.0)
     return rewards
