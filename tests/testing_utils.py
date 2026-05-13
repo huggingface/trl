@@ -31,7 +31,6 @@ from transformers.utils import (
 )
 
 from trl.import_utils import (
-    is_jmespath_available,
     is_joblib_available,
     is_liger_kernel_available,
     is_math_verify_available,
@@ -43,7 +42,8 @@ from trl.import_utils import (
 
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
-require_jmespath = pytest.mark.skipif(not is_jmespath_available(), reason="test requires jmespath")
+# require_jmespath = pytest.mark.skipif(not is_jmespath_available(), reason="test requires jmespath")
+require_jmespath = pytest.mark.skipif(False, reason="test requires jmespath")
 require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test requires kernels")
 require_liger_kernel = pytest.mark.skipif(not is_liger_kernel_available(), reason="test requires liger-kernel")
 require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
