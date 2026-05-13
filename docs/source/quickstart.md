@@ -22,14 +22,20 @@ trainer.train()
 ### Group Relative Policy Optimization
 
 ```python
-from trl import GRPOTrainer
 from datasets import load_dataset
+from trl import GRPOConfig, GRPOTrainer
 from trl.rewards import accuracy_reward
+
+training_args = GRPOConfig(
+    output_dir="Qwen2.5-0.5B-Instruct-GRPO",
+    max_completion_length=1024,
+)
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",
     train_dataset=load_dataset("trl-lib/DeepMath-103K", split="train"),
     reward_funcs=accuracy_reward,
+    args=training_args,
 )
 trainer.train()
 ```
