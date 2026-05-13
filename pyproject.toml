@@ -129,7 +129,7 @@ dev = [
     "torchvision",
     "num2words==0.5.14",
     # for response parsing (required for training with tools)
-    "jmespath",
+#    "jmespath",
 ]
 
 [tool.setuptools]
