@@ -26,9 +26,6 @@ check_transformers_version(TRANSFORMERS_VERSION)
 
 MODEL_ID = "google/gemma-4-E2B-it"
 
-processor = AutoProcessor.from_pretrained(MODEL_ID)
-generation_config = GenerationConfig.from_pretrained(MODEL_ID)
-
 # Gemma4 image processor uses aspect-ratio-preserving resizing, not a fixed image size. max_soft_tokens controls
 # the output token budget and must be one of (70, 140, 280, 560, 1120). The smallest value (70) gives
 # max_patches = 70 × pooling_kernel_size² = 70 × 9 = 630, so position_embedding_size must be at least 630.
@@ -36,6 +33,9 @@ generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 # training activations [batch, patches, intermediate_size] to dominate GPU memory and OOM in CI.
 IMAGE_TOKENS = 70  # minimum supported max_soft_tokens
 MAX_PATCHES = IMAGE_TOKENS * 3**2  # 630
+
+processor = AutoProcessor.from_pretrained(MODEL_ID, image_seq_length=IMAGE_TOKENS, max_soft_tokens=IMAGE_TOKENS)
+generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 
 text_config = {
     "num_hidden_layers": 2,
@@ -54,10 +54,6 @@ vision_config = {
     "position_embedding_size": MAX_PATCHES,  # 630
     "default_output_length": IMAGE_TOKENS,  # 70
 }
-
-processor.image_seq_length = IMAGE_TOKENS  # top-level Gemma4Processor attribute (serialized to processor_config.json)
-processor.image_processor.image_seq_length = IMAGE_TOKENS  # nested Gemma4ImageProcessor attribute
-processor.image_processor.max_soft_tokens = IMAGE_TOKENS
 
 config = AutoConfig.from_pretrained(MODEL_ID)
 for k, v in text_config.items():
