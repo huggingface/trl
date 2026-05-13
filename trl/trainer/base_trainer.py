@@ -57,6 +57,9 @@ class _BaseTrainer(Trainer):
             gpu = getattr(torch, device).get_device_name(0)
         except (AttributeError, RuntimeError):
             gpu = ""
+        # Bucketed to avoid fingerprinting individual deployments by their exact cluster size.
+        n = self.accelerator.num_processes
+        world_size = "1" if n == 1 else "2-8" if n <= 8 else "9-64" if n <= 64 else "65+"
         send_telemetry(
             topic=f"trl/{type(self).__name__}",
             library_name="trl",
@@ -65,7 +68,7 @@ class _BaseTrainer(Trainer):
                 "model_arch": self.model.config.model_type,
                 "peft": str(is_peft_model(self.model)).lower(),
                 "distributed": distributed,
-                "world_size": str(self.accelerator.num_processes),
+                "world_size": world_size,
                 "device": device,
                 "gpu": gpu,
             },

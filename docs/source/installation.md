@@ -40,7 +40,3 @@ If you want the development install you can replace the pip install with the fol
 ```bash
 pip install -e ".[dev]"
 ```
-
-## Telemetry
-
-TRL sends usage telemetry to help prioritize features. Disable with `HF_HUB_DISABLE_TELEMETRY=1` or `HF_HUB_OFFLINE=1`.
