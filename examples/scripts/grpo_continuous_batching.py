@@ -15,8 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl[peft]",
-#     "datasets",
-#     "flash-attn",
+#     "kernels",
 # ]
 # ///
 
