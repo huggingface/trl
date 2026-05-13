@@ -96,9 +96,20 @@ def pytest_runtest_makereport(item, call):
     reruns (~2 GiB per rerun for Gemma4, reaching 5 × 2.38 GiB = 11.89 GiB after 5 reruns). Clearing the frame locals
     breaks those reference chains so that the subsequent gc.collect() + empty_cache() in cleanup_gpu can actually
     reclaim the CUDA memory before the next attempt.
+
+    We must walk the full exception chain (__context__ / __cause__) because OOM often fires inside a try/except in the
+    trainer (e.g. gradient scaling, mixed-precision recovery), making the original exception a chained __context__
+    whose traceback — and all its frame locals — would otherwise never be cleared.
     """
     yield
     if call.when == "call" and call.excinfo is not None:
+        exc, seen = call.excinfo.value, set()
+        while exc is not None and id(exc) not in seen:
+            seen.add(id(exc))
+            if exc.__traceback__ is not None:
+                traceback.clear_frames(exc.__traceback__)
+                exc.__traceback__ = None
+            exc = exc.__cause__ if exc.__suppress_context__ else exc.__context__
         traceback.clear_frames(call.excinfo.tb)
 
 
