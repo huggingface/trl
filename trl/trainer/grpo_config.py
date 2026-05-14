@@ -164,8 +164,7 @@ class GRPOConfig(_BaseConfig):
             Whether to use transformers' continuous batching engine for generating completions. Requires
             `transformers>=5.8.0`.
         transformers_continuous_batching_config (`dict`, *optional*):
-            Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`]. `return_logprobs` is always
-            forced to `True`.
+            Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
 
         > Parameters that control the training
 
@@ -888,10 +887,7 @@ class GRPOConfig(_BaseConfig):
     )
     transformers_continuous_batching_config: dict | None = field(
         default=None,
-        metadata={
-            "help": "Keyword arguments for `transformers.generation.ContinuousBatchingConfig`. `return_logprobs` is "
-            "always forced to True."
-        },
+        metadata={"help": "Keyword arguments for `transformers.generation.ContinuousBatchingConfig`."},
     )
 
     # Deprecated parameters

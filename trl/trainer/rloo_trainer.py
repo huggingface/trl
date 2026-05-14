@@ -265,6 +265,11 @@ class RLOOTrainer(_BaseTrainer):
                 get_config_model_id(model.config), truncation_side="left", padding_side="left"
             )
 
+        if args.use_transformers_continuous_batching and isinstance(processing_class, ProcessorMixin):
+            raise ValueError(
+                "`use_transformers_continuous_batching` does not support multimodal models. Use `use_vllm` instead."
+            )
+
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
             self._tokenizer = processing_class.tokenizer
