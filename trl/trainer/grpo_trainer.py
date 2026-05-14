@@ -572,7 +572,6 @@ class GRPOTrainer(_BaseTrainer):
             from transformers.generation import ContinuousBatchingConfig
 
             cb_kwargs = dict(args.transformers_continuous_batching_config or {})
-            cb_kwargs["return_logprobs"] = True
             # The transformers default (0.9) leaves almost no VRAM for the training backward pass;
             # use a training-aware default unless the user has set it explicitly.
             cb_kwargs.setdefault("max_memory_percent", 0.5)
@@ -1402,9 +1401,8 @@ class GRPOTrainer(_BaseTrainer):
                     progress_bar=False,
                 )
                 unwrapped_model.train()
-            ordered_outputs = list(all_outputs.values())
-            completion_ids = [output.generated_tokens for output in ordered_outputs]
-            logprobs = [list(output.logprobs) for output in ordered_outputs]
+            completion_ids = [output.generated_tokens for output in all_outputs.values()]
+            logprobs = None
 
         else:
             # Regular generation path: left-pad token IDs into tensors

@@ -1013,8 +1013,7 @@ class RLOOTrainer(_BaseTrainer):
                     progress_bar=False,
                 )
                 unwrapped_model.train()
-            ordered_outputs = list(all_outputs.values())
-            completion_ids = [output.generated_tokens for output in ordered_outputs]
+            completion_ids = [output.generated_tokens for output in all_outputs.values()]
 
         else:
             # Regular generation path: left-pad token IDs into tensors

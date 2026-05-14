@@ -272,16 +272,6 @@ class TestTransformersContinuousBatchingContract:
             "generate_batch() must accept a continuous_batching_config parameter"
         )
 
-    def test_generate_batch_request_ids_are_sequential(self):
-        import inspect
-
-        from transformers.generation.continuous_batching.continuous_api import ContinuousBatchingManager
-
-        src = inspect.getsource(ContinuousBatchingManager.__init__)
-        assert "_request_counter" in src, (
-            "ContinuousBatchingManager must use _request_counter for request ID generation"
-        )
-
 
 class TestGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
