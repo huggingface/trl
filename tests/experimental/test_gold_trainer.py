@@ -646,7 +646,7 @@ def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
     config = build_config()
     loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
 
-    text = "a😊c"
+    text = "SmolLM3-3B says hi 😊 to 你好."
     [(student_ids, student_offs)] = encode_with_byte_offsets(
         llama_tokenizer.backend_tokenizer, [text], add_special_tokens=False
     )

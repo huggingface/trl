@@ -147,6 +147,33 @@ def _token_piece_byte_len(piece: str) -> int:
     return len(piece)
 
 
+def _bytes_to_unicode() -> dict[int, str]:
+    bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("\u00a1"), ord("\u00ac") + 1))
+    bs += list(range(ord("\u00ae"), ord("\u00ff") + 1))
+    cs = bs[:]
+    n = 0
+    for b in range(256):
+        if b not in bs:
+            bs.append(b)
+            cs.append(256 + n)
+            n += 1
+    return dict(zip(bs, [chr(n) for n in cs], strict=True))
+
+
+_BYTE_LEVEL_DECODER = {ch: b for b, ch in _bytes_to_unicode().items()}
+
+
+def _byte_level_piece_len(piece: str, text_bytes: bytes, start: int) -> int | None:
+    piece_bytes = []
+    for ch in piece:
+        if ch not in _BYTE_LEVEL_DECODER:
+            return None
+        piece_bytes.append(_BYTE_LEVEL_DECODER[ch])
+    if piece_bytes and piece_bytes[0] == ord(" ") and text_bytes[start : start + 1] != b" ":
+        piece_bytes = piece_bytes[1:]
+    return len(piece_bytes)
+
+
 def _split_repeated_byte_offsets(
     byte_offsets: list[tuple[int, int]], tokens: list[str]
 ) -> list[tuple[int, int]]:
@@ -171,12 +198,47 @@ def _split_repeated_byte_offsets(
     return normalized
 
 
+def _normalize_byte_offsets(
+    byte_offsets: list[tuple[int, int]], tokens: list[str], text_bytes: bytes
+) -> list[tuple[int, int]]:
+    byte_offsets = _split_repeated_byte_offsets(byte_offsets, tokens)
+    normalized = []
+    cursor = 0
+
+    for idx, (start, end) in enumerate(byte_offsets):
+        if start == end:
+            normalized.append((cursor, cursor))
+            continue
+
+        piece_len = _byte_level_piece_len(tokens[idx], text_bytes, start)
+        next_start = byte_offsets[idx + 1][0] if idx + 1 < len(byte_offsets) else None
+        has_overlap = start < cursor or (next_start is not None and next_start < end)
+
+        if piece_len is not None and (has_overlap or piece_len == end - start):
+            candidate_start = max(start, cursor)
+            candidate_end = candidate_start + piece_len
+            if candidate_end <= end:
+                start = candidate_start
+                end = candidate_end
+
+        if start < cursor or end < start:
+            raise ValueError(
+                "Tokenizer produced overlapping byte offsets that could not be normalized. "
+                "Cross-tokenizer ULD requires monotonic byte offsets."
+            )
+
+        normalized.append((start, end))
+        cursor = end
+
+    return normalized
+
+
 def encode_with_byte_offsets(backend, texts: list[str], add_special_tokens: bool = False):
     """Encode ``texts`` and return per-text ``(ids, byte_offsets)`` pairs.
 
     Byte offsets are derived from the fast tokenizer's character offsets via an
-    O(N) char-to-byte cumulative table. Repeated spans from byte fallback tokens
-    are split across their byte pieces."""
+    O(N) char-to-byte cumulative table. Overlapping spans from byte-level and
+    byte-fallback tokens are split across their byte pieces."""
     encs = backend.encode_batch(texts, add_special_tokens=add_special_tokens)
     out = []
     for text, enc in zip(texts, encs, strict=True):
@@ -184,7 +246,7 @@ def encode_with_byte_offsets(backend, texts: list[str], add_special_tokens: bool
         for ch in text:
             char_to_byte.append(char_to_byte[-1] + len(ch.encode("utf-8")))
         byte_offsets = [(char_to_byte[s], char_to_byte[e]) for s, e in enc.offsets]
-        byte_offsets = _split_repeated_byte_offsets(byte_offsets, enc.tokens)
+        byte_offsets = _normalize_byte_offsets(byte_offsets, enc.tokens, text.encode("utf-8"))
         out.append((list(enc.ids), byte_offsets))
     return out
 
