@@ -59,7 +59,6 @@ from ..utils import (
     empty_cache,
     encode_with_byte_offsets,
     pad_byte_offsets,
-    token_piece_byte_len,
     truncate_dataset,
 )
 from .gold_config import GOLDConfig
@@ -1048,10 +1047,8 @@ class GOLDTrainer(SFTTrainer):
     def _maybe_add_completion_byte_offsets(self, updated_slice: dict[str, torch.Tensor | Any]) -> None:
         """Attach completion-relative byte offsets for on-policy ULD batches.
 
-        Each generated token's byte span comes from its piece string via ``token_piece_byte_len`` — the same primitive
-        ``_normalize_byte_offsets`` uses on the teacher side. No decode-then-re-encode round-trip; for ByteLevel BPE
-        tokenizers (Llama 3+, SmolLM, Qwen, …) the cumulative spans match what ``encode_with_byte_offsets`` produces on
-        the same text, so student and teacher share a byte coordinate system by construction.
+        Byte offsets come from the same helper used by the off-policy and teacher paths, so cross-tokenizer alignment
+        stays in one coordinate system.
         """
         if not (
             getattr(self, "use_uld_loss", False)
@@ -1061,23 +1058,29 @@ class GOLDTrainer(SFTTrainer):
         ):
             return
 
-        cache = self.__dict__.setdefault("_token_byte_len_cache", {})
         new_input_ids = updated_slice["input_ids"]
         new_labels = updated_slice["labels"]
         seq_len = new_input_ids.shape[1]
+        completion_texts = updated_slice.get("original_completion_text")
+        if completion_texts is None:
+            raise ValueError("On-policy extended ULD batches must include `original_completion_text`.")
+
+        completion_encs = encode_with_byte_offsets(
+            self.processing_class.backend_tokenizer, completion_texts, add_special_tokens=False
+        )
+
         rows: list[list[tuple[int, int]]] = []
-        for row_ids, row_labels in zip(new_input_ids.cpu().tolist(), new_labels.cpu().tolist(), strict=True):
+        for (completion_ids, completion_offsets), row_ids, row_labels in zip(
+            completion_encs, new_input_ids.cpu().tolist(), new_labels.cpu().tolist(), strict=True
+        ):
+            positions = [pos for pos, label in enumerate(row_labels) if label != -100]
+            expected_ids = [row_ids[pos] for pos in positions]
+            if completion_ids != expected_ids:
+                raise ValueError("Generated completion text does not retokenize to the generated completion ids.")
+
             offs: list[tuple[int, int]] = [(0, 0)] * seq_len
-            cumulative = 0
-            for pos, (tid, lbl) in enumerate(zip(row_ids, row_labels, strict=True)):
-                if lbl == -100:
-                    continue
-                if tid not in cache:
-                    piece = self.processing_class.convert_ids_to_tokens([tid])[0]
-                    cache[tid] = token_piece_byte_len(piece)
-                nb = cache[tid]
-                offs[pos] = (cumulative, cumulative + nb)
-                cumulative += nb
+            for pos, offset in zip(positions, completion_offsets, strict=True):
+                offs[pos] = offset
             rows.append(offs)
         updated_slice["byte_offsets"] = torch.tensor(rows, dtype=torch.long, device=new_input_ids.device)
 
@@ -1432,8 +1435,6 @@ class GOLDTrainer(SFTTrainer):
                 result = {}
 
                 if "prompt" in example:  # prompt-completion case
-                    result["original_prompt_text"] = example["prompt"]
-                    result["original_completion_text"] = example["completion"]
                     if is_conversational(example):
                         prompt_text = processing_class.apply_chat_template(
                             example["prompt"],
@@ -1446,9 +1447,13 @@ class GOLDTrainer(SFTTrainer):
                             tokenize=False,
                             **example.get("chat_template_kwargs", {}),
                         )
+                        completion_text = full_text[len(prompt_text) :] if full_text.startswith(prompt_text) else ""
                     else:
                         prompt_text = example["prompt"]
-                        full_text = example["prompt"] + example["completion"]
+                        completion_text = example["completion"]
+                        full_text = prompt_text + completion_text
+                    result["original_prompt_text"] = prompt_text
+                    result["original_completion_text"] = completion_text
                 elif is_conversational(example):
                     messages = example["messages"]
                     user_messages = [msg for msg in messages if msg["role"] != "assistant"]
@@ -1504,6 +1509,23 @@ class GOLDTrainer(SFTTrainer):
                 result["input_ids"] = input_ids
                 result["attention_mask"] = [1] * len(input_ids)
                 result["byte_offsets"] = byte_offsets
+                if "prompt" in example:
+                    result["completion_mask"] = [0] * completion_start + [1] * (len(input_ids) - completion_start)
+                elif assistant_only_loss and is_conversational(example):
+                    processed = processing_class.apply_chat_template(
+                        example["messages"],
+                        return_dict=True,
+                        return_assistant_tokens_mask=True,
+                        **example.get("chat_template_kwargs", {}),
+                    )
+                    if "assistant_masks" not in processed or 1 not in processed["assistant_masks"]:
+                        raise RuntimeError(
+                            "You're using `assistant_only_loss=True`, but at least one example has no assistant "
+                            "tokens. This usually means the chat template does not support assistant masks."
+                        )
+                    if processed["input_ids"] != input_ids:
+                        raise ValueError("Chat-template input ids do not match byte-offset input ids.")
+                    result["assistant_masks"] = processed["assistant_masks"]
                 return result
 
             dataset = dataset.map(
@@ -1835,6 +1857,7 @@ class GOLDTrainer(SFTTrainer):
                 )
             )
             completion_tokens = new_input_ids[idx, length:]
+            completion_tokens = completion_tokens[new_labels[idx, length:] != -100]
             completion_texts.append(
                 self.processing_class.decode(
                     completion_tokens.tolist(),

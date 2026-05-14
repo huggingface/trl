@@ -25,7 +25,6 @@ from trl.experimental.utils import (
     DataCollatorForChatML,
     encode_with_byte_offsets,
     pad_byte_offsets,
-    token_piece_byte_len,
 )
 
 
@@ -297,6 +296,26 @@ def encode_prompt_completion(tokenizer, prompt, completion):
     labels = [-100] * len(prompt_ids) + completion_ids
     byte_offsets = [(0, 0)] * len(prompt_ids) + completion_offsets
     return input_ids, labels, byte_offsets
+
+
+def test_chatml_collator_uses_original_prompt_text_for_tokenized_rows(llama_tokenizer):
+    collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=64)
+    prompt = "Question:"
+    completion = " hello"
+    input_ids, labels, byte_offsets = encode_prompt_completion(llama_tokenizer, prompt, completion)
+
+    batch = collator(
+        [
+            {
+                "input_ids": input_ids,
+                "attention_mask": [1] * len(input_ids),
+                "original_prompt_text": prompt,
+                "byte_offsets": byte_offsets,
+            }
+        ]
+    )
+
+    assert torch.equal(batch["labels"][0, -len(labels) :], torch.tensor(labels, dtype=torch.long))
 
 
 def pad_tokens(ids, pad_id, target_length):
@@ -672,28 +691,28 @@ def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
         assert student_span == teacher_span
 
 
-@pytest.mark.parametrize("tokenizer_fixture", ["smollm_tokenizer", "qwen_tokenizer"])
-def test_token_piece_byte_len_matches_encode_with_byte_offsets(tokenizer_fixture, request):
-    """The trainer's on-policy refresh derives byte offsets from generated token
-    ids via token_piece_byte_len; off-policy / teacher paths derive them via encode_with_byte_offsets. For
-    cross-tokenizer ULD to align consistently across those paths, the two derivations must agree token-by-token on the
-    same source text. This invariant holds for ByteLevel BPE tokenizers (Llama 3+, SmolLM, Qwen, …) — the on-policy
-    path's documented scope."""
-    tokenizer = request.getfixturevalue(tokenizer_fixture)
-    text = "café 你好 hello world 😊 résumé naïve\n## Heading"
+def test_on_policy_completion_byte_offsets_use_tokenizer_offsets(llama_tokenizer, qwen_tokenizer):
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.use_uld_loss = True
+    trainer.teacher_tokenizer = qwen_tokenizer
+    trainer.uld_loss_fn = SimpleNamespace(use_extended_uld=True)
+    trainer.processing_class = llama_tokenizer
 
-    [(ids, expected_offs)] = encode_with_byte_offsets(tokenizer.backend_tokenizer, [text], add_special_tokens=False)
+    completion_text = "hello 你好 😊"
+    [(completion_ids, expected_offsets)] = encode_with_byte_offsets(
+        llama_tokenizer.backend_tokenizer, [completion_text], add_special_tokens=False
+    )
+    input_ids = [llama_tokenizer.pad_token_id] + completion_ids
+    labels = [-100] + completion_ids
+    updated_slice = {
+        "input_ids": torch.tensor([input_ids]),
+        "labels": torch.tensor([labels]),
+        "original_completion_text": [completion_text],
+    }
 
-    pieces = tokenizer.convert_ids_to_tokens(ids)
-    cumulative = 0
-    derived_offs: list[tuple[int, int]] = []
-    for piece in pieces:
-        nb = token_piece_byte_len(piece)
-        derived_offs.append((cumulative, cumulative + nb))
-        cumulative += nb
+    trainer._maybe_add_completion_byte_offsets(updated_slice)
 
-    assert derived_offs == expected_offs
-    assert cumulative == len(text.encode("utf-8"))
+    assert [tuple(offset) for offset in updated_slice["byte_offsets"][0, 1:].tolist()] == expected_offsets
 
 
 def test_merge_probabilities_multiplies_split_tokens():
