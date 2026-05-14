@@ -251,6 +251,7 @@ class ULDLoss(nn.Module):
         self.teacher_temperature = config.uld_teacher_temperature
         self.skip_student_eos = config.uld_skip_student_eos
         self.skip_teacher_eos = config.uld_skip_teacher_eos
+        self.use_extended_uld = config.use_extended_uld
         self.ignore_index = -100
 
         # Add tokenizers for enhanced alignment
@@ -412,22 +413,28 @@ class ULDLoss(nn.Module):
             student_probs = F.softmax(student_answer_logits / self.student_temperature, dim=-1)
             teacher_probs = F.softmax(teacher_answer_logits / self.teacher_temperature, dim=-1)
 
-            # Both sides are completion-relative (the collator shifts student offsets, teacher
-            # offsets are emitted relative to completion_text), so plain slicing gives a shared
-            # byte coordinate system for alignment.
-            s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
-            t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
-            student_groups, teacher_groups = self._align_by_byte_offsets(s_answer, t_answer)
-
             # Pass actual input_ids so split-token groups can multiply conditional probabilities.
             student_token_ids = student_input_ids[i, student_start : student_start + student_size].tolist()
             teacher_token_ids = teacher_input_ids[i, teacher_start : teacher_start + teacher_size].tolist()
-            student_aligned = self._merge_probabilities_with_alignment_groups(
-                student_probs, student_groups, student_token_ids
-            )
-            teacher_aligned = self._merge_probabilities_with_alignment_groups(
-                teacher_probs, teacher_groups, teacher_token_ids
-            )
+
+            if self.use_extended_uld:
+                if student_byte_offsets is None or teacher_byte_offsets is None:
+                    raise ValueError("Byte offsets are required when `use_extended_uld=True`.")
+
+                # Both sides are completion-relative, so plain slicing gives a shared byte coordinate system.
+                s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
+                t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
+                student_groups, teacher_groups = self._align_by_byte_offsets(s_answer, t_answer)
+                student_aligned = self._merge_probabilities_with_alignment_groups(
+                    student_probs, student_groups, student_token_ids
+                )
+                teacher_aligned = self._merge_probabilities_with_alignment_groups(
+                    teacher_probs, teacher_groups, teacher_token_ids
+                )
+            else:
+                min_length = min(len(student_token_ids), len(teacher_token_ids))
+                student_aligned = student_probs[:min_length, :]
+                teacher_aligned = teacher_probs[:min_length, :]
 
             # Apply ULD loss computation
             if self.use_hybrid_loss and self._vocab_mapping is not None:
@@ -1033,38 +1040,36 @@ class GOLDTrainer(SFTTrainer):
 
         return new_attention_mask, new_labels
 
-    def _token_byte_length(self, token_id: int) -> int:
-        """Cached UTF-8 byte length of a single token's decoded form. For ByteLevel
-        BPE tokenizers (Llama, Qwen, SmolLM, …) per-token decoding is context-free,
-        so per-token byte lengths sum to the byte length of the decoded sequence."""
-        cache = self.__dict__.setdefault("_token_byte_len_cache", {})
-        if token_id not in cache:
-            text = self.processing_class.decode(
-                [token_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
-            )
-            cache[token_id] = len(text.encode("utf-8"))
-        return cache[token_id]
+    def _maybe_add_completion_byte_offsets(self, updated_slice: dict[str, torch.Tensor | Any]) -> None:
+        """Attach completion-relative byte offsets for on-policy ULD batches."""
+        if not (
+            getattr(self, "use_uld_loss", False)
+            and self.teacher_tokenizer is not None
+            and self.uld_loss_fn is not None
+            and self.uld_loss_fn.use_extended_uld
+        ):
+            return
 
-    def _refresh_byte_offsets(self, updated_slice: dict[str, torch.Tensor | Any]) -> None:
-        """Emit per-token byte offsets for an on-policy slice, computed directly
-        from generated token ids via cached per-token byte lengths. No decode-
-        then-re-encode round-trip — the offsets are guaranteed to describe the
-        same tokens the model's logits do."""
-        new_input_ids = updated_slice["input_ids"]
         new_labels = updated_slice["labels"]
-        seq_len = new_input_ids.shape[1]
+        completion_texts = updated_slice["original_completion_text"]
+        completion_encs = encode_with_byte_offsets(
+            self.processing_class.backend_tokenizer, completion_texts, add_special_tokens=False
+        )
+
+        seq_len = new_labels.shape[1]
         rows: list[list[tuple[int, int]]] = []
-        for row_ids, row_labels in zip(new_input_ids.cpu().tolist(), new_labels.cpu().tolist()):
+        for row_labels, (_, completion_offsets) in zip(new_labels.cpu().tolist(), completion_encs, strict=True):
+            completion_positions = [idx for idx, label in enumerate(row_labels) if label != -100]
+            if len(completion_positions) != len(completion_offsets):
+                raise ValueError(
+                    "Could not align generated completion text back to student tokens for byte-offset ULD. "
+                    "This can happen if decoding and re-tokenizing the generated completion changes token boundaries."
+                )
             offs: list[tuple[int, int]] = [(0, 0)] * seq_len
-            cumulative = 0
-            for pos, (tid, lbl) in enumerate(zip(row_ids, row_labels)):
-                if lbl == -100:
-                    continue
-                nb = self._token_byte_length(tid)
-                offs[pos] = (cumulative, cumulative + nb)
-                cumulative += nb
+            for pos, offset in zip(completion_positions, completion_offsets, strict=True):
+                offs[pos] = offset
             rows.append(offs)
-        updated_slice["byte_offsets"] = torch.tensor(rows, dtype=torch.long, device=new_input_ids.device)
+        updated_slice["byte_offsets"] = torch.tensor(rows, dtype=torch.long, device=new_labels.device)
 
     @profiling_decorator
     def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any], buffer_steps: int):
@@ -1095,6 +1100,16 @@ class GOLDTrainer(SFTTrainer):
                         "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
                         "Use the default DataCollatorForChatML (or a collator that emits these fields) so the "
                         "teacher tokenizer has source text to align against."
+                    )
+                if (
+                    self.use_uld_loss
+                    and self.teacher_tokenizer is not None
+                    and self.uld_loss_fn.use_extended_uld
+                    and "byte_offsets" not in slice_inputs
+                ):
+                    raise ValueError(
+                        "Off-policy batch missing `byte_offsets`. Use the default DataCollatorForChatML or set "
+                        "`use_extended_uld=False`."
                     )
 
                 self._buffered_inputs[i] = slice_inputs
@@ -1177,7 +1192,7 @@ class GOLDTrainer(SFTTrainer):
                 updated_slice["labels"] = new_labels
                 updated_slice["original_prompt_text"] = prompt_texts
                 updated_slice["original_completion_text"] = completion_texts
-                self._refresh_byte_offsets(updated_slice)
+                self._maybe_add_completion_byte_offsets(updated_slice)
 
                 self._buffered_inputs[slice_idx] = updated_slice
                 self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
@@ -1301,7 +1316,7 @@ class GOLDTrainer(SFTTrainer):
             updated_slice["labels"] = new_labels
             updated_slice["original_prompt_text"] = prompt_txts_with_special
             updated_slice["original_completion_text"] = completion_texts
-            self._refresh_byte_offsets(updated_slice)
+            self._maybe_add_completion_byte_offsets(updated_slice)
 
             self._buffered_inputs[slice_idx] = updated_slice
             self._buffered_text_logs[slice_idx] = (prompt_txts, completion_texts)
@@ -1318,6 +1333,12 @@ class GOLDTrainer(SFTTrainer):
         """Preserve original text fields for ULD when needed."""
         column_names = list(next(iter(dataset)).keys())
         is_processed = "input_ids" in column_names
+
+        if packing and self.use_uld_loss and self.teacher_tokenizer is not None:
+            raise ValueError(
+                "Packing is not supported with cross-tokenizer ULD because byte-offset alignment is defined per "
+                "prompt/completion example."
+            )
 
         if not is_processed or (self.use_uld_loss and self.teacher_tokenizer is not None):
             return self._prepare_dataset_with_original_text(
@@ -1397,7 +1418,6 @@ class GOLDTrainer(SFTTrainer):
                 come from the same backend call — the tokenization the model trains on is the
                 same one whose offsets feed cross-tokenizer ULD alignment.
                 """
-                del dataset_text_field, assistant_only_loss  # consumed only by the LM path below
                 backend = processing_class.backend_tokenizer
                 result = {}
 
@@ -1514,6 +1534,7 @@ class GOLDTrainer(SFTTrainer):
                     "assistant_masks",
                     "original_prompt_text",
                     "original_completion_text",
+                    "byte_offsets",
                 }
                 dataset = dataset.select_columns(required_columns.intersection(dataset.column_names))
 
@@ -1725,6 +1746,10 @@ class GOLDTrainer(SFTTrainer):
             if self.teacher_tokenizer.pad_token_id is not None:
                 teacher_labels[teacher_labels == self.teacher_tokenizer.pad_token_id] = -100
 
+            student_byte_offsets = inputs.get("byte_offsets")
+            if self.uld_loss_fn.use_extended_uld and student_byte_offsets is None:
+                raise ValueError("Input batches must include `byte_offsets` when `use_extended_uld=True`.")
+
             loss = self.uld_loss_fn(
                 student_logits=outputs_student.logits,
                 teacher_logits=outputs_teacher.logits,
@@ -1732,7 +1757,7 @@ class GOLDTrainer(SFTTrainer):
                 teacher_labels=teacher_labels,
                 student_input_ids=inputs["input_ids"],
                 teacher_input_ids=teacher_input_ids,
-                student_byte_offsets=inputs["byte_offsets"],
+                student_byte_offsets=student_byte_offsets,
                 teacher_byte_offsets=teacher_completion_byte_offsets,
             )
 

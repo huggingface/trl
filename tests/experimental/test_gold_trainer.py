@@ -236,6 +236,7 @@ def build_config(**overrides):
         uld_teacher_temperature=1.0,
         uld_skip_student_eos=False,
         uld_skip_teacher_eos=False,
+        use_extended_uld=True,
         uld_use_hybrid_loss=False,
         uld_hybrid_matched_weight=None,
         uld_hybrid_unmatched_weight=None,
@@ -645,7 +646,7 @@ def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
     config = build_config()
     loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
 
-    text = "SmolLM3-3B is smaller than Llama 3.2 but still capable."
+    text = "a😊c"
     [(student_ids, student_offs)] = encode_with_byte_offsets(
         llama_tokenizer.backend_tokenizer, [text], add_special_tokens=False
     )
@@ -658,6 +659,10 @@ def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
     assert len(student_groups) == len(teacher_groups)
     assert sorted(idx for group in student_groups for idx in group) == list(range(len(student_ids)))
     assert sorted(idx for group in teacher_groups for idx in group) == list(range(len(teacher_ids)))
+    for student_group, teacher_group in zip(student_groups, teacher_groups, strict=True):
+        student_span = (student_offs[student_group[0]][0], student_offs[student_group[-1]][1])
+        teacher_span = (teacher_offs[teacher_group[0]][0], teacher_offs[teacher_group[-1]][1])
+        assert student_span == teacher_span
 
 
 def test_merge_probabilities_multiplies_split_tokens():
@@ -680,6 +685,29 @@ def test_merge_probabilities_multiplies_split_tokens():
     # Expected unnormalized: [0.6 * 0.5, 0.3 * 0.5, 0.1 * 0.5] = [0.3, 0.15, 0.05]
 
     torch.testing.assert_close(merged[0], expected)
+
+
+def test_uldloss_positional_mode_does_not_require_byte_offsets():
+    config = build_config(use_extended_uld=False)
+    loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+
+    student_logits = torch.randn(1, 4, 5)
+    teacher_logits = torch.randn(1, 4, 6)
+    student_labels = torch.tensor([[-100, 1, 2, -100]])
+    teacher_labels = torch.tensor([[-100, 3, 4, -100]])
+    student_input_ids = torch.tensor([[0, 1, 2, 0]])
+    teacher_input_ids = torch.tensor([[0, 3, 4, 0]])
+
+    loss = loss_fn(
+        student_logits=student_logits,
+        teacher_logits=teacher_logits,
+        student_labels=student_labels,
+        teacher_labels=teacher_labels,
+        student_input_ids=student_input_ids,
+        teacher_input_ids=teacher_input_ids,
+    )
+
+    assert torch.isfinite(loss)
 
 
 def test_initialize_vocabulary_mapping_contains_common_tokens(llama_tokenizer, qwen_tokenizer):

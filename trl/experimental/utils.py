@@ -139,15 +139,44 @@ def pad_byte_offsets(offsets: list[tuple[int, int]], target_length: int, padding
     return torch.cat([pad_block, offs], dim=0) if padding_side == "left" else torch.cat([offs, pad_block], dim=0)
 
 
+def _token_piece_byte_len(piece: str) -> int:
+    if piece == "\u2581":
+        return 0
+    if len(piece) == 6 and piece.startswith("<0x") and piece.endswith(">"):
+        return 1
+    return len(piece)
+
+
+def _split_repeated_byte_offsets(
+    byte_offsets: list[tuple[int, int]], tokens: list[str]
+) -> list[tuple[int, int]]:
+    """Split repeated char-derived spans for byte-fallback or byte-level tokens."""
+    normalized = list(byte_offsets)
+    i = 0
+    while i < len(byte_offsets):
+        j = i + 1
+        while j < len(byte_offsets) and byte_offsets[j] == byte_offsets[i]:
+            j += 1
+
+        if j - i > 1:
+            start, end = byte_offsets[i]
+            piece_lengths = [_token_piece_byte_len(token) for token in tokens[i:j]]
+            if sum(piece_lengths) == end - start:
+                cursor = start
+                for offset_idx, length in enumerate(piece_lengths, start=i):
+                    normalized[offset_idx] = (cursor, cursor + length)
+                    cursor += length
+
+        i = j
+    return normalized
+
+
 def encode_with_byte_offsets(backend, texts: list[str], add_special_tokens: bool = False):
     """Encode ``texts`` and return per-text ``(ids, byte_offsets)`` pairs.
 
     Byte offsets are derived from the fast tokenizer's character offsets via an
-    O(N) char-to-byte cumulative table, so this works on any stable tokenizers
-    release without depending on a byte-native encode method. Tokens spanning
-    boundaries get the same span the char-offset path reports, just in byte
-    coordinates — which is the shared coordinate system cross-tokenizer
-    alignment needs."""
+    O(N) char-to-byte cumulative table. Repeated spans from byte fallback tokens
+    are split across their byte pieces."""
     encs = backend.encode_batch(texts, add_special_tokens=add_special_tokens)
     out = []
     for text, enc in zip(texts, encs, strict=True):
@@ -155,6 +184,7 @@ def encode_with_byte_offsets(backend, texts: list[str], add_special_tokens: bool
         for ch in text:
             char_to_byte.append(char_to_byte[-1] + len(ch.encode("utf-8")))
         byte_offsets = [(char_to_byte[s], char_to_byte[e]) for s, e in enc.offsets]
+        byte_offsets = _split_repeated_byte_offsets(byte_offsets, enc.tokens)
         out.append((list(enc.ids), byte_offsets))
     return out
 
