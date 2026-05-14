@@ -1395,13 +1395,12 @@ class GRPOTrainer(_BaseTrainer):
                     unwrapped_model.to(torch.float16)
                 if self.args.cast_lm_head_to_fp32:
                     unwrapped_model.lm_head.to(torch.float32)
-                with torch.inference_mode():
-                    all_outputs = unwrapped_model.generate_batch(
-                        prompt_ids,
-                        generation_config=self.generation_config,
-                        continuous_batching_config=self.continuous_batching_config,
-                        progress_bar=False,
-                    )
+                all_outputs = unwrapped_model.generate_batch(
+                    prompt_ids,
+                    generation_config=self.generation_config,
+                    continuous_batching_config=self.continuous_batching_config,
+                    progress_bar=False,
+                )
                 unwrapped_model.train()
             ordered_outputs = [all_outputs[f"req_{i}"] for i in range(len(all_outputs))]
             completion_ids = [output.generated_tokens for output in ordered_outputs]
