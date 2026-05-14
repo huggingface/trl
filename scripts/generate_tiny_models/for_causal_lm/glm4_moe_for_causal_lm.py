@@ -42,7 +42,6 @@ config = Glm4MoeConfig(
     head_dim=2,
     n_routed_experts=4,
     num_experts_per_tok=2,
-    num_experts_per_tok=2,
     attention_bias=True,
     eos_token_id=[151329, 151336, 151338],
     pad_token_id=151329,
