@@ -141,15 +141,13 @@ def pad_byte_offsets(offsets: list[tuple[int, int]], target_length: int, padding
 
 def token_piece_byte_len(piece: str) -> int:
     """UTF-8 byte length of a single token's piece string. Works for ByteLevel BPE
-    (each piece char maps to one source byte), SentencePiece byte-fallback
-    (``<0xXX>`` tokens represent one byte each), and the bare SentencePiece
-    word-start marker ``\u2581``.
+    (each piece char maps to one source byte), SentencePiece byte-fallback (``<0xXX>`` tokens represent one byte each),
+    and the bare SentencePiece word-start marker ``\u2581``.
 
-    Used both by the off-policy / teacher path (via
-    :func:`encode_with_byte_offsets` to disambiguate overlapping char-derived
-    spans) and by the on-policy path (cumulative byte offsets per generated
-    token) \u2014 keeping the byte-length-per-piece convention identical on both
-    sides is what makes student and teacher offsets share a coordinate system."""
+    Used both by the off-policy / teacher path (via :func:`encode_with_byte_offsets` to disambiguate overlapping
+    char-derived spans) and by the on-policy path (cumulative byte offsets per generated token) \u2014 keeping the
+    byte-length-per-piece convention identical on both sides is what makes student and teacher offsets share a
+    coordinate system."""
     if piece == "\u2581":
         return 0
     if len(piece) == 6 and piece.startswith("<0x") and piece.endswith(">"):
@@ -184,9 +182,7 @@ def _byte_level_piece_len(piece: str, text_bytes: bytes, start: int) -> int | No
     return len(piece_bytes)
 
 
-def _split_repeated_byte_offsets(
-    byte_offsets: list[tuple[int, int]], tokens: list[str]
-) -> list[tuple[int, int]]:
+def _split_repeated_byte_offsets(byte_offsets: list[tuple[int, int]], tokens: list[str]) -> list[tuple[int, int]]:
     """Split repeated char-derived spans for byte-fallback or byte-level tokens."""
     normalized = list(byte_offsets)
     i = 0
@@ -246,9 +242,8 @@ def _normalize_byte_offsets(
 def encode_with_byte_offsets(backend, texts: list[str], add_special_tokens: bool = False):
     """Encode ``texts`` and return per-text ``(ids, byte_offsets)`` pairs.
 
-    Byte offsets are derived from the fast tokenizer's character offsets via an
-    O(N) char-to-byte cumulative table. Overlapping spans from byte-level and
-    byte-fallback tokens are split across their byte pieces."""
+    Byte offsets are derived from the fast tokenizer's character offsets via an O(N) char-to-byte cumulative table.
+    Overlapping spans from byte-level and byte-fallback tokens are split across their byte pieces."""
     encs = backend.encode_batch(texts, add_special_tokens=add_special_tokens)
     out = []
     for text, enc in zip(texts, encs, strict=True):
@@ -324,7 +319,9 @@ class DataCollatorForChatML:
                     current_prompt_len = completion_start_idx_full
 
                 # Make completion-relative: prompt positions zeroed, completion offsets shifted.
-                completion_offs = [(s - prompt_byte_len, e - prompt_byte_len) for s, e in sample_offs[current_prompt_len:]]
+                completion_offs = [
+                    (s - prompt_byte_len, e - prompt_byte_len) for s, e in sample_offs[current_prompt_len:]
+                ]
                 sample_offs = [(0, 0)] * current_prompt_len + completion_offs
 
                 input_ids.append(sample_ids)

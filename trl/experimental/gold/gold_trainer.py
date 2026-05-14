@@ -14,7 +14,6 @@
 
 import random
 import textwrap
-import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -171,9 +170,8 @@ def build_teacher_inputs_from_texts(
 
     Returns ``(input_ids, labels, attention_mask, byte_offsets)``. ``byte_offsets`` is a ``[batch, seq, 2]`` tensor of
     UTF-8 byte ``(start, end)`` for each token: prompt and padding positions are filled with ``(0, 0)``; completion
-    tokens carry offsets relative to the corresponding ``completion_text``; the appended EOS gets
-    ``(content_len, content_len)``. Byte offsets are derived from the fast tokenizer's char offsets via
-    ``encode_with_byte_offsets``.
+    tokens carry offsets relative to the corresponding ``completion_text``; the appended EOS gets ``(content_len,
+    content_len)``. Byte offsets are derived from the fast tokenizer's char offsets via ``encode_with_byte_offsets``.
     """
 
     pad_token_id = tokenizer.pad_token_id
@@ -1050,12 +1048,10 @@ class GOLDTrainer(SFTTrainer):
     def _maybe_add_completion_byte_offsets(self, updated_slice: dict[str, torch.Tensor | Any]) -> None:
         """Attach completion-relative byte offsets for on-policy ULD batches.
 
-        Each generated token's byte span comes from its piece string via
-        ``token_piece_byte_len`` — the same primitive ``_normalize_byte_offsets``
-        uses on the teacher side. No decode-then-re-encode round-trip; for
-        ByteLevel BPE tokenizers (Llama 3+, SmolLM, Qwen, …) the cumulative
-        spans match what ``encode_with_byte_offsets`` produces on the same text,
-        so student and teacher share a byte coordinate system by construction.
+        Each generated token's byte span comes from its piece string via ``token_piece_byte_len`` — the same primitive
+        ``_normalize_byte_offsets`` uses on the teacher side. No decode-then-re-encode round-trip; for ByteLevel BPE
+        tokenizers (Llama 3+, SmolLM, Qwen, …) the cumulative spans match what ``encode_with_byte_offsets`` produces on
+        the same text, so student and teacher share a byte coordinate system by construction.
         """
         if not (
             getattr(self, "use_uld_loss", False)
@@ -1425,12 +1421,12 @@ class GOLDTrainer(SFTTrainer):
 
             def tokenize_with_original_text(example, processing_class, dataset_text_field, assistant_only_loss):
                 """Tokenize the chat-template-rendered message and emit:
-                    input_ids, attention_mask, original_prompt_text, original_completion_text,
-                    byte_offsets (per-token, completion-relative).
+                    input_ids, attention_mask, original_prompt_text, original_completion_text, byte_offsets (per-token,
+                    completion-relative).
 
-                Encoding goes through ``encode_with_byte_offsets`` so byte offsets and input_ids
-                come from the same backend call — the tokenization the model trains on is the
-                same one whose offsets feed cross-tokenizer ULD alignment.
+                Encoding goes through ``encode_with_byte_offsets`` so byte offsets and input_ids come from the same
+                backend call — the tokenization the model trains on is the same one whose offsets feed cross-tokenizer
+                ULD alignment.
                 """
                 backend = processing_class.backend_tokenizer
                 result = {}

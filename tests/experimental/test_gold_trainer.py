@@ -283,7 +283,9 @@ def encode_prompt_completion(tokenizer, prompt, completion):
     DataCollatorForChatML and build_teacher_inputs_from_texts.
     """
     prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
-    [(enc_ids, enc_offsets)] = encode_with_byte_offsets(tokenizer.backend_tokenizer, [completion], add_special_tokens=False)
+    [(enc_ids, enc_offsets)] = encode_with_byte_offsets(
+        tokenizer.backend_tokenizer, [completion], add_special_tokens=False
+    )
     completion_ids = list(enc_ids)
     completion_offsets = list(enc_offsets)
     content_len = len(completion.encode("utf-8"))
@@ -673,17 +675,14 @@ def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
 @pytest.mark.parametrize("tokenizer_fixture", ["smollm_tokenizer", "qwen_tokenizer"])
 def test_token_piece_byte_len_matches_encode_with_byte_offsets(tokenizer_fixture, request):
     """The trainer's on-policy refresh derives byte offsets from generated token
-    ids via token_piece_byte_len; off-policy / teacher paths derive them via
-    encode_with_byte_offsets. For cross-tokenizer ULD to align consistently
-    across those paths, the two derivations must agree token-by-token on the
-    same source text. This invariant holds for ByteLevel BPE tokenizers
-    (Llama 3+, SmolLM, Qwen, …) — the on-policy path's documented scope."""
+    ids via token_piece_byte_len; off-policy / teacher paths derive them via encode_with_byte_offsets. For
+    cross-tokenizer ULD to align consistently across those paths, the two derivations must agree token-by-token on the
+    same source text. This invariant holds for ByteLevel BPE tokenizers (Llama 3+, SmolLM, Qwen, …) — the on-policy
+    path's documented scope."""
     tokenizer = request.getfixturevalue(tokenizer_fixture)
     text = "café 你好 hello world 😊 résumé naïve\n## Heading"
 
-    [(ids, expected_offs)] = encode_with_byte_offsets(
-        tokenizer.backend_tokenizer, [text], add_special_tokens=False
-    )
+    [(ids, expected_offs)] = encode_with_byte_offsets(tokenizer.backend_tokenizer, [text], add_special_tokens=False)
 
     pieces = tokenizer.convert_ids_to_tokens(ids)
     cumulative = 0
