@@ -1402,7 +1402,7 @@ class GRPOTrainer(_BaseTrainer):
                     progress_bar=False,
                 )
                 unwrapped_model.train()
-            ordered_outputs = [all_outputs[f"req_{i}"] for i in range(len(all_outputs))]
+            ordered_outputs = list(all_outputs.values())
             completion_ids = [output.generated_tokens for output in ordered_outputs]
             logprobs = [list(output.logprobs) for output in ordered_outputs]
 
