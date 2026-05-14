@@ -55,7 +55,14 @@ from ...trainer.utils import (
     pad,
     split_tensor_dict,
 )
-from ..utils import DataCollatorForChatML, empty_cache, encode_with_byte_offsets, pad_byte_offsets, truncate_dataset
+from ..utils import (
+    DataCollatorForChatML,
+    empty_cache,
+    encode_with_byte_offsets,
+    pad_byte_offsets,
+    token_piece_byte_len,
+    truncate_dataset,
+)
 from .gold_config import GOLDConfig
 
 
@@ -1041,7 +1048,15 @@ class GOLDTrainer(SFTTrainer):
         return new_attention_mask, new_labels
 
     def _maybe_add_completion_byte_offsets(self, updated_slice: dict[str, torch.Tensor | Any]) -> None:
-        """Attach completion-relative byte offsets for on-policy ULD batches."""
+        """Attach completion-relative byte offsets for on-policy ULD batches.
+
+        Each generated token's byte span comes from its piece string via
+        ``token_piece_byte_len`` — the same primitive ``_normalize_byte_offsets``
+        uses on the teacher side. No decode-then-re-encode round-trip; for
+        ByteLevel BPE tokenizers (Llama 3+, SmolLM, Qwen, …) the cumulative
+        spans match what ``encode_with_byte_offsets`` produces on the same text,
+        so student and teacher share a byte coordinate system by construction.
+        """
         if not (
             getattr(self, "use_uld_loss", False)
             and self.teacher_tokenizer is not None
@@ -1050,26 +1065,25 @@ class GOLDTrainer(SFTTrainer):
         ):
             return
 
+        cache = self.__dict__.setdefault("_token_byte_len_cache", {})
+        new_input_ids = updated_slice["input_ids"]
         new_labels = updated_slice["labels"]
-        completion_texts = updated_slice["original_completion_text"]
-        completion_encs = encode_with_byte_offsets(
-            self.processing_class.backend_tokenizer, completion_texts, add_special_tokens=False
-        )
-
-        seq_len = new_labels.shape[1]
+        seq_len = new_input_ids.shape[1]
         rows: list[list[tuple[int, int]]] = []
-        for row_labels, (_, completion_offsets) in zip(new_labels.cpu().tolist(), completion_encs, strict=True):
-            completion_positions = [idx for idx, label in enumerate(row_labels) if label != -100]
-            if len(completion_positions) != len(completion_offsets):
-                raise ValueError(
-                    "Could not align generated completion text back to student tokens for byte-offset ULD. "
-                    "This can happen if decoding and re-tokenizing the generated completion changes token boundaries."
-                )
+        for row_ids, row_labels in zip(new_input_ids.cpu().tolist(), new_labels.cpu().tolist(), strict=True):
             offs: list[tuple[int, int]] = [(0, 0)] * seq_len
-            for pos, offset in zip(completion_positions, completion_offsets, strict=True):
-                offs[pos] = offset
+            cumulative = 0
+            for pos, (tid, lbl) in enumerate(zip(row_ids, row_labels, strict=True)):
+                if lbl == -100:
+                    continue
+                if tid not in cache:
+                    piece = self.processing_class.convert_ids_to_tokens([tid])[0]
+                    cache[tid] = token_piece_byte_len(piece)
+                nb = cache[tid]
+                offs[pos] = (cumulative, cumulative + nb)
+                cumulative += nb
             rows.append(offs)
-        updated_slice["byte_offsets"] = torch.tensor(rows, dtype=torch.long, device=new_labels.device)
+        updated_slice["byte_offsets"] = torch.tensor(rows, dtype=torch.long, device=new_input_ids.device)
 
     @profiling_decorator
     def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any], buffer_steps: int):

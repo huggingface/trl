@@ -139,7 +139,17 @@ def pad_byte_offsets(offsets: list[tuple[int, int]], target_length: int, padding
     return torch.cat([pad_block, offs], dim=0) if padding_side == "left" else torch.cat([offs, pad_block], dim=0)
 
 
-def _token_piece_byte_len(piece: str) -> int:
+def token_piece_byte_len(piece: str) -> int:
+    """UTF-8 byte length of a single token's piece string. Works for ByteLevel BPE
+    (each piece char maps to one source byte), SentencePiece byte-fallback
+    (``<0xXX>`` tokens represent one byte each), and the bare SentencePiece
+    word-start marker ``\u2581``.
+
+    Used both by the off-policy / teacher path (via
+    :func:`encode_with_byte_offsets` to disambiguate overlapping char-derived
+    spans) and by the on-policy path (cumulative byte offsets per generated
+    token) \u2014 keeping the byte-length-per-piece convention identical on both
+    sides is what makes student and teacher offsets share a coordinate system."""
     if piece == "\u2581":
         return 0
     if len(piece) == 6 and piece.startswith("<0x") and piece.endswith(">"):
@@ -187,7 +197,7 @@ def _split_repeated_byte_offsets(
 
         if j - i > 1:
             start, end = byte_offsets[i]
-            piece_lengths = [_token_piece_byte_len(token) for token in tokens[i:j]]
+            piece_lengths = [token_piece_byte_len(token) for token in tokens[i:j]]
             if sum(piece_lengths) == end - start:
                 cursor = start
                 for offset_idx, length in enumerate(piece_lengths, start=i):
