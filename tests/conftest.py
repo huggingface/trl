@@ -18,6 +18,7 @@ from functools import wraps
 
 import pytest
 import torch
+from transformers.utils import is_torch_xpu_available
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -103,14 +104,17 @@ def apply_model_revisions(monkeypatch):
 @pytest.fixture(autouse=True)
 def cleanup_gpu():
     """
-    Automatically cleanup GPU memory after each test.
+    Automatically cleanup accelerator memory after each test.
 
-    This fixture helps prevent CUDA out of memory errors when running tests in parallel with pytest-xdist by ensuring
-    models and tensors are properly garbage collected and GPU memory caches are cleared between tests.
+    This fixture helps prevent accelerator out of memory errors when running tests in parallel with pytest-xdist by
+    ensuring models and tensors are properly garbage collected and accelerator memory caches are cleared between tests.
     """
     yield
     # Cleanup after test
     gc.collect()
     if torch.cuda.is_available():
-        torch.cuda.empty_cache()
         torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+    if is_torch_xpu_available():
+        torch.xpu.synchronize()
+        torch.xpu.empty_cache()
