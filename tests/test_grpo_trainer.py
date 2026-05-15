@@ -2512,7 +2512,7 @@ class TestGRPOTrainer(TrlTestCase):
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         def fake_generate(input_ids, **kwargs):
-            if input_ids.shape[0] == 3:  # first call
+            if input_ids.shape[0] == 2:  # first call: num_generations=2 completions for 1 prompt
                 # fmt: off
                 completion_ids = torch.tensor(
                     [
@@ -2520,17 +2520,13 @@ class TestGRPOTrainer(TrlTestCase):
                         [248058, 198, 27, 1628, 13744, 30091, 22076, 29, 198, 510, 1628, 29, 198, 248059, 248046],
                         # "I don't know any tool<|im_end|>" + padding
                         [40, 1459, 914, 1366, 866, 5224, 248046, 248044, 248044, 248044, 248044, 248044, 248044, 248044, 248044],
-                        # '<tool_call>\n<function=screenshot_tool>\n</function>\n</tool_call><|im_end|>'
-                        [248058, 198, 27, 1628, 13744, 30091, 22076, 29, 198, 510, 1628, 29, 198, 248059, 248046],
                     ],
                     device=input_ids.device,
                 )
                 # fmt: on
-            else:  # second call: 2 tool calls succeeded
+            else:  # second call: 1 tool call succeeded
                 completion_ids = torch.tensor(
                     [
-                        # 'Done!<|im_end|>'
-                        [16936, 0, 248046],
                         # 'Done!<|im_end|>'
                         [16936, 0, 248046],
                     ],
@@ -2542,7 +2538,8 @@ class TestGRPOTrainer(TrlTestCase):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
+        # With num_generations=2: 1 out of 2 completions is a tool call (1/2), and it succeeds (0 failures).
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
 
         # Check that the params have changed (skip vision parts, see test_train_vlm)
