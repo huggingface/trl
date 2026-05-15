@@ -34,16 +34,21 @@ def pytest_runtest_makereport(item, call):
     yield
     if call.when == "call" and call.excinfo is not None:
         traceback.clear_frames(call.excinfo.tb)
-        # Also clear chained exception tracebacks: when OOM fires inside a try/except in the trainer,
-        # the OOM becomes __context__ of the outer exception and its traceback holds frame locals
-        # (model, tensors) that prevent gc from releasing CUDA memory even after clear_frames above.
-        exc, seen = call.excinfo.value, set()
-        while exc is not None and id(exc) not in seen:
+        # Also clear all reachable chained exception tracebacks (both __context__ and __cause__ at
+        # every node): when OOM fires inside a try/except in the trainer, the OOM becomes __context__
+        # of the outer exception and its traceback holds frame locals (model, tensors) that prevent gc
+        # from releasing CUDA memory even after clear_frames above.
+        stack, seen = [call.excinfo.value], set()
+        while stack:
+            exc = stack.pop()
+            if exc is None or id(exc) in seen:
+                continue
             seen.add(id(exc))
             if exc.__traceback__ is not None:
                 traceback.clear_frames(exc.__traceback__)
                 exc.__traceback__ = None
-            exc = exc.__cause__ if exc.__suppress_context__ else exc.__context__
+            stack.append(exc.__context__)
+            stack.append(exc.__cause__)
 
 
 # ============================================================================
