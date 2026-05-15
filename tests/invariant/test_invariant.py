@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -84,6 +85,7 @@ class CorrectnessConfig:
     name: str
     method: str  # "sft" | "dpo"
     args: dict[str, str]
+    num_processes: int = 1
 
     def cli_args(self) -> list[str]:
         out: list[str] = []
@@ -95,8 +97,11 @@ class CorrectnessConfig:
 def run(config: CorrectnessConfig) -> Trajectory:
     """Invoke the trl CLI as a subprocess; parse its trainer_state.json into a Trajectory."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        cmd = ["trl", config.method, "--output_dir", tmpdir, *config.cli_args()]
-        subprocess.run(cmd, check=True)
+        cmd = ["trl", config.method]
+        cmd += ["--num_processes", str(config.num_processes)]
+        cmd += ["--output_dir", tmpdir, *config.cli_args()]
+        env = {**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(str(i) for i in range(config.num_processes))}
+        subprocess.run(cmd, check=True, env=env)
 
         state_paths = list(Path(tmpdir).glob("**/trainer_state.json"))
         if not state_paths:
@@ -159,7 +164,9 @@ def compare_scalars(a: Trajectory, b: Trajectory, tol: float, residual_tol: floa
     return errors
 
 
-def _build(name: str, method: str, dataset: str, attn: str = "eager", **overrides) -> CorrectnessConfig:
+def _build(
+    name: str, method: str, dataset: str, attn: str = "eager", num_processes: int = 1, **overrides
+) -> CorrectnessConfig:
     args: dict[str, str] = {
         "model_name_or_path": MODEL,
         "model_revision": MODEL_REVISION,
@@ -176,7 +183,7 @@ def _build(name: str, method: str, dataset: str, attn: str = "eager", **override
         "bf16": "False",
     }
     args.update({k: str(v) for k, v in overrides.items()})
-    return CorrectnessConfig(name=name, method=method, args=args)
+    return CorrectnessConfig(name=name, method=method, args=args, num_processes=num_processes)
 
 
 # Equivalence classes: each maps to a `members` list and a tolerance pair. The first member is the canonical
@@ -190,6 +197,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
             _build("sft_default", "sft", SFT_DATASET),
             _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
             _build("sft_no_grad_ckpt", "sft", SFT_DATASET, gradient_checkpointing=False),
+            _build("sft_ddp2", "sft", SFT_DATASET, per_device_train_batch_size=4, num_processes=2),
         ],
     },
     "dpo": {
@@ -199,6 +207,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
             _build("dpo_default", "dpo", DPO_DATASET),
             _build("dpo_pdb1_gas8", "dpo", DPO_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
             _build("dpo_no_grad_ckpt", "dpo", DPO_DATASET, gradient_checkpointing=False),
+            _build("dpo_ddp2", "dpo", DPO_DATASET, per_device_train_batch_size=4, num_processes=2),
         ],
     },
 }
@@ -213,6 +222,9 @@ def test_invariant(klass, config):
     ref_path = REFERENCES_DIR / f"{klass}.json"
     if not ref_path.exists():
         pytest.fail(f"no reference at {ref_path}; record it with `python {Path(__file__).name}`")
+
+    if config.num_processes > 1 and torch.cuda.device_count() < config.num_processes:
+        pytest.skip(f"requires {config.num_processes} GPUs, got {torch.cuda.device_count()}")
 
     trajectory = run(config)
     reference = load(ref_path)
