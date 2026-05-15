@@ -289,12 +289,30 @@ class GRPOTrainer(_BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = GRPOConfig(f"{model_name}-GRPO")
 
+        is_liger_cuda_multi_gpu = (
+            args.use_liger_kernel
+            and args.distributed_state.distributed_type not in ["MULTI_GPU", "DEEPSPEED"]
+            and args.device.type == "cuda"
+            and args.n_gpu > 1
+        )
+        if is_liger_cuda_multi_gpu:
+            # Liger's forward redirection is not compatible with single-process CUDA DataParallel.
+            args._n_gpu = 1
+            logger.warning(
+                "Single-process CUDA multi-GPU training with Liger kernels is not supported in GRPOTrainer. "
+                f"Disabling DataParallel; models loaded with the default `device_map='auto'` will be placed on "
+                f"the current CUDA device ({args.device}). To use multiple CUDA GPUs, launch distributed training "
+                "with `torchrun`, `accelerate launch`, or DeepSpeed."
+            )
+
         # Model
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            elif is_liger_cuda_multi_gpu and model_init_kwargs.get("device_map", "auto") == "auto":
+                model_init_kwargs["device_map"] = {"": torch.cuda.current_device()}
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
@@ -400,6 +418,8 @@ class GRPOTrainer(_BaseTrainer):
                 # Distributed training requires device_map=None ("auto" fails)
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     model_init_kwargs["device_map"] = None
+                elif is_liger_cuda_multi_gpu and model_init_kwargs.get("device_map", "auto") == "auto":
+                    model_init_kwargs["device_map"] = {"": torch.cuda.current_device()}
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
@@ -672,6 +692,8 @@ class GRPOTrainer(_BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            elif is_liger_cuda_multi_gpu and model_init_kwargs.get("device_map", "auto") == "auto":
+                model_init_kwargs["device_map"] = {"": torch.cuda.current_device()}
             self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
         # Disable dropout in the models
