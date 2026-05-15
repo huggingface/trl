@@ -33,11 +33,11 @@ text_config = {
     "layer_types": None,
 }
 vision_config = {
-    "num_hidden_layers": 2,
+    # 3 layers, not 2, to faithfully reproduce real LLaVA's vision_feature_layer=-2 behavior:
+    # the language model consumes layer 1's output, layer 2 runs but is unused (by design).
+    "num_hidden_layers": 3,
     "hidden_size": 16,
     "num_attention_heads": 4,
-    "num_key_value_heads": 2,
-    "embed_dim": 64,
 }
 
 config = AutoConfig.from_pretrained(MODEL_ID, text_config=text_config, vision_config=vision_config)
