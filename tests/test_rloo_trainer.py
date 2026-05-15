@@ -1371,9 +1371,7 @@ class TestRLOOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
-        params_to_skip = (
-            "model.vision_tower.",
-        )
+        params_to_skip = ("model.vision_tower.",)
         for n, param in previous_trainable_params.items():
             if n.startswith(params_to_skip):
                 continue
