@@ -63,6 +63,25 @@ class RolloutWorkerProtocol(Protocol):
     def update_model_version(self, version: int) -> None: ...
 
 
+class _InitialWeightSyncCallback(TrainerCallback):
+    """
+    Syncs model weights to the vLLM rollout worker once, on train begin.
+
+    This fires after FSDP wrapping / ``accelerator.prepare()`` (so parameters are on GPU) but before
+    the first training step.  After the sync the rollout worker is started and this callback removes
+    itself from the trainer.
+    """
+
+    def __init__(self, trainer: "AsyncGRPOTrainer"):
+        self._trainer = trainer
+
+    def on_train_begin(self, _args, _state, _control, **_kwargs):
+        self._trainer._sync_weight()
+        if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker:
+            self._trainer.rollout_worker.start()
+        self._trainer.remove_callback(type(self))
+
+
 class StepIntervalCallback(TrainerCallback):
     """
     A callback that calls a function every N optimization steps.
@@ -392,6 +411,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.rollout_worker = None
 
         # Add callbacks
+        self.add_callback(_InitialWeightSyncCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
 
     def get_train_dataloader(self) -> DataLoader:
@@ -610,13 +630,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
 
     def _inner_training_loop(self, *args, **kwargs):
-        # Start the rollout worker here (not in __init__) so that checkpoint loading in Trainer.train()
-        # has already restored the model weights. The sequence is: start worker thread → wait for NCCL
-        # init → sync weights to vLLM → begin generation. This ensures vLLM always uses the current
-        # policy before producing any samples (matters for resumed runs, harmless for fresh ones).
-        self._sync_weight()
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.start()
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
