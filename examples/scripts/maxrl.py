@@ -59,8 +59,6 @@ accelerate launch \
 ```
 """
 
-import re
-
 from datasets import load_dataset
 
 from trl import GRPOConfig, GRPOTrainer, ModelConfig, ScriptArguments, TrlParser
