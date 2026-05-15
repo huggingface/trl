@@ -2192,6 +2192,7 @@ class GRPOTrainer(_BaseTrainer):
         )
         all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
         advantages = advantages[process_slice]
+        is_std_zero = is_std_zero[process_slice]  # local process slice for masking zero-std groups
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
@@ -2273,6 +2274,7 @@ class GRPOTrainer(_BaseTrainer):
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
             "advantages": advantages,
+            "is_std_zero": is_std_zero,
             "num_items_in_batch": num_items_in_batch,
         }
         if old_per_token_logps is not None:
@@ -2326,6 +2328,8 @@ class GRPOTrainer(_BaseTrainer):
 
         # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
         loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
+        if "is_std_zero" in inputs:
+            loss_mask = loss_mask * (~inputs["is_std_zero"]).unsqueeze(1)
         # Compute loss and metrics using liger grpo loss
         loss, metrics = self.liger_grpo_loss(
             _input=last_hidden_state,
@@ -2442,6 +2446,10 @@ class GRPOTrainer(_BaseTrainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
+        if "is_std_zero" in inputs:
+            # Suppress both policy-gradient and KL gradients for zero-std groups: advantages are zero so policy
+            # loss is already zero, but beta*KL would still push the model toward the reference unnecessarily.
+            mask = mask * (~inputs["is_std_zero"]).unsqueeze(1)
 
         # Compute the per_token_logps and the entropy at each position in the completion
         per_token_logps, entropies = self._get_per_token_logps_and_entropies(

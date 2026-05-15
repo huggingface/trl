@@ -982,6 +982,83 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_zero_std_groups_no_kl_gradient(self):
+        # Regression test for https://github.com/huggingface/trl/issues/5588
+        # Zero-std reward groups (all completions in a group have the same reward) produce zero advantages.
+        # With beta > 0 the KL penalty should also be suppressed for those groups because the mask is zeroed out.
+        # We verify this by checking that is_std_zero is propagated into the output dict and that _compute_loss
+        # applies it to the mask.
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        trainer = object.__new__(GRPOTrainer)
+        trainer.accelerator = SimpleNamespace(
+            device=torch.device("cpu"),
+            num_processes=1,
+            process_index=0,
+            gather=lambda t: t,
+            unwrap_model=lambda m: m,
+        )
+        trainer.args = SimpleNamespace(
+            use_bias_correction_kl=False,
+            delta=None,
+        )
+        trainer.model = SimpleNamespace(training=True)
+        trainer.beta = 0.1
+        trainer.epsilon_low = 0.2
+        trainer.epsilon_high = 0.2
+        trainer.loss_type = "grpo"
+        trainer.importance_sampling_level = "token"
+        trainer.off_policy_mask_threshold = None
+        trainer.top_entropy_quantile = 1.0
+        trainer.current_gradient_accumulation_steps = 1
+        trainer.use_vllm = False
+        trainer.vllm_importance_sampling_correction = False
+        from collections import defaultdict
+
+        trainer._metrics = {"train": defaultdict(list)}
+
+        B, T = 4, 6  # 2 groups of 2 completions, 6 completion tokens each
+        completion_mask = torch.ones(B, T, dtype=torch.long)
+        # Simulate: group 0 has zero std (indices 0,1), group 1 has non-zero std (indices 2,3)
+        is_std_zero = torch.tensor([True, True, False, False])
+
+        per_token_logps = torch.full((B, T), -1.0)
+        # ref_logps differ from model logps only for zero-std groups, so KL > 0 only there
+        ref_per_token_logps = per_token_logps.clone()
+        ref_per_token_logps[:2] = -0.5  # would produce non-zero KL for rows 0,1 if mask were not zeroed
+
+        inputs_with_fix = {
+            "prompt_ids": torch.zeros(B, 1, dtype=torch.long),
+            "prompt_mask": torch.ones(B, 1, dtype=torch.long),
+            "completion_ids": torch.zeros(B, T, dtype=torch.long),
+            "completion_mask": completion_mask,
+            "advantages": torch.tensor([0.0, 0.0, 1.0, -1.0]),
+            "is_std_zero": is_std_zero,
+            "ref_per_token_logps": ref_per_token_logps,
+            "num_items_in_batch": torch.tensor(B * T),
+        }
+        inputs_without_fix = {**inputs_with_fix}
+        del inputs_without_fix["is_std_zero"]  # no fix: KL from zero-std groups leaks into loss
+
+        def fake_get_logps(self_arg, model, input_ids, attention_mask, logits_to_keep, **kwargs):
+            return per_token_logps, torch.zeros(B, T)
+
+        with patch.object(GRPOTrainer, "_get_per_token_logps_and_entropies", fake_get_logps):
+            loss_fixed = GRPOTrainer._compute_loss(trainer, trainer.model, inputs_with_fix)
+            trainer._metrics["train"].clear()
+            loss_unfixed = GRPOTrainer._compute_loss(trainer, trainer.model, inputs_without_fix)
+
+        # With the fix: zero-std groups are masked out entirely, so KL from rows 0,1 does not
+        # affect the loss. Advantages for rows 2,3 are ±1 and cancel → loss == 0.
+        assert loss_fixed.item() == pytest.approx(0.0, abs=1e-6), (
+            f"Fixed loss should be 0 (masked zero-std groups), got {loss_fixed.item()}"
+        )
+        # Without the fix: KL from rows 0,1 leaks into the loss (beta=0.1, ref≠model for those rows).
+        assert loss_unfixed.item() > 1e-4, (
+            f"Unfixed loss should be non-zero due to spurious KL, got {loss_unfixed.item()}"
+        )
+
     def test_train_with_pad_to_multiple_of(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
