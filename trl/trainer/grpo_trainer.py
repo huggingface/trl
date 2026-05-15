@@ -2142,20 +2142,22 @@ class GRPOTrainer(_BaseTrainer):
 
         if self.multi_objective_aggregation == "sum_then_normalize":
             # Apply weights to each reward function's output and sum
-            rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-            mean_grouped_rewards = rewards.view(-1, num_generations).mean(dim=1)
+            weighted = rewards_per_func * self.reward_weights.to(device).unsqueeze(0)
+            rewards = weighted.nansum(dim=1)
+            rewards[torch.isnan(weighted).all(dim=1)] = float("nan")
+            mean_grouped_rewards = torch.nanmean(rewards.view(-1, num_generations), dim=1)
             mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(num_generations, dim=0)
             if self.scale_rewards in ["group", "none"]:
                 # If self.scale_rewards = "none", we'll only use std_rewards to check for zero std for logging
                 if num_generations > 1:
-                    std_rewards = rewards.view(-1, num_generations).std(dim=1)
+                    std_rewards = nanstd(rewards.view(-1, num_generations), dim=1)
                     std_rewards = std_rewards.repeat_interleave(num_generations, dim=0)
                 else:  # doesn't occur during training, but could occur in eval when num_generations_eval=1
                     std_rewards = torch.zeros_like(rewards)
             elif self.scale_rewards == "batch":
                 # Compute global std
                 if rewards.numel() > 1:
-                    std_rewards = rewards.std().expand_as(rewards)
+                    std_rewards = nanstd(rewards).expand_as(rewards)
                 else:  # doesn't occur during training, but could occur in eval when num_generations_eval=batch_size=1
                     std_rewards = torch.zeros_like(rewards)
             else:
