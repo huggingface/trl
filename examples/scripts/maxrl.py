@@ -59,8 +59,6 @@ accelerate launch \
 ```
 """
 
-import re
-
 from datasets import load_dataset
 
 from trl import GRPOConfig, GRPOTrainer, ModelConfig, ScriptArguments, TrlParser
@@ -127,17 +125,17 @@ def format_example(example):
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": problem},
     ]
-    return {"prompt": prompt, "answer": example.get("answer") or example.get("solution", "")}
+    answer_raw = example.get("answer") or example.get("solution", "")
+    answer = extract_boxed(answer_raw) or answer_raw
+    return {"prompt": prompt, "answer": answer}
 
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, GRPOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
 
-    # MaxRL uses scale_rewards="mean" — set it here so the example works
-    # out of the box even if the flag is not passed on the command line.
-    if training_args.scale_rewards != "mean":
-        training_args.scale_rewards = "mean"
+    training_args.scale_rewards = "mean"
+    training_args.multi_objective_aggregation = "sum_then_normalize"
 
     model_name = model_args.model_name_or_path or "Qwen/Qwen2.5-1.5B-Instruct"
 
