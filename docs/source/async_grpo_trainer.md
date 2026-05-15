@@ -71,6 +71,14 @@ CUDA_VISIBLE_DEVICES=1 accelerate launch train_async_grpo.py
 
 This trainer is intentionally kept minimal and is not meant to grow into a general-purpose solution. If you need a feature that is not supported, we recommend cloning the repository and adapting the trainer to your needs directly. New features will only be considered when there is significant community demand.
 
+## Async rewards and tools
+
+As with [`GRPOTrainer`], custom reward functions can be synchronous or asynchronous. When reward functions are defined as
+`async def` coroutines, they are awaited concurrently so their latency overlaps.
+
+Tools can also be synchronous or asynchronous. When a rollout sample triggers multiple tool calls in the same round,
+asynchronous tools are awaited concurrently and their results are appended back to the conversation in tool-call order.
+
 ## AsyncGRPOConfig
 
 [[autodoc]] trl.experimental.async_grpo.AsyncGRPOConfig
