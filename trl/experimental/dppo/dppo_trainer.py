@@ -1075,7 +1075,7 @@ class DPPOTrainer(GRPOTrainer):
             elif self.scale_rewards == "batch":
                 # Compute global std
                 if rewards.numel() > 1:
-                    std_rewards = rewards.std().expand_as(rewards)
+                    std_rewards = nanstd(rewards).expand_as(rewards)
                 else:  # doesn't occur during training, but could occur in eval when num_generations_eval=batch_size=1
                     std_rewards = torch.zeros_like(rewards)
             else:
