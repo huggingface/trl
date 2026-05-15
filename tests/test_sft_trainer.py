@@ -26,7 +26,13 @@ from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from packaging.version import Version
 from packaging.version import parse as parse_version
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    TrainingArguments,
+)
 from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
@@ -476,17 +482,13 @@ class TestSFTTrainer(TrlTestCase):
 
     @require_peft
     def test_train_chunked_nll_loss_peft(self):
-        # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="chunked_nll", report_to="none")
-
         trainer = SFTTrainer(
             model=model_id,
             args=training_args,
@@ -494,22 +496,99 @@ class TestSFTTrainer(TrlTestCase):
             peft_config=LoraConfig(),
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the peft params have changed and the base model params have not changed
+        # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed")
-            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("4.57.0"),
+                        reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                    ),
+                ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    @require_vision
+    def test_train_chunked_nll_loss_vlm(self, model_id):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            loss_type="chunked_nll",
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            report_to="none",
+        )
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            # For some reason, these params are not updated. This is probably not related to TRL, but to
+            # the model itself. We should investigate this further, but for now we just skip these params.
+            # fmt: off
+            if (
+                model_id == "trl-internal-testing/tiny-Gemma3ForConditionalGeneration" and "model.vision_tower.vision_model.head" in n or
+                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or  # transformers < 5.6.0
+                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or  # transformers < 5.6.0
+                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.encoder.layers.1" in n or  # transformers >= 5.6.0, see #5497
+                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.post_layernorm" in n or  # transformers >= 5.6.0, see #5497
+                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or  # transformers < 5.6.0
+                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or  # transformers < 5.6.0
+                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "model.vision_tower.encoder.layers.1" in n or  # transformers >= 5.6.0, see #5497
+                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "model.vision_tower.post_layernorm" in n or  # transformers >= 5.6.0, see #5497
+                model_id == "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration" and "model.visual.deepstack_merger_list" in n
+            ):
+            # fmt: on
+                continue
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     def test_train_moe_model_with_aux_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -2188,6 +2267,43 @@ _CHUNKED_CE_MODEL_IDS = [
 ]
 
 
+_CHUNKED_CE_VLM_MODEL_IDS = [
+    "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.5.0"),
+            reason="Gemma4 models were introduced in transformers-5.5.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+    "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+    "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+    "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("4.57.0"),
+            reason="Qwen3-VL series were introduced in transformers-4.57.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.2.0"),
+            reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.2.0"),
+            reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        ),
+    ),
+]
+
+
 class TestChunkedCrossEntropyLoss:
     B, S, H, V = 2, 8, 4, 16
     CHUNK_SIZE = 3  # deliberately small to force multiple chunks and a partial final chunk
@@ -2355,7 +2471,7 @@ class TestPatchChunkedCELMHead:
     CHUNK_SIZE = 5  # small, to exercise the chunk loop
 
     def _setup(self, model_id):
-        ref_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32, device_map=torch_device)
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
         chunked_model = copy.deepcopy(ref_model)
         _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
 
@@ -2363,6 +2479,19 @@ class TestPatchChunkedCELMHead:
         input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
         labels[:, :4] = -100  # prompt-like mask
+        num_items = int((labels[..., 1:] != -100).sum())
+        return ref_model, chunked_model, input_ids, labels, num_items
+
+    def _setup_vlm(self, model_id):
+        ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE, is_vlm=True)
+
+        B, S = 2, 16
+        vocab_size = ref_model.config.text_config.vocab_size
+        input_ids = torch.randint(0, vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
         num_items = int((labels[..., 1:] != -100).sum())
         return ref_model, chunked_model, input_ids, labels, num_items
 
@@ -2390,7 +2519,7 @@ class TestPatchChunkedCELMHead:
         """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
         to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
         ref_model = AutoModelForCausalLM.from_pretrained(
-            model_id, torch_dtype=torch.float32, output_router_logits=True, device_map=torch_device
+            model_id, dtype=torch.float32, output_router_logits=True, device_map=torch_device
         )
         chunked_model = copy.deepcopy(ref_model)
         _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
@@ -2424,12 +2553,86 @@ class TestPatchChunkedCELMHead:
         )
         # Base decoder gradients
         for name, ref_param in ref_model.model.named_parameters():
-            if ref_param.grad is None:
-                continue
-            chunked_param = chunked_model.model.get_parameter(name)
-            torch.testing.assert_close(
-                chunked_param.grad, ref_param.grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+            chunked_grad = chunked_model.model.get_parameter(name).grad
+            ref_grad = ref_param.grad
+            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
+            if ref_grad is not None:
+                torch.testing.assert_close(
+                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+                )
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_CE_VLM_MODEL_IDS)
+    def test_forward_matches_reference_vlm(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        assert out.logits is None
+        assert out.num_correct_tokens is not None and out.num_correct_tokens.item() >= 0
+        assert out.entropy_sum is not None and out.entropy_sum.item() >= 0.0
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_forward_matches_reference_vlm_with_aux_loss(self, model_id):
+        ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE, is_vlm=True)
+
+        # VLM MoE wrappers only read `output_router_logits` from forward kwargs (their `text_config` explicitly
+        # removes the attribute), so we have to pass it at call time on both paths.
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.text_config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        with torch.no_grad():
+            ref_out = ref_model(
+                input_ids=input_ids, labels=labels, num_items_in_batch=num_items, output_router_logits=True
             )
+            out = chunked_model(
+                input_ids=input_ids, labels=labels, num_items_in_batch=num_items, output_router_logits=True
+            )
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_CE_VLM_MODEL_IDS)
+    def test_backward_matches_reference_vlm(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        ref_out.loss.backward()
+
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        out.loss.backward()
+
+        # lm_head gradient
+        torch.testing.assert_close(
+            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
+        )
+        # Multimodal-wrapper gradients (covers both vision tower and inner text decoder).
+        for name, ref_param in ref_model.model.named_parameters():
+            chunked_grad = chunked_model.model.get_parameter(name).grad
+            ref_grad = ref_param.grad
+            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
+            if ref_grad is not None:
+                torch.testing.assert_close(
+                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+                )
 
     def test_forward_without_labels_uses_original_path(self):
         """With labels=None the patched forward returns real logits (for generation / eval)."""

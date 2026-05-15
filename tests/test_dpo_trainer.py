@@ -662,6 +662,25 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_liger_kernel
+    @require_peft
+    def test_init_fails_with_peft_and_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+
+        with pytest.raises(NotImplementedError, match="Liger DPO loss is not implemented for PEFT models."):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+
     def test_train_with_iterable_dataset(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train", streaming=True)
 

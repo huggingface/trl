@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import textwrap
 from collections import defaultdict
 from collections.abc import Callable
@@ -20,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -27,6 +29,7 @@ import transformers
 from accelerate import PartialState, logging
 from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
+from datasets.fingerprint import Hasher
 from packaging.version import Version
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
@@ -53,6 +56,7 @@ from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
     get_config_model_id,
+    hash_module,
     pad,
     selective_log_softmax,
     use_adapter,
@@ -657,30 +661,55 @@ class KTOTrainer(_BaseTrainer):
             yield
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
-        dataloader_params = {
-            "batch_size": batch_size,
-            "collate_fn": self.data_collator,
-            "num_workers": self.args.dataloader_num_workers,
-            "pin_memory": self.args.dataloader_pin_memory,
-            "shuffle": False,
-        }
-        data_loader = self.accelerator.prepare(DataLoader(dataset, **dataloader_params))
-        reference_completion_logps = []
-        reference_KL_logps = []
-        for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-            reference_completion_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
-            reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
-            reference_completion_logps.append(reference_completion_logp.cpu())
+        model_hash = hash_module(self.ref_model or self.model)
+        fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
+        cache_file = dataset._get_cache_file_path(fingerprint).removesuffix(".arrow") + ".npz"
+        if os.path.exists(cache_file):
+            loaded = np.load(cache_file)
+            reference_logps = loaded["reference_logps"]
             if self.calculate_KL:
-                reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
-                reference_KL_logps.append(reference_KL_logp.cpu())
-        dataset = dataset.add_column(
-            name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
-        )
-        if self.calculate_KL:
-            dataset = dataset.add_column(
-                name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
+                reference_KL_logps = loaded["reference_KL_logps"]
+        else:
+            dataloader = DataLoader(
+                dataset,
+                batch_size=batch_size,
+                collate_fn=self.data_collator,
+                num_workers=self.args.dataloader_num_workers,
+                pin_memory=self.args.dataloader_pin_memory,
+                shuffle=False,
             )
+            data_loader = self.accelerator.prepare(dataloader)
+            reference_logps = []
+            reference_KL_logps = []
+            for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
+                reference_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
+                if self.calculate_KL:
+                    reference_logp, reference_KL_logp = self.accelerator.gather_for_metrics(
+                        (reference_logp, reference_KL_logp)
+                    )
+                    reference_KL_logps.append(reference_KL_logp.cpu())
+                else:
+                    reference_logp = self.accelerator.gather_for_metrics(reference_logp)
+                reference_logps.append(reference_logp.cpu())
+
+            # Save the reference log probabilities to cache. We need .float() because bf16 is not supported by numpy
+            reference_logps = torch.cat(reference_logps).float().numpy()
+            save_dict = {"reference_logps": reference_logps}
+            if self.calculate_KL:
+                reference_KL_logps = torch.cat(reference_KL_logps).float().numpy()
+                save_dict["reference_KL_logps"] = reference_KL_logps
+            if self.accelerator.is_main_process:
+                np.savez_compressed(cache_file, **save_dict)
+            self.accelerator.wait_for_everyone()
+
+        if self.calculate_KL:
+            dataset = dataset.add_column(name="reference_logps", column=reference_logps)
+            dataset = dataset.add_column(
+                name="reference_KL_logps", column=reference_KL_logps, new_fingerprint=fingerprint
+            )
+        else:
+            dataset = dataset.add_column(name="reference_logps", column=reference_logps, new_fingerprint=fingerprint)
+
         return dataset
 
     def compute_reference_log_probs(self, padded_batch: dict) -> dict:
