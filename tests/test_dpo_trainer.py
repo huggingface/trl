@@ -983,7 +983,6 @@ class TestDPOTrainer(TrlTestCase):
                 "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             ) and ("encoder.layers.1" in n or "post_layernorm" in n):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
-                continue
             # For some reason, these params are not updated. This is probably not related to TRL, but to
             # the model itself. We should investigate this further, but for now we just skip these params.
             elif (
