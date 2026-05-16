@@ -712,7 +712,6 @@ def test_get_start_and_size_answers_skips_prompt_tokens():
 def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.processing_class = llama_tokenizer
-    trainer.use_transformers_paged = False
 
     prompt_text = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\nHello?<|eot_id|>"
     completion_text = "<|start_header_id|>assistant<|end_header_id|>\nHi there!"
@@ -764,7 +763,6 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
 def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1_examples):
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.processing_class = smollm_tokenizer
-    trainer.use_transformers_paged = False
 
     collator = DataCollatorForChatML(tokenizer=smollm_tokenizer)
     batch = collator([openr1_examples[0]])
@@ -1108,7 +1106,6 @@ def test_gold_trainer_init_rejects_llm_with_vision_dataset(monkeypatch):
         top_p=1.0,
         seq_kd=False,
         num_generations=1,
-        use_transformers_paged=False,
         max_completion_length=16,
         top_k=0,
         log_completions=False,
@@ -1392,7 +1389,6 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
         top_p=1.0,
         seq_kd=False,
         num_generations=1,
-        use_transformers_paged=False,
         max_completion_length=16,
         top_k=0,
         log_completions=False,
@@ -1493,7 +1489,6 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
         top_p=1.0,
         seq_kd=False,
         num_generations=1,
-        use_transformers_paged=False,
         max_completion_length=16,
         top_k=0,
         log_completions=False,
@@ -1577,7 +1572,6 @@ def _make_vlm_trainer_args(use_vllm=False):
         top_p=1.0,
         seq_kd=False,
         num_generations=1,
-        use_transformers_paged=False,
         max_completion_length=16,
         top_k=0,
         log_completions=False,

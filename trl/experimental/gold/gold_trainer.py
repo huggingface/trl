@@ -2340,43 +2340,22 @@ class GOLDTrainer(SFTTrainer):
 
     def generate_on_policy_outputs(self, model, inputs, generation_config, pad_token_id=None):
         # Generate output with respect to the prompt only
-        if self.use_transformers_paged:
-            previous_attn = self.model.config._attn_implementation
-            if is_flash_attn_2_available():
-                model.config._attn_implementation = "paged_attention"
-            else:
-                model.config._attn_implementation = "sdpa_paged"
-            prompt_mask = inputs.get("prompt_attention_mask")
-            prompts_tensor = inputs["prompts"]
-            if prompt_mask is not None:
-                prompt_sequences = [
-                    row[mask.bool()].detach().cpu().tolist()
-                    for row, mask in zip(prompts_tensor, prompt_mask, strict=True)
-                ]
-            else:
-                prompt_sequences = [row.detach().cpu().tolist() for row in prompts_tensor]
-            generated_outputs = model.generate_batch(prompt_sequences, generation_config=generation_config)
-            model.config._attn_implementation = previous_attn
-
-            completion_ids = [output.generated_tokens for output in generated_outputs.values()]
-            generated_tokens = torch.stack([torch.tensor(ids, device=model.device) for ids in completion_ids])
-        else:
-            generate_kwargs = {k: inputs[k] for k in self._MULTIMODAL_KEYS if k in inputs}
-            # Slice sequence-length-dependent keys to prompt-only length (e.g. token_type_ids for Gemma,
-            # mm_token_type_ids for ERNIE-VL) since model.generate receives prompt-only input_ids
-            prompt_seq_len = inputs["prompts"].shape[1]
-            for k in ("token_type_ids", "mm_token_type_ids"):
-                if k in generate_kwargs:
-                    generate_kwargs[k] = self._get_prompt_sequence_key(inputs, k)
-            generated_outputs = model.generate(
-                input_ids=inputs["prompts"],
-                attention_mask=inputs.get("prompt_attention_mask", None),
-                generation_config=generation_config,
-                return_dict_in_generate=True,
-                **generate_kwargs,
-            )
-            # Get the generated token IDs
-            generated_tokens = generated_outputs.sequences
+        generate_kwargs = {k: inputs[k] for k in self._MULTIMODAL_KEYS if k in inputs}
+        # Slice sequence-length-dependent keys to prompt-only length (e.g. token_type_ids for Gemma,
+        # mm_token_type_ids for ERNIE-VL) since model.generate receives prompt-only input_ids
+        prompt_seq_len = inputs["prompts"].shape[1]
+        for k in ("token_type_ids", "mm_token_type_ids"):
+            if k in generate_kwargs:
+                generate_kwargs[k] = self._get_prompt_sequence_key(inputs, k)
+        generated_outputs = model.generate(
+            input_ids=inputs["prompts"],
+            attention_mask=inputs.get("prompt_attention_mask", None),
+            generation_config=generation_config,
+            return_dict_in_generate=True,
+            **generate_kwargs,
+        )
+        # Get the generated token IDs
+        generated_tokens = generated_outputs.sequences
 
         batch_size = generated_tokens.size(0)
         device = generated_tokens.device
