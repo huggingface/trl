@@ -104,8 +104,12 @@ if __name__ == "__main__":
     # ──────────────────────────────────────────────
     # Models
     # ──────────────────────────────────────────────
-    student_model = AutoModelForImageTextToText.from_pretrained(cli_args.student_model_name, dtype=torch.bfloat16)
-    teacher_model = AutoModelForImageTextToText.from_pretrained(cli_args.teacher_model_name, dtype=torch.bfloat16)
+    student_model = AutoModelForImageTextToText.from_pretrained(
+        cli_args.student_model_name, torch_dtype=torch.bfloat16
+    )
+    teacher_model = AutoModelForImageTextToText.from_pretrained(
+        cli_args.teacher_model_name, torch_dtype=torch.bfloat16
+    )
 
     # Freeze everything except the language model head
     for name, param in student_model.named_parameters():
