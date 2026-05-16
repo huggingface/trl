@@ -39,13 +39,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
-from transformers.utils import (
-    is_datasets_available,
-    is_flash_attn_2_available,
-    is_liger_kernel_available,
-    is_peft_available,
-    is_rich_available,
-)
+from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available, is_rich_available
 
 from ...data_utils import (
     is_conversational,
@@ -899,10 +893,10 @@ class GOLDTrainer(SFTTrainer):
             )
         else:
             teacher_model_init_kwargs = args.teacher_model_init_kwargs
-            teacher_model_init_kwargs["torch_dtype"] = (
-                teacher_model_init_kwargs["torch_dtype"]
-                if teacher_model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, teacher_model_init_kwargs["torch_dtype"])
+            teacher_model_init_kwargs["dtype"] = (
+                teacher_model_init_kwargs["dtype"]
+                if teacher_model_init_kwargs["dtype"] in ["auto", None]
+                else getattr(torch, teacher_model_init_kwargs["dtype"])
             )
 
         if args.use_uld_loss and args.teacher_tokenizer_name_or_path is None:
@@ -919,8 +913,6 @@ class GOLDTrainer(SFTTrainer):
             init_kwargs = dict(teacher_model_init_kwargs)
             if args.teacher_model_revision is not None:
                 init_kwargs.setdefault("revision", args.teacher_model_revision)
-            if "torch_dtype" in init_kwargs and "dtype" not in init_kwargs:
-                init_kwargs["dtype"] = init_kwargs.pop("torch_dtype")
             teacher_model = create_model_from_path(teacher_model, **init_kwargs)
         self.use_uld_loss = args.use_uld_loss
         self.teacher_tokenizer = None
@@ -948,7 +940,7 @@ class GOLDTrainer(SFTTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
         if not args.use_uld_loss:
-            teacher_model.resize_token_embeddings(self.model.config.vocab_size)
+            teacher_model.resize_token_embeddings(self.model.config.get_text_config().vocab_size)
 
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
@@ -979,8 +971,6 @@ class GOLDTrainer(SFTTrainer):
         self._unmatched_sum = 0.0
         self._matched_step_eq = 0.0
         self._unmatched_step_eq = 0.0
-
-        self.use_transformers_paged = args.use_transformers_paged or False
 
         self.uld_loss_fn = None
         if self.use_uld_loss:
@@ -1787,7 +1777,7 @@ class GOLDTrainer(SFTTrainer):
                 **map_kwargs,
             )
 
-            # Apply the chat template if needed and preserve original text
+            # Add EOS token if needed: non-conversational only
             first_example = next(iter(dataset))
             if not is_conversational(first_example):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -2370,18 +2360,9 @@ class GOLDTrainer(SFTTrainer):
         prompt_mask = inputs.get("prompt_attention_mask")
         pad_token_id = pad_token_id if pad_token_id is not None else self.pad_token_id
 
-        if self.use_transformers_paged:
-            # generate_batch() returns completion-only tokens, so the entire tensor is completion.
-            prompt_lengths = torch.zeros(batch_size, dtype=torch.long, device=device)
-        else:
-            # model.generate() returns full sequences (prompt + completion), so completions start
-            # after the full padded prompt width.
-            prompt_lengths = torch.full(
-                (batch_size,),
-                inputs["prompts"].shape[1],
-                dtype=torch.long,
-                device=device,
-            )
+        # model.generate() returns full sequences (prompt + completion), so completions start
+        # after the full padded prompt width.
+        prompt_lengths = torch.full((batch_size,), inputs["prompts"].shape[1], dtype=torch.long, device=device)
 
         new_input_ids = generated_tokens
         new_attention_mask, new_labels = self._build_sequence_batch(new_input_ids, prompt_lengths, pad_token_id)

@@ -518,7 +518,9 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
 
     class DummyStudentModel:
         def __init__(self):
-            self.config = SimpleNamespace(_name_or_path="student", vocab_size=17)
+            config = SimpleNamespace(_name_or_path="student", vocab_size=17)
+            config.get_text_config = lambda: config
+            self.config = config
             self.generation_config = SimpleNamespace(eos_token_id=2)
             self.name_or_path = "student"
 
@@ -585,7 +587,6 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
         top_p=1.0,
         seq_kd=False,
         num_generations=1,
-        use_transformers_paged=False,
         max_completion_length=16,
         top_k=0,
         log_completions=False,
@@ -706,7 +707,6 @@ def test_get_start_and_size_answers_skips_prompt_tokens():
 @pytest.mark.slow
 def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.use_transformers_paged = False
     trainer.processing_class = llama_tokenizer
 
     prompt_text = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\nHello?<|eot_id|>"
@@ -758,7 +758,6 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
 @pytest.mark.slow
 def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1_examples):
     trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.use_transformers_paged = False
     trainer.processing_class = smollm_tokenizer
 
     collator = DataCollatorForChatML(tokenizer=smollm_tokenizer)

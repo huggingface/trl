@@ -33,7 +33,7 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils import ModelOutput, is_liger_kernel_available, is_peft_available
 
 from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
@@ -143,11 +143,14 @@ class GKDTrainer(SFTTrainer):
         # Liger fused GKD loss (JSD)
         self.use_liger_gkd_loss = False
         if args.use_liger_kernel:
+            # Match the non-Liger path: pure JSD (no hard CE component) and no temperature
+            # scaling, since `generalized_jsd_loss` is called without a `temperature` argument.
             self.liger_jsd_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
-                temperature=args.temperature,
                 compiled=False,
+                weight_hard_loss=0.0,
+                weight_soft_loss=1.0,
             )
             self.use_liger_gkd_loss = True
 
@@ -325,8 +328,8 @@ class GKDTrainer(SFTTrainer):
             student_hidden = student_outputs.last_hidden_state[:, :-1]
             teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
 
-            # Release full outputs to free memory
-            del student_outputs, teacher_outputs
+            # Release teacher outputs; keep student_outputs for return_outputs
+            del teacher_outputs
 
             # labels mask and labels (shifted)
             labels_mask = inputs["labels"] != -100
@@ -355,6 +358,11 @@ class GKDTrainer(SFTTrainer):
 
             # Release hidden states after loss computation
             del student_hidden, teacher_hidden, true_labels
+            empty_cache()
+            if return_outputs:
+                return (loss, ModelOutput(logits=None, last_hidden_state=student_outputs.last_hidden_state))
+            else:
+                return loss
         else:
             # compute student output
             student_outputs = model(
@@ -423,10 +431,10 @@ class GKDTrainer(SFTTrainer):
         `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
         the original inputs.
         """
-        if self.seq_kd:
+        if random.random() <= self.lmbda:
             with (
                 unwrap_model_for_generation(
-                    self.teacher_model,
+                    model,
                     self.accelerator,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                 ) as unwrapped_model
@@ -437,10 +445,10 @@ class GKDTrainer(SFTTrainer):
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
-        if random.random() <= self.lmbda:
+        elif self.seq_kd:
             with (
                 unwrap_model_for_generation(
-                    model,
+                    self.teacher_model,
                     self.accelerator,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                 ) as unwrapped_model

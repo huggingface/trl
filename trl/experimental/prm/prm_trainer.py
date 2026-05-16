@@ -22,6 +22,7 @@ import torch
 import torch.nn as nn
 import transformers
 from accelerate import PartialState, logging
+from accelerate.utils import is_peft_model
 from datasets import Dataset, features
 from packaging.version import Version
 from transformers import (
@@ -44,7 +45,7 @@ from .prm_config import PRMConfig
 
 
 if is_peft_available():
-    from peft import PeftModel
+    from peft import PeftConfig
 
 logger = logging.get_logger(__name__)
 
@@ -127,7 +128,7 @@ class PRMTrainer(_BaseTrainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        peft_config (`dict`, defaults to `None`):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
             a PEFT model.
     """
@@ -167,12 +168,24 @@ class PRMTrainer(_BaseTrainer):
             None,
         ),
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
-        peft_config: dict | None = None,
+        peft_config: "PeftConfig | None" = None,
     ):
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
 
-        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
+        # PEFT
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+        if peft_config is not None or is_peft_model(model):
             model = prepare_peft_model(model, peft_config, args)
 
         # Disable dropout in the model
