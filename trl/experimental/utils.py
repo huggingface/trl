@@ -435,8 +435,12 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         labels[attention_mask == 0] = -100
         labels[completion_mask == 0] = -100
 
-        # Build output with vision keys from processed_prompts (pixel_values, image_grid_thw, etc.)
-        output = processed_prompts
+        # Build output with non-sequence vision keys from processed_prompts (pixel_values, image_grid_thw, etc.).
+        output = {
+            k: v
+            for k, v in processed_prompts.items()
+            if k not in ("input_ids", "attention_mask", "token_type_ids", "mm_token_type_ids")
+        }
         output["input_ids"] = input_ids
         output["attention_mask"] = attention_mask
         output["labels"] = labels

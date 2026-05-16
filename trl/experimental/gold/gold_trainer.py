@@ -2089,82 +2089,82 @@ class GOLDTrainer(SFTTrainer):
         teacher_forward_kwargs = student_forward_kwargs
 
         if self.use_uld_loss and self.teacher_tokenizer is not None:
-            if "original_prompt_text" in inputs and "original_completion_text" in inputs:
-                prompt_texts = inputs["original_prompt_text"]
-                completion_texts = inputs["original_completion_text"]
-                full_texts = [p + c for p, c in zip(prompt_texts, completion_texts, strict=True)]
-            else:
-                # Fallback: decode student input_ids (current approach)
-                # WARNING: This may not work perfectly for cross-tokenizer distillation
-                full_sequences = inputs["input_ids"]
-                full_texts = self.processing_class.batch_decode(full_sequences, skip_special_tokens=False)
-
-                # Try to split prompt/completion using original prompt length
-                prompt_lengths = inputs["prompts"].shape[1]
-                prompt_texts = self.processing_class.batch_decode(inputs["prompts"], skip_special_tokens=False)
-                completion_texts = [
-                    full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
-                ]
-
             if self._is_vlm and self._teacher_processor is None:
                 teacher_input_ids = inputs["input_ids"]
                 teacher_labels = inputs["labels"].clone()
                 teacher_attention_mask = inputs["attention_mask"]
                 teacher_prompt_length = self._get_min_completion_start_from_labels(inputs["labels"])
-            # For cross-architecture VLMs, build teacher inputs with image placeholders by processing
-            # prompts through the teacher's processor with raw images, then appending completions.
-            elif self._teacher_processor is not None and "_raw_images" in inputs:
-                raw_images = inputs["_raw_images"]
-                raw_prompts = inputs["_raw_prompts"]
-                # Apply teacher's chat template to get prompt text with correct image placeholders
-                teacher_prompt_texts = self._teacher_processor.apply_chat_template(
-                    raw_prompts, tokenize=False, add_generation_prompt=True
-                )
-                # Build full text (prompt + completion) and process in one call so all tensors
-                # (input_ids, attention_mask, mm_token_type_ids, pixel_values, ...) are aligned.
-                teacher_full_texts = [p + c for p, c in zip(teacher_prompt_texts, completion_texts, strict=True)]
-                teacher_full_processed = self._teacher_processor(
-                    images=raw_images,
-                    text=teacher_full_texts,
-                    padding=True,
-                    return_tensors="pt",
-                )
-                teacher_input_ids = teacher_full_processed["input_ids"]
-                teacher_attention_mask = teacher_full_processed["attention_mask"]
-                # Determine prompt lengths after image token expansion to build labels.
-                # Derive prompt lengths from total sequence length minus completion length.
-                # Completions are pure text (no images), so the tokenizer gives exact counts.
-                # This avoids a second image-processing pass through the teacher processor.
-                teacher_completion_token_lengths = [
-                    len(self._teacher_processor.tokenizer(ct, add_special_tokens=False)["input_ids"])
-                    for ct in completion_texts
-                ]
-                total_lengths = teacher_attention_mask.sum(dim=1)
-                teacher_prompt_token_lengths = [
-                    int(total_lengths[i].item()) - cl for i, cl in enumerate(teacher_completion_token_lengths)
-                ]
-                teacher_labels = teacher_input_ids.clone()
-                teacher_labels[teacher_attention_mask == 0] = -100
-                for i, pl in enumerate(teacher_prompt_token_lengths):
-                    teacher_labels[i, :pl] = -100
-                teacher_prompt_length = min(teacher_prompt_token_lengths)
-                # Override teacher_forward_kwargs with all multimodal keys from teacher processing
-                teacher_forward_kwargs = {
-                    k: teacher_full_processed[k].to(self.accelerator.device)
-                    for k in self._MULTIMODAL_KEYS
-                    if k in teacher_full_processed
-                }
             else:
-                (
-                    teacher_input_ids,
-                    teacher_labels,
-                    teacher_attention_mask,
-                    teacher_prompt_length,
-                ) = build_teacher_inputs_from_texts(
-                    self.teacher_tokenizer,
-                    prompt_texts,
-                    completion_texts,
-                )
+                if "original_prompt_text" in inputs and "original_completion_text" in inputs:
+                    prompt_texts = inputs["original_prompt_text"]
+                    completion_texts = inputs["original_completion_text"]
+                else:
+                    # Fallback: decode student input_ids (current approach)
+                    # WARNING: This may not work perfectly for cross-tokenizer distillation
+                    full_sequences = inputs["input_ids"]
+                    full_texts = self.processing_class.batch_decode(full_sequences, skip_special_tokens=False)
+
+                    # Try to split prompt/completion using original prompt length
+                    prompt_lengths = inputs["prompts"].shape[1]
+                    prompt_texts = self.processing_class.batch_decode(inputs["prompts"], skip_special_tokens=False)
+                    completion_texts = [
+                        full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
+                    ]
+
+                # For cross-architecture VLMs, build teacher inputs with image placeholders by processing
+                # prompts through the teacher's processor with raw images, then appending completions.
+                if self._teacher_processor is not None and "_raw_images" in inputs:
+                    raw_images = inputs["_raw_images"]
+                    raw_prompts = inputs["_raw_prompts"]
+                    # Apply teacher's chat template to get prompt text with correct image placeholders
+                    teacher_prompt_texts = self._teacher_processor.apply_chat_template(
+                        raw_prompts, tokenize=False, add_generation_prompt=True
+                    )
+                    # Build full text (prompt + completion) and process in one call so all tensors
+                    # (input_ids, attention_mask, mm_token_type_ids, pixel_values, ...) are aligned.
+                    teacher_full_texts = [p + c for p, c in zip(teacher_prompt_texts, completion_texts, strict=True)]
+                    teacher_full_processed = self._teacher_processor(
+                        images=raw_images,
+                        text=teacher_full_texts,
+                        padding=True,
+                        return_tensors="pt",
+                    )
+                    teacher_input_ids = teacher_full_processed["input_ids"]
+                    teacher_attention_mask = teacher_full_processed["attention_mask"]
+                    # Determine prompt lengths after image token expansion to build labels.
+                    # Derive prompt lengths from total sequence length minus completion length.
+                    # Completions are pure text (no images), so the tokenizer gives exact counts.
+                    # This avoids a second image-processing pass through the teacher processor.
+                    teacher_completion_token_lengths = [
+                        len(self._teacher_processor.tokenizer(ct, add_special_tokens=False)["input_ids"])
+                        for ct in completion_texts
+                    ]
+                    total_lengths = teacher_attention_mask.sum(dim=1)
+                    teacher_prompt_token_lengths = [
+                        int(total_lengths[i].item()) - cl for i, cl in enumerate(teacher_completion_token_lengths)
+                    ]
+                    teacher_labels = teacher_input_ids.clone()
+                    teacher_labels[teacher_attention_mask == 0] = -100
+                    for i, pl in enumerate(teacher_prompt_token_lengths):
+                        teacher_labels[i, :pl] = -100
+                    teacher_prompt_length = min(teacher_prompt_token_lengths)
+                    # Override teacher_forward_kwargs with all multimodal keys from teacher processing
+                    teacher_forward_kwargs = {
+                        k: teacher_full_processed[k].to(self.accelerator.device)
+                        for k in self._MULTIMODAL_KEYS
+                        if k in teacher_full_processed
+                    }
+                else:
+                    (
+                        teacher_input_ids,
+                        teacher_labels,
+                        teacher_attention_mask,
+                        teacher_prompt_length,
+                    ) = build_teacher_inputs_from_texts(
+                        self.teacher_tokenizer,
+                        prompt_texts,
+                        completion_texts,
+                    )
 
             teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
             teacher_labels = teacher_labels.to(self.accelerator.device)
