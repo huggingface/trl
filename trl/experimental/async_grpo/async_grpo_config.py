@@ -43,14 +43,24 @@ class AsyncGRPOConfig(_BaseConfig):
             stops when the model generates a response turn with no tool calls or when the total response length reaches
             `max_completion_length`.
 
-        > Parameters that control the vLLM server
+        > Parameters that control the rollout backend
 
+        backend (`str`, *optional*, defaults to `"vllm"`):
+            Generation backend. One of `"vllm"` (use an external vLLM server, default) or `"cb"` (use
+            transformers' continuous batching against the same in-process model, no external server).
         vllm_server_base_url (`str`, *optional*, defaults to `"http://localhost:8000"`):
-            Base URL of the vLLM server used for generation (e.g., `"http://localhost:8000"`).
+            Base URL of the vLLM server used for generation (e.g., `"http://localhost:8000"`). Only used
+            when `backend="vllm"`.
         vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
-            Total timeout duration in seconds to wait for the vLLM server to be ready.
+            Total timeout duration in seconds to wait for the vLLM server to be ready. Only used when
+            `backend="vllm"`.
         request_timeout (`int`, *optional*, defaults to `600`):
-            Timeout in seconds for individual HTTP requests to the vLLM server.
+            Timeout in seconds for individual HTTP requests to the vLLM server. Only used when
+            `backend="vllm"`.
+        attn_implementation (`str`, *optional*, defaults to `"paged|flash_attention_2"`):
+            Attention implementation passed to [`~transformers.AutoModelForCausalLM.from_pretrained`].
+            Only used when `backend="cb"`; must be a paged variant (e.g. `"paged|flash_attention_2"`,
+            `"paged|sdpa"`).
 
         > Parameters that control the training
 
@@ -131,10 +141,18 @@ class AsyncGRPOConfig(_BaseConfig):
         },
     )
 
-    # Parameters that control the vLLM server
+    # Parameters that control the rollout backend
+    backend: str = field(
+        default="vllm",
+        metadata={"help": "Rollout backend. One of 'vllm' (external server) or 'cb' (in-process continuous batching)."},
+    )
     vllm_server_base_url: str = field(
         default="http://localhost:8000",
         metadata={"help": "Base URL of the vLLM server used for generation (e.g., 'http://localhost:8000')."},
+    )
+    attn_implementation: str = field(
+        default="paged|flash_attention_2",
+        metadata={"help": "Attention implementation used by the in-process model when backend='cb'."},
     )
     vllm_server_timeout: float = field(
         default=240.0,

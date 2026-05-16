@@ -77,6 +77,22 @@ class StepIntervalCallback(TrainerCallback):
             self.fn()
 
 
+class _OptimizerLockCallback(TrainerCallback):
+    """Holds a `threading.Lock` across `optimizer.step` so a same-model generation thread cannot
+    observe parameters being mutated. Used by the `backend="cb"` path."""
+
+    def __init__(self, lock, on_step):
+        self.lock = lock
+        self.on_step = on_step
+
+    def on_pre_optimizer_step(self, _args, _state, _control, **_kwargs):
+        self.lock.acquire()
+
+    def on_optimizer_step(self, _args, _state, _control, **_kwargs):
+        self.lock.release()
+        self.on_step()
+
+
 class RolloutQueueDataset(torch.utils.data.IterableDataset):
     def __init__(self, rollout_queue, model_version_fn, max_staleness=3, timeout=120.0):
         self.queue = rollout_queue
@@ -289,7 +305,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Model
         model_name = model
-        model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.float32)
+        if self.args.backend == "cb":
+            # Continuous batching needs a paged attention backend and bf16 weights to be memory-friendly.
+            model = AutoModelForCausalLM.from_pretrained(
+                model, device_map=None, dtype=torch.bfloat16, attn_implementation=self.args.attn_implementation
+            )
+        else:
+            model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.float32)
 
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
@@ -353,6 +375,22 @@ class AsyncGRPOTrainer(_BaseTrainer):
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
                 self.rollout_worker = rollout_worker
+            elif self.args.backend == "cb":
+                from .cb_rollout_worker import CBRolloutWorker
+
+                self.rollout_worker = CBRolloutWorker(
+                    model=self.model,
+                    tokenizer=processing_class,
+                    dataset=train_dataset,
+                    reward_funcs=reward_funcs,
+                    num_generations=self.args.num_generations,
+                    max_tokens=self.args.max_completion_length,
+                    temperature=self.args.temperature,
+                    queue_maxsize=self.args.queue_maxsize,
+                    chat_template_kwargs=self.args.chat_template_kwargs,
+                    log_completions=self.args.log_completions,
+                    num_completions_to_print=self.args.num_completions_to_print,
+                )
             else:
                 # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
                 # DTensor.shape returns the global shape without triggering any all-gather.
@@ -391,8 +429,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.rollout_queue = None
             self.rollout_worker = None
 
-        # Add callbacks
-        self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
+        # Sync semantics differ per backend.
+        if self.args.backend == "cb":
+            # CB shares parameters with the trainer — guard `optimizer.step` against the worker's forward.
+            from .cb_rollout_worker import CBRolloutWorker as _CBWorker
+
+            if isinstance(self.rollout_worker, _CBWorker):
+                self.add_callback(_OptimizerLockCallback(self.rollout_worker.weight_lock, self._bump_model_version))
+        else:
+            # vLLM: push fresh weights to the external server every N optimizer steps.
+            self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
+
+    def _bump_model_version(self) -> None:
+        self.model_version += 1
+        if self.accelerator.is_main_process and self.rollout_worker is not None:
+            self.rollout_worker.update_model_version(self.model_version)
 
     def get_train_dataloader(self) -> DataLoader:
         if self.accelerator.is_main_process:
@@ -614,7 +665,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # has already restored the model weights. The sequence is: start worker thread → wait for NCCL
         # init → sync weights to vLLM → begin generation. This ensures vLLM always uses the current
         # policy before producing any samples (matters for resumed runs, harmless for fresh ones).
-        self._sync_weight()
+        if self.args.backend == "vllm":
+            self._sync_weight()
         if self.accelerator.is_main_process and self.rollout_worker:
             self.rollout_worker.start()
         try:
