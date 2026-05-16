@@ -2009,3 +2009,37 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
         assert slice_idx in trainer._buffered_inputs
         _, completion_texts = trainer._buffered_text_logs[slice_idx]
         assert len(completion_texts) == unique_prompts_per_slice * num_generations
+
+
+def test_training_step_releases_consumed_buffer_slot(monkeypatch):
+    """Regression: completed accumulation microbatches should not stay referenced in the rollout buffer."""
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.args = SimpleNamespace(gradient_accumulation_steps=3)
+    trainer.use_liger_gkd_loss = False
+    trainer._step = 2  # `_prepare_inputs` already advanced after returning slice 1
+    trainer._buffered_on_policy = [False, False, False]
+    trainer._buffered_text_logs = [None, None, None]
+    trainer._textual_logs = {"prompt": [], "completion": []}
+    trainer._on_policy_loss_total = 0.0
+    trainer._off_policy_loss_total = 0.0
+    trainer._on_policy_step_equiv = 0.0
+    trainer._off_policy_step_equiv = 0.0
+    sentinel = {"pixel_values": torch.ones(1)}
+    trainer._buffered_inputs = [{"id": 0}, sentinel, {"id": 2}]
+
+    def fake_training_step(self, model, inputs, num_items_in_batch=None):
+        assert self._buffered_inputs[1] is sentinel
+        return torch.tensor(1.0)
+
+    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "training_step", fake_training_step)
+
+    loss = GOLDTrainer.training_step(
+        trainer,
+        torch.nn.Linear(1, 1),
+        sentinel,
+        num_items_in_batch=None,
+    )
+
+    assert loss.item() == 1.0
+    assert trainer._buffered_inputs == [{"id": 0}, None, {"id": 2}]
+    assert trainer._off_policy_loss_total == 1.0

@@ -18,7 +18,6 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
-from copy import deepcopy
 from functools import partial
 from typing import Any, Optional
 
@@ -1343,7 +1342,7 @@ class GOLDTrainer(SFTTrainer):
                             for ex, imgs in zip(raw_slices[i], raw_images, strict=True)
                         ]
                     # Collate raw examples on-the-fly for off-policy slices
-                    slice_inputs = self._vlm_collator(raw_slices[i])
+                    slice_inputs = self._vlm_collator([dict(example) for example in raw_slices[i]])
                     slice_inputs = {
                         k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v)
                         for k, v in slice_inputs.items()
@@ -1485,7 +1484,7 @@ class GOLDTrainer(SFTTrainer):
         slice_raw_data = {}  # per-slice raw data for non-vLLM path
 
         for slice_idx in on_policy_indices:
-            raw_examples = deepcopy(raw_slices[slice_idx])
+            raw_examples = raw_slices[slice_idx]
 
             # Extract raw PIL images from examples (like GRPOTrainer)
             if "images" in raw_examples[0]:
@@ -1554,7 +1553,7 @@ class GOLDTrainer(SFTTrainer):
             ) as unwrapped_model:
                 for slice_idx in on_policy_indices:
                     raw_examples, images, prompts, _ = slice_raw_data[slice_idx]
-                    collated = self._vlm_collator(raw_examples)
+                    collated = self._vlm_collator([dict(example) for example in raw_examples])
                     collated = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in collated.items()}
                     result = self.generate_on_policy_outputs(
                         unwrapped_model,
@@ -2609,6 +2608,13 @@ class GOLDTrainer(SFTTrainer):
         else:
             self._off_policy_loss_total += loss_scalar
             self._off_policy_step_equiv += step_equiv
+
+        if (
+            self._buffered_inputs is not None
+            and isinstance(self._buffered_inputs, list)
+            and slice_idx < len(self._buffered_inputs)
+        ):
+            self._buffered_inputs[slice_idx] = None
         return loss
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
