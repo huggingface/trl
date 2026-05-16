@@ -1192,8 +1192,92 @@ class GOLDTrainer(SFTTrainer):
 
         slice_idx = self._step % buffer_steps
         inputs = self._buffered_inputs[slice_idx]
+        if isinstance(inputs, dict):
+            if "_gold_vlm_on_policy_raw_examples" in inputs:
+                inputs, text_logs = self._generate_on_policy_vlm_slice(inputs)
+                self._buffered_inputs[slice_idx] = inputs
+                self._buffered_text_logs[slice_idx] = text_logs
+            elif "_gold_vlm_lazy_examples" in inputs:
+                inputs = self._materialize_vlm_slice(inputs)
+                self._buffered_inputs[slice_idx] = inputs
         self._step += 1
         return inputs
+
+    def _generate_on_policy_vlm_slice(
+        self, pending_slice: dict[str, Any]
+    ) -> tuple[dict[str, torch.Tensor | Any], tuple[list[str], list[str]]]:
+        """Generate and collate one non-vLLM on-policy VLM slice immediately before it is consumed."""
+        raw_examples = pending_slice["_gold_vlm_on_policy_raw_examples"]
+        collated = self._vlm_collator([dict(example) for example in raw_examples])
+        collated = {
+            k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in collated.items()
+        }
+
+        with unwrap_model_for_generation(
+            self.model, self.accelerator, generation_kwargs=self.generation_kwargs
+        ) as unwrapped_model:
+            (
+                new_input_ids,
+                new_attention_mask,
+                new_labels,
+                prompt_texts,
+                completion_texts,
+            ) = self.generate_on_policy_outputs(
+                unwrapped_model,
+                collated,
+                self.generation_config,
+                self.pad_token_id,
+            )
+
+        updated_slice = dict(collated)
+        updated_slice["input_ids"] = new_input_ids
+        updated_slice["attention_mask"] = new_attention_mask
+        updated_slice["labels"] = new_labels
+        # Rebuild sequence-length-dependent keys to match new input_ids shape
+        new_seq_len = new_input_ids.shape[1]
+        prompt_seq_len = collated["prompts"].shape[1]
+        for k in ("token_type_ids", "mm_token_type_ids"):
+            if k in updated_slice:
+                prompt_part = self._get_prompt_sequence_key(collated, k)
+                comp_part = torch.zeros(
+                    new_input_ids.shape[0],
+                    new_seq_len - prompt_seq_len,
+                    dtype=updated_slice[k].dtype,
+                    device=new_input_ids.device,
+                )
+                updated_slice[k] = torch.cat([prompt_part, comp_part], dim=1)
+        updated_slice["original_prompt_text"] = prompt_texts
+        updated_slice["original_completion_text"] = completion_texts
+        if self._teacher_processor is not None:
+            updated_slice["_raw_images"] = pending_slice["_gold_vlm_raw_images"]
+            updated_slice["_raw_prompts"] = pending_slice["_gold_vlm_raw_prompts"]
+
+        return updated_slice, (prompt_texts, completion_texts)
+
+    def _materialize_vlm_slice(self, pending_slice: dict[str, Any]) -> dict[str, torch.Tensor | Any]:
+        """Collate one pending VLM slice immediately before it is consumed."""
+        slice_inputs = self._vlm_collator([dict(example) for example in pending_slice["_gold_vlm_lazy_examples"]])
+        slice_inputs = {
+            k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in slice_inputs.items()
+        }
+
+        if "_gold_vlm_original_prompt_text" in pending_slice:
+            slice_inputs["original_prompt_text"] = pending_slice["_gold_vlm_original_prompt_text"]
+            slice_inputs["original_completion_text"] = pending_slice["_gold_vlm_original_completion_text"]
+        elif self.use_uld_loss and self.teacher_tokenizer is not None:
+            slice_inputs = self._ensure_original_text_fields(slice_inputs)
+            if "original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs:
+                raise ValueError(
+                    "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
+                    "When using ULD loss with cross-tokenizer alignment, datasets must be prepared with "
+                    "_prepare_dataset_with_original_text(). Ensure your dataset includes these fields."
+                )
+
+        if self._teacher_processor is not None:
+            slice_inputs["_raw_images"] = pending_slice["_gold_vlm_raw_images"]
+            slice_inputs["_raw_prompts"] = pending_slice["_gold_vlm_raw_prompts"]
+
+        return slice_inputs
 
     def _decode_completion_texts_from_labels(self, slice_inputs: dict[str, torch.Tensor | Any]) -> list[str] | None:
         """Decode completion text from labels when raw text is absent."""
@@ -1341,20 +1425,15 @@ class GOLDTrainer(SFTTrainer):
                             )
                             for ex, imgs in zip(raw_slices[i], raw_images, strict=True)
                         ]
-                    # Collate raw examples on-the-fly for off-policy slices
-                    slice_inputs = self._vlm_collator([dict(example) for example in raw_slices[i]])
                     slice_inputs = {
-                        k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v)
-                        for k, v in slice_inputs.items()
+                        "_gold_vlm_lazy_examples": raw_slices[i],
+                        "_gold_vlm_raw_images": raw_images,
+                        "_gold_vlm_raw_prompts": raw_prompts,
                     }
-                    # Preserve raw PIL images and prompts for cross-architecture teacher processing
-                    if self._teacher_processor is not None:
-                        slice_inputs["_raw_images"] = raw_images
-                        slice_inputs["_raw_prompts"] = raw_prompts
                 else:
                     slice_inputs = slices[i]
 
-                if self.use_uld_loss and self.teacher_tokenizer is not None:
+                if self._vlm_collator is None and self.use_uld_loss and self.teacher_tokenizer is not None:
                     slice_inputs = self._ensure_original_text_fields(slice_inputs)
                     if "original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs:
                         raise ValueError(
@@ -1473,8 +1552,6 @@ class GOLDTrainer(SFTTrainer):
 
     def _generate_on_policy_vlm_raw(self, raw_slices: list[list[dict]], on_policy_indices: list[int]):
         """On-policy generation from raw VLM examples, preserving PIL images for vLLM."""
-        device = self.accelerator.device
-
         # Phase 1: Collect prompts, images, and raw examples across all on-policy slices
         all_prompt_ids = []
         all_images = []
@@ -1520,6 +1597,10 @@ class GOLDTrainer(SFTTrainer):
                 for prompt in prompts
             ]
 
+            if not self.use_vllm:
+                slice_raw_data[slice_idx] = (raw_examples, images, prompts, None)
+                continue
+
             # Tokenize prompts to get prompt token IDs
             # TODO: add self.tools support
             tokenized = self.processing_class.apply_chat_template(
@@ -1543,61 +1624,20 @@ class GOLDTrainer(SFTTrainer):
                 all_raw_examples.append(example)
                 local_slice_indices.append(slice_idx)
 
+        if not self.use_vllm:
+            # Non-vLLM path: local generation needs collated pixel tensors, so defer generation too.
+            for slice_idx in on_policy_indices:
+                raw_examples, images, prompts, _ = slice_raw_data[slice_idx]
+                has_images = images is not None and any(img is not None for img in images)
+                self._buffered_inputs[slice_idx] = {
+                    "_gold_vlm_on_policy_raw_examples": raw_examples,
+                    "_gold_vlm_raw_images": images if self._teacher_processor is not None and has_images else None,
+                    "_gold_vlm_raw_prompts": prompts if self._teacher_processor is not None else None,
+                }
+            return
+
         all_prompts_text = self.processing_class.batch_decode(all_prompt_ids, skip_special_tokens=True)
         all_prompts_text_with_special = self.processing_class.batch_decode(all_prompt_ids, skip_special_tokens=False)
-
-        if not self.use_vllm:
-            # Non-vLLM path: generate per-slice using model.generate
-            with unwrap_model_for_generation(
-                self.model, self.accelerator, generation_kwargs=self.generation_kwargs
-            ) as unwrapped_model:
-                for slice_idx in on_policy_indices:
-                    raw_examples, images, prompts, _ = slice_raw_data[slice_idx]
-                    collated = self._vlm_collator([dict(example) for example in raw_examples])
-                    collated = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in collated.items()}
-                    result = self.generate_on_policy_outputs(
-                        unwrapped_model,
-                        collated,
-                        self.generation_config,
-                        self.pad_token_id,
-                    )
-                    (
-                        new_input_ids,
-                        new_attention_mask,
-                        new_labels,
-                        prompt_texts,
-                        completion_texts,
-                    ) = result
-
-                    updated_slice = dict(collated)
-                    updated_slice["input_ids"] = new_input_ids
-                    updated_slice["attention_mask"] = new_attention_mask
-                    updated_slice["labels"] = new_labels
-                    # Rebuild sequence-length-dependent keys to match new input_ids shape
-                    new_seq_len = new_input_ids.shape[1]
-                    prompt_seq_len = collated["prompts"].shape[1]
-                    for k in ("token_type_ids", "mm_token_type_ids"):
-                        if k in updated_slice:
-                            prompt_part = self._get_prompt_sequence_key(collated, k)
-                            comp_part = torch.zeros(
-                                new_input_ids.shape[0],
-                                new_seq_len - prompt_seq_len,
-                                dtype=updated_slice[k].dtype,
-                                device=new_input_ids.device,
-                            )
-                            updated_slice[k] = torch.cat([prompt_part, comp_part], dim=1)
-                    updated_slice["original_prompt_text"] = prompt_texts
-                    updated_slice["original_completion_text"] = completion_texts
-                    if self._teacher_processor is not None:
-                        updated_slice["_raw_images"] = images
-                        updated_slice["_raw_prompts"] = prompts
-
-                    self._buffered_inputs[slice_idx] = updated_slice
-                    self._buffered_text_logs[slice_idx] = (
-                        prompt_texts,
-                        completion_texts,
-                    )
-            return
 
         # vLLM path: one batched generate call across all slices
         if (
@@ -1670,17 +1710,16 @@ class GOLDTrainer(SFTTrainer):
                 ]
                 synthetic_examples.append(synthetic)
 
-            # Collate synthetic examples to get pixel_values + properly tokenized input_ids/labels
-            collated = self._vlm_collator(synthetic_examples)
-            collated = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in collated.items()}
-            collated["original_prompt_text"] = slice_prompts_text_special[slice_idx]
-            collated["original_completion_text"] = completion_texts
-            if self._teacher_processor is not None:
-                has_images = any(img is not None for img in images_for_slice)
-                collated["_raw_images"] = images_for_slice if has_images else None
-                collated["_raw_prompts"] = prompts_for_slice
-
-            self._buffered_inputs[slice_idx] = collated
+            has_images = any(img is not None for img in images_for_slice)
+            self._buffered_inputs[slice_idx] = {
+                "_gold_vlm_lazy_examples": synthetic_examples,
+                "_gold_vlm_original_prompt_text": slice_prompts_text_special[slice_idx],
+                "_gold_vlm_original_completion_text": completion_texts,
+                "_gold_vlm_raw_images": images_for_slice
+                if self._teacher_processor is not None and has_images
+                else None,
+                "_gold_vlm_raw_prompts": prompts_for_slice if self._teacher_processor is not None else None,
+            }
             self._buffered_text_logs[slice_idx] = (
                 slice_prompts_text[slice_idx],
                 completion_texts,
