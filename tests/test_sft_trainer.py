@@ -575,7 +575,6 @@ class TestSFTTrainer(TrlTestCase):
             # the model itself. We should investigate this further, but for now we just skip these params.
             # fmt: off
             if (
-                model_id == "trl-internal-testing/tiny-Gemma3ForConditionalGeneration" and "model.vision_tower.vision_model.head" in n or
                 model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or  # transformers < 5.6.0
                 model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or  # transformers < 5.6.0
                 model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.encoder.layers.1" in n or  # transformers >= 5.6.0, see #5497
@@ -1655,7 +1654,6 @@ class TestSFTTrainer(TrlTestCase):
             # the model itself. We should investigate this further, but for now we just skip these params.
             # fmt: off
             if (
-                model_id == "trl-internal-testing/tiny-Gemma3ForConditionalGeneration" and "model.vision_tower.vision_model.head" in n or
                 model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or  # transformers < 5.6.0
                 model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or  # transformers < 5.6.0
                 model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.encoder.layers.1" in n or  # transformers >= 5.6.0, see #5497
@@ -2470,7 +2468,7 @@ class TestPatchChunkedCELMHead:
     CHUNK_SIZE = 5  # small, to exercise the chunk loop
 
     def _setup(self, model_id):
-        ref_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32, device_map=torch_device)
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
         chunked_model = copy.deepcopy(ref_model)
         _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
 
@@ -2518,7 +2516,7 @@ class TestPatchChunkedCELMHead:
         """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
         to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
         ref_model = AutoModelForCausalLM.from_pretrained(
-            model_id, torch_dtype=torch.float32, output_router_logits=True, device_map=torch_device
+            model_id, dtype=torch.float32, output_router_logits=True, device_map=torch_device
         )
         chunked_model = copy.deepcopy(ref_model)
         _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)

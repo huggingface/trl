@@ -124,7 +124,15 @@ class TestAddResponseSchema:
         "tokenizer_name",
         [
             pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
-            pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
+            pytest.param(
+                "trl-internal-testing/tiny-GptOssForCausalLM",
+                id="gptoss",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Upstream bug in response parsing (see #5753; fixed in transformers#45166)",
+                    strict=True,
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
@@ -457,6 +465,7 @@ class TestIsChatTemplatePrefixPreserving:
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
+        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
@@ -708,6 +717,10 @@ class TestParseResponse:
         return processing_class
 
     def test_parse_response(self, model_name):
+        if model_name in ("trl-internal-testing/tiny-GptOssForCausalLM",) and Version(
+            transformers.__version__
+        ) < Version("5.5.0"):
+            pytest.skip("Upstream bug in response parsing (see #5753; fixed in transformers#45166)")
         processing_class = self._load(model_name)
         messages = [
             {"role": "user", "content": "What is 3*4?"},
@@ -761,6 +774,12 @@ class TestParseResponse:
         assert parsed == expected
 
     def test_parse_response_tool_call(self, model_name):
+        if model_name in (
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+        ) and Version(transformers.__version__) < Version("5.5.0"):
+            pytest.skip("Upstream bug in response parsing (see #5753; fixed in transformers#45166)")
         processing_class = self._load(model_name)
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         messages = [
@@ -793,6 +812,10 @@ class TestParseResponse:
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         ):
             pytest.skip("Llama 3.1 / 3.2 templates only allow a single tool call per assistant turn, with no content.")
+        if model_name in ("trl-internal-testing/tiny-GptOssForCausalLM",) and Version(
+            transformers.__version__
+        ) < Version("5.5.0"):
+            pytest.skip("Upstream bug in response parsing (see #5753; fixed in transformers#45166)")
         processing_class = self._load(model_name)
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         messages = [
@@ -814,6 +837,10 @@ class TestParseResponse:
         assert parsed == expected
 
     def test_parse_response_tool_call_without_arguments(self, model_name):
+        if model_name in ("trl-internal-testing/tiny-GptOssForCausalLM",) and Version(
+            transformers.__version__
+        ) < Version("5.5.0"):
+            pytest.skip("Upstream bug in response parsing (see #5753; fixed in transformers#45166)")
         processing_class = self._load(model_name)
         tool_calls = [{"type": "function", "function": {"name": "ping", "arguments": {}}}]
         messages = [

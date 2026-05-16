@@ -343,7 +343,7 @@ accelerate launch --config_file examples/accelerate_configs/alst_ulysses_4gpu.ya
     --max_seq_length 4096 \
     --packing \
     --packing_strategy wrapped \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --attn_implementation flash_attention_2 \
     --output_dir output-alst-4gpu \
     --logging_steps 10 \
