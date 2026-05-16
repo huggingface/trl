@@ -248,7 +248,20 @@ class TestGRPOTrainer(TrlTestCase):
         )
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
-    def test_train(self, config_name):
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            pytest.param(
+                "trl-internal-testing/tiny-DeepseekV4ForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.8.0"),
+                    reason="DeepSeek-V4 models were introduced in transformers-5.7.0",
+                ),
+            ),
+        ],
+    )
+    def test_train(self, config_name, model_id):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
         training_args = GRPOConfig(
@@ -260,7 +273,7 @@ class TestGRPOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,

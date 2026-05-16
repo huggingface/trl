@@ -196,6 +196,14 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
             pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
             pytest.param(
+                "trl-internal-testing/tiny-DeepseekV4ForCausalLM",
+                id="deepseekv4",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.8.0"),
+                    reason="DeepSeek-V4 models were introduced in transformers-5.7.0",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
                 id="gemma4",
                 marks=pytest.mark.skipif(

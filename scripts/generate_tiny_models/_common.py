@@ -147,13 +147,13 @@ _TORCH_TO_SAFETENSORS_DTYPE = {
 }
 
 
-def check_dtype_pattern(reference_id, model):
+def check_dtype_pattern(reference_id, model, revision=None):
     """Flag tensors whose dtype diverges from the reference checkpoint.
 
     Reads the reference safetensors header via the Hub API (no weight download). Useful to catch cases
     like Qwen3.5 where specific params (e.g. linear_attn.A_log) are kept in fp32 while the rest is bf16.
     """
-    metadata = api.get_safetensors_metadata(reference_id)
+    metadata = api.get_safetensors_metadata(reference_id, revision=revision)
     ref_dtypes = {name: info.dtype for fm in metadata.files_metadata.values() for name, info in fm.tensors.items()}
 
     mismatches = []
@@ -174,9 +174,9 @@ def check_dtype_pattern(reference_id, model):
         print(f"  {name}: reference={ref}, tiny={tiny}")
 
 
-def print_config_diff(reference_id, model):
+def print_config_diff(reference_id, model, revision=None):
     """Print the flat, recursive diff between the reference Hub config and the tiny-model config."""
-    reference_config = AutoConfig.from_pretrained(reference_id)
+    reference_config = AutoConfig.from_pretrained(reference_id, revision=revision)
     ref_flat = _flatten(reference_config.to_dict())
     tiny_flat = _flatten(model.config.to_dict())
 

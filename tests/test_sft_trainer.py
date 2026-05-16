@@ -362,6 +362,13 @@ class TestSFTTrainer(TrlTestCase):
         [
             "trl-internal-testing/tiny-Cohere2ForCausalLM",
             pytest.param(
+                "trl-internal-testing/tiny-DeepseekV4ForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.8.0"),
+                    reason="DeepSeek-V4 models were introduced in transformers-5.7.0",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-Glm4MoeForCausalLM",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
@@ -2238,14 +2245,14 @@ _CHUNKED_CE_MODEL_IDS = [
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            reason="DeepSeek-V3 SDPA attention is broken in transformers < 5.0.0",
         ),
     ),
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            reason="DeepSeek-V3 SDPA attention is broken in transformers < 5.0.0",
         ),
     ),
     "trl-internal-testing/tiny-Gemma2ForCausalLM",
