@@ -40,7 +40,12 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
-from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available, is_rich_available
+from transformers.utils import (
+    is_datasets_available,
+    is_liger_kernel_available,
+    is_peft_available,
+    is_rich_available,
+)
 
 from ...data_utils import (
     is_conversational,
@@ -63,7 +68,12 @@ from ...trainer.utils import (
     pad,
     split_tensor_dict,
 )
-from ..utils import DataCollatorForChatML, DataCollatorForVisionLanguageChatML, empty_cache, truncate_dataset
+from ..utils import (
+    DataCollatorForChatML,
+    DataCollatorForVisionLanguageChatML,
+    empty_cache,
+    truncate_dataset,
+)
 from .gold_config import GOLDConfig
 
 
@@ -223,7 +233,12 @@ def build_teacher_inputs_from_texts(
 
     teacher_prompt_length = min(prompt_lengths) if prompt_lengths else 0
 
-    return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_prompt_length
+    return (
+        teacher_input_ids,
+        teacher_labels,
+        teacher_attention_mask,
+        teacher_prompt_length,
+    )
 
 
 class ULDLoss(nn.Module):
@@ -231,7 +246,13 @@ class ULDLoss(nn.Module):
     Universal Logit Distillation Loss.
     """
 
-    def __init__(self, config: GOLDConfig, student_tokenizer=None, teacher_tokenizer=None, device=None):
+    def __init__(
+        self,
+        config: GOLDConfig,
+        student_tokenizer=None,
+        teacher_tokenizer=None,
+        device=None,
+    ):
         super().__init__()
         self.device = device
         self.crossentropy_weight = config.uld_crossentropy_weight
@@ -261,7 +282,13 @@ class ULDLoss(nn.Module):
             self._initialize_vocabulary_mapping()
 
     def __call__(
-        self, student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+        self,
+        student_logits,
+        teacher_logits,
+        student_labels,
+        teacher_labels,
+        student_input_ids,
+        teacher_input_ids,
     ):
         """
         Compute ULD loss with GKD trainer interface.
@@ -289,7 +316,12 @@ class ULDLoss(nn.Module):
 
         # Compute distillation loss using ULD approximation
         distillation_loss = self._compute_distillation_loss(
-            student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+            student_logits,
+            teacher_logits,
+            student_labels,
+            teacher_labels,
+            student_input_ids,
+            teacher_input_ids,
         )
 
         return crossentropy_loss + distillation_loss
@@ -327,7 +359,13 @@ class ULDLoss(nn.Module):
             self.mapping_tensor = self.mapping_tensor.to(self.device)
 
     def _compute_distillation_loss(
-        self, student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+        self,
+        student_logits,
+        teacher_logits,
+        student_labels,
+        teacher_labels,
+        student_input_ids,
+        teacher_input_ids,
     ):
         """
         Compute the Universal Logit Distillation loss with token mapping.
@@ -445,7 +483,11 @@ class ULDLoss(nn.Module):
             prev = ""
             for k in range(len(ids)):
                 # IMPORTANT: Do NOT skip special tokens - we need to align them too
-                cur = tok.decode(ids[: k + 1], skip_special_tokens=False, clean_up_tokenization_spaces=False)
+                cur = tok.decode(
+                    ids[: k + 1],
+                    skip_special_tokens=False,
+                    clean_up_tokenization_spaces=False,
+                )
                 # Extract the incremental addition (may include spaces/ZWJ/etc.)
                 pieces.append(cur[len(prev) :])
                 prev = cur
@@ -669,11 +711,13 @@ class ULDLoss(nn.Module):
 
             if teacher_unmatched_size < max_unmatched_size:
                 teacher_unmatched_sorted = F.pad(
-                    teacher_unmatched_sorted, (0, max_unmatched_size - teacher_unmatched_size)
+                    teacher_unmatched_sorted,
+                    (0, max_unmatched_size - teacher_unmatched_size),
                 )
             if student_unmatched_size < max_unmatched_size:
                 student_unmatched_sorted = F.pad(
-                    student_unmatched_sorted, (0, max_unmatched_size - student_unmatched_size)
+                    student_unmatched_sorted,
+                    (0, max_unmatched_size - student_unmatched_size),
                 )
 
             # L1 loss on sorted unmatched tokens
@@ -750,13 +794,15 @@ class GOLDTrainer(SFTTrainer):
     _paper = {
         "title": "Unlocking On-Policy Distillation for Any Model Family",
         # docstyle-ignore
-        "citation": textwrap.dedent("""\
+        "citation": textwrap.dedent(
+            """\
             @misc{patino2025unlocking,
                 title        = {{Unlocking On-Policy Distillation for Any Model Family}},
                 author       = {Carlos Miguel Patiño and Kashif Rasul and Quentin Gallouédec and Ben Burtenshaw and Sergio Paniego and Vaibhav Srivastav and Thibaud Frere and Ed Beeching and Lewis Tunstall and Leandro von Werra and Thomas Wolf},
                 year         = 2025,
                 url          = {https://huggingface.co/spaces/HuggingFaceH4/general-on-policy-logit-distillation},
-            }"""),
+            }"""
+        ),
     }
 
     def __init__(
@@ -767,15 +813,16 @@ class GOLDTrainer(SFTTrainer):
         data_collator: DataCollator | None = None,  # type: ignore
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
-        processing_class: PreTrainedTokenizerBase
-        | BaseImageProcessor
-        | FeatureExtractionMixin
-        | ProcessorMixin
-        | None = None,
+        processing_class: (
+            PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin | None
+        ) = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
-        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
+            None,
+            None,
+        ),
+        preprocess_logits_for_metrics: (Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None) = None,
         peft_config: Optional["PeftConfig"] = None,
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
@@ -1038,7 +1085,9 @@ class GOLDTrainer(SFTTrainer):
                 tensor_parallel_size=args.vllm_tensor_parallel_size,
                 gpu_memory_utilization=args.vllm_gpu_memory_utilization,
                 max_model_length=args.vllm_max_model_length or args.max_length,
-                max_num_seqs=args.per_device_train_batch_size * args.gradient_accumulation_steps,
+                max_num_seqs=args.per_device_train_batch_size
+                * args.gradient_accumulation_steps
+                * args.vllm_tensor_parallel_size,
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
                 repetition_penalty=getattr(args, "repetition_penalty", 1.0),
@@ -1247,7 +1296,11 @@ class GOLDTrainer(SFTTrainer):
         return completion_mask[rows_with_completion].long().argmax(dim=1).min().item()
 
     @profiling_decorator
-    def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any] | list[dict], buffer_steps: int):
+    def _fill_buffer(
+        self,
+        generation_batch: dict[str, torch.Tensor | Any] | list[dict],
+        buffer_steps: int,
+    ):
         if self._vlm_collator is not None:
             # Identity collator path: generation_batch is list[dict] with raw PIL images.
             # Split into chunks via list slicing, then collate on-the-fly per slice.
@@ -1282,15 +1335,17 @@ class GOLDTrainer(SFTTrainer):
                             ex.get("images") or ([ex["image"]] if "image" in ex else None) for ex in raw_slices[i]
                         ]
                         raw_prompts = [
-                            prepare_multimodal_messages(ex["prompt"], images=imgs)
-                            if imgs is not None
-                            else ex.get("prompt")
+                            (
+                                prepare_multimodal_messages(ex["prompt"], images=imgs)
+                                if imgs is not None
+                                else ex.get("prompt")
+                            )
                             for ex, imgs in zip(raw_slices[i], raw_images, strict=True)
                         ]
                     # Collate raw examples on-the-fly for off-policy slices
                     slice_inputs = self._vlm_collator(raw_slices[i])
                     slice_inputs = {
-                        k: v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v
+                        k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v)
                         for k, v in slice_inputs.items()
                     }
                     # Preserve raw PIL images and prompts for cross-architecture teacher processing
@@ -1386,7 +1441,13 @@ class GOLDTrainer(SFTTrainer):
                     self.generation_config,
                     self.pad_token_id,
                 )
-                new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
+                (
+                    new_input_ids,
+                    new_attention_mask,
+                    new_labels,
+                    prompt_texts,
+                    completion_texts,
+                ) = result
 
                 updated_slice = dict(slice_inputs)
                 updated_slice["input_ids"] = new_input_ids
@@ -1450,9 +1511,11 @@ class GOLDTrainer(SFTTrainer):
             # copied from GRPOTrainer
             prompts = [
                 [
-                    {**msg, "content": [{"type": "text", "text": msg["content"]}]}
-                    if isinstance(msg.get("content"), str)
-                    else msg
+                    (
+                        {**msg, "content": [{"type": "text", "text": msg["content"]}]}
+                        if isinstance(msg.get("content"), str)
+                        else msg
+                    )
                     for msg in prompt
                 ]
                 for prompt in prompts
@@ -1494,9 +1557,18 @@ class GOLDTrainer(SFTTrainer):
                     collated = self._vlm_collator(raw_examples)
                     collated = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in collated.items()}
                     result = self.generate_on_policy_outputs(
-                        unwrapped_model, collated, self.generation_config, self.pad_token_id
+                        unwrapped_model,
+                        collated,
+                        self.generation_config,
+                        self.pad_token_id,
                     )
-                    new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
+                    (
+                        new_input_ids,
+                        new_attention_mask,
+                        new_labels,
+                        prompt_texts,
+                        completion_texts,
+                    ) = result
 
                     updated_slice = dict(collated)
                     updated_slice["input_ids"] = new_input_ids
@@ -1522,7 +1594,10 @@ class GOLDTrainer(SFTTrainer):
                         updated_slice["_raw_prompts"] = prompts
 
                     self._buffered_inputs[slice_idx] = updated_slice
-                    self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
+                    self._buffered_text_logs[slice_idx] = (
+                        prompt_texts,
+                        completion_texts,
+                    )
             return
 
         # vLLM path: one batched generate call across all slices
@@ -1533,17 +1608,12 @@ class GOLDTrainer(SFTTrainer):
             self.vllm_generation.sync_weights()
             self._last_vllm_sync_step = self.state.global_step
 
-        # `vllm_generation.generate` returns one completion per input prompt entry and expects the
-        # caller to pre-duplicate prompts `num_generations` times (same contract as GRPOTrainer).
-        # Without this duplication, colocate mode (which hardcodes n=1) yields only `len(prompts)`
-        # completions while the redistribution below expects `len(prompts) * num_generations`.
-        dup_prompt_ids = [ids for ids in all_prompt_ids for _ in range(self.num_generations)]
         if any(img is not None for img in all_images):
-            generate_images = [img for img in all_images for _ in range(self.num_generations)]
+            generate_images = all_images
         else:
             generate_images = None
         _, completion_ids, _, _ = self.vllm_generation.generate(
-            prompts=dup_prompt_ids,
+            prompts=all_prompt_ids,
             images=generate_images,
             num_generations=self.num_generations,
         )
@@ -1555,12 +1625,15 @@ class GOLDTrainer(SFTTrainer):
             if len(comp_ids) > max_completion_length:
                 comp_ids = comp_ids[:max_completion_length]
             all_completion_texts.append(
-                self.processing_class.decode(comp_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                self.processing_class.decode(
+                    comp_ids,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
+                )
             )
 
-        # Redistribute completions to slices. Completions now align 1:1 with the duplicated inputs,
-        # so `comp_idx` is a single running counter; raw example/prompt/image entries still reference
-        # the original unique example `i` since those are shared across the `num_generations` copies.
+        # Redistribute completions to slices. The RepeatSampler has already duplicated examples
+        # `num_generations` times, so completions align 1:1 with the sampled input entries.
         slice_completions = {idx: [] for idx in on_policy_indices}
         slice_raw = {idx: [] for idx in on_policy_indices}
         slice_images = {idx: [] for idx in on_policy_indices}
@@ -1570,14 +1643,13 @@ class GOLDTrainer(SFTTrainer):
 
         comp_idx = 0
         for i, slice_idx in enumerate(local_slice_indices):
-            for _ in range(self.num_generations):
-                slice_completions[slice_idx].append(all_completion_texts[comp_idx])
-                slice_raw[slice_idx].append(all_raw_examples[i])
-                slice_images[slice_idx].append(all_images[i])
-                slice_prompts[slice_idx].append(all_prompts[i])
-                slice_prompts_text[slice_idx].append(all_prompts_text[i])
-                slice_prompts_text_special[slice_idx].append(all_prompts_text_with_special[i])
-                comp_idx += 1
+            slice_completions[slice_idx].append(all_completion_texts[comp_idx])
+            slice_raw[slice_idx].append(all_raw_examples[i])
+            slice_images[slice_idx].append(all_images[i])
+            slice_prompts[slice_idx].append(all_prompts[i])
+            slice_prompts_text[slice_idx].append(all_prompts_text[i])
+            slice_prompts_text_special[slice_idx].append(all_prompts_text_with_special[i])
+            comp_idx += 1
 
         for slice_idx in on_policy_indices:
             completion_texts = slice_completions[slice_idx]
@@ -1592,7 +1664,10 @@ class GOLDTrainer(SFTTrainer):
                 # Wrap as content blocks so VLM chat templates (e.g. SmolVLM) that index
                 # `message.content[0]` can render the synthetic assistant turn.
                 synthetic["completion"] = [
-                    {"role": "assistant", "content": [{"type": "text", "text": completion_texts[i]}]}
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": completion_texts[i]}],
+                    }
                 ]
                 synthetic_examples.append(synthetic)
 
@@ -1607,7 +1682,10 @@ class GOLDTrainer(SFTTrainer):
                 collated["_raw_prompts"] = prompts_for_slice
 
             self._buffered_inputs[slice_idx] = collated
-            self._buffered_text_logs[slice_idx] = (slice_prompts_text[slice_idx], completion_texts)
+            self._buffered_text_logs[slice_idx] = (
+                slice_prompts_text[slice_idx],
+                completion_texts,
+            )
 
     def _process_completions_to_buffer(
         self,
@@ -1671,7 +1749,11 @@ class GOLDTrainer(SFTTrainer):
                     padded_completion_ids_list.append(truncated_completion_tensor)
                     completion_ids_for_text.append(truncated_completion_tensor.tolist())
                     completion_attention_masks.append(
-                        torch.ones(len(truncated_completion_tensor), device=device, dtype=torch.long)
+                        torch.ones(
+                            len(truncated_completion_tensor),
+                            device=device,
+                            dtype=torch.long,
+                        )
                     )
                 elif len(completion_tensor) < max_completion_length:
                     padding_needed = max_completion_length - len(completion_tensor)
@@ -1691,7 +1773,11 @@ class GOLDTrainer(SFTTrainer):
                     completion_attention_masks.append(
                         torch.cat(
                             [
-                                torch.ones(len(completion_tensor), device=device, dtype=torch.long),
+                                torch.ones(
+                                    len(completion_tensor),
+                                    device=device,
+                                    dtype=torch.long,
+                                ),
                                 torch.zeros(padding_needed, device=device, dtype=torch.long),
                             ]
                         )
@@ -1735,7 +1821,7 @@ class GOLDTrainer(SFTTrainer):
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
-        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
+        processing_class: (PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin),
         args,
         packing: bool,
         formatting_func: Callable[[dict], str] | None,
@@ -1760,7 +1846,7 @@ class GOLDTrainer(SFTTrainer):
     def _prepare_dataset_with_original_text(
         self,
         dataset: Dataset | IterableDataset,
-        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
+        processing_class: (PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin),
         args,
         packing: bool,
         formatting_func: Callable[[dict], str] | None,
@@ -1791,7 +1877,7 @@ class GOLDTrainer(SFTTrainer):
             column_names = next(iter(dataset)).keys()
             dataset = dataset.map(
                 maybe_convert_to_chatml,
-                remove_columns="conversations" if "conversations" in column_names else None,
+                remove_columns=("conversations" if "conversations" in column_names else None),
                 **map_kwargs,
             )
 
@@ -1811,7 +1897,7 @@ class GOLDTrainer(SFTTrainer):
                 dataset = dataset.map(
                     add_eos,
                     fn_kwargs={"eos_token": processing_class.eos_token},
-                    remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
+                    remove_columns=("messages" if "messages" in column_names else None),  # renamed to "text"
                     **map_kwargs,
                 )
 
@@ -1830,7 +1916,9 @@ class GOLDTrainer(SFTTrainer):
 
                     if is_conversational(example):
                         prompt_ids = processing_class.apply_chat_template(
-                            example["prompt"], return_dict=False, **example.get("chat_template_kwargs", {})
+                            example["prompt"],
+                            return_dict=False,
+                            **example.get("chat_template_kwargs", {}),
                         )
                         prompt_completion_ids = processing_class.apply_chat_template(
                             example["prompt"] + example["completion"],
@@ -1907,7 +1995,9 @@ class GOLDTrainer(SFTTrainer):
                         else:
                             # Fallback: use empty prompt and full text as completion
                             full_text = processing_class.apply_chat_template(
-                                messages, tokenize=False, **example.get("chat_template_kwargs", {})
+                                messages,
+                                tokenize=False,
+                                **example.get("chat_template_kwargs", {}),
                             )
                             result["original_prompt_text"] = ""
                             result["original_completion_text"] = full_text
@@ -1940,7 +2030,11 @@ class GOLDTrainer(SFTTrainer):
                         result.update(
                             {
                                 "input_ids": tokenized.input_ids,
-                                "attention_mask": getattr(tokenized, "attention_mask", [1] * len(tokenized.input_ids)),
+                                "attention_mask": getattr(
+                                    tokenized,
+                                    "attention_mask",
+                                    [1] * len(tokenized.input_ids),
+                                ),
                             }
                         )
 
@@ -1963,7 +2057,11 @@ class GOLDTrainer(SFTTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
 
-                columns_to_keep = ["input_ids", "original_prompt_text", "original_completion_text"]
+                columns_to_keep = [
+                    "input_ids",
+                    "original_prompt_text",
+                    "original_completion_text",
+                ]
                 existing_columns = set(dataset.column_names)
                 columns_to_select = [col for col in columns_to_keep if col in existing_columns]
 
@@ -2042,7 +2140,12 @@ class GOLDTrainer(SFTTrainer):
             # log(a + b) = log(exp(log(a)) + exp(log(b))) -> for mixture
             beta = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
             mixture_log_probs = torch.logsumexp(
-                torch.stack([student_log_probs + torch.log1p(-beta), teacher_log_probs + torch.log(beta)]),
+                torch.stack(
+                    [
+                        student_log_probs + torch.log1p(-beta),
+                        teacher_log_probs + torch.log(beta),
+                    ]
+                ),
                 dim=0,
             )
 
@@ -2241,7 +2344,9 @@ class GOLDTrainer(SFTTrainer):
                     base_student = unwrapped_student.get_decoder()
                 else:
                     base_student = getattr(
-                        unwrapped_student, getattr(unwrapped_student, "base_model_prefix", "model"), unwrapped_student
+                        unwrapped_student,
+                        getattr(unwrapped_student, "base_model_prefix", "model"),
+                        unwrapped_student,
                     )
 
                 student_outputs = base_student(
@@ -2257,7 +2362,9 @@ class GOLDTrainer(SFTTrainer):
                     base_teacher = unwrapped_teacher.get_decoder()
                 else:
                     base_teacher = getattr(
-                        unwrapped_teacher, getattr(unwrapped_teacher, "base_model_prefix", "model"), unwrapped_teacher
+                        unwrapped_teacher,
+                        getattr(unwrapped_teacher, "base_model_prefix", "model"),
+                        unwrapped_teacher,
                     )
                 with torch.no_grad():
                     teacher_outputs = base_teacher(
@@ -2277,7 +2384,9 @@ class GOLDTrainer(SFTTrainer):
 
                 labels_mask = inputs["labels"] != -100
                 masked_input_ids = torch.where(
-                    labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100)
+                    labels_mask,
+                    inputs["input_ids"],
+                    torch.full_like(inputs["input_ids"], -100),
                 )
                 true_labels = masked_input_ids[:, 1:].contiguous().reshape(-1)
 
@@ -2431,7 +2540,13 @@ class GOLDTrainer(SFTTrainer):
                 )
             )
 
-        return new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts
+        return (
+            new_input_ids,
+            new_attention_mask,
+            new_labels,
+            prompt_texts,
+            completion_texts,
+        )
 
     def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
         if not self.use_liger_gkd_loss:
@@ -2456,7 +2571,10 @@ class GOLDTrainer(SFTTrainer):
 
     @profiling_decorator
     def training_step(
-        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        num_items_in_batch: int | None = None,
     ) -> torch.Tensor:
         """
         Perform a training step for the General Online Logit Distillation (GOLD) model.

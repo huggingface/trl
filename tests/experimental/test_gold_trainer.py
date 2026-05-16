@@ -20,9 +20,16 @@ from datasets import Dataset, load_dataset
 from transformers import AutoProcessor, AutoTokenizer
 
 from trl.experimental.gold import gold_trainer as gold_trainer_module
-from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, build_teacher_inputs_from_texts
-from trl.experimental.utils import DataCollatorForChatML, DataCollatorForVisionLanguageChatML
-from trl.trainer.utils import identity
+from trl.experimental.gold.gold_trainer import (
+    GOLDTrainer,
+    ULDLoss,
+    build_teacher_inputs_from_texts,
+)
+from trl.experimental.utils import (
+    DataCollatorForChatML,
+    DataCollatorForVisionLanguageChatML,
+)
+from trl.trainer.utils import RepeatSampler, identity
 
 
 @pytest.fixture(scope="module")
@@ -329,7 +336,12 @@ def test_process_completions_to_buffer_left_pads_prompt_ids():
         pad_token_id = 0
         pad_token = "<pad>"
 
-        def batch_decode(self, sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+        def batch_decode(
+            self,
+            sequences,
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        ):
             del skip_special_tokens, clean_up_tokenization_spaces
             return [" ".join(str(token) for token in sequence) for sequence in sequences]
 
@@ -354,8 +366,14 @@ def test_process_completions_to_buffer_left_pads_prompt_ids():
     )
 
     buffered_inputs = trainer._buffered_inputs[0]
-    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[0, 11, 31], [21, 22, 41]], dtype=torch.long))
-    assert torch.equal(buffered_inputs["attention_mask"], torch.tensor([[0, 1, 1], [1, 1, 1]], dtype=torch.long))
+    assert torch.equal(
+        buffered_inputs["input_ids"],
+        torch.tensor([[0, 11, 31], [21, 22, 41]], dtype=torch.long),
+    )
+    assert torch.equal(
+        buffered_inputs["attention_mask"],
+        torch.tensor([[0, 1, 1], [1, 1, 1]], dtype=torch.long),
+    )
     assert torch.equal(buffered_inputs["labels"], torch.tensor([[-100, -100, 31], [-100, -100, 41]]))
 
 
@@ -378,7 +396,12 @@ def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_promp
         pad_token_id = 9
         pad_token = "<eos>"
 
-        def batch_decode(self, sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+        def batch_decode(
+            self,
+            sequences,
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        ):
             del clean_up_tokenization_spaces
             decoded = []
             token_map = {5: "A", 6: "B", 9: "<eos>"}
@@ -465,7 +488,12 @@ def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens()
         def __init__(self):
             self.truncation_side = "right"
 
-        def batch_decode(self, sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+        def batch_decode(
+            self,
+            sequences,
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        ):
             del clean_up_tokenization_spaces
             token_map = {0: "<pad>", 5: "A", 6: "B", 13: "<special>", 42: "C"}
             decoded = []
@@ -510,8 +538,14 @@ def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens()
     assert trainer.vllm_generation.prompts == [[5, 13, 6]]
     assert trainer.vllm_generation.sync_calls == 1
     assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[5, 13, 6, 42]], dtype=torch.long))
-    assert torch.equal(buffered_inputs["attention_mask"], torch.tensor([[1, 1, 1, 1]], dtype=torch.long))
-    assert torch.equal(buffered_inputs["labels"], torch.tensor([[-100, -100, -100, 42]], dtype=torch.long))
+    assert torch.equal(
+        buffered_inputs["attention_mask"],
+        torch.tensor([[1, 1, 1, 1]], dtype=torch.long),
+    )
+    assert torch.equal(
+        buffered_inputs["labels"],
+        torch.tensor([[-100, -100, -100, 42]], dtype=torch.long),
+    )
     assert buffered_inputs["original_prompt_text"] == ["A <special> B"]
     assert buffered_inputs["original_completion_text"] == ["C"]
     assert trainer._buffered_text_logs[0] == (["A B"], ["C"])
@@ -555,7 +589,14 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
         preprocess_logits_for_metrics=None,
         peft_config=None,
     ):
-        del data_collator, train_dataset, eval_dataset, compute_metrics, callbacks, optimizers
+        del (
+            data_collator,
+            train_dataset,
+            eval_dataset,
+            compute_metrics,
+            callbacks,
+            optimizers,
+        )
         del preprocess_logits_for_metrics, peft_config
         self.model = model
         self.args = args
@@ -753,7 +794,10 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
 
     padded_prompt_len = prompt_tensor.shape[1]
     assert torch.all(new_labels[0, :padded_prompt_len] == -100)
-    assert torch.equal(new_labels[0, padded_prompt_len:], torch.tensor(completion_ids, dtype=torch.long))
+    assert torch.equal(
+        new_labels[0, padded_prompt_len:],
+        torch.tensor(completion_ids, dtype=torch.long),
+    )
 
     assert prompt_texts[0] == llama_tokenizer.decode(prompt_ids, skip_special_tokens=False)
     assert completion_texts[0] == llama_tokenizer.decode(completion_ids, skip_special_tokens=False)
@@ -779,7 +823,10 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
         trainer,
         DummyModel(),
-        {"prompts": batch["prompts"], "prompt_attention_mask": batch["prompt_attention_mask"]},
+        {
+            "prompts": batch["prompts"],
+            "prompt_attention_mask": batch["prompt_attention_mask"],
+        },
         generation_config,
         pad_id,
     )
@@ -1069,7 +1116,14 @@ def test_gold_trainer_init_rejects_llm_with_vision_dataset(monkeypatch):
         preprocess_logits_for_metrics=None,
         peft_config=None,
     ):
-        del data_collator, train_dataset, eval_dataset, compute_metrics, callbacks, optimizers
+        del (
+            data_collator,
+            train_dataset,
+            eval_dataset,
+            compute_metrics,
+            callbacks,
+            optimizers,
+        )
         del preprocess_logits_for_metrics, peft_config
         self.model = model
         self.args = args
@@ -1355,7 +1409,14 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
         preprocess_logits_for_metrics=None,
         peft_config=None,
     ):
-        del data_collator, train_dataset, eval_dataset, compute_metrics, callbacks, optimizers
+        del (
+            data_collator,
+            train_dataset,
+            eval_dataset,
+            compute_metrics,
+            callbacks,
+            optimizers,
+        )
         del preprocess_logits_for_metrics, peft_config
         self.model = model
         self.args = args
@@ -1412,13 +1473,17 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
 
 def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
     """When a VLM processor is used with lmbda > 0 and use_vllm=True, GOLDTrainer should use the identity collator
-    and store a _vlm_collator for on-the-fly collation. vLLM should be initialized with max_model_length from args."""
+    and store a _vlm_collator for on-the-fly collation. vLLM should be initialized with max_model_length from args.
+    """
     captured = {}
 
     class DummyStudentModel:
         def __init__(self):
             self.config = SimpleNamespace(
-                _name_or_path="student", vocab_size=17, vision_config=True, model_type="dummy_vlm"
+                _name_or_path="student",
+                vocab_size=17,
+                vision_config=True,
+                model_type="dummy_vlm",
             )
             self.config.get_text_config = lambda: self.config
             self.generation_config = SimpleNamespace(eos_token_id=2)
@@ -1538,7 +1603,10 @@ def _make_dummy_vlm_models(student_model_type, teacher_model_type):
     class DummyStudentModel:
         def __init__(self):
             self.config = SimpleNamespace(
-                _name_or_path="student", vocab_size=17, vision_config=True, model_type=student_model_type
+                _name_or_path="student",
+                vocab_size=17,
+                vision_config=True,
+                model_type=student_model_type,
             )
             self.config.get_text_config = lambda: self.config
             self.generation_config = SimpleNamespace(eos_token_id=2)
@@ -1546,7 +1614,11 @@ def _make_dummy_vlm_models(student_model_type, teacher_model_type):
 
     class DummyTeacherModel:
         def __init__(self):
-            self.config = SimpleNamespace(_name_or_path="teacher", vision_config=True, model_type=teacher_model_type)
+            self.config = SimpleNamespace(
+                _name_or_path="teacher",
+                vision_config=True,
+                model_type=teacher_model_type,
+            )
             self.resized_to = None
 
         def resize_token_embeddings(self, vocab_size):
@@ -1649,7 +1721,11 @@ def test_cross_architecture_vlm_without_uld_raises_error(monkeypatch):
             return sentinel_processor
         return real_auto_processor_from_pretrained(name, **kwargs)
 
-    monkeypatch.setattr(gold_trainer_module.AutoProcessor, "from_pretrained", staticmethod(patched_auto_processor))
+    monkeypatch.setattr(
+        gold_trainer_module.AutoProcessor,
+        "from_pretrained",
+        staticmethod(patched_auto_processor),
+    )
 
     vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
     student, teacher = _make_dummy_vlm_models("smolvlm", "qwen2_5_vl")
@@ -1709,7 +1785,11 @@ def test_cross_architecture_vlm_with_uld_sets_teacher_processor(monkeypatch):
             return sentinel_processor
         return real_auto_processor_from_pretrained(name, **kwargs)
 
-    monkeypatch.setattr(gold_trainer_module.AutoProcessor, "from_pretrained", staticmethod(patched_auto_processor))
+    monkeypatch.setattr(
+        gold_trainer_module.AutoProcessor,
+        "from_pretrained",
+        staticmethod(patched_auto_processor),
+    )
 
     # Monkeypatch AutoTokenizer.from_pretrained for ULD teacher tokenizer loading
     sentinel_tokenizer = SimpleNamespace(pad_token="<pad>", eos_token="</s>")
@@ -1720,7 +1800,11 @@ def test_cross_architecture_vlm_with_uld_sets_teacher_processor(monkeypatch):
             return sentinel_tokenizer
         return real_auto_tokenizer_from_pretrained(name, **kwargs)
 
-    monkeypatch.setattr(gold_trainer_module.AutoTokenizer, "from_pretrained", staticmethod(patched_auto_tokenizer))
+    monkeypatch.setattr(
+        gold_trainer_module.AutoTokenizer,
+        "from_pretrained",
+        staticmethod(patched_auto_tokenizer),
+    )
 
     vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
     student, teacher = _make_dummy_vlm_models("smolvlm", "qwen2_5_vl")
@@ -1819,14 +1903,13 @@ def test_same_architecture_vlm_no_teacher_processor(monkeypatch):
     assert trainer._vlm_collator is not None
 
 
-def test_on_policy_vlm_vllm_duplicates_prompts_for_num_generations(monkeypatch):
-    """Regression: in the vLLM path, `_generate_on_policy_vlm_raw` must pre-duplicate prompts
-    `num_generations` times to satisfy `vllm_generation.generate`'s contract (which returns one completion per input
-    prompt entry; colocate mode hardcodes `n=1`). Without duplication, the redistribution loop raised `IndexError` for
-    `num_generations > 1`.
+def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatch):
+    """The VLM vLLM path must rely on RepeatSampler for `num_generations` duplication.
+
+    `VLLMGeneration.generate` expects the incoming prompt batch to already contain the repeated prompt entries,
+    matching the text-only path. Duplicating here again would produce `num_generations ** 2` completions.
     """
     num_generations = 3
-    num_prompts_per_slice = 2
     num_slices = 2
 
     trainer = GOLDTrainer.__new__(GOLDTrainer)
@@ -1885,33 +1968,44 @@ def test_on_policy_vlm_vllm_duplicates_prompts_for_num_generations(monkeypatch):
         def __init__(self, tag):
             self.tag = tag
 
+    unique_prompts_per_slice = 2
+    unique_examples = [
+        {"prompt": [{"role": "user", "content": f"q{i}"}], "image": FakeImage(str(i))}
+        for i in range(num_slices * unique_prompts_per_slice)
+    ]
+    sampler = RepeatSampler(
+        unique_examples,
+        mini_repeat_count=num_generations,
+        batch_size=len(unique_examples),
+        shuffle=False,
+    )
+    sampled_examples = [unique_examples[i] for i in sampler]
     raw_slices = [
-        [
-            {"prompt": [{"role": "user", "content": f"q{slice_idx}_{i}"}], "image": FakeImage(f"{slice_idx}_{i}")}
-            for i in range(num_prompts_per_slice)
-        ]
-        for slice_idx in range(num_slices)
+        sampled_examples[i : i + unique_prompts_per_slice * num_generations]
+        for i in range(0, len(sampled_examples), unique_prompts_per_slice * num_generations)
     ]
     on_policy_indices = list(range(num_slices))
 
     # Bypass multimodal-message helper; its exact shape is irrelevant to this regression.
-    monkeypatch.setattr(gold_trainer_module, "prepare_multimodal_messages", lambda prompt, images: prompt)
+    monkeypatch.setattr(
+        gold_trainer_module,
+        "prepare_multimodal_messages",
+        lambda prompt, images: prompt,
+    )
 
     trainer._generate_on_policy_vlm_raw(raw_slices, on_policy_indices)
 
-    total_unique_prompts = num_slices * num_prompts_per_slice
-    # The fix: prompts (and images) are pre-duplicated `num_generations` times before
-    # being handed to vllm_generation.generate.
-    assert received["n_prompts"] == total_unique_prompts * num_generations
-    assert received["n_images"] == total_unique_prompts * num_generations
+    total_sampled_prompts = num_slices * unique_prompts_per_slice * num_generations
+    assert received["n_prompts"] == total_sampled_prompts
+    assert received["n_images"] == total_sampled_prompts
 
-    # Each slice ends up with `num_prompts_per_slice * num_generations` synthetic examples.
+    # Each slice ends up with one synthetic example per sampled prompt entry.
     assert len(collated_per_call) == num_slices
     for synthetic in collated_per_call:
-        assert len(synthetic) == num_prompts_per_slice * num_generations
+        assert len(synthetic) == unique_prompts_per_slice * num_generations
 
     # Buffers populated for every on-policy slice without IndexError.
     for slice_idx in on_policy_indices:
         assert slice_idx in trainer._buffered_inputs
         _, completion_texts = trainer._buffered_text_logs[slice_idx]
-        assert len(completion_texts) == num_prompts_per_slice * num_generations
+        assert len(completion_texts) == unique_prompts_per_slice * num_generations
