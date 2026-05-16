@@ -61,7 +61,7 @@ class SelfDistillationCaptureCallback(TrainerCallback):
 
 
 class TestSDPOTrainer(TrlTestCase):
-    def test_training_with_positional_config_argument(self):
+    def test_train_with_positional_config_argument(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2."],
@@ -172,7 +172,7 @@ class TestSDPOTrainer(TrlTestCase):
         assert trainer.vllm_generation.sync_weights_call_count == 2
         assert trainer._last_loaded_step == 5
 
-    def test_training(self):
+    def test_train(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SDPOConfig(
@@ -201,9 +201,9 @@ class TestSDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Parameter {n} has not changed."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_without_successful_rollouts(self):
+    def test_train_without_successful_rollouts(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SDPOConfig(
@@ -230,7 +230,7 @@ class TestSDPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_training_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
+    def test_train_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2.", "Solve 3+3."]})
 
         training_args = SDPOConfig(
@@ -341,7 +341,7 @@ class TestSDPOTrainer(TrlTestCase):
         assert "{{" not in capture_callback.captured_teacher_input_text
         assert "}}" not in capture_callback.captured_teacher_input_text
 
-    def test_training_with_conversational_prompts_preserves_context(self):
+    def test_train_with_conversational_prompts_preserves_context(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": [
@@ -387,7 +387,7 @@ class TestSDPOTrainer(TrlTestCase):
         assert "Solve 2+2" in capture_callback.captured_teacher_input_text
         assert capture_callback.captured_self_distillation_mask is not None
 
-    def test_training_with_feedback_only_reprompts_teacher(self):
+    def test_train_with_feedback_only_reprompts_teacher(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": [
@@ -432,7 +432,7 @@ class TestSDPOTrainer(TrlTestCase):
         assert capture_callback.captured_self_distillation_mask is not None
         assert capture_callback.captured_self_distillation_mask[0].item() == 1.0
 
-    def test_training_warns_when_sdpo_rewards_are_flat(self, caplog):
+    def test_train_warns_when_sdpo_rewards_are_flat(self, caplog):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SDPOConfig(
@@ -461,7 +461,7 @@ class TestSDPOTrainer(TrlTestCase):
         assert "Observed flat SDPO rewards across all sampled generations" in caplog.text
         assert "SDPO self-distillation is inactive because no reprompted samples were constructed" in caplog.text
 
-    def test_training_preserves_teacher_completion_attention_mask(self):
+    def test_train_preserves_teacher_completion_attention_mask(self):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
 
         training_args = SDPOConfig(

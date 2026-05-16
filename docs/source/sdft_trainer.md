@@ -69,6 +69,29 @@ SDFT-specific hook:
 
 - `on_generation_prompts_selected`: fired when SDFT chooses the prompt source for on-policy generation. The payload includes the selected `generation_prompts` and the corresponding `generation_prompt_text`.
 
+## Example script
+
+Use [`trl/experimental/sdft/sdft.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/sdft/sdft.py) to launch SDFT training from the command line. The script supports any causal LM from the Hub, custom local datasets via `--dataset_path`, and PEFT/LoRA via the standard `ModelConfig` flags.
+
+```bash
+python trl/experimental/sdft/sdft.py \
+    --model_name_or_path Qwen/Qwen3.5-0.8B \
+    --dataset_name your-org/your-dataset \
+    --output_dir outputs/sdft-qwen3.5-0.8b \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 16 \
+    --learning_rate 2e-5 \
+    --max_prompt_length 1024 \
+    --max_completion_length 512 \
+    --generate_from_teacher \
+    --sync_ref_model \
+    --ref_model_sync_steps 1 \
+    --ref_model_mixup_alpha 0.01 \
+    --eval_strategy steps \
+    --eval_steps 50 \
+    --report_to wandb
+```
+
 ## SDFTConfig
 
 [[autodoc]] experimental.sdft.SDFTConfig

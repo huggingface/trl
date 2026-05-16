@@ -26,7 +26,12 @@ except PackageNotFoundError:
     __version__ = "unknown"
 
 _import_structure = {
-    "chat_template_utils": ["add_response_schema", "clone_chat_template", "get_training_chat_template"],
+    "chat_template_utils": [
+        "add_response_schema",
+        "clone_chat_template",
+        "get_training_chat_template",
+        "supports_tool_calling",
+    ],
     "data_utils": [
         "apply_chat_template",
         "extract_prompt",
@@ -69,7 +74,12 @@ _import_structure = {
 }
 
 if TYPE_CHECKING:
-    from .chat_template_utils import add_response_schema, clone_chat_template, get_training_chat_template
+    from .chat_template_utils import (
+        add_response_schema,
+        clone_chat_template,
+        get_training_chat_template,
+        supports_tool_calling,
+    )
     from .data_utils import (
         apply_chat_template,
         extract_prompt,
