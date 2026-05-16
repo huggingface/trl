@@ -18,6 +18,7 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
+from copy import deepcopy
 from functools import partial
 from typing import Any, Optional
 
@@ -1220,6 +1221,23 @@ class GOLDTrainer(SFTTrainer):
         return new_attention_mask, new_labels
 
     @staticmethod
+    def _get_prompt_sequence_key(inputs: dict[str, torch.Tensor | Any], key: str) -> torch.Tensor:
+        """Align a sequence-length-dependent key with the left-padded prompt tensor."""
+        values = inputs[key]
+        prompts = inputs["prompts"]
+        prompt_attention_mask = inputs.get("prompt_attention_mask")
+
+        if prompt_attention_mask is None:
+            return values[:, : prompts.shape[1]]
+
+        prompt_values = values.new_zeros(prompts.shape)
+        for i, mask in enumerate(prompt_attention_mask.bool()):
+            prompt_length = int(mask.sum().item())
+            if prompt_length:
+                prompt_values[i, mask] = values[i, :prompt_length]
+        return prompt_values
+
+    @staticmethod
     def _get_min_completion_start_from_labels(labels: torch.Tensor) -> int:
         """Return the earliest completion start, ignoring rows with no completion labels."""
         completion_mask = labels != -100
@@ -1379,7 +1397,7 @@ class GOLDTrainer(SFTTrainer):
                 prompt_seq_len = slice_inputs["prompts"].shape[1]
                 for k in ("token_type_ids", "mm_token_type_ids"):
                     if k in updated_slice:
-                        prompt_part = updated_slice[k][:, :prompt_seq_len]
+                        prompt_part = self._get_prompt_sequence_key(slice_inputs, k)
                         comp_part = torch.zeros(
                             new_input_ids.shape[0],
                             new_seq_len - prompt_seq_len,
@@ -1396,6 +1414,7 @@ class GOLDTrainer(SFTTrainer):
     def _generate_on_policy_vlm_raw(self, raw_slices: list[list[dict]], on_policy_indices: list[int]):
         """On-policy generation from raw VLM examples, preserving PIL images for vLLM."""
         device = self.accelerator.device
+        raw_slices = deepcopy(raw_slices)
 
         # Phase 1: Collect prompts, images, and raw examples across all on-policy slices
         all_prompt_ids = []
@@ -1468,43 +1487,43 @@ class GOLDTrainer(SFTTrainer):
 
         if not self.use_vllm:
             # Non-vLLM path: generate per-slice using model.generate
-            for slice_idx in on_policy_indices:
-                raw_examples, images, prompts, _ = slice_raw_data[slice_idx]
-                collated = self._vlm_collator(raw_examples)
-                collated = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in collated.items()}
-                with unwrap_model_for_generation(
-                    self.model, self.accelerator, generation_kwargs=self.generation_kwargs
-                ) as unwrapped_model:
+            with unwrap_model_for_generation(
+                self.model, self.accelerator, generation_kwargs=self.generation_kwargs
+            ) as unwrapped_model:
+                for slice_idx in on_policy_indices:
+                    raw_examples, images, prompts, _ = slice_raw_data[slice_idx]
+                    collated = self._vlm_collator(raw_examples)
+                    collated = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in collated.items()}
                     result = self.generate_on_policy_outputs(
                         unwrapped_model, collated, self.generation_config, self.pad_token_id
                     )
-                new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
+                    new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
 
-                updated_slice = dict(collated)
-                updated_slice["input_ids"] = new_input_ids
-                updated_slice["attention_mask"] = new_attention_mask
-                updated_slice["labels"] = new_labels
-                # Rebuild sequence-length-dependent keys to match new input_ids shape
-                new_seq_len = new_input_ids.shape[1]
-                prompt_seq_len = collated["prompts"].shape[1]
-                for k in ("token_type_ids", "mm_token_type_ids"):
-                    if k in updated_slice:
-                        prompt_part = updated_slice[k][:, :prompt_seq_len]
-                        comp_part = torch.zeros(
-                            new_input_ids.shape[0],
-                            new_seq_len - prompt_seq_len,
-                            dtype=updated_slice[k].dtype,
-                            device=new_input_ids.device,
-                        )
-                        updated_slice[k] = torch.cat([prompt_part, comp_part], dim=1)
-                updated_slice["original_prompt_text"] = prompt_texts
-                updated_slice["original_completion_text"] = completion_texts
-                if self._teacher_processor is not None:
-                    updated_slice["_raw_images"] = images
-                    updated_slice["_raw_prompts"] = prompts
+                    updated_slice = dict(collated)
+                    updated_slice["input_ids"] = new_input_ids
+                    updated_slice["attention_mask"] = new_attention_mask
+                    updated_slice["labels"] = new_labels
+                    # Rebuild sequence-length-dependent keys to match new input_ids shape
+                    new_seq_len = new_input_ids.shape[1]
+                    prompt_seq_len = collated["prompts"].shape[1]
+                    for k in ("token_type_ids", "mm_token_type_ids"):
+                        if k in updated_slice:
+                            prompt_part = self._get_prompt_sequence_key(collated, k)
+                            comp_part = torch.zeros(
+                                new_input_ids.shape[0],
+                                new_seq_len - prompt_seq_len,
+                                dtype=updated_slice[k].dtype,
+                                device=new_input_ids.device,
+                            )
+                            updated_slice[k] = torch.cat([prompt_part, comp_part], dim=1)
+                    updated_slice["original_prompt_text"] = prompt_texts
+                    updated_slice["original_completion_text"] = completion_texts
+                    if self._teacher_processor is not None:
+                        updated_slice["_raw_images"] = images
+                        updated_slice["_raw_prompts"] = prompts
 
-                self._buffered_inputs[slice_idx] = updated_slice
-                self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
+                    self._buffered_inputs[slice_idx] = updated_slice
+                    self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
             return
 
         # vLLM path: one batched generate call across all slices
@@ -2088,9 +2107,14 @@ class GOLDTrainer(SFTTrainer):
                     full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
                 ]
 
+            if self._is_vlm and self._teacher_processor is None:
+                teacher_input_ids = inputs["input_ids"]
+                teacher_labels = inputs["labels"].clone()
+                teacher_attention_mask = inputs["attention_mask"]
+                teacher_prompt_length = self._get_min_completion_start_from_labels(inputs["labels"])
             # For cross-architecture VLMs, build teacher inputs with image placeholders by processing
             # prompts through the teacher's processor with raw images, then appending completions.
-            if self._teacher_processor is not None and "_raw_images" in inputs:
+            elif self._teacher_processor is not None and "_raw_images" in inputs:
                 raw_images = inputs["_raw_images"]
                 raw_prompts = inputs["_raw_prompts"]
                 # Apply teacher's chat template to get prompt text with correct image placeholders
@@ -2343,7 +2367,7 @@ class GOLDTrainer(SFTTrainer):
             prompt_seq_len = inputs["prompts"].shape[1]
             for k in ("token_type_ids", "mm_token_type_ids"):
                 if k in generate_kwargs:
-                    generate_kwargs[k] = generate_kwargs[k][:, :prompt_seq_len]
+                    generate_kwargs[k] = self._get_prompt_sequence_key(inputs, k)
             generated_outputs = model.generate(
                 input_ids=inputs["prompts"],
                 attention_mask=inputs.get("prompt_attention_mask", None),

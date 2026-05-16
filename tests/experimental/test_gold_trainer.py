@@ -289,16 +289,20 @@ def qwen3_vl_processor():
 
 
 @pytest.fixture(scope="module")
-def vlm_examples():
+def vlm_dataset():
     try:
-        dataset = load_dataset(
+        return load_dataset(
             "trl-internal-testing/zen-image",
             "conversational_prompt_completion",
             split="train[:3]",
         )
     except Exception as exc:  # pragma: no cover - network/environment dependent
         pytest.skip(f"zen-image dataset unavailable: {exc}")
-    return [dict(row) for row in dataset]
+
+
+@pytest.fixture
+def vlm_examples(vlm_dataset):
+    return [dict(row) for row in vlm_dataset]
 
 
 def encode_prompt_completion(tokenizer, prompt, completion):
@@ -708,6 +712,7 @@ def test_get_start_and_size_answers_skips_prompt_tokens():
 def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.processing_class = llama_tokenizer
+    trainer.use_transformers_paged = False
 
     prompt_text = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\nHello?<|eot_id|>"
     completion_text = "<|start_header_id|>assistant<|end_header_id|>\nHi there!"
@@ -759,6 +764,7 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
 def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1_examples):
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.processing_class = smollm_tokenizer
+    trainer.use_transformers_paged = False
 
     collator = DataCollatorForChatML(tokenizer=smollm_tokenizer)
     batch = collator([openr1_examples[0]])
@@ -1418,6 +1424,7 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
             self.config = SimpleNamespace(
                 _name_or_path="student", vocab_size=17, vision_config=True, model_type="dummy_vlm"
             )
+            self.config.get_text_config = lambda: self.config
             self.generation_config = SimpleNamespace(eos_token_id=2)
             self.name_or_path = "student"
 
@@ -1538,6 +1545,7 @@ def _make_dummy_vlm_models(student_model_type, teacher_model_type):
             self.config = SimpleNamespace(
                 _name_or_path="student", vocab_size=17, vision_config=True, model_type=student_model_type
             )
+            self.config.get_text_config = lambda: self.config
             self.generation_config = SimpleNamespace(eos_token_id=2)
             self.name_or_path = "student"
 
