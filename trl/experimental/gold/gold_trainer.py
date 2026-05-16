@@ -1414,7 +1414,6 @@ class GOLDTrainer(SFTTrainer):
     def _generate_on_policy_vlm_raw(self, raw_slices: list[list[dict]], on_policy_indices: list[int]):
         """On-policy generation from raw VLM examples, preserving PIL images for vLLM."""
         device = self.accelerator.device
-        raw_slices = deepcopy(raw_slices)
 
         # Phase 1: Collect prompts, images, and raw examples across all on-policy slices
         all_prompt_ids = []
@@ -1425,7 +1424,7 @@ class GOLDTrainer(SFTTrainer):
         slice_raw_data = {}  # per-slice raw data for non-vLLM path
 
         for slice_idx in on_policy_indices:
-            raw_examples = raw_slices[slice_idx]
+            raw_examples = deepcopy(raw_slices[slice_idx])
 
             # Extract raw PIL images from examples (like GRPOTrainer)
             if "images" in raw_examples[0]:
@@ -2343,7 +2342,6 @@ class GOLDTrainer(SFTTrainer):
         generate_kwargs = {k: inputs[k] for k in self._MULTIMODAL_KEYS if k in inputs}
         # Slice sequence-length-dependent keys to prompt-only length (e.g. token_type_ids for Gemma,
         # mm_token_type_ids for ERNIE-VL) since model.generate receives prompt-only input_ids
-        prompt_seq_len = inputs["prompts"].shape[1]
         for k in ("token_type_ids", "mm_token_type_ids"):
             if k in generate_kwargs:
                 generate_kwargs[k] = self._get_prompt_sequence_key(inputs, k)
