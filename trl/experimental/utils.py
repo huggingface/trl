@@ -385,7 +385,7 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
         if "token_type_ids" in processed_prompts:
             prompt_token_type_ids = processed_prompts["token_type_ids"]
-            completion_token_type_ids = processed_completions["token_type_ids"]
+            completion_token_type_ids = processed_completions.get("token_type_ids", torch.zeros_like(completion_ids))
             token_type_ids = torch.cat((prompt_token_type_ids, completion_token_type_ids), dim=1)
         if "mm_token_type_ids" in processed_prompts:
             prompt_mm_token_type_ids = processed_prompts["mm_token_type_ids"]

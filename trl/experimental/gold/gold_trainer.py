@@ -2120,40 +2120,78 @@ class GOLDTrainer(SFTTrainer):
                     teacher_prompt_texts = self._teacher_processor.apply_chat_template(
                         raw_prompts, tokenize=False, add_generation_prompt=True
                     )
-                    # Build full text (prompt + completion) and process in one call so all tensors
-                    # (input_ids, attention_mask, mm_token_type_ids, pixel_values, ...) are aligned.
-                    teacher_full_texts = [p + c for p, c in zip(teacher_prompt_texts, completion_texts, strict=True)]
-                    teacher_full_processed = self._teacher_processor(
+                    teacher_prompt_processed = self._teacher_processor(
                         images=raw_images,
-                        text=teacher_full_texts,
+                        text=teacher_prompt_texts,
                         padding=True,
                         return_tensors="pt",
                     )
-                    teacher_input_ids = teacher_full_processed["input_ids"]
-                    teacher_attention_mask = teacher_full_processed["attention_mask"]
-                    # Determine prompt lengths after image token expansion to build labels.
-                    # Derive prompt lengths from total sequence length minus completion length.
-                    # Completions are pure text (no images), so the tokenizer gives exact counts.
-                    # This avoids a second image-processing pass through the teacher processor.
-                    teacher_completion_token_lengths = [
-                        len(self._teacher_processor.tokenizer(ct, add_special_tokens=False)["input_ids"])
-                        for ct in completion_texts
-                    ]
-                    total_lengths = teacher_attention_mask.sum(dim=1)
-                    teacher_prompt_token_lengths = [
-                        int(total_lengths[i].item()) - cl for i, cl in enumerate(teacher_completion_token_lengths)
-                    ]
-                    teacher_labels = teacher_input_ids.clone()
-                    teacher_labels[teacher_attention_mask == 0] = -100
-                    for i, pl in enumerate(teacher_prompt_token_lengths):
-                        teacher_labels[i, :pl] = -100
+                    teacher_completion_token_ids = self._teacher_processor.tokenizer(
+                        completion_texts, add_special_tokens=False
+                    )["input_ids"]
+
+                    pad_token_id = self.teacher_tokenizer.pad_token_id
+                    eos_token_id = self.teacher_tokenizer.eos_token_id
+                    teacher_sequences = []
+                    teacher_attention_masks = []
+                    teacher_labels_list = []
+                    teacher_prompt_token_lengths = []
+                    teacher_sequence_kwargs = defaultdict(list)
+                    teacher_sequence_keys = ("token_type_ids", "mm_token_type_ids")
+
+                    for row, completion_ids in enumerate(teacher_completion_token_ids):
+                        prompt_mask = teacher_prompt_processed["attention_mask"][row].bool()
+                        prompt_ids = teacher_prompt_processed["input_ids"][row][prompt_mask].tolist()
+                        if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
+                            prompt_ids = prompt_ids[:-1]
+
+                        teacher_prompt_token_lengths.append(len(prompt_ids))
+                        sequence = list(prompt_ids)
+                        sequence.extend(completion_ids)
+                        if eos_token_id is not None:
+                            sequence.append(eos_token_id)
+
+                        seq_tensor = torch.tensor(sequence, dtype=torch.long)
+                        teacher_sequences.append(seq_tensor)
+                        teacher_attention_masks.append(torch.ones_like(seq_tensor))
+
+                        labels = seq_tensor.clone()
+                        labels[: len(prompt_ids)] = -100
+                        if pad_token_id is not None:
+                            labels[labels == pad_token_id] = -100
+                        teacher_labels_list.append(labels)
+
+                        for key in teacher_sequence_keys:
+                            if key in teacher_prompt_processed:
+                                prompt_values = teacher_prompt_processed[key][row][prompt_mask]
+                                if eos_token_id is not None:
+                                    prompt_values = prompt_values[: len(prompt_ids)]
+                                completion_values = torch.zeros(
+                                    len(sequence) - len(prompt_ids),
+                                    dtype=prompt_values.dtype,
+                                    device=prompt_values.device,
+                                )
+                                teacher_sequence_kwargs[key].append(torch.cat((prompt_values, completion_values)))
+
+                    teacher_input_ids = pad(
+                        teacher_sequences,
+                        padding_side="right",
+                        padding_value=pad_token_id if pad_token_id is not None else 0,
+                    )
+                    teacher_attention_mask = pad(teacher_attention_masks, padding_side="right", padding_value=0).bool()
+                    teacher_labels = pad(teacher_labels_list, padding_side="right", padding_value=-100)
                     teacher_prompt_length = min(teacher_prompt_token_lengths)
-                    # Override teacher_forward_kwargs with all multimodal keys from teacher processing
+
+                    # Override teacher_forward_kwargs with multimodal keys from teacher processing.
                     teacher_forward_kwargs = {
-                        k: teacher_full_processed[k].to(self.accelerator.device)
+                        k: teacher_prompt_processed[k].to(self.accelerator.device)
                         for k in self._MULTIMODAL_KEYS
-                        if k in teacher_full_processed
+                        if k in teacher_prompt_processed and k not in teacher_sequence_keys
                     }
+                    for key, values in teacher_sequence_kwargs.items():
+                        teacher_forward_kwargs[key] = pad(values, padding_side="right", padding_value=0).to(
+                            self.accelerator.device
+                        )
                 else:
                     (
                         teacher_input_ids,
