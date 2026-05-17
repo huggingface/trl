@@ -1655,8 +1655,6 @@ class GOLDTrainer(SFTTrainer):
             return
 
         all_prompts_text = self.processing_class.batch_decode(all_prompt_ids, skip_special_tokens=True)
-        all_prompts_text_with_special = self.processing_class.batch_decode(all_prompt_ids, skip_special_tokens=False)
-
         # vLLM path: one batched generate call across all slices
         if (
             self.state.global_step != self._last_vllm_sync_step
@@ -1696,7 +1694,6 @@ class GOLDTrainer(SFTTrainer):
         slice_images = {idx: [] for idx in on_policy_indices}
         slice_prompts = {idx: [] for idx in on_policy_indices}
         slice_prompts_text = {idx: [] for idx in on_policy_indices}
-        slice_prompts_text_special = {idx: [] for idx in on_policy_indices}
 
         comp_idx = 0
         for i, slice_idx in enumerate(local_slice_indices):
@@ -1705,7 +1702,6 @@ class GOLDTrainer(SFTTrainer):
             slice_images[slice_idx].append(all_images[i])
             slice_prompts[slice_idx].append(all_prompts[i])
             slice_prompts_text[slice_idx].append(all_prompts_text[i])
-            slice_prompts_text_special[slice_idx].append(all_prompts_text_with_special[i])
             comp_idx += 1
 
         for slice_idx in on_policy_indices:
