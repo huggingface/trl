@@ -848,6 +848,7 @@ class GOLDTrainer(SFTTrainer):
         # VLM distillation: only VLM-to-VLM is supported. Both student and teacher must be
         # VLMs so that both receive images and multimodal inputs.
         self._teacher_processor = None
+        self._is_cross_architecture_vlm = False
         if self._is_vlm and isinstance(teacher_model, str):
             # Teacher not yet instantiated -- validate it's a VLM
             teacher_proc = AutoProcessor.from_pretrained(teacher_model)
@@ -860,6 +861,7 @@ class GOLDTrainer(SFTTrainer):
             student_model_type = model.config.model_type if not isinstance(model, str) else None
             teacher_model_type = AutoConfig.from_pretrained(teacher_model).model_type
             is_cross_architecture = student_model_type and teacher_model_type != student_model_type
+            self._is_cross_architecture_vlm = is_cross_architecture
             if is_cross_architecture:
                 warnings.warn(
                     f"Cross-architecture VLM distillation detected: student is '{student_model_type}', "
@@ -880,6 +882,7 @@ class GOLDTrainer(SFTTrainer):
             student_model_type = model.config.model_type if not isinstance(model, str) else None
             teacher_model_type = teacher_model.config.model_type
             is_cross_architecture = student_model_type and teacher_model_type != student_model_type
+            self._is_cross_architecture_vlm = is_cross_architecture
             if is_cross_architecture:
                 warnings.warn(
                     f"Cross-architecture VLM distillation detected: student is '{student_model_type}', "
@@ -888,7 +891,7 @@ class GOLDTrainer(SFTTrainer):
                 )
             if is_cross_architecture or args.use_uld_loss:
                 self._teacher_processor = AutoProcessor.from_pretrained(teacher_model.config._name_or_path)
-        if self._teacher_processor is not None and not args.use_uld_loss:
+        if self._is_cross_architecture_vlm and not args.use_uld_loss:
             raise ValueError(
                 "Cross-architecture VLM distillation (student and teacher have different `model_type`) is not "
                 "supported with the standard JSD loss because the models require different image token formats "
@@ -2228,130 +2231,124 @@ class GOLDTrainer(SFTTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Extract multimodal fields for student forward passes
         student_forward_kwargs = {k: inputs[k] for k in self._MULTIMODAL_KEYS if k in inputs}
-        # For same-architecture teacher reuses student vision tensors.
-        # For cross-architecture VLMs, this gets overridden in the ULD branch below.
+        # Standard JSD reuses student vision tensors. VLM ULD rebuilds teacher inputs with
+        # the teacher processor below.
         teacher_forward_kwargs = student_forward_kwargs
 
         if self.use_uld_loss and self.teacher_tokenizer is not None:
-            if self._is_vlm and self._teacher_processor is None:
-                teacher_input_ids = inputs["input_ids"]
-                teacher_labels = inputs["labels"].clone()
-                teacher_attention_mask = inputs["attention_mask"]
-                teacher_prompt_length = self._get_min_completion_start_from_labels(inputs["labels"])
+            if "original_prompt_text" in inputs and "original_completion_text" in inputs:
+                prompt_texts = inputs["original_prompt_text"]
+                completion_texts = inputs["original_completion_text"]
             else:
-                if "original_prompt_text" in inputs and "original_completion_text" in inputs:
-                    prompt_texts = inputs["original_prompt_text"]
-                    completion_texts = inputs["original_completion_text"]
-                else:
-                    # Fallback: decode student input_ids (current approach)
-                    # WARNING: This may not work perfectly for cross-tokenizer distillation
-                    full_sequences = inputs["input_ids"]
-                    full_texts = self.processing_class.batch_decode(full_sequences, skip_special_tokens=False)
+                # Fallback: decode student input_ids (current approach)
+                # WARNING: This may not work perfectly for cross-tokenizer distillation
+                full_sequences = inputs["input_ids"]
+                full_texts = self.processing_class.batch_decode(full_sequences, skip_special_tokens=False)
 
-                    # Try to split prompt/completion using original prompt length
-                    prompt_lengths = inputs["prompts"].shape[1]
-                    prompt_texts = self.processing_class.batch_decode(inputs["prompts"], skip_special_tokens=False)
-                    completion_texts = [
-                        full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
-                    ]
+                # Try to split prompt/completion using original prompt length
+                prompt_lengths = inputs["prompts"].shape[1]
+                prompt_texts = self.processing_class.batch_decode(inputs["prompts"], skip_special_tokens=False)
+                completion_texts = [
+                    full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
+                ]
 
-                # For VLMs, build teacher inputs with image placeholders by processing prompts through
-                # the teacher's processor, then appending completions.
-                if self._teacher_processor is not None:
-                    if "_raw_images" not in inputs:
-                        raise ValueError(
-                            "VLM ULD loss requires raw images in the batch so teacher inputs can be rendered with "
-                            "the teacher processor. Use GOLD's VLM collator path, which preserves raw images."
-                        )
-                    raw_images = inputs["_raw_images"]
-                    raw_prompts = inputs["_raw_prompts"]
-                    # Apply teacher's chat template to get prompt text with correct image placeholders
-                    teacher_prompt_texts = self._teacher_processor.apply_chat_template(
-                        raw_prompts, tokenize=False, add_generation_prompt=True
+            # For VLMs, build teacher inputs with image placeholders by processing prompts through
+            # the teacher's processor, then appending completions.
+            if self._teacher_processor is not None:
+                if "_raw_images" not in inputs:
+                    raise ValueError(
+                        "VLM ULD loss requires raw images in the batch so teacher inputs can be rendered with "
+                        "the teacher processor. Use GOLD's VLM collator path, which preserves raw images."
                     )
-                    teacher_prompt_processed = self._teacher_processor(
-                        images=raw_images,
-                        text=teacher_prompt_texts,
-                        padding=True,
-                        return_tensors="pt",
+                raw_images = inputs["_raw_images"]
+                raw_prompts = inputs["_raw_prompts"]
+                # Apply teacher's chat template to get prompt text with correct image placeholders
+                teacher_prompt_texts = self._teacher_processor.apply_chat_template(
+                    raw_prompts, tokenize=False, add_generation_prompt=True
+                )
+                teacher_prompt_processed = self._teacher_processor(
+                    images=raw_images,
+                    text=teacher_prompt_texts,
+                    padding=True,
+                    return_tensors="pt",
+                )
+                teacher_completion_token_ids = self._teacher_processor.tokenizer(
+                    completion_texts, add_special_tokens=False
+                )["input_ids"]
+
+                pad_token_id = self.teacher_tokenizer.pad_token_id
+                eos_token_id = self.teacher_tokenizer.eos_token_id
+                teacher_sequences = []
+                teacher_attention_masks = []
+                teacher_labels_list = []
+                teacher_prompt_token_lengths = []
+                teacher_sequence_kwargs = defaultdict(list)
+                teacher_sequence_keys = ("token_type_ids", "mm_token_type_ids")
+
+                for row, completion_ids in enumerate(teacher_completion_token_ids):
+                    prompt_mask = teacher_prompt_processed["attention_mask"][row].bool()
+                    prompt_ids = teacher_prompt_processed["input_ids"][row][prompt_mask].tolist()
+                    if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
+                        prompt_ids = prompt_ids[:-1]
+
+                    teacher_prompt_token_lengths.append(len(prompt_ids))
+                    sequence = list(prompt_ids)
+                    sequence.extend(completion_ids)
+                    if eos_token_id is not None:
+                        sequence.append(eos_token_id)
+
+                    seq_tensor = torch.tensor(sequence, dtype=torch.long)
+                    teacher_sequences.append(seq_tensor)
+                    teacher_attention_masks.append(torch.ones_like(seq_tensor))
+
+                    labels = seq_tensor.clone()
+                    labels[: len(prompt_ids)] = -100
+                    if pad_token_id is not None:
+                        labels[labels == pad_token_id] = -100
+                    teacher_labels_list.append(labels)
+
+                    for key in teacher_sequence_keys:
+                        if key in teacher_prompt_processed:
+                            prompt_values = teacher_prompt_processed[key][row][prompt_mask]
+                            if eos_token_id is not None:
+                                prompt_values = prompt_values[: len(prompt_ids)]
+                            completion_values = torch.zeros(
+                                len(sequence) - len(prompt_ids),
+                                dtype=prompt_values.dtype,
+                                device=prompt_values.device,
+                            )
+                            teacher_sequence_kwargs[key].append(torch.cat((prompt_values, completion_values)))
+
+                teacher_input_ids = pad(
+                    teacher_sequences,
+                    padding_side="right",
+                    padding_value=pad_token_id if pad_token_id is not None else 0,
+                )
+                teacher_attention_mask = pad(teacher_attention_masks, padding_side="right", padding_value=0).bool()
+                teacher_labels = pad(teacher_labels_list, padding_side="right", padding_value=-100)
+                teacher_prompt_length = min(teacher_prompt_token_lengths)
+
+                # Override teacher_forward_kwargs with multimodal keys from teacher processing.
+                teacher_forward_kwargs = {
+                    k: teacher_prompt_processed[k].to(self.accelerator.device)
+                    for k in self._MULTIMODAL_KEYS
+                    if k in teacher_prompt_processed and k not in teacher_sequence_keys
+                }
+                for key, values in teacher_sequence_kwargs.items():
+                    teacher_forward_kwargs[key] = pad(values, padding_side="right", padding_value=0).to(
+                        self.accelerator.device
                     )
-                    teacher_completion_token_ids = self._teacher_processor.tokenizer(
-                        completion_texts, add_special_tokens=False
-                    )["input_ids"]
-
-                    pad_token_id = self.teacher_tokenizer.pad_token_id
-                    eos_token_id = self.teacher_tokenizer.eos_token_id
-                    teacher_sequences = []
-                    teacher_attention_masks = []
-                    teacher_labels_list = []
-                    teacher_prompt_token_lengths = []
-                    teacher_sequence_kwargs = defaultdict(list)
-                    teacher_sequence_keys = ("token_type_ids", "mm_token_type_ids")
-
-                    for row, completion_ids in enumerate(teacher_completion_token_ids):
-                        prompt_mask = teacher_prompt_processed["attention_mask"][row].bool()
-                        prompt_ids = teacher_prompt_processed["input_ids"][row][prompt_mask].tolist()
-                        if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
-                            prompt_ids = prompt_ids[:-1]
-
-                        teacher_prompt_token_lengths.append(len(prompt_ids))
-                        sequence = list(prompt_ids)
-                        sequence.extend(completion_ids)
-                        if eos_token_id is not None:
-                            sequence.append(eos_token_id)
-
-                        seq_tensor = torch.tensor(sequence, dtype=torch.long)
-                        teacher_sequences.append(seq_tensor)
-                        teacher_attention_masks.append(torch.ones_like(seq_tensor))
-
-                        labels = seq_tensor.clone()
-                        labels[: len(prompt_ids)] = -100
-                        if pad_token_id is not None:
-                            labels[labels == pad_token_id] = -100
-                        teacher_labels_list.append(labels)
-
-                        for key in teacher_sequence_keys:
-                            if key in teacher_prompt_processed:
-                                prompt_values = teacher_prompt_processed[key][row][prompt_mask]
-                                if eos_token_id is not None:
-                                    prompt_values = prompt_values[: len(prompt_ids)]
-                                completion_values = torch.zeros(
-                                    len(sequence) - len(prompt_ids),
-                                    dtype=prompt_values.dtype,
-                                    device=prompt_values.device,
-                                )
-                                teacher_sequence_kwargs[key].append(torch.cat((prompt_values, completion_values)))
-
-                    teacher_input_ids = pad(
-                        teacher_sequences,
-                        padding_side="right",
-                        padding_value=pad_token_id if pad_token_id is not None else 0,
-                    )
-                    teacher_attention_mask = pad(teacher_attention_masks, padding_side="right", padding_value=0).bool()
-                    teacher_labels = pad(teacher_labels_list, padding_side="right", padding_value=-100)
-                    teacher_prompt_length = min(teacher_prompt_token_lengths)
-
-                    # Override teacher_forward_kwargs with multimodal keys from teacher processing.
-                    teacher_forward_kwargs = {
-                        k: teacher_prompt_processed[k].to(self.accelerator.device)
-                        for k in self._MULTIMODAL_KEYS
-                        if k in teacher_prompt_processed and k not in teacher_sequence_keys
-                    }
-                    for key, values in teacher_sequence_kwargs.items():
-                        teacher_forward_kwargs[key] = pad(values, padding_side="right", padding_value=0).to(
-                            self.accelerator.device
-                        )
-                else:
-                    (
-                        teacher_input_ids,
-                        teacher_labels,
-                        teacher_attention_mask,
-                        teacher_prompt_length,
-                    ) = build_teacher_inputs_from_texts(
-                        self.teacher_tokenizer,
-                        prompt_texts,
-                        completion_texts,
-                    )
+            else:
+                (
+                    teacher_input_ids,
+                    teacher_labels,
+                    teacher_attention_mask,
+                    teacher_prompt_length,
+                ) = build_teacher_inputs_from_texts(
+                    self.teacher_tokenizer,
+                    prompt_texts,
+                    completion_texts,
+                )
 
             teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
             teacher_labels = teacher_labels.to(self.accelerator.device)

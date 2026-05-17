@@ -1828,6 +1828,7 @@ def test_cross_architecture_vlm_with_uld_sets_teacher_processor(monkeypatch):
     # _teacher_processor should be set for cross-architecture
     assert trainer._teacher_processor is not None
     assert trainer._teacher_processor is sentinel_processor
+    assert trainer._is_cross_architecture_vlm is True
 
     # A cross-architecture warning should have been emitted
     cross_arch_warnings = [w for w in caught if "Cross-architecture VLM distillation" in str(w.message)]
@@ -1894,6 +1895,7 @@ def test_same_architecture_vlm_no_teacher_processor(monkeypatch):
 
     # _teacher_processor should be None for same architecture (zero overhead)
     assert trainer._teacher_processor is None
+    assert trainer._is_cross_architecture_vlm is False
 
     # No cross-architecture warning should have been emitted
     cross_arch_warnings = [w for w in caught if "Cross-architecture VLM distillation" in str(w.message)]
@@ -1983,9 +1985,55 @@ def test_same_architecture_vlm_with_uld_sets_teacher_processor(monkeypatch):
     )
 
     assert trainer._teacher_processor is sentinel_processor
+    assert trainer._is_cross_architecture_vlm is False
     assert trainer.teacher_tokenizer is sentinel_tokenizer
     assert trainer.data_collator is identity
     assert trainer._vlm_collator is not None
+
+
+def test_same_architecture_vlm_uld_preserves_raw_images_for_teacher_processor(monkeypatch):
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+    trainer.args = SimpleNamespace(gradient_accumulation_steps=2)
+    trainer.lmbda = 0.0
+    trainer.use_uld_loss = True
+    trainer.teacher_tokenizer = SimpleNamespace(pad_token_id=0)
+    trainer._teacher_processor = object()
+    trainer._is_cross_architecture_vlm = False
+    trainer._step = 0
+    trainer.model = SimpleNamespace(training=True)
+
+    def stub_collator(examples):
+        return {
+            "input_ids": torch.zeros(len(examples), 1, dtype=torch.long),
+            "original_prompt_text": [example["prompt"][0]["content"] for example in examples],
+            "original_completion_text": [example["completion"][0]["content"] for example in examples],
+        }
+
+    trainer._vlm_collator = stub_collator
+    monkeypatch.setattr(gold_trainer_module, "broadcast_object_list", lambda values, from_process: values)
+    monkeypatch.setattr(gold_trainer_module, "prepare_multimodal_messages", lambda prompt, images: prompt)
+
+    images = [object(), object()]
+    generation_batch = [
+        {
+            "prompt": [{"role": "user", "content": "q0"}],
+            "completion": [{"role": "assistant", "content": "a0"}],
+            "image": images[0],
+        },
+        {
+            "prompt": [{"role": "user", "content": "q1"}],
+            "completion": [{"role": "assistant", "content": "a1"}],
+            "image": images[1],
+        },
+    ]
+
+    first_slice = trainer._prepare_inputs(generation_batch)
+
+    assert first_slice["_raw_images"] == [[images[0]]]
+    assert first_slice["_raw_prompts"] == [generation_batch[0]["prompt"]]
+    assert "_gold_vlm_raw_images" in trainer._buffered_inputs[1]
+    assert "_gold_vlm_raw_prompts" in trainer._buffered_inputs[1]
 
 
 def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatch):
@@ -2008,6 +2056,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
     trainer._buffered_inputs = {}
     trainer._buffered_text_logs = {}
     trainer._teacher_processor = None
+    trainer._is_cross_architecture_vlm = False
     trainer.use_uld_loss = False
     trainer.teacher_tokenizer = None
 
@@ -2117,6 +2166,7 @@ def test_off_policy_vlm_collates_only_consumed_slice(monkeypatch):
     trainer.use_uld_loss = False
     trainer.teacher_tokenizer = None
     trainer._teacher_processor = None
+    trainer._is_cross_architecture_vlm = False
     trainer._step = 0
     trainer.model = SimpleNamespace(training=True)
     collated_per_call = []
@@ -2153,6 +2203,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
     trainer.args = SimpleNamespace(gradient_accumulation_steps=2)
     trainer.use_vllm = False
     trainer._teacher_processor = None
+    trainer._is_cross_architecture_vlm = False
     trainer._buffered_inputs = [None, None]
     trainer._buffered_text_logs = [None, None]
     trainer._step = 1
