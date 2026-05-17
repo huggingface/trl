@@ -1411,8 +1411,7 @@ class GOLDTrainer(SFTTrainer):
                 if self._vlm_collator is not None:
                     # Extract raw images and prompts BEFORE collation, since the collator
                     # mutates examples in place (pops "image", overwrites "prompt").
-                    raw_images = None
-                    raw_prompts = None
+                    slice_inputs = {"_gold_vlm_lazy_examples": raw_slices[i]}
                     if self._teacher_processor is not None:
                         raw_images = [
                             ex.get("images") or ([ex["image"]] if "image" in ex else None) for ex in raw_slices[i]
@@ -1425,11 +1424,8 @@ class GOLDTrainer(SFTTrainer):
                             )
                             for ex, imgs in zip(raw_slices[i], raw_images, strict=True)
                         ]
-                    slice_inputs = {
-                        "_gold_vlm_lazy_examples": raw_slices[i],
-                        "_gold_vlm_raw_images": raw_images,
-                        "_gold_vlm_raw_prompts": raw_prompts,
-                    }
+                        slice_inputs["_gold_vlm_raw_images"] = raw_images
+                        slice_inputs["_gold_vlm_raw_prompts"] = raw_prompts
                 else:
                     slice_inputs = slices[i]
 
@@ -1629,11 +1625,11 @@ class GOLDTrainer(SFTTrainer):
             for slice_idx in on_policy_indices:
                 raw_examples, images, prompts, _ = slice_raw_data[slice_idx]
                 has_images = images is not None and any(img is not None for img in images)
-                self._buffered_inputs[slice_idx] = {
-                    "_gold_vlm_on_policy_raw_examples": raw_examples,
-                    "_gold_vlm_raw_images": images if self._teacher_processor is not None and has_images else None,
-                    "_gold_vlm_raw_prompts": prompts if self._teacher_processor is not None else None,
-                }
+                pending_slice = {"_gold_vlm_on_policy_raw_examples": raw_examples}
+                if self._teacher_processor is not None:
+                    pending_slice["_gold_vlm_raw_images"] = images if has_images else None
+                    pending_slice["_gold_vlm_raw_prompts"] = prompts
+                self._buffered_inputs[slice_idx] = pending_slice
             return
 
         all_prompts_text = self.processing_class.batch_decode(all_prompt_ids, skip_special_tokens=True)
@@ -1711,15 +1707,15 @@ class GOLDTrainer(SFTTrainer):
                 synthetic_examples.append(synthetic)
 
             has_images = any(img is not None for img in images_for_slice)
-            self._buffered_inputs[slice_idx] = {
+            pending_slice = {
                 "_gold_vlm_lazy_examples": synthetic_examples,
                 "_gold_vlm_original_prompt_text": slice_prompts_text_special[slice_idx],
                 "_gold_vlm_original_completion_text": completion_texts,
-                "_gold_vlm_raw_images": images_for_slice
-                if self._teacher_processor is not None and has_images
-                else None,
-                "_gold_vlm_raw_prompts": prompts_for_slice if self._teacher_processor is not None else None,
             }
+            if self._teacher_processor is not None:
+                pending_slice["_gold_vlm_raw_images"] = images_for_slice if has_images else None
+                pending_slice["_gold_vlm_raw_prompts"] = prompts_for_slice
+            self._buffered_inputs[slice_idx] = pending_slice
             self._buffered_text_logs[slice_idx] = (
                 slice_prompts_text[slice_idx],
                 completion_texts,
