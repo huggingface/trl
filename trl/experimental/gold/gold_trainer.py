@@ -1259,12 +1259,22 @@ class GOLDTrainer(SFTTrainer):
                 updated_slice[k] = torch.cat([prompt_part, comp_part], dim=1)
         if "original_prompt_text" not in updated_slice:
             updated_slice["original_prompt_text"] = prompt_texts
-        updated_slice["original_completion_text"] = completion_texts
+        clean_completion_texts = []
+        for input_ids, labels in zip(new_input_ids, new_labels, strict=True):
+            completion_token_ids = input_ids[labels != -100].tolist()
+            clean_completion_texts.append(
+                self.processing_class.decode(
+                    completion_token_ids,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
+                )
+            )
+        updated_slice["original_completion_text"] = clean_completion_texts
         if self._teacher_processor is not None:
             updated_slice["_raw_images"] = pending_slice["_gold_vlm_raw_images"]
             updated_slice["_raw_prompts"] = pending_slice["_gold_vlm_raw_prompts"]
 
-        return updated_slice, (prompt_texts, completion_texts)
+        return updated_slice, (prompt_texts, clean_completion_texts)
 
     def _materialize_vlm_slice(self, pending_slice: dict[str, Any]) -> dict[str, torch.Tensor | Any]:
         """Collate one pending VLM slice immediately before it is consumed."""

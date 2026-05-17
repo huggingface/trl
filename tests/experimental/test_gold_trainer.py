@@ -2226,7 +2226,15 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
 
         @staticmethod
         def decode(ids, skip_special_tokens, clean_up_tokenization_spaces):
-            return "decoded"
+            tokens = []
+            for token_id in ids:
+                if token_id == 9:
+                    if skip_special_tokens:
+                        continue
+                    tokens.append("<eos>")
+                else:
+                    tokens.append(f"tok{token_id}")
+            return "".join(tokens)
 
     trainer.processing_class = StubProcessor
 
@@ -2247,7 +2255,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
 
         @staticmethod
         def generate(input_ids, attention_mask, generation_config, return_dict_in_generate, **kwargs):
-            completion = torch.full((input_ids.shape[0], 1), 3, dtype=torch.long)
+            completion = torch.tensor([[3, 9]] * input_ids.shape[0], dtype=torch.long)
             return SimpleNamespace(sequences=torch.cat([input_ids, completion], dim=1))
 
     trainer.model = FakeModel()
@@ -2273,8 +2281,9 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
     consumed_slice = trainer._prepare_inputs(raw_slices)
 
     assert len(collated_per_call) == 1
-    assert consumed_slice["input_ids"].shape == (1, 3)
+    assert consumed_slice["input_ids"].shape == (1, 4)
     assert consumed_slice["original_prompt_text"] == ["q1"]
+    assert consumed_slice["original_completion_text"] == ["tok3"]
     assert "_gold_vlm_on_policy_raw_examples" in trainer._buffered_inputs[0]
     assert "_gold_vlm_on_policy_raw_examples" not in trainer._buffered_inputs[1]
 
