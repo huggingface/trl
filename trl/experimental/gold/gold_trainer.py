@@ -1130,6 +1130,7 @@ class GOLDTrainer(SFTTrainer):
             "image_position_ids",
             "pixel_attention_mask",
             "image_sizes",
+            "spatial_shapes",
             "token_type_ids",
             "mm_token_type_ids",
         ]
@@ -1247,7 +1248,7 @@ class GOLDTrainer(SFTTrainer):
         # Rebuild sequence-length-dependent keys to match new input_ids shape
         new_seq_len = new_input_ids.shape[1]
         prompt_seq_len = collated["prompts"].shape[1]
-        for k in ("token_type_ids", "mm_token_type_ids"):
+        for k in self._SEQUENCE_KEYS:
             if k in updated_slice:
                 prompt_part = self._get_prompt_sequence_key(collated, k)
                 comp_part = torch.zeros(
@@ -1552,7 +1553,7 @@ class GOLDTrainer(SFTTrainer):
                 # Rebuild sequence-length-dependent keys to match new input_ids shape
                 new_seq_len = new_input_ids.shape[1]
                 prompt_seq_len = slice_inputs["prompts"].shape[1]
-                for k in ("token_type_ids", "mm_token_type_ids"):
+                for k in self._SEQUENCE_KEYS:
                     if k in updated_slice:
                         prompt_part = self._get_prompt_sequence_key(slice_inputs, k)
                         comp_part = torch.zeros(
@@ -2224,19 +2225,34 @@ class GOLDTrainer(SFTTrainer):
         else:
             return jsd
 
-    _MULTIMODAL_KEYS = (
-        "pixel_values",
-        "image_grid_thw",
-        "image_position_ids",
-        "pixel_attention_mask",
-        "image_sizes",
-        "token_type_ids",
-        "mm_token_type_ids",
+    _SEQUENCE_KEYS = ("token_type_ids", "mm_token_type_ids")
+    _MODEL_INPUT_RESERVED_KEYS = frozenset(
+        (
+            "input_ids",
+            "attention_mask",
+            "labels",
+            "prompts",
+            "prompt_attention_mask",
+            "completion_mask",
+            "assistant_masks",
+            "original_prompt_text",
+            "original_completion_text",
+        )
     )
+
+    def _get_model_forward_kwargs(
+        self, inputs: dict[str, torch.Tensor | Any], exclude: tuple[str, ...] = ()
+    ) -> dict[str, torch.Tensor]:
+        reserved_keys = self._MODEL_INPUT_RESERVED_KEYS | set(exclude)
+        return {
+            k: v
+            for k, v in inputs.items()
+            if k not in reserved_keys and not k.startswith("_") and isinstance(v, torch.Tensor)
+        }
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Extract multimodal fields for student forward passes
-        student_forward_kwargs = {k: inputs[k] for k in self._MULTIMODAL_KEYS if k in inputs}
+        student_forward_kwargs = self._get_model_forward_kwargs(inputs)
         # Standard JSD reuses student vision tensors. VLM ULD rebuilds teacher inputs with
         # the teacher processor below.
         teacher_forward_kwargs = student_forward_kwargs
@@ -2336,9 +2352,10 @@ class GOLDTrainer(SFTTrainer):
 
                 # Override teacher_forward_kwargs with multimodal keys from teacher processing.
                 teacher_forward_kwargs = {
-                    k: teacher_prompt_processed[k].to(self.accelerator.device)
-                    for k in self._MULTIMODAL_KEYS
-                    if k in teacher_prompt_processed and k not in teacher_sequence_keys
+                    k: v.to(self.accelerator.device)
+                    for k, v in self._get_model_forward_kwargs(
+                        teacher_prompt_processed, exclude=teacher_sequence_keys
+                    ).items()
                 }
                 for key, values in teacher_sequence_kwargs.items():
                     teacher_forward_kwargs[key] = pad(values, padding_side="right", padding_value=0).to(
@@ -2535,10 +2552,10 @@ class GOLDTrainer(SFTTrainer):
 
     def generate_on_policy_outputs(self, model, inputs, generation_config, pad_token_id=None):
         # Generate output with respect to the prompt only
-        generate_kwargs = {k: inputs[k] for k in self._MULTIMODAL_KEYS if k in inputs}
+        generate_kwargs = self._get_model_forward_kwargs(inputs)
         # Slice sequence-length-dependent keys to prompt-only length (e.g. token_type_ids for Gemma,
         # mm_token_type_ids for ERNIE-VL) since model.generate receives prompt-only input_ids
-        for k in ("token_type_ids", "mm_token_type_ids"):
+        for k in self._SEQUENCE_KEYS:
             if k in generate_kwargs:
                 generate_kwargs[k] = self._get_prompt_sequence_key(inputs, k)
         generated_outputs = model.generate(

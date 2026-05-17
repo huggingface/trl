@@ -2245,6 +2245,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
             "prompts": torch.ones(batch_size, 2, dtype=torch.long),
             "prompt_attention_mask": torch.ones(batch_size, 2, dtype=torch.long),
             "pixel_values": torch.zeros(batch_size, 3, 2, 2),
+            "spatial_shapes": torch.tensor([[2, 2]] * batch_size, dtype=torch.long),
             "original_prompt_text": [example["prompt"][0]["content"] for example in examples],
         }
 
@@ -2255,6 +2256,8 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
 
         @staticmethod
         def generate(input_ids, attention_mask, generation_config, return_dict_in_generate, **kwargs):
+            assert "spatial_shapes" in kwargs
+            assert torch.equal(kwargs["spatial_shapes"], torch.tensor([[2, 2]], dtype=torch.long))
             completion = torch.tensor([[3, 9]] * input_ids.shape[0], dtype=torch.long)
             return SimpleNamespace(sequences=torch.cat([input_ids, completion], dim=1))
 
@@ -2282,10 +2285,39 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
 
     assert len(collated_per_call) == 1
     assert consumed_slice["input_ids"].shape == (1, 4)
+    assert torch.equal(consumed_slice["spatial_shapes"], torch.tensor([[2, 2]], dtype=torch.long))
     assert consumed_slice["original_prompt_text"] == ["q1"]
     assert consumed_slice["original_completion_text"] == ["tok3"]
     assert "_gold_vlm_on_policy_raw_examples" in trainer._buffered_inputs[0]
     assert "_gold_vlm_on_policy_raw_examples" not in trainer._buffered_inputs[1]
+
+
+def test_model_forward_kwargs_preserve_processor_tensor_fields():
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    inputs = {
+        "input_ids": torch.ones(1, 2, dtype=torch.long),
+        "attention_mask": torch.ones(1, 2, dtype=torch.long),
+        "labels": torch.ones(1, 2, dtype=torch.long),
+        "prompts": torch.ones(1, 1, dtype=torch.long),
+        "prompt_attention_mask": torch.ones(1, 1, dtype=torch.long),
+        "completion_mask": torch.ones(1, 2, dtype=torch.long),
+        "assistant_masks": torch.ones(1, 2, dtype=torch.long),
+        "original_prompt_text": ["prompt"],
+        "_raw_images": [object()],
+        "pixel_values": torch.zeros(1, 3, 2, 2),
+        "spatial_shapes": torch.tensor([[2, 2]], dtype=torch.long),
+        "custom_processor_tensor": torch.tensor([1]),
+        "token_type_ids": torch.zeros(1, 2, dtype=torch.long),
+    }
+
+    kwargs = trainer._get_model_forward_kwargs(inputs)
+
+    assert set(kwargs) == {"pixel_values", "spatial_shapes", "custom_processor_tensor", "token_type_ids"}
+    assert set(trainer._get_model_forward_kwargs(inputs, exclude=("token_type_ids",))) == {
+        "pixel_values",
+        "spatial_shapes",
+        "custom_processor_tensor",
+    }
 
 
 def test_training_step_releases_consumed_buffer_slot(monkeypatch):
