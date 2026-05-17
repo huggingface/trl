@@ -1254,7 +1254,8 @@ class GOLDTrainer(SFTTrainer):
                     device=new_input_ids.device,
                 )
                 updated_slice[k] = torch.cat([prompt_part, comp_part], dim=1)
-        updated_slice["original_prompt_text"] = prompt_texts
+        if "original_prompt_text" not in updated_slice:
+            updated_slice["original_prompt_text"] = prompt_texts
         updated_slice["original_completion_text"] = completion_texts
         if self._teacher_processor is not None:
             updated_slice["_raw_images"] = pending_slice["_gold_vlm_raw_images"]
@@ -1717,8 +1718,6 @@ class GOLDTrainer(SFTTrainer):
             has_images = any(img is not None for img in images_for_slice)
             pending_slice = {
                 "_gold_vlm_lazy_examples": synthetic_examples,
-                "_gold_vlm_original_prompt_text": slice_prompts_text_special[slice_idx],
-                "_gold_vlm_original_completion_text": completion_texts,
             }
             if self._teacher_processor is not None:
                 pending_slice["_gold_vlm_raw_images"] = images_for_slice if has_images else None

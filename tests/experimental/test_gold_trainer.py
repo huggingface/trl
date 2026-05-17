@@ -2008,6 +2008,8 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
     trainer._buffered_inputs = {}
     trainer._buffered_text_logs = {}
     trainer._teacher_processor = None
+    trainer.use_uld_loss = False
+    trainer.teacher_tokenizer = None
 
     class StubProcessor:
         @staticmethod
@@ -2045,7 +2047,13 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
 
     def stub_collator(synthetic_examples):
         collated_per_call.append(list(synthetic_examples))
-        return {"input_ids": torch.zeros(len(synthetic_examples), 1, dtype=torch.long)}
+        return {
+            "input_ids": torch.zeros(len(synthetic_examples), 1, dtype=torch.long),
+            "original_prompt_text": [example["prompt"][0]["content"] for example in synthetic_examples],
+            "original_completion_text": [
+                example["completion"][0]["content"][0]["text"] for example in synthetic_examples
+            ],
+        }
 
     trainer._vlm_collator = stub_collator
 
@@ -2095,6 +2103,8 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
 
     first_slice = trainer._materialize_vlm_slice(trainer._buffered_inputs[0])
     assert first_slice["input_ids"].shape[0] == unique_prompts_per_slice * num_generations
+    assert first_slice["original_prompt_text"] == [example["prompt"][0]["content"] for example in collated_per_call[0]]
+    assert all("<" not in prompt for prompt in first_slice["original_prompt_text"])
     assert len(collated_per_call) == 1
     assert len(collated_per_call[0]) == unique_prompts_per_slice * num_generations
 
@@ -2176,6 +2186,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
             "prompts": torch.ones(batch_size, 2, dtype=torch.long),
             "prompt_attention_mask": torch.ones(batch_size, 2, dtype=torch.long),
             "pixel_values": torch.zeros(batch_size, 3, 2, 2),
+            "original_prompt_text": [example["prompt"][0]["content"] for example in examples],
         }
 
     trainer._vlm_collator = stub_collator
@@ -2212,6 +2223,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
 
     assert len(collated_per_call) == 1
     assert consumed_slice["input_ids"].shape == (1, 3)
+    assert consumed_slice["original_prompt_text"] == ["q1"]
     assert "_gold_vlm_on_policy_raw_examples" in trainer._buffered_inputs[0]
     assert "_gold_vlm_on_policy_raw_examples" not in trainer._buffered_inputs[1]
 
