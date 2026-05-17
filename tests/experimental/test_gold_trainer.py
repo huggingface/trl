@@ -1193,6 +1193,19 @@ def _get_assistant_texts(examples):
     return texts
 
 
+def _get_prompt_turn_texts(example):
+    texts = []
+    for turn in example["prompt"]:
+        content = turn["content"]
+        if isinstance(content, list):
+            text = "\n".join(part["text"] for part in content if isinstance(part, dict) and "text" in part)
+        else:
+            text = content
+        if text:
+            texts.append(text)
+    return texts
+
+
 def test_vlm_chatml_collator_preserves_completion_smolvlm(smolvlm_processor, qwen3_vl_processor, vlm_examples):
     # 2048 to not truncate the completion tokens
     collator = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=2048)
@@ -1370,7 +1383,13 @@ def test_vlm_collator_original_text_is_untemplated(smolvlm_processor, vlm_exampl
                 f"original_completion_text leaked student special token {special!r}: {raw_completion!r}"
             )
 
-    for raw_prompt in batch["original_prompt_text"]:
+    for raw_prompt, example in zip(batch["original_prompt_text"], vlm_examples, strict=True):
+        prompt_turn_texts = _get_prompt_turn_texts(example)
+        for text in prompt_turn_texts:
+            assert text.strip() in raw_prompt
+        if len(prompt_turn_texts) > 1:
+            assert "\n".join(prompt_turn_texts) == raw_prompt
+            assert "".join(prompt_turn_texts) != raw_prompt
         for special in student_specials:
             assert special not in raw_prompt, (
                 f"original_prompt_text leaked student special token {special!r}: {raw_prompt!r}"

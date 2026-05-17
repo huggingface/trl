@@ -332,14 +332,20 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
             for turn in messages_or_str:
                 content = turn.get("content", "")
                 if isinstance(content, str):
-                    parts.append(content)
+                    if content:
+                        parts.append(content)
                     continue
+                turn_parts: list[str] = []
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "text":
-                        parts.append(block.get("text", ""))
+                        text = block.get("text", "")
+                        if text:
+                            turn_parts.append(text)
                     elif isinstance(block, str):
-                        parts.append(block)
-            return "".join(parts)
+                        turn_parts.append(block)
+                if turn_parts:
+                    parts.append("\n".join(turn_parts))
+            return "\n".join(parts)
 
         raw_prompt_texts = [_raw_text_from_messages(example["prompt"]) for example in examples]
         raw_completion_texts = [_raw_text_from_messages(example["completion"]) for example in examples]

@@ -1284,10 +1284,7 @@ class GOLDTrainer(SFTTrainer):
             k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in slice_inputs.items()
         }
 
-        if "_gold_vlm_original_prompt_text" in pending_slice:
-            slice_inputs["original_prompt_text"] = pending_slice["_gold_vlm_original_prompt_text"]
-            slice_inputs["original_completion_text"] = pending_slice["_gold_vlm_original_completion_text"]
-        elif self.use_uld_loss and self.teacher_tokenizer is not None:
+        if self.use_uld_loss and self.teacher_tokenizer is not None:
             slice_inputs = self._ensure_original_text_fields(slice_inputs)
             if "original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs:
                 raise ValueError(
