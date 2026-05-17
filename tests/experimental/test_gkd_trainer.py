@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -359,3 +360,112 @@ class TestGKDTrainer(TrlTestCase):
             rtol=2e-2,
             atol=1e-6,
         )
+
+
+def test_generate_on_policy_outputs_vllm_strips_left_padding_and_syncs_weights():
+    class RecordingVLLMGeneration:
+        def __init__(self):
+            self.prompts = None
+            self.sync_calls = 0
+
+        def sync_weights(self):
+            self.sync_calls += 1
+
+        def generate(self, prompts, images, num_generations):
+            self.prompts = prompts
+            assert images is None
+            assert num_generations == 1
+            # Return two completions, one shorter than the other, so we exercise right-padding.
+            return None, [[7, 8], [9]], None, None
+
+    trainer = GKDTrainer.__new__(GKDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer.processing_class = SimpleNamespace(pad_token_id=0)
+    trainer.use_vllm = True
+    trainer.vllm_generation = RecordingVLLMGeneration()
+    trainer.vllm_sync_frequency = 1
+    trainer._last_vllm_sync_step = -1
+    trainer.state = SimpleNamespace(global_step=0)
+
+    # Two left-padded prompts: [[0, 0, 5, 6], [0, 4, 5, 6]] with matching attention masks.
+    inputs = {
+        "prompts": torch.tensor([[0, 0, 5, 6], [0, 4, 5, 6]], dtype=torch.long),
+        "prompt_attention_mask": torch.tensor([[0, 0, 1, 1], [0, 1, 1, 1]], dtype=torch.long),
+    }
+
+    generated_tokens, new_attention_mask, new_labels = trainer._generate_on_policy_outputs_vllm(inputs, pad_token_id=0)
+
+    # The stripped prompt ids that should be forwarded to vLLM (left-padding removed).
+    assert trainer.vllm_generation.prompts == [[5, 6], [4, 5, 6]]
+    assert trainer.vllm_generation.sync_calls == 1
+    assert trainer._last_vllm_sync_step == 0
+
+    # Prompt span reuses the original padded width (4) so compute_loss can slice with inputs["prompts"].shape[1];
+    # completions are right-padded to width 2.
+    expected_tokens = torch.tensor([[0, 0, 5, 6, 7, 8], [0, 4, 5, 6, 9, 0]], dtype=torch.long)
+    expected_attention_mask = torch.tensor([[0, 0, 1, 1, 1, 1], [0, 1, 1, 1, 1, 0]], dtype=torch.long)
+    # Prompt span (first 4 cols) is masked; pad position in the completion of row 1 is also masked.
+    expected_labels = torch.tensor(
+        [[-100, -100, -100, -100, 7, 8], [-100, -100, -100, -100, 9, -100]], dtype=torch.long
+    )
+
+    assert torch.equal(generated_tokens, expected_tokens)
+    assert torch.equal(new_attention_mask, expected_attention_mask)
+    assert torch.equal(new_labels, expected_labels)
+
+    # A second call at the same global_step should NOT trigger another sync.
+    trainer._generate_on_policy_outputs_vllm(inputs, pad_token_id=0)
+    assert trainer.vllm_generation.sync_calls == 1
+
+    # Advance to the next step: with frequency=1, every step triggers a sync.
+    trainer.state.global_step = 1
+    trainer._generate_on_policy_outputs_vllm(inputs, pad_token_id=0)
+    assert trainer.vllm_generation.sync_calls == 2
+    assert trainer._last_vllm_sync_step == 1
+
+
+def test_generate_on_policy_outputs_vllm_respects_sync_frequency():
+    class RecordingVLLMGeneration:
+        def __init__(self):
+            self.sync_calls = 0
+
+        def sync_weights(self):
+            self.sync_calls += 1
+
+        def generate(self, prompts, images, num_generations):
+            return None, [[7, 8], [9]], None, None
+
+    trainer = GKDTrainer.__new__(GKDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer.processing_class = SimpleNamespace(pad_token_id=0)
+    trainer.use_vllm = True
+    trainer.vllm_generation = RecordingVLLMGeneration()
+    trainer.vllm_sync_frequency = 3
+    trainer._last_vllm_sync_step = -3
+    trainer.state = SimpleNamespace(global_step=0)
+
+    inputs = {
+        "prompts": torch.tensor([[0, 0, 5, 6], [0, 4, 5, 6]], dtype=torch.long),
+        "prompt_attention_mask": torch.tensor([[0, 0, 1, 1], [0, 1, 1, 1]], dtype=torch.long),
+    }
+
+    # Step 0: 0 >= -3 + 3, so sync fires.
+    trainer._generate_on_policy_outputs_vllm(inputs, pad_token_id=0)
+    assert trainer.vllm_generation.sync_calls == 1
+    assert trainer._last_vllm_sync_step == 0
+
+    # Step 1: 1 < 0 + 3, no sync.
+    trainer.state.global_step = 1
+    trainer._generate_on_policy_outputs_vllm(inputs, pad_token_id=0)
+    assert trainer.vllm_generation.sync_calls == 1
+
+    # Step 2: 2 < 0 + 3, no sync.
+    trainer.state.global_step = 2
+    trainer._generate_on_policy_outputs_vllm(inputs, pad_token_id=0)
+    assert trainer.vllm_generation.sync_calls == 1
+
+    # Step 3: 3 >= 0 + 3, sync fires.
+    trainer.state.global_step = 3
+    trainer._generate_on_policy_outputs_vllm(inputs, pad_token_id=0)
+    assert trainer.vllm_generation.sync_calls == 2
+    assert trainer._last_vllm_sync_step == 3
