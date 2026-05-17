@@ -1793,6 +1793,7 @@ def test_cross_architecture_vlm_with_uld_sets_teacher_processor(monkeypatch):
 
     # Monkeypatch AutoTokenizer.from_pretrained for ULD teacher tokenizer loading
     sentinel_tokenizer = SimpleNamespace(pad_token="<pad>", eos_token="</s>")
+    sentinel_processor.tokenizer = sentinel_tokenizer
     real_auto_tokenizer_from_pretrained = AutoTokenizer.from_pretrained
 
     def patched_auto_tokenizer(name, **kwargs):
@@ -1899,6 +1900,90 @@ def test_same_architecture_vlm_no_teacher_processor(monkeypatch):
     assert len(cross_arch_warnings) == 0
 
     # Identity collator and VLM collator should still be set
+    assert trainer.data_collator is identity
+    assert trainer._vlm_collator is not None
+
+
+def test_same_architecture_vlm_with_uld_sets_teacher_processor(monkeypatch):
+    """ULD VLM distillation should use a teacher processor even when the VLM model_type matches."""
+
+    def fake_sft_init(
+        self,
+        model,
+        args=None,
+        data_collator=None,
+        train_dataset=None,
+        eval_dataset=None,
+        processing_class=None,
+        compute_metrics=None,
+        callbacks=None,
+        optimizers=None,
+        preprocess_logits_for_metrics=None,
+        peft_config=None,
+    ):
+        self.data_collator = data_collator
+        self.model = model
+        self.args = args
+        self.processing_class = processing_class
+        self.accelerator = SimpleNamespace(
+            device=torch.device("cpu"),
+            num_processes=1,
+            prepare_model=lambda module, evaluation_mode=True: module,
+        )
+        self.is_deepspeed_enabled = False
+        self.is_fsdp_enabled = False
+
+    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
+
+    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
+    if processor.tokenizer.pad_token is None:
+        processor.tokenizer.pad_token = processor.tokenizer.eos_token
+
+    sentinel_processor = SimpleNamespace(_is_sentinel=True)
+    real_auto_processor_from_pretrained = AutoProcessor.from_pretrained
+
+    def patched_auto_processor(name, **kwargs):
+        if name == "teacher":
+            return sentinel_processor
+        return real_auto_processor_from_pretrained(name, **kwargs)
+
+    monkeypatch.setattr(
+        gold_trainer_module.AutoProcessor,
+        "from_pretrained",
+        staticmethod(patched_auto_processor),
+    )
+
+    sentinel_tokenizer = SimpleNamespace(pad_token="<pad>", eos_token="</s>")
+    sentinel_processor.tokenizer = sentinel_tokenizer
+    real_auto_tokenizer_from_pretrained = AutoTokenizer.from_pretrained
+
+    def patched_auto_tokenizer(name, **kwargs):
+        if name == "teacher":
+            return sentinel_tokenizer
+        return real_auto_tokenizer_from_pretrained(name, **kwargs)
+
+    monkeypatch.setattr(
+        gold_trainer_module.AutoTokenizer,
+        "from_pretrained",
+        staticmethod(patched_auto_tokenizer),
+    )
+
+    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
+    student, teacher = _make_dummy_vlm_models("smolvlm", "smolvlm")
+    args = _make_vlm_trainer_args()
+    args.use_uld_loss = True
+    args.teacher_tokenizer_name_or_path = "teacher"
+
+    trainer = GOLDTrainer(
+        model=student,
+        teacher_model=teacher,
+        args=args,
+        train_dataset=vision_dataset,
+        processing_class=processor,
+    )
+
+    assert trainer._teacher_processor is sentinel_processor
+    assert trainer.teacher_tokenizer is sentinel_tokenizer
     assert trainer.data_collator is identity
     assert trainer._vlm_collator is not None
 

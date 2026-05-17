@@ -859,12 +859,14 @@ class GOLDTrainer(SFTTrainer):
             # Check for cross-architecture VLM distillation
             student_model_type = model.config.model_type if not isinstance(model, str) else None
             teacher_model_type = AutoConfig.from_pretrained(teacher_model).model_type
-            if student_model_type and teacher_model_type != student_model_type:
+            is_cross_architecture = student_model_type and teacher_model_type != student_model_type
+            if is_cross_architecture:
                 warnings.warn(
                     f"Cross-architecture VLM distillation detected: student is '{student_model_type}', "
                     f"teacher is '{teacher_model_type}'. Images will be processed separately through each "
                     "model's processor, which may increase memory usage and computation time."
                 )
+            if is_cross_architecture or args.use_uld_loss:
                 self._teacher_processor = teacher_proc
         elif self._is_vlm and not isinstance(teacher_model, str):
             # Teacher already instantiated — check if it looks like a VLM by checking for a vision config
@@ -877,12 +879,14 @@ class GOLDTrainer(SFTTrainer):
             # Check for cross-architecture VLM distillation
             student_model_type = model.config.model_type if not isinstance(model, str) else None
             teacher_model_type = teacher_model.config.model_type
-            if student_model_type and teacher_model_type != student_model_type:
+            is_cross_architecture = student_model_type and teacher_model_type != student_model_type
+            if is_cross_architecture:
                 warnings.warn(
                     f"Cross-architecture VLM distillation detected: student is '{student_model_type}', "
                     f"teacher is '{teacher_model_type}'. Images will be processed separately through each "
                     "model's processor, which may increase memory usage and computation time."
                 )
+            if is_cross_architecture or args.use_uld_loss:
                 self._teacher_processor = AutoProcessor.from_pretrained(teacher_model.config._name_or_path)
         if self._teacher_processor is not None and not args.use_uld_loss:
             raise ValueError(
@@ -963,7 +967,11 @@ class GOLDTrainer(SFTTrainer):
             teacher_model = create_model_from_path(teacher_model, **init_kwargs)
         self.use_uld_loss = args.use_uld_loss
         self.teacher_tokenizer = None
-        if args.use_uld_loss and args.teacher_tokenizer_name_or_path is not None:
+        if args.use_uld_loss and self._teacher_processor is not None:
+            self.teacher_tokenizer = self._teacher_processor.tokenizer
+            if self.teacher_tokenizer.pad_token is None:
+                self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
+        elif args.use_uld_loss and args.teacher_tokenizer_name_or_path is not None:
             self.teacher_tokenizer = AutoTokenizer.from_pretrained(args.teacher_tokenizer_name_or_path)
             if not hasattr(self.teacher_tokenizer, "pad_token") or self.teacher_tokenizer.pad_token is None:
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
@@ -2248,9 +2256,14 @@ class GOLDTrainer(SFTTrainer):
                         full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
                     ]
 
-                # For cross-architecture VLMs, build teacher inputs with image placeholders by processing
-                # prompts through the teacher's processor with raw images, then appending completions.
-                if self._teacher_processor is not None and "_raw_images" in inputs:
+                # For VLMs, build teacher inputs with image placeholders by processing prompts through
+                # the teacher's processor, then appending completions.
+                if self._teacher_processor is not None:
+                    if "_raw_images" not in inputs:
+                        raise ValueError(
+                            "VLM ULD loss requires raw images in the batch so teacher inputs can be rendered with "
+                            "the teacher processor. Use GOLD's VLM collator path, which preserves raw images."
+                        )
                     raw_images = inputs["_raw_images"]
                     raw_prompts = inputs["_raw_prompts"]
                     # Apply teacher's chat template to get prompt text with correct image placeholders
