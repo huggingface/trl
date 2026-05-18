@@ -67,9 +67,6 @@ class CPOConfig(_BaseConfig):
             standard log probability rewards. When `alpha != 0`, applies AlphaPO transformation: `r = (1 - p^(-alpha))
             / alpha` from the [AlphaPO paper](https://huggingface.co/papers/2501.03884). This parameter works with all
             loss types.
-        truncation_mode (`str`,*optional*,  defaults to `"keep_end"`):
-            Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
-            This argument is required if you want to use the default data collator.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             If `True`, generates and logs completions from the model to W&B or Comet during evaluation.
         is_encoder_decoder (`bool`, *optional*):
@@ -144,13 +141,6 @@ class CPOConfig(_BaseConfig):
             "help": "Alpha parameter that controls reward function shape across all loss types. When alpha=0 "
             "(default), uses standard log probability rewards. When `alpha != 0`, applies AlphaPO transformation: "
             "`r = (1 - p^(-alpha)) / alpha` from the AlphaPO paper. This parameter works with all loss types."
-        },
-    )
-    truncation_mode: str = field(
-        default="keep_end",
-        metadata={
-            "help": "Truncation mode to use when the prompt is too long.",
-            "choices": ["keep_end", "keep_start"],
         },
     )
     generate_during_eval: bool = field(

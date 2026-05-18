@@ -55,16 +55,10 @@ accelerate launch \
     --lora_target_modules q_proj k_proj v_proj o_proj gate_proj up_proj down_proj
 """
 
-import os
-
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_peft_config
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args):

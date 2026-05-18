@@ -93,6 +93,17 @@ class GOLDConfig(SFTConfig):
             Tensor parallel size for the colocated student vLLM engine (if `vllm_mode="colocate"`).
         vllm_structured_outputs_regex (`str`, *optional*):
             Regex for vLLM structured outputs for the student model.
+        vllm_server_base_url (`str`, *optional*):
+            Base URL for the vLLM server (e.g., `"http://localhost:8001"`). If provided, `vllm_server_host` and
+            `vllm_server_port` are ignored.
+        vllm_group_port (`int`, *optional*, defaults to `51216`):
+            Port for the vLLM weight-update group (NCCL communicator). Unless the port is occupied, there is no need to
+            change it.
+        vllm_max_model_length (`int`, *optional*):
+            Maximum model sequence length for the colocated vLLM engine when `vllm_mode="colocate"`. Defaults to the
+            model's maximum context length.
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation backend to use in vLLM. Use `"vllm"` (default) or `"transformers"`.
         vllm_sync_frequency (`int`, *optional*, defaults to `1`):
             Frequency (in training steps) to synchronize student model weights to vLLM engine. Set to 1 to sync after
             every step.
@@ -275,16 +286,6 @@ class GOLDConfig(SFTConfig):
         metadata={"help": "Whether to skip EOS token for teacher in ULD loss computation."},
     )
 
-    # transformers paged attention
-    use_transformers_paged: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
-            "`transformers` paged implementation will be used for generation instead of the default padded "
-            "implementation."
-        },
-    )
-
     # vLLM parameters
     use_vllm: bool = field(
         default=False,
@@ -294,6 +295,12 @@ class GOLDConfig(SFTConfig):
         default="colocate",
         metadata={
             "help": 'Mode for vLLM integration. Either "server" (connect to a running TRL vLLM server) or "colocate" (run vLLM in the same process).'
+        },
+    )
+    vllm_server_base_url: str | None = field(
+        default=None,
+        metadata={
+            "help": 'Base URL for the vLLM server (e.g., "http://localhost:8001"). If provided, vllm_server_host and vllm_server_port are ignored.'
         },
     )
     vllm_server_host: str = field(
@@ -308,6 +315,10 @@ class GOLDConfig(SFTConfig):
         default=240.0,
         metadata={"help": 'Timeout (in seconds) for connecting to the vLLM server when `vllm_mode="server"`.'},
     )
+    vllm_group_port: int = field(
+        default=51216,
+        metadata={"help": "Port for the vLLM weight-update group (NCCL communicator)."},
+    )
     vllm_gpu_memory_utilization: float = field(
         default=0.9,
         metadata={
@@ -317,6 +328,16 @@ class GOLDConfig(SFTConfig):
     vllm_tensor_parallel_size: int = field(
         default=1,
         metadata={"help": 'Tensor parallel size for the colocated vLLM engine when `vllm_mode="colocate"`.'},
+    )
+    vllm_max_model_length: int | None = field(
+        default=None,
+        metadata={
+            "help": 'Maximum model sequence length for the colocated vLLM engine when `vllm_mode="colocate"`. Defaults to the model\'s maximum context length.'
+        },
+    )
+    vllm_model_impl: str = field(
+        default="vllm",
+        metadata={"help": 'Model implementation backend to use in vLLM. Use "vllm" (default) or "transformers".'},
     )
     vllm_structured_outputs_regex: str | None = field(
         default=None,
@@ -384,6 +405,7 @@ class GOLDConfig(SFTConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
         # check lmbda and beta are in the range [0, 1]
         if self.lmbda < 0.0 or self.lmbda > 1.0:
             raise ValueError("lmbda must be in the range [0.0, 1.0].")
