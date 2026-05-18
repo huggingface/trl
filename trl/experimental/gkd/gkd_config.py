@@ -214,10 +214,3 @@ class GKDConfig(SFTConfig):
             raise ValueError("lmbda must be in the range [0.0, 1.0].")
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError("beta must be in the range [0.0, 1.0].")
-        if self.use_vllm and self.lmbda == 0.0 and not self.seq_kd:
-            raise ValueError(
-                "use_vllm=True has no effect when lmbda=0.0 and seq_kd=False, since no on-policy generation happens. "
-                "Set lmbda > 0 or seq_kd=True, or disable use_vllm."
-            )
-        if self.vllm_mode not in {"colocate", "server"}:
-            raise ValueError(f"vllm_mode must be 'colocate' or 'server', got {self.vllm_mode!r}.")
