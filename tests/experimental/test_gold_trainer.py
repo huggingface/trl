@@ -2259,6 +2259,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
 
     def stub_collator(examples):
         collated_per_call.append(list(examples))
+        assert all(example.get("completion") == "" for example in examples)
         batch_size = len(examples)
         return {
             "prompts": torch.ones(batch_size, 2, dtype=torch.long),
@@ -2290,8 +2291,8 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
     monkeypatch.setattr(gold_trainer_module, "prepare_multimodal_messages", lambda prompt, images: prompt)
 
     raw_slices = [
-        [{"prompt": [{"role": "user", "content": "q0"}], "image": object()}],
-        [{"prompt": [{"role": "user", "content": "q1"}], "image": object()}],
+        [{"prompt": [{"role": "user", "content": "q0"}], "completion": "gold0", "image": object()}],
+        [{"prompt": [{"role": "user", "content": "q1"}], "completion": "gold1", "image": object()}],
     ]
 
     trainer._generate_on_policy_vlm_raw(raw_slices, [0, 1])

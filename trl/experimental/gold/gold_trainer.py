@@ -1220,7 +1220,17 @@ class GOLDTrainer(SFTTrainer):
     ) -> tuple[dict[str, torch.Tensor | Any], tuple[list[str], list[str]]]:
         """Generate and collate one non-vLLM on-policy VLM slice immediately before it is consumed."""
         raw_examples = pending_slice["_gold_vlm_on_policy_raw_examples"]
-        collated = self._vlm_collator([dict(example) for example in raw_examples])
+        generation_examples = []
+        for example in raw_examples:
+            generation_example = dict(example)
+            completion = generation_example.get("completion")
+            generation_example["completion"] = (
+                [{"role": "assistant", "content": [{"type": "text", "text": ""}]}]
+                if isinstance(completion, list)
+                else ""
+            )
+            generation_examples.append(generation_example)
+        collated = self._vlm_collator(generation_examples)
         collated = {
             k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in collated.items()
         }
@@ -1250,11 +1260,12 @@ class GOLDTrainer(SFTTrainer):
         prompt_seq_len = collated["prompts"].shape[1]
         for k in self._SEQUENCE_KEYS:
             if k in updated_slice:
+                sequence_dtype = updated_slice[k].dtype
                 prompt_part = self._get_prompt_sequence_key(collated, k)
                 comp_part = torch.zeros(
                     new_input_ids.shape[0],
                     new_seq_len - prompt_seq_len,
-                    dtype=updated_slice[k].dtype,
+                    dtype=sequence_dtype,
                     device=new_input_ids.device,
                 )
                 updated_slice[k] = torch.cat([prompt_part, comp_part], dim=1)
@@ -1624,7 +1635,7 @@ class GOLDTrainer(SFTTrainer):
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
-                padding=True,
+                processor_kwargs={"padding": True},
             )
             prompt_ids_list = [
                 [tok for tok, m in zip(ids, mask, strict=True) if m]
@@ -1693,14 +1704,12 @@ class GOLDTrainer(SFTTrainer):
         slice_prompts = {idx: [] for idx in on_policy_indices}
         slice_prompts_text = {idx: [] for idx in on_policy_indices}
 
-        comp_idx = 0
         for i, slice_idx in enumerate(local_slice_indices):
-            slice_completions[slice_idx].append(all_completion_texts[comp_idx])
+            slice_completions[slice_idx].append(all_completion_texts[i])
             slice_raw[slice_idx].append(all_raw_examples[i])
             slice_images[slice_idx].append(all_images[i])
             slice_prompts[slice_idx].append(all_prompts[i])
             slice_prompts_text[slice_idx].append(all_prompts_text[i])
-            comp_idx += 1
 
         for slice_idx in on_policy_indices:
             completion_texts = slice_completions[slice_idx]
@@ -2285,6 +2294,23 @@ class GOLDTrainer(SFTTrainer):
                 teacher_prompt_texts = self._teacher_processor.apply_chat_template(
                     raw_prompts, tokenize=False, add_generation_prompt=True
                 )
+                teacher_completion_texts = []
+                for raw_prompt, completion_text, teacher_prompt_text in zip(
+                    raw_prompts, completion_texts, teacher_prompt_texts, strict=True
+                ):
+                    teacher_completion = [
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": completion_text}],
+                        }
+                    ]
+                    teacher_prompt_completion_text = self._teacher_processor.apply_chat_template(
+                        raw_prompt + teacher_completion, tokenize=False, add_generation_prompt=False
+                    )
+                    if teacher_prompt_completion_text.startswith(teacher_prompt_text):
+                        teacher_completion_texts.append(teacher_prompt_completion_text[len(teacher_prompt_text) :])
+                    else:
+                        teacher_completion_texts.append(completion_text)
                 teacher_prompt_processed = self._teacher_processor(
                     images=raw_images,
                     text=teacher_prompt_texts,
@@ -2292,7 +2318,7 @@ class GOLDTrainer(SFTTrainer):
                     return_tensors="pt",
                 )
                 teacher_completion_token_ids = self._teacher_processor.tokenizer(
-                    completion_texts, add_special_tokens=False
+                    teacher_completion_texts, add_special_tokens=False
                 )["input_ids"]
 
                 pad_token_id = self.teacher_tokenizer.pad_token_id
@@ -2313,7 +2339,7 @@ class GOLDTrainer(SFTTrainer):
                     teacher_prompt_token_lengths.append(len(prompt_ids))
                     sequence = list(prompt_ids)
                     sequence.extend(completion_ids)
-                    if eos_token_id is not None:
+                    if eos_token_id is not None and eos_token_id not in completion_ids:
                         sequence.append(eos_token_id)
 
                     seq_tensor = torch.tensor(sequence, dtype=torch.long)

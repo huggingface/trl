@@ -13,26 +13,22 @@
 # limitations under the License.
 
 """
-GOLD VLM distillation on MMK12.
+GOLD VLM distillation on GEOQA_R1V.
 
-# Example 1 — Same-family distillation (SmolVLM-500M → SmolVLM-256M)
+# Same-family distillation (Qwen3-VL-8B → Qwen3-VL-2B)
 # Uses JSD loss. Same architecture and tokenizer, so standard distillation works directly.
 # vLLM enabled for faster on-policy generation.
 accelerate launch examples/scripts/gold_vlm.py \
-    --student_model_name HuggingFaceTB/SmolVLM-256M-Instruct \
-    --teacher_model_name HuggingFaceTB/SmolVLM-500M-Instruct \
-    --lmbda 0.5 \
-    --use_vllm \
-    --vllm_mode colocate
+    --student_model_name Qwen/Qwen3-VL-2B-Instruct \
+    --teacher_model_name Qwen/Qwen3-VL-8B-Instruct
 
-# Example 2 — Cross-family distillation (Qwen2.5-VL-3B → SmolVLM-256M)
-# Different architectures have incompatible tokenizers and image token formats,
-# so ULD (Universal Logit Distillation) loss is required to align logits across vocabularies.
+# Cross-family distillation (Qwen3-VL-8B → LFM2.5-VL-1.6B)
+# Uses ULD loss for different tokenizers/processors. vLLM is disabled because this path uses local VLM generation.
 accelerate launch examples/scripts/gold_vlm.py \
-    --student_model_name HuggingFaceTB/SmolVLM-256M-Instruct \
-    --teacher_model_name Qwen/Qwen2.5-VL-3B-Instruct \
+    --student_model_name LiquidAI/LFM2.5-VL-1.6B \
+    --teacher_model_name Qwen/Qwen3-VL-8B-Instruct \
     --use_uld_loss \
-    --lmbda 0.0
+    --no-use_vllm
 """
 
 import argparse
@@ -45,15 +41,18 @@ from transformers import AutoModelForImageTextToText, AutoProcessor
 from trl.experimental.gold import GOLDConfig, GOLDTrainer
 
 
-SYSTEM_PROMPT = (
-    "You are a helpful AI Assistant that provides well-reasoned and detailed responses. "
-    "You first think about the reasoning process as an internal monologue and then provide the user with the answer. "
-    "Respond in the following format: <think>\n...\n</think>\n<answer>\n...\n</answer>"
-)
+SYSTEM_PROMPT = "Answer with a single number followed by the ° symbol."
+
+
+def normalize_solution(solution):
+    solution = str(solution).replace("<answer>", "").replace("</answer>", "").strip()
+    if solution and not solution.endswith("°"):
+        solution = f"{solution}°"
+    return solution
 
 
 def make_conversation(example):
-    """Convert MMK12 row into the chat format expected by TRL VLM trainers."""
+    """Convert GEOQA_R1V row into the chat format expected by TRL VLM trainers."""
     return {
         "prompt": [
             {
@@ -64,14 +63,14 @@ def make_conversation(example):
                 "role": "user",
                 "content": [
                     {"type": "image"},
-                    {"type": "text", "text": example["question"]},
+                    {"type": "text", "text": example["problem"]},
                 ],
             },
         ],
         "completion": [
             {
                 "role": "assistant",
-                "content": [{"type": "text", "text": str(example["answer"])}],
+                "content": [{"type": "text", "text": normalize_solution(example["solution"])}],
             },
         ],
         "image": example["image"],
@@ -93,11 +92,11 @@ def convert_to_rgb(example):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--student_model_name", type=str, default="HuggingFaceTB/SmolVLM-256M-Instruct")
-    parser.add_argument("--teacher_model_name", type=str, default="HuggingFaceTB/SmolVLM-500M-Instruct")
-    parser.add_argument("--use_uld_loss", action="store_true")
+    parser.add_argument("--student_model_name", type=str, default="Qwen/Qwen3-VL-2B-Instruct")
+    parser.add_argument("--teacher_model_name", type=str, default="Qwen/Qwen3-VL-8B-Instruct")
     parser.add_argument("--lmbda", type=float, default=0.5)
-    parser.add_argument("--use_vllm", action="store_true")
+    parser.add_argument("--use_uld_loss", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--use_vllm", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--vllm_mode", type=str, default="colocate")
     cli_args = parser.parse_args()
 
@@ -118,18 +117,17 @@ if __name__ == "__main__":
 
     processor = AutoProcessor.from_pretrained(cli_args.student_model_name, padding_side="left")
 
-    # toy example to fit small GPUs
     peft_config = LoraConfig(
-        r=4,
-        lora_alpha=8,
+        r=16,
+        lora_alpha=32,
         lora_dropout=0.05,
-        target_modules=["q_proj"],
+        target_modules=r"^.*language_model.*\.(q_proj|k_proj|v_proj)$",
     )
 
     # ──────────────────────────────────────────────
     # Dataset
     # ──────────────────────────────────────────────
-    dataset = load_dataset("FanqingM/MMK12", split="train[:5%]")
+    dataset = load_dataset("leonardPKU/GEOQA_R1V_Train_8K", split="train")
     dataset = dataset.filter(filter_big_images)
     dataset = dataset.map(convert_to_rgb)
     dataset = dataset.map(make_conversation)
@@ -138,35 +136,38 @@ if __name__ == "__main__":
     # Training config
     # ──────────────────────────────────────────────
     args = GOLDConfig(
-        output_dir="gold-vlm-distillation",
+        output_dir=(
+            "gold-vlm-distillation-different-family" if cli_args.use_uld_loss else "gold-vlm-distillation-same-family"
+        ),
         # GOLD-specific
         lmbda=cli_args.lmbda,
         beta=0.5,
-        temperature=0.9,
-        max_completion_length=256,
+        temperature=0.6,
+        max_completion_length=128,
+        max_grad_norm=1.0,
         teacher_model_name_or_path=cli_args.teacher_model_name,
         num_generations=1,
         use_uld_loss=cli_args.use_uld_loss,
+        uld_crossentropy_weight=0.5,
+        uld_distillation_weight=0.5,
         # vLLM
         use_vllm=cli_args.use_vllm,
         vllm_mode=cli_args.vllm_mode,
         vllm_gpu_memory_utilization=0.5,
-        vllm_max_model_length=8192,
-        # VLM image tokens expand during processing, so the default max_length (1024) is often too small.
-        # Which will lead to shifted_student_logits become an empty Tensor.
+        vllm_max_model_length=1024,
         max_length=2048,
         # Training schedule
         per_device_train_batch_size=2,
         gradient_accumulation_steps=4,
-        max_steps=100,
-        learning_rate=2e-5,
+        max_steps=300,
+        learning_rate=1e-4,
         warmup_steps=10,
         # Precision
         bf16=True,
         # Logging
-        logging_steps=1,
+        logging_steps=10,
         log_completions=True,
-        report_to="none",
+        report_to="wandb",
     )
 
     # ──────────────────────────────────────────────
