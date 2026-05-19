@@ -218,19 +218,19 @@ class GRPOTrainer(_BaseTrainer):
             are ignored.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             Function called after each evaluation pass to compute additional metrics. It receives an
-            [`~transformers.EvalPrediction`] whose `predictions` field contains the generated text completions
-            as a list of strings (or list of message dicts in conversational format), and whose `label_ids`
-            field contains a `(N, R)` float tensor of per-function reward scores, where `N` is the number of
-            completions and `R` is the number of reward functions. The function must return a `dict` mapping
-            metric names to scalar values. Unlike [`DPOTrainer`], predictions here are raw text, not logit
-            tensors. Example:
+            [`~transformers.EvalPrediction`] whose `predictions` field contains the generated text completions as a
+            list of strings (or list of message dicts in conversational format), and whose `label_ids` field contains a
+            `(N, R)` float tensor of per-function reward scores, where `N` is the number of completions and `R` is the
+            number of reward functions. The function must return a `dict` mapping metric names to scalar values. Unlike
+            [`DPOTrainer`], predictions here are raw text, not logit tensors. Example:
 
             ```python
             def compute_metrics(eval_pred):
                 completions = eval_pred.predictions  # list of strings
-                rewards = eval_pred.label_ids        # tensor of shape (N, R)
+                rewards = eval_pred.label_ids  # tensor of shape (N, R)
                 correct = [1 if "answer" in c else 0 for c in completions]
                 return {"exact_match": sum(correct) / len(correct)}
+
 
             trainer = GRPOTrainer(
                 model=model,
