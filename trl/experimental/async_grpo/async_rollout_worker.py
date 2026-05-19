@@ -182,6 +182,12 @@ class AsyncRolloutWorker:
         self.model_version = 0
         self.session = None
 
+        # Initialized so check_health() is safe to call before start().
+        self._failed = threading.Event()
+        self._exception: BaseException | None = None
+        self._last_heartbeat: float = time.monotonic()
+        self._thread: threading.Thread | None = None
+
         # Wait for the vLLM server and initialize NCCL weight transfer.
         self._wait_for_server_ready_sync(timeout_s=self.server_timeout)
         self._init_weight_transfer()
@@ -254,8 +260,10 @@ class AsyncRolloutWorker:
             )
 
     def start(self) -> None:
-        thread = threading.Thread(target=self._run, daemon=True)
-        thread.start()
+        # Reset so a long __init__→start() gap doesn't immediately trip check_health.
+        self._last_heartbeat = time.monotonic()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
 
     def stop(self) -> None:
         logger.info("Stopping worker thread...")
@@ -272,12 +280,23 @@ class AsyncRolloutWorker:
         self._stop_event = asyncio.Event()
         try:
             loop.run_until_complete(self._run_loops(stop_event=self._stop_event))
-        except Exception as e:
+        except BaseException as e:
+            # Set _failed last: a reader that sees the event is guaranteed to also see _exception.
+            self._exception = e
+            self._failed.set()
             logger.exception(f"Worker thread failed: {e}")
             raise
         finally:
             loop.close()
             self._destroy_model_update_group()
+
+    def check_health(self, stale_after_s: float) -> None:
+        """Raise if the worker crashed or hasn't ticked the heartbeat within `stale_after_s`."""
+        if self._failed.is_set():
+            raise RuntimeError("Rollout worker has failed; see chained exception.") from self._exception
+        age = time.monotonic() - self._last_heartbeat
+        if age > stale_after_s:
+            raise RuntimeError(f"Rollout worker heartbeat stale: {age:.0f}s > {stale_after_s:.0f}s; worker is hung.")
 
     def _destroy_model_update_group(self) -> None:
         # It's important because otherwise we get errors on exit.
@@ -330,6 +349,7 @@ class AsyncRolloutWorker:
         self._generation_start_time = time.monotonic()
         try:
             while True:
+                self._last_heartbeat = time.monotonic()
                 while free_slots and not stop_event.is_set():
                     group_id, row = next(work_iter)
                     if group_id not in pending_groups:
@@ -461,6 +481,7 @@ class AsyncRolloutWorker:
 
     async def _score_loop(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
+            self._last_heartbeat = time.monotonic()
             t_wait = time.monotonic()
             try:
                 group = await asyncio.wait_for(self._groups_to_score.get(), timeout=0.5)

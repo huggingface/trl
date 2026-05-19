@@ -61,6 +61,7 @@ class RolloutWorkerProtocol(Protocol):
     def resume(self) -> None: ...
     def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None: ...
     def update_model_version(self, version: int) -> None: ...
+    def check_health(self, stale_after_s: float) -> None: ...
 
 
 class StepIntervalCallback(TrainerCallback):
@@ -78,36 +79,33 @@ class StepIntervalCallback(TrainerCallback):
 
 
 class RolloutQueueDataset(torch.utils.data.IterableDataset):
-    def __init__(self, rollout_queue, model_version_fn, max_staleness=3, timeout=120.0, max_empty_waits=10):
+    def __init__(
+        self,
+        rollout_queue,
+        model_version_fn,
+        check_health_fn,
+        stale_after_s,
+        max_staleness=3,
+        poll_interval_s=5.0,
+    ):
         self.queue = rollout_queue
         self.model_version_fn = model_version_fn
+        self.check_health_fn = check_health_fn
+        self.stale_after_s = stale_after_s
         self.max_staleness = max_staleness
-        self.timeout = timeout
-        self.max_empty_waits = max_empty_waits
+        self.poll_interval_s = poll_interval_s
 
     def __iter__(self):
-        # Returning on `queue.Empty` would propagate `None` through accelerate's loop for dispatch
-        empty_waits = 0
         while True:
             t0 = time.time()
-            qsize = self.queue.qsize()
-            if qsize == 0:
+            if self.queue.qsize() == 0:
                 logger.info("queue empty, waiting for rollout samples...")
             try:
-                sample = self.queue.get(timeout=self.timeout)
+                sample = self.queue.get(timeout=self.poll_interval_s)
             except queue.Empty:
-                empty_waits += 1
-                if empty_waits >= self.max_empty_waits:
-                    raise RuntimeError(
-                        f"Rollout queue empty for {self.max_empty_waits * self.timeout:.0f}s "
-                        f"({self.max_empty_waits} consecutive {self.timeout}s waits); rollout worker is dead."
-                    ) from None
-                logger.warning(
-                    f"Rollout queue empty for {self.timeout}s "
-                    f"(empty waits: {empty_waits}/{self.max_empty_waits}); continuing to wait."
-                )
+                # Returning here would broadcast None through accelerate's dispatch loop.
+                self.check_health_fn(self.stale_after_s)
                 continue
-            empty_waits = 0
             queue_wait_time_s = time.time() - t0
             if queue_wait_time_s > 1.0:
                 logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={self.queue.qsize()})")
@@ -131,10 +129,6 @@ class _EmptyIterableDataset(torch.utils.data.IterableDataset):
 
     def __iter__(self):
         return iter([])
-
-
-def _safe_float(v):
-    return 0.0 if v is None else float(v)
 
 
 @dataclass
@@ -161,11 +155,11 @@ class DataCollatorForRollout(DataCollatorMixin):
 
         # Convert per-sample metrics dicts to a dict of 1D tensors so that Accelerate's
         # recursive broadcast (dispatch_batches=True) can handle them — it traverses nested
-
+        # dicts of tensors but chokes on plain Python floats.
         metrics_list = [example["metrics"] for example in examples]
         metrics = (
             {
-                key: torch.tensor([_safe_float(m.get(key, 0.0)) for m in metrics_list], dtype=torch.float32)
+                key: torch.tensor([m.get(key, 0.0) for m in metrics_list], dtype=torch.float32)
                 for key in metrics_list[0]
             }
             if metrics_list and metrics_list[0]
@@ -416,8 +410,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             dataset = RolloutQueueDataset(
                 rollout_queue=self.rollout_queue,
                 model_version_fn=lambda: self.model_version,
+                check_health_fn=self.rollout_worker.check_health,
+                stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
-                timeout=self.args.vllm_server_timeout,
             )
         else:
             dataset = _EmptyIterableDataset()
