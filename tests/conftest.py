@@ -14,6 +14,7 @@
 
 import gc
 import traceback
+import warnings
 from functools import wraps
 
 import pytest
@@ -129,18 +130,24 @@ def cleanup_gpu(request):
     models and tensors are properly garbage collected and GPU memory caches are cleared between tests.
     """
     if torch.cuda.is_available():
-        before = torch.cuda.memory_reserved()
+        before_reserved = torch.cuda.memory_reserved()
+        before_allocated = torch.cuda.memory_allocated()
     yield
     # Cleanup after test
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
-        after = torch.cuda.memory_reserved()
-        leaked = after - before
-        if leaked > 100 * 1024**2:  # warn if > 100 MiB leaked
-            print(
-                f"\n[cleanup_gpu] {request.node.nodeid}: leaked {leaked / 1024**2:.1f} MiB "
-                f"(before={before / 1024**2:.1f} MiB, after={after / 1024**2:.1f} MiB)",
-                flush=True,
+        after_reserved = torch.cuda.memory_reserved()
+        after_allocated = torch.cuda.memory_allocated()
+        leaked_reserved = after_reserved - before_reserved
+        leaked_allocated = after_allocated - before_allocated
+        if leaked_reserved > 100 * 1024**2 or leaked_allocated > 100 * 1024**2:
+            warnings.warn(
+                f"[cleanup_gpu] {request.node.nodeid}: "
+                f"reserved +{leaked_reserved / 1024**2:.1f} MiB, "
+                f"allocated +{leaked_allocated / 1024**2:.1f} MiB "
+                f"(after: res={after_reserved / 1024**2:.1f} MiB, alloc={after_allocated / 1024**2:.1f} MiB)",
+                ResourceWarning,
+                stacklevel=2,
             )
