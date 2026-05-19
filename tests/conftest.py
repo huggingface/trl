@@ -121,16 +121,26 @@ def apply_model_revisions(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def cleanup_gpu():
+def cleanup_gpu(request):
     """
     Automatically cleanup GPU memory after each test.
 
     This fixture helps prevent CUDA out of memory errors when running tests in parallel with pytest-xdist by ensuring
     models and tensors are properly garbage collected and GPU memory caches are cleared between tests.
     """
+    if torch.cuda.is_available():
+        before = torch.cuda.memory_allocated()
     yield
     # Cleanup after test
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
+        after = torch.cuda.memory_allocated()
+        leaked = after - before
+        if leaked > 100 * 1024**2:  # warn if > 100 MiB leaked
+            print(
+                f"\n[cleanup_gpu] {request.node.nodeid}: leaked {leaked / 1024**2:.1f} MiB "
+                f"(before={before / 1024**2:.1f} MiB, after={after / 1024**2:.1f} MiB)",
+                flush=True,
+            )
