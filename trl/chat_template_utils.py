@@ -407,18 +407,6 @@ llama3_template = {
     },
 }
 
-# GPT-OSS: channel-based. The harmony format uses three semantic channels:
-#   - `analysis` carries chain-of-thought / reasoning -> mapped to `thinking`
-#   - `final`    carries the user-facing answer       -> mapped to `content`
-#   - `commentary to=functions.X` carries tool calls  -> mapped to `tool_calls`
-#
-# gpt-oss uses the `thinking` field name (not `reasoning_content` like other TRL models) because
-# that's what its chat template reads from when rendering the analysis channel. Also note: the
-# chat template forces an assistant `content` field into the analysis channel whenever it
-# precedes a tool call (the harmony spec forbids `final` before tools), so a message constructed
-# as `{content: X, tool_calls: [...]}` round-trips back as `{thinking: X, tool_calls: [...]}`.
-# Construct training messages with `thinking` for the pre-tool-call narrative to keep the
-# round-trip stable.
 gpt_oss_template = {
     "defaults": {"role": "assistant"},
     "start_anchor": "<|start|>assistant",

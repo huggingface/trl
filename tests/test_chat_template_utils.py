@@ -822,10 +822,7 @@ class TestParseResponse:
             pytest.skip("Upstream bug in response parsing (see #5753; fixed in transformers#45166)")
         processing_class = self._load(model_name)
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
-        # gpt-oss's chat template forces an assistant `content` that precedes a tool call into the `analysis`
-        # channel (the harmony spec forbids `final` before tools). Our parser maps that channel to `thinking`,
-        # so for gpt-oss we put the narrative in `thinking` and keep `content=""` (TRL's parse_response wrapper
-        # normalizes missing content to "" anyway, so we include it explicitly here to match what comes out).
+        # gpt-oss renders content-before-tool-call into the `analysis` channel, which we parse as `thinking`.
         assistant = {"role": "assistant", "tool_calls": tool_calls}
         if model_name == "trl-internal-testing/tiny-GptOssForCausalLM":
             assistant["thinking"] = "Let's call the tool."
