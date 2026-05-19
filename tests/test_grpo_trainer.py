@@ -2300,6 +2300,7 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
+            model_init_kwargs={"attn_implementation": "eager"}, # There is a bug for SDPA since torch 2.12
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -2315,18 +2316,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the params have changed
-        # Because of the way the tiny models are initialized, the gradient does not flow properly through the
-        # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
-        params_to_skip = (
-            "model.vision_tower.",
-            "model.multi_modal_projector.",
-            "model.visual.",
-            "model.image_newline",
-        )
         for n, param in previous_trainable_params.items():
-            if n.startswith(params_to_skip):
-                continue
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
