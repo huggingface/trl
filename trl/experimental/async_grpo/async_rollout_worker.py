@@ -544,7 +544,7 @@ class AsyncRolloutWorker:
         )
         while True:
             turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
-            assistant_message = parse_response(self.tokenizer, turn_ids)
+            assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
             completion_logprobs.extend(turn_logprobs)

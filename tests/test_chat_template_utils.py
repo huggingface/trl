@@ -737,13 +737,12 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_with_reasoning_content(self, model_name):
         if model_name in (
             "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-            "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -753,9 +752,14 @@ class TestParseResponse:
             pytest.skip("This tokenizer doesn't support inline reasoning_content.")
 
         processing_class = self._load(model_name)
+        # gpt-oss uses the `thinking` field name (matching its harmony chat template) rather
+        # than the `reasoning_content` convention used by other models.
+        reasoning_field = (
+            "thinking" if model_name == "trl-internal-testing/tiny-GptOssForCausalLM" else "reasoning_content"
+        )
         messages = [
             {"role": "user", "content": "What is 3*4?"},
-            {"role": "assistant", "reasoning_content": "Hmmm.", "content": "12"},
+            {"role": "assistant", reasoning_field: "Hmmm.", "content": "12"},
         ]
         expected = messages[-1]
         messages = prepare_multimodal_messages(messages) if self.is_vlm else messages
@@ -770,7 +774,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_tool_call(self, model_name):
@@ -803,7 +807,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_tool_call_with_content(self, model_name):
@@ -818,10 +822,17 @@ class TestParseResponse:
             pytest.skip("Upstream bug in response parsing (see #5753; fixed in transformers#45166)")
         processing_class = self._load(model_name)
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
-        messages = [
-            {"role": "user", "content": "What is 3*4?"},
-            {"role": "assistant", "content": "Let's call the tool.", "tool_calls": tool_calls},
-        ]
+        # gpt-oss's chat template forces an assistant `content` that precedes a tool call into the `analysis`
+        # channel (the harmony spec forbids `final` before tools). Our parser maps that channel to `thinking`,
+        # so for gpt-oss we put the narrative in `thinking` and keep `content=""` (TRL's parse_response wrapper
+        # normalizes missing content to "" anyway, so we include it explicitly here to match what comes out).
+        assistant = {"role": "assistant", "tool_calls": tool_calls}
+        if model_name == "trl-internal-testing/tiny-GptOssForCausalLM":
+            assistant["thinking"] = "Let's call the tool."
+            assistant["content"] = ""
+        else:
+            assistant["content"] = "Let's call the tool."
+        messages = [{"role": "user", "content": "What is 3*4?"}, assistant]
         expected = messages[-1]
         messages = prepare_multimodal_messages(messages) if self.is_vlm else messages
         prefix = processing_class.apply_chat_template(
@@ -833,7 +844,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_tool_call_without_arguments(self, model_name):
@@ -864,7 +875,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_multiple_tool_calls(self, model_name):
@@ -900,7 +911,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_malformed_tool_call(self, model_name):

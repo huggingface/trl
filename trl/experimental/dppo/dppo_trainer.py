@@ -592,7 +592,10 @@ class DPPOTrainer(GRPOTrainer):
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
             # Decode post-tool completions
-            post_tool_completions = [parse_response(self._tokenizer, ids) if ids else {} for ids in post_tool_ids]
+            post_tool_completions = [
+                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx]) if ids else {}
+                for idx, ids in enumerate(post_tool_ids)
+            ]
 
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
@@ -666,12 +669,14 @@ class DPPOTrainer(GRPOTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
-            if (
-                Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
-                and hasattr(self._tokenizer, "response_schema")  # attribute not set by default for now
-                and self._tokenizer.response_schema is not None  # only works if the tokenizer has a schema
+            if Version(transformers.__version__) >= Version("5.0.0") and (  # parse_response added in v5
+                getattr(self._tokenizer, "response_template", None) is not None  # new-style
+                or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
             ):
-                completions = [[parse_response(self._tokenizer, ids)] for ids in completion_ids]
+                completions = [
+                    [parse_response(self._tokenizer, ids, prefix=prompt_ids[i])]
+                    for i, ids in enumerate(completion_ids)
+                ]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
