@@ -129,14 +129,14 @@ def cleanup_gpu(request):
     models and tensors are properly garbage collected and GPU memory caches are cleared between tests.
     """
     if torch.cuda.is_available():
-        before = torch.cuda.memory_allocated()
+        before = torch.cuda.memory_reserved()
     yield
     # Cleanup after test
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
-        after = torch.cuda.memory_allocated()
+        after = torch.cuda.memory_reserved()
         leaked = after - before
         if leaked > 100 * 1024**2:  # warn if > 100 MiB leaked
             print(
