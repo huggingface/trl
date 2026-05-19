@@ -2337,14 +2337,17 @@ class GRPOTrainer(_BaseTrainer):
         # Accumulate completions and per-function rewards for compute_metrics. Each eval batch appends
         # to the buffers; log() drains them once per eval cycle after all batches have run.
         if mode == "eval" and self.compute_metrics is not None:
-            local_rewards = rewards_per_func[process_slice]
-            self._completions_for_compute_metrics.extend(completions)
-            if self._rewards_for_compute_metrics is None:
-                self._rewards_for_compute_metrics = local_rewards.cpu()
-            else:
-                self._rewards_for_compute_metrics = torch.cat(
-                    [self._rewards_for_compute_metrics, local_rewards.cpu()], dim=0
-                )
+            # gather_object is a collective: must be called on all processes, returns full list everywhere
+            all_completions = gather_object(completions)
+            if self.accelerator.is_main_process:
+                self._completions_for_compute_metrics.extend(all_completions)
+                # rewards_per_func is already globally gathered (line ~1316); use it directly
+                if self._rewards_for_compute_metrics is None:
+                    self._rewards_for_compute_metrics = rewards_per_func.cpu()
+                else:
+                    self._rewards_for_compute_metrics = torch.cat(
+                        [self._rewards_for_compute_metrics, rewards_per_func.cpu()], dim=0
+                    )
 
         return output
 
