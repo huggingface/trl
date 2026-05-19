@@ -1973,15 +1973,13 @@ class GRPOTrainer(_BaseTrainer):
             )
         # If mm_token_type_ids are used, extend them with zeros for the completion part
         if "mm_token_type_ids" in forward_kwargs:
-            mm_token_type_ids = forward_kwargs["mm_token_type_ids"]
-            if self.pad_to_multiple_of is not None:
-                # Needed only with pad_to_multiple_of: otherwise prompt_ids and mm_token_type_ids must have equal len
-                padding_size = prompt_ids.size(1) - mm_token_type_ids.size(1)
-                if padding_size > 0:
-                    mm_token_type_ids = torch.cat(
-                        [mm_token_type_ids.new_zeros((mm_token_type_ids.size(0), padding_size)), mm_token_type_ids],
-                        dim=1,
-                    )
+            # [Minimal Fix] Rebuild from the left-padded prompt_ids to ensure padding alignment
+            mm_token_type_ids = torch.zeros_like(prompt_ids)
+            if self._image_pad_token_id is not None:
+                mm_token_type_ids[prompt_ids == self._image_pad_token_id] = 1
+            if self._video_pad_token_id is not None:
+                mm_token_type_ids[prompt_ids == self._video_pad_token_id] = 2
+            
             forward_kwargs["mm_token_type_ids"] = torch.cat(
                 [mm_token_type_ids, mm_token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
