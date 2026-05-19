@@ -139,6 +139,9 @@ def _child_main(
     model_version_value: MPValue,
     stop_event: MPEvent,
     child_ready_event: MPEvent,
+    heartbeat_value: MPValue,
+    failed_event: MPEvent,
+    exception_info_queue: MPQueue,
 ) -> None:
     _scrub_child_env()
     # `accelerate.logging.get_logger` requires `PartialState()` to have been called.
@@ -151,6 +154,9 @@ def _child_main(
         **loop_kwargs,
         rollout_buffer=samples_queue,
         model_version_value=model_version_value,
+        heartbeat_value=heartbeat_value,
+        failed_event=failed_event,
+        exception_info_queue=exception_info_queue,
     )
     child_ready_event.set()
     _spawn_stop_watcher(rollout_loop, stop_event)
@@ -178,6 +184,9 @@ class _AsyncRolloutLoop:
         processing_class: PreTrainedTokenizerBase,
         rollout_buffer: MPQueue,
         model_version_value: MPValue,
+        heartbeat_value: MPValue,
+        failed_event: MPEvent,
+        exception_info_queue: MPQueue,
         tools: list[Callable] | None = None,
         environment_factory: Callable[[], object] | None = None,
         num_generations: int = 8,
@@ -200,6 +209,9 @@ class _AsyncRolloutLoop:
         self.tokenizer = add_response_schema(processing_class)
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
+        self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
+        self._failed_event = failed_event  # shared mp.Event
+        self._exception_info_queue = exception_info_queue  # shared mp.Queue(maxsize=1)
 
         self.num_generations = num_generations
         self.max_inflight_tasks = max_inflight_tasks
@@ -262,7 +274,15 @@ class _AsyncRolloutLoop:
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._run_loops(stop_event=self._stop_event))
-        except Exception as e:
+        except BaseException as e:
+            # Push pickle-safe exception info to the parent before setting _failed_event, so a
+            # reader that sees the event is guaranteed to also see the info on the queue.
+            info = (type(e).__name__, str(e), traceback.format_exc())
+            try:
+                self._exception_info_queue.put_nowait(info)
+            except Exception:
+                pass  # queue full (parent hasn't drained a prior failure), best-effort put
+            self._failed_event.set()
             logger.exception(f"Worker process failed: {e}")
             raise
         finally:
@@ -290,7 +310,8 @@ class _AsyncRolloutLoop:
         self._generation_start_time = time.monotonic()
         try:
             while True:
-                self._last_heartbeat = time.monotonic()
+                # Wall-clock for cross-process comparison; parent uses time.time() in check_health.
+                self._heartbeat_value.value = time.time()
                 while free_slots and not stop_event.is_set():
                     group_id, row = next(work_iter)
                     if group_id not in pending_groups:
@@ -389,7 +410,7 @@ class _AsyncRolloutLoop:
 
     async def _score_loop(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
-            self._last_heartbeat = time.monotonic()
+            self._heartbeat_value.value = time.time()
             t_wait = time.monotonic()
             try:
                 group = await asyncio.wait_for(self._groups_to_score.get(), timeout=0.5)
@@ -698,6 +719,10 @@ class AsyncRolloutWorker:
         self._model_version_value = ctx.Value("i", 0)
         self._stop_event_mp = ctx.Event()
         self._child_ready_event = ctx.Event()
+        # Liveness state shared with the child. Wall-clock seconds because monotonic() is per-process.
+        self._heartbeat_value = ctx.Value("d", 0.0)
+        self._failed_event = ctx.Event()
+        self._exception_info_queue = ctx.Queue(maxsize=1)
         # Forwarded verbatim to _AsyncRolloutLoop in the child. queue_maxsize is also
         # forwarded — the child reads it for "rollout buffer full" log lines.
         loop_kwargs["queue_maxsize"] = queue_maxsize
@@ -722,6 +747,8 @@ class AsyncRolloutWorker:
         if self._process is not None:
             logger.warning("AsyncRolloutWorker.start() called but child process is already running; ignoring.")
             return
+        # Reset so spawn-import latency (~tens of seconds) doesn't immediately trip check_health.
+        self._heartbeat_value.value = time.time()
         loop_kwargs_pkl = pickle.dumps(self._loop_kwargs)
         self._process = self._mp_ctx.Process(
             target=_child_main,
@@ -731,6 +758,9 @@ class AsyncRolloutWorker:
                 self._model_version_value,
                 self._stop_event_mp,
                 self._child_ready_event,
+                self._heartbeat_value,
+                self._failed_event,
+                self._exception_info_queue,
             ),
             name="grpo-rollout-worker-child",
             daemon=True,
@@ -756,6 +786,19 @@ class AsyncRolloutWorker:
                     f"AsyncRolloutWorker child did not signal ready within {self._child_ready_timeout}s."
                 )
         logger.info("AsyncRolloutWorker child is ready")
+
+    def check_health(self, stale_after_s: float) -> None:
+        """Raise if the child crashed or hasn't ticked the heartbeat within `stale_after_s`."""
+        if self._failed_event.is_set():
+            try:
+                type_name, msg, tb = self._exception_info_queue.get_nowait()
+                cause = RuntimeError(f"{type_name}: {msg}\n{tb}")
+            except queue.Empty:
+                cause = None
+            raise RuntimeError("Rollout worker child has failed; see chained exception.") from cause
+        age = time.time() - self._heartbeat_value.value
+        if age > stale_after_s:
+            raise RuntimeError(f"Rollout worker heartbeat stale: {age:.0f}s > {stale_after_s:.0f}s; child is hung.")
 
     def stop(self) -> None:
         if self._process is None:
