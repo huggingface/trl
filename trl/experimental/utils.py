@@ -33,6 +33,7 @@ from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import (
     is_peft_available,
     is_torch_mlu_available,
+    is_torch_mps_available,
     is_torch_npu_available,
     is_torch_xpu_available,
 )
@@ -536,8 +537,8 @@ def pad_to_length(tensor: torch.Tensor, length: int, pad_value: int | float, dim
 def empty_cache() -> None:
     """Empties the cache of the available torch device.
 
-    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA) and empties the cache of
-    the first available device it finds.
+    This function checks for the availability of different torch devices (XPU, MLU, NPU, MPS, CUDA) and empties the
+    cache of the first available device it finds.
 
     If none of the specific devices are available, it defaults to emptying the CUDA cache.
     """
@@ -547,6 +548,8 @@ def empty_cache() -> None:
         torch.mlu.empty_cache()
     elif is_torch_npu_available():
         torch.npu.empty_cache()
+    elif is_torch_mps_available():
+        torch.mps.empty_cache()
     else:
         torch.cuda.empty_cache()
 
