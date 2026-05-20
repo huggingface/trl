@@ -120,7 +120,7 @@ def clone_chat_template(
 
 
 glm4moe_schema = {
-    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?$",
+    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>(?:(?!<tool_call>)[\s\S])*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|$))(?P<tool_calls>(?:<tool_call>(?:(?!</tool_call>)[\s\S])+</tool_call>\s*)+)?$",
     "type": "object",
     "properties": {
         "role": {"const": "assistant"},
@@ -771,6 +771,8 @@ def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int]) -> dict:
     """
     try:
         parsed = tokenizer.parse_response(ids)
+        if parsed is None:  # this can happen if the response is heavily truncated and even the content is lost
+            raise ValueError("parse_response returned None")
         # Hotfix: remove incorrectly appended EOS token from tool calls
         # See https://github.com/huggingface/transformers/issues/42249
         if isinstance(parsed.get("content"), str):

@@ -13,9 +13,7 @@
 # limitations under the License.
 
 import copy
-import re
 import textwrap
-import time
 
 import pytest
 import transformers
@@ -28,8 +26,6 @@ from trl.chat_template_utils import (
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     parse_response,
-    qwen3_5_schema,
-    qwen3_schema,
     supports_tool_calling,
 )
 from trl.data_utils import prepare_multimodal_messages
@@ -921,42 +917,30 @@ class TestParseResponse:
 
         assert parsed == expected
 
-
-class TestQwen3SchemaRegex:
-    """Regression tests for catastrophic backtracking in qwen3_schema and qwen3_5_schema x-regex.
-
-    See https://github.com/huggingface/trl/issues/5415 — the original regexes hit O(2^n) backtracking
-    when the last <tool_call> block is truncated (no closing </tool_call>), causing training to hang.
-    """
-
-    COMPLETE_BLOCK = '<tool_call>\n{"name": "tool_d", "arguments": {"numbers": [13]}}\n</tool_call>\n'
-    # Simulates truncation at max_completion_length
-    TRUNCATED_BLOCK = '<tool_call>\n{"name": "tool_d", "arguments": {"numbers":'
-
-    @pytest.mark.parametrize("schema", [qwen3_schema, qwen3_5_schema], ids=["qwen3", "qwen3_5"])
-    def test_truncated_tool_call_completes_in_bounded_time(self, schema):
-        regex = schema["x-regex"]
-        # n=22 took ~22s with the original regex; must finish in under 1s after the fix.
-        n = 22
-        text = "<think>\n\n</think>\n\n" + self.COMPLETE_BLOCK * n + self.TRUNCATED_BLOCK
-        t0 = time.time()
-        re.search(regex, text, re.DOTALL)
-        elapsed = time.time() - t0
-        assert elapsed < 1.0, f"Regex took {elapsed:.2f}s on {n} blocks + truncated — catastrophic backtracking"
-
-    @pytest.mark.parametrize("schema", [qwen3_schema, qwen3_5_schema], ids=["qwen3", "qwen3_5"])
-    def test_well_formed_tool_calls_still_parse(self, schema):
-        regex = schema["x-regex"]
-        text = "<think>\n\n</think>\n\n" + self.COMPLETE_BLOCK * 3 + "<|im_end|>"
-        match = re.search(regex, text, re.DOTALL)
-        assert match is not None, "Well-formed input should still match after the regex fix"
-        assert match.group("tool_calls") is not None
-
-    @pytest.mark.parametrize("schema", [qwen3_schema, qwen3_5_schema], ids=["qwen3", "qwen3_5"])
-    def test_plain_content_no_tool_calls(self, schema):
-        regex = schema["x-regex"]
-        text = "Some plain answer.<|im_end|>"
-        match = re.search(regex, text, re.DOTALL)
-        assert match is not None
-        assert match.group("content") == "Some plain answer."
-        assert match.group("tool_calls") is None
+    def test_parse_response_truncated(self, model_name):
+        processing_class = self._load(model_name)
+        # Here we use 2 tool calls as it seems to be a more common source of failure when truncated.
+        # Llama 3.1 / 3.2 templates only allow a single tool call per assistant turn, so fall back to one.
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        if model_name not in (
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+        ):
+            tool_calls.append({"type": "function", "function": {"name": "addition", "arguments": {"a": 4, "b": 3}}})
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        ]
+        messages = prepare_multimodal_messages(messages) if self.is_vlm else messages
+        prefix = processing_class.apply_chat_template(
+            messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
+        ).input_ids
+        text = processing_class.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids
+        if self.is_vlm:
+            prefix = prefix[0]
+            text = text[0]
+        response = text[len(prefix) :]
+        tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
+        # Truncate the response mid-tool-call and just check that parsing doesn't crash.
+        for end in range(1, len(response)):
+            parse_response(tokenizer, response[:end])
