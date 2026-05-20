@@ -17,7 +17,7 @@ import os
 import torch
 from accelerate.utils import is_peft_model
 from huggingface_hub.utils import send_telemetry
-from transformers import Trainer, is_wandb_available
+from transformers import CONFIG_MAPPING, Trainer, is_wandb_available
 
 from .. import __version__
 from .utils import generate_model_card, get_comet_experiment_url, get_config_model_id, get_trackio_space_url
@@ -60,12 +60,19 @@ class _BaseTrainer(Trainer):
         # Bucketed to avoid fingerprinting individual deployments by their exact cluster size.
         n = self.accelerator.num_processes
         world_size = "1" if n == 1 else "2-8" if n <= 8 else "9-64" if n <= 64 else "65+"
+        # Trainer class and model arch are reported only if they come from a known upstream allowlist (TRL trainers,
+        # transformers `CONFIG_MAPPING`); anything else is reported as "other" so we never leak the names of internal,
+        # custom trainer subclasses or private model architectures.
+        cls = type(self)
+        trainer = cls.__name__ if cls.__module__.startswith("trl.") else "other"
+        model_type = self.model.config.model_type
+        model_arch = model_type if model_type in CONFIG_MAPPING else "other"
         send_telemetry(
-            topic=f"trl/{type(self).__name__}",
+            topic=f"trl/{trainer}",
             library_name="trl",
             library_version=__version__,
             user_agent={
-                "model_arch": self.model.config.model_type,
+                "model_arch": model_arch,
                 "peft": str(is_peft_model(self.model)).lower(),
                 "distributed": distributed,
                 "world_size": world_size,

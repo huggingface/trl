@@ -7,8 +7,8 @@ TRL collects anonymous usage statistics to help the maintainers understand which
 A single ping is sent each time a trainer is instantiated. The payload contains:
 
 - TRL version (e.g. `1.5.0`)
-- Trainer class name (e.g. `SFTTrainer`, `GRPOTrainer`)
-- Model architecture (`model.config.model_type`, e.g. `llama`, `qwen3`)
+- Trainer class name, reported only if it is a TRL-defined trainer (e.g. `SFTTrainer`, `GRPOTrainer`). Custom user subclasses are reported as `other`.
+- Model architecture, reported only if it is a model type known to [`transformers`](https://github.com/huggingface/transformers) (e.g. `llama`, `qwen3`). Custom or private architectures are reported as `other`.
 - Whether [PEFT](https://github.com/huggingface/peft) is in use
 - Distributed backend (`deepspeed`, `fsdp`, `ddp`, or `none`)
 - World size, bucketed (`1`, `2-8`, `9-64`, `65+`)
