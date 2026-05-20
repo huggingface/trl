@@ -13,12 +13,19 @@
 # limitations under the License.
 
 import gc
+import os
 import traceback
 import warnings
 from functools import wraps
 
 import pytest
 import torch
+
+
+# Per-worker baseline: captured once on the first GPU test, stays fixed for the worker's lifetime.
+# This lets us track cumulative GPU memory growth across all tests in the worker, which a simple
+# per-test delta cannot detect (because before_allocated grows alongside after_allocated).
+_worker_gpu_baseline: int | None = None
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -128,10 +135,17 @@ def cleanup_gpu(request):
 
     This fixture helps prevent CUDA out of memory errors when running tests in parallel with pytest-xdist by ensuring
     models and tensors are properly garbage collected and GPU memory caches are cleared between tests.
+
+    It also logs cumulative GPU memory growth across tests in the same worker process. A per-test delta alone is
+    insufficient: if memory "sticks" after test 1, tests 2+ each measure delta≈0 because before_allocated already
+    includes the stuck baseline. Cumulative tracking (from worker start) catches the slow accumulation that causes CI
+    OOM.
     """
+    global _worker_gpu_baseline
     if torch.cuda.is_available():
-        before_reserved = torch.cuda.memory_reserved()
         before_allocated = torch.cuda.memory_allocated()
+        if _worker_gpu_baseline is None:
+            _worker_gpu_baseline = before_allocated
     yield
     # Cleanup after test
     gc.collect()
@@ -140,14 +154,18 @@ def cleanup_gpu(request):
         torch.cuda.synchronize()
         after_reserved = torch.cuda.memory_reserved()
         after_allocated = torch.cuda.memory_allocated()
-        leaked_reserved = after_reserved - before_reserved
-        leaked_allocated = after_allocated - before_allocated
-        if leaked_reserved > 100 * 1024**2 or leaked_allocated > 100 * 1024**2:
+        delta_this_test = after_allocated - before_allocated
+        cumulative = after_allocated - _worker_gpu_baseline
+        # Warn if this test leaked, OR if cumulative growth from worker start is significant.
+        # The cumulative check is critical: per-test delta is always ~0 after the first test
+        # (before_allocated already includes the stuck memory), so it would never fire alone.
+        if delta_this_test > 30 * 1024**2 or cumulative > 200 * 1024**2:
             warnings.warn(
-                f"[cleanup_gpu] {request.node.nodeid}: "
-                f"reserved +{leaked_reserved / 1024**2:.1f} MiB, "
-                f"allocated +{leaked_allocated / 1024**2:.1f} MiB "
-                f"(after: res={after_reserved / 1024**2:.1f} MiB, alloc={after_allocated / 1024**2:.1f} MiB)",
+                f"[cleanup_gpu] pid={os.getpid()} {request.node.nodeid}: "
+                f"delta={delta_this_test / 1024**2:+.1f} MiB, "
+                f"cumulative={cumulative / 1024**2:+.1f} MiB "
+                f"(alloc: {before_allocated / 1024**2:.1f}→{after_allocated / 1024**2:.1f} MiB, "
+                f"res={after_reserved / 1024**2:.1f} MiB)",
                 ResourceWarning,
                 stacklevel=2,
             )
