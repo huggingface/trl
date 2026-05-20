@@ -166,6 +166,6 @@ def cleanup_gpu(request):
                 f"cumulative={cumulative / 1024**2:+.1f} MiB "
                 f"(alloc: {before_allocated / 1024**2:.1f}→{after_allocated / 1024**2:.1f} MiB, "
                 f"res={after_reserved / 1024**2:.1f} MiB)",
-                ResourceWarning,
+                UserWarning,
                 stacklevel=2,
             )
