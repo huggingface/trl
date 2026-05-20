@@ -51,12 +51,16 @@ class _BaseTrainer(Trainer):
         else:
             distributed = "none"
         device = self.accelerator.device.type
-        # Each accelerator backend (cuda, xpu, npu, mlu, …) exposes its own `torch.<device>.get_device_name`. MPS and
-        # CPU do not, hence the broad except.
-        try:
-            gpu = getattr(torch, device).get_device_name(0)
-        except (AttributeError, RuntimeError):
-            gpu = ""
+        if device == "cuda":
+            gpu = torch.cuda.get_device_name(0)
+        elif device == "xpu":
+            gpu = torch.xpu.get_device_name(0)
+        elif device == "npu":
+            gpu = torch.npu.get_device_name(0)
+        elif device == "mlu":
+            gpu = torch.mlu.get_device_name(0)
+        else:
+            gpu = "other"
         # Bucketed to avoid fingerprinting individual deployments by their exact cluster size.
         n = self.accelerator.num_processes
         world_size = "1" if n == 1 else "2-8" if n <= 8 else "9-64" if n <= 64 else "65+"
