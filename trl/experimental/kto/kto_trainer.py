@@ -1148,24 +1148,8 @@ class KTOTrainer(_BaseTrainer):
 
         return loss
 
-    def compute_loss(
-        self,
-        model: PreTrainedModel | nn.Module,
-        inputs: dict[str, torch.Tensor | Any],
-        return_outputs=False,
-        num_items_in_batch=None,
-    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        loss, metrics = self._compute_loss(model, inputs)
-
-        # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
-        loss = loss.to(self.args.device)
-        # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="train")
-
-        if return_outputs:
-            return (loss, metrics)
-        return loss
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        return self._compute_loss(model, inputs, return_outputs)
 
     def store_metrics(self, metrics: dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
         for key, value in metrics.items():
