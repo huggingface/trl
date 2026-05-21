@@ -2529,11 +2529,8 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
 
-        # Check that the params have changed (skip vision parts, see test_train_vlm)
-        params_to_skip = ("model.visual.",)
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
-            if n.startswith(params_to_skip):
-                continue
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
