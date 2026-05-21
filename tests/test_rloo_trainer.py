@@ -1374,7 +1374,8 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
-            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen.
+            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen — if they
+            # ever start training, the feature-selection plumbing has likely regressed.
             if model_id in (
                 "trl-internal-testing/tiny-LlavaForConditionalGeneration",
                 "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
