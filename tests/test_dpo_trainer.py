@@ -112,6 +112,19 @@ class TestDataCollatorForPreference(TrlTestCase):
         torch.testing.assert_close(result["ref_chosen_logps"], expected_ref_chosen_logps)
         torch.testing.assert_close(result["ref_rejected_logps"], expected_ref_rejected_logps)
 
+    def test_optional_weight(self):
+        collator = DataCollatorForPreference(pad_token_id=0)
+        examples = [
+            {"prompt_ids": [1, 2], "chosen_ids": [3], "rejected_ids": [4], "weight": 0.25},
+            {"prompt_ids": [5], "chosen_ids": [6, 7], "rejected_ids": [8, 9], "weight": 2.0},
+        ]
+        result = collator(examples)
+
+        expected_weight = torch.tensor([0.25, 2.0])
+
+        assert set(result.keys()) == {"input_ids", "attention_mask", "completion_mask", "weight"}
+        torch.testing.assert_close(result["weight"], expected_weight)
+
     def test_with_pad_to_multiple_of(self):
         collator = DataCollatorForPreference(pad_token_id=0, pad_to_multiple_of=5)
         examples = [
@@ -346,6 +359,85 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_with_per_pair_weight(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = dataset.add_column("weight", [0.5] * len(dataset))
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_per_pair_weight_scales_loss(self):
+        # With a constant weight w applied to every pair, the loss should be exactly w * unweighted_loss.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            report_to="none",
+        )
+
+        baseline = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        baseline_batch = next(iter(baseline.get_train_dataloader()))
+        baseline_batch = baseline._prepare_inputs(baseline_batch)
+        with torch.no_grad():
+            baseline_loss = baseline._compute_loss(baseline.model, baseline_batch, return_outputs=False)
+
+        weighted_dataset = dataset.add_column("weight", [0.5] * len(dataset))
+        weighted = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=weighted_dataset,
+        )
+        weighted_batch = next(iter(weighted.get_train_dataloader()))
+        weighted_batch = weighted._prepare_inputs(weighted_batch)
+        with torch.no_grad():
+            weighted_loss = weighted._compute_loss(weighted.model, weighted_batch, return_outputs=False)
+
+        torch.testing.assert_close(weighted_loss, baseline_loss * 0.5)
+
+    def test_per_pair_weight_rejected_for_aot(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = dataset.add_column("weight", [1.0] * len(dataset))
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            loss_type="aot_unpaired",
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        batch = next(iter(trainer.get_train_dataloader()))
+        batch = trainer._prepare_inputs(batch)
+        with pytest.raises(ValueError, match="loss_type='aot_unpaired'"):
+            trainer._compute_loss(trainer.model, batch, return_outputs=False)
 
     def test_train_with_ld(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")

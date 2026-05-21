@@ -104,6 +104,10 @@ class DataCollatorForPreference(DataCollatorMixin):
     Optionally, the examples can contain a `"ref_chosen_logps"` and `"ref_rejected_logps"` keys, in which case the
     returned dictionary will also contain these keys with the corresponding tensors.
 
+    Optionally, each example can contain a `"weight"` key holding a scalar per-pair weight; when present, the
+    returned dictionary will also contain a `"weight"` tensor of shape `(batch_size,)`. This is consumed by the
+    trainer to scale the per-pair loss before reduction.
+
     Args:
         pad_token_id (`int`):
             Token ID to use for padding.
@@ -183,6 +187,8 @@ class DataCollatorForPreference(DataCollatorMixin):
             ref_chosen_logps = torch.tensor([example["ref_chosen_logps"] for example in examples])
         if "ref_rejected_logps" in examples[0]:
             ref_rejected_logps = torch.tensor([example["ref_rejected_logps"] for example in examples])
+        if "weight" in examples[0]:
+            weight = torch.tensor([example["weight"] for example in examples], dtype=torch.float)
 
         # Pad
         output = {}
@@ -208,6 +214,8 @@ class DataCollatorForPreference(DataCollatorMixin):
             output["ref_chosen_logps"] = ref_chosen_logps
         if "ref_rejected_logps" in examples[0]:
             output["ref_rejected_logps"] = ref_rejected_logps
+        if "weight" in examples[0]:
+            output["weight"] = weight
         return output
 
 
@@ -400,6 +408,8 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
             output["token_type_ids"] = token_type_ids
         if "mm_token_type_ids" in processed_prompts:
             output["mm_token_type_ids"] = mm_token_type_ids
+        if "weight" in examples[0]:
+            output["weight"] = torch.tensor([example["weight"] for example in examples], dtype=torch.float)
         return output
 
 
@@ -987,6 +997,7 @@ class DPOTrainer(_BaseTrainer):
                     "images",
                     "tools",
                     "chat_template_kwargs",
+                    "weight",
                 ]
             else:
                 self._signature_columns = [
@@ -995,6 +1006,7 @@ class DPOTrainer(_BaseTrainer):
                     "rejected_ids",
                     "ref_chosen_logps",
                     "ref_rejected_logps",
+                    "weight",
                 ]
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
@@ -1043,7 +1055,7 @@ class DPOTrainer(_BaseTrainer):
         """Computes reference log probabilities for a single padded batch."""
         device = self.accelerator.device
 
-        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
+        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps", "weight"}
         model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
 
@@ -1088,6 +1100,11 @@ class DPOTrainer(_BaseTrainer):
             raise RuntimeError(
                 "return_outputs=True is not supported with the Liger DPO loss. The Liger loss computes the loss "
                 "without materializing logits, so outputs cannot be returned."
+            )
+        if "weight" in inputs:
+            raise ValueError(
+                "Per-pair `weight` from the dataset is not supported with the Liger DPO loss path, which fuses "
+                "the loss inside a kernel and does not expose per-sample reweighting."
             )
 
         mode = "train" if self.model.training else "eval"
@@ -1161,7 +1178,7 @@ class DPOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         device = self.accelerator.device
 
-        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
+        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps", "weight"}
         model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
         outputs = model(**model_kwargs)
@@ -1398,6 +1415,17 @@ class DPOTrainer(_BaseTrainer):
                 weights = torch.exp(mean_logps)
                 chosen_weights, rejected_weights = weights.chunk(2, dim=0)
                 per_sequence_loss *= chosen_weights * rejected_weights
+
+            if "weight" in inputs:
+                # Per-pair weight provided by the dataset; scale the per-pair loss before reduction.
+                # AOT losses sort across the batch, so per-sequence weights no longer correspond to the original
+                # pairs and would silently mismatch.
+                if loss_type in {"aot", "aot_unpaired"}:
+                    raise ValueError(
+                        f"Per-pair `weight` is not supported with loss_type={loss_type!r}, which sorts across "
+                        "the batch and breaks the correspondence with original pairs."
+                    )
+                per_sequence_loss = per_sequence_loss * inputs["weight"]
 
             loss += per_sequence_loss.mean() * loss_weight
 
