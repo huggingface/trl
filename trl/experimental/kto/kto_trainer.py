@@ -1162,40 +1162,14 @@ class KTOTrainer(_BaseTrainer):
             return None
         return SequentialSampler(dataset)
 
-    def prediction_step(
-        self,
-        model: PreTrainedModel | nn.Module,
-        inputs: dict[str, torch.Tensor | Any],
-        prediction_loss_only: bool,
-        ignore_keys: list[str] | None = None,
-    ):
-        if ignore_keys is None:
-            if hasattr(model, "config"):
-                ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
-            else:
-                ignore_keys = []
-
-        with torch.no_grad():
-            loss, metrics = self._compute_loss(model, inputs)
-
-        # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="eval")
-
-        if prediction_loss_only:
-            return (loss.detach(), None, None)
-
-        # logits for the chosen and rejected samples from model
-        logits_dict = {}
-        if "logits/chosen_sum" in metrics:
-            logits_dict["eval_logits/chosen"] = metrics["logits/chosen_sum"]
-        if "logits/rejected_sum" in metrics:
-            logits_dict["eval_logits/rejected"] = metrics["logits/rejected_sum"]
-        logits = [v for k, v in logits_dict.items() if k not in ignore_keys]
-        logits = torch.tensor(logits, device=self.accelerator.device)
-        labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
-
-        return (loss.detach(), logits, labels)
+    # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
+    # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        inputs = self._prepare_inputs(inputs)
+        with torch.no_grad(), self.compute_loss_context_manager():
+            loss = self.compute_loss(model, inputs)
+            logits, labels = None, None
+        return loss, logits, labels
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         """
