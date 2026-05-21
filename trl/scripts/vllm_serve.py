@@ -18,6 +18,8 @@ import json
 import logging
 import math
 import os
+import time
+import uuid
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -412,7 +414,6 @@ def main(script_args: ScriptArguments):
 
     from transformers import is_vision_available
 
-    from trl.generation.vllm_generation import extract_logprobs
     from trl.import_utils import (
         is_fastapi_available,
         is_pydantic_available,
@@ -439,8 +440,9 @@ def main(script_args: ScriptArguments):
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
     import uvicorn
-    from fastapi import FastAPI
-    from pydantic import BaseModel
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import JSONResponse
+    from pydantic import BaseModel, ConfigDict, Field
     from vllm import SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
     from vllm.utils.network_utils import get_open_port
@@ -461,6 +463,11 @@ def main(script_args: ScriptArguments):
         connections.append(parent_connection)
         processes.append(process)
 
+    # Background tasks are scheduled in the lifespan handler below.
+    _chat_queue: asyncio.Queue = asyncio.Queue()
+    _logprob_queue: asyncio.Queue = asyncio.Queue()
+    _workers_lock = asyncio.Lock()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Wait for all workers to send "ready"
@@ -471,12 +478,14 @@ def main(script_args: ScriptArguments):
                 if isinstance(msg, dict) and msg.get("status") == "ready":
                     ready_connections.add(connection)
 
-        # Start the logprob request batcher background task
-        batcher_task = asyncio.create_task(_logprob_batcher())
+        # Start the background batcher tasks
+        logprob_batcher_task = asyncio.create_task(_logprob_batcher())
+        chat_batcher_task = asyncio.create_task(_chat_batcher())
 
         yield
 
-        batcher_task.cancel()
+        logprob_batcher_task.cancel()
+        chat_batcher_task.cancel()
 
         # Wait for processes to terminate
         for process in processes:
@@ -488,178 +497,573 @@ def main(script_args: ScriptArguments):
 
     app = FastAPI(lifespan=lifespan)
 
-    # Define the endpoints for the model server
-    @app.get("/health/")
+    def _decode_data_url(url: str) -> "Image.Image":
+        """Decode an OpenAI-style `image_url` (data URI with base64 payload) to a PIL image."""
+        # Format: "data:image/<format>;base64,<payload>" — also accept a bare base64 payload.
+        payload = url.split(",", 1)[1] if url.startswith("data:") else url
+        return Image.open(BytesIO(base64.b64decode(payload)))
+
+    def _convert_messages_for_vllm(messages: list[dict]) -> list[dict]:
+        """Decode `image_url` content parts to PIL images in-place (vLLM's `chat` API accepts PIL)."""
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if part.get("type") == "image_url":
+                        url = part.get("image_url", {}).get("url", "")
+                        part["image_pil"] = _decode_data_url(url)
+        return messages
+
+    def _build_sampling_params(
+        n: int,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+        min_p: float,
+        repetition_penalty: float,
+        frequency_penalty: float,
+        presence_penalty: float,
+        max_tokens: int | None,
+        stop: str | list[str] | None,
+        seed: int | None,
+        logprobs: int | None,
+        guided_regex: str | None,
+        generation_kwargs: dict | None,
+    ) -> SamplingParams:
+        """Build vLLM `SamplingParams` from OpenAI-style fields + vLLM-style extensions."""
+        kwargs: dict = {
+            "n": n,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "min_p": min_p,
+            "repetition_penalty": repetition_penalty,
+            "frequency_penalty": frequency_penalty,
+            "presence_penalty": presence_penalty,
+            "max_tokens": max_tokens,
+            "stop": stop,
+            "seed": seed,
+            "logprobs": logprobs,
+        }
+        if generation_kwargs:
+            kwargs.update(generation_kwargs)
+        if guided_regex is not None:
+            if kwargs.get("structured_outputs") is not None:
+                logger.warning(
+                    "Both `guided_regex` and `generation_kwargs['structured_outputs']` are set; `guided_regex` takes "
+                    "precedence."
+                )
+            kwargs["structured_outputs"] = StructuredOutputsParams(regex=guided_regex)
+        elif isinstance(kwargs.get("structured_outputs"), dict):
+            kwargs["structured_outputs"] = StructuredOutputsParams(**kwargs["structured_outputs"])
+        return SamplingParams(**kwargs)
+
+    def _extract_choice_logprobs(output):
+        """Extract per-token logprob info from a single vLLM `CompletionOutput`.
+
+        Returns a list of dicts (one per output token), each with:
+            - `sampled_token` (str): vLLM's decoded text of the sampled token (empty if unavailable)
+            - `sampled_logprob` (float | None): logprob of the sampled token at this position
+            - `top_tokens` (list[str]): decoded text of the top-k alternatives, sorted by rank
+            - `top_logprobs` (list[float | None]): logprobs of the top-k alternatives, sorted by rank
+            - `top_token_ids` (list[int]): token IDs of the top-k alternatives, sorted by rank
+
+        Returns `None` if vLLM did not return logprobs.
+        """
+        if output.logprobs is None:
+            return None
+        out = []
+        for sampled_id, lp in zip(output.token_ids, output.logprobs, strict=True):
+            sampled_obj = lp.get(sampled_id)
+            sampled_text = (sampled_obj.decoded_token or "") if sampled_obj is not None else ""
+            sampled_lp = None if sampled_obj is None or math.isnan(sampled_obj.logprob) else sampled_obj.logprob
+            sorted_items = sorted(lp.items(), key=lambda x: x[1].rank)
+            top_token_ids = [tid for tid, _ in sorted_items]
+            top_tokens = [(item.decoded_token or "") for _, item in sorted_items]
+            top_logprobs = [None if math.isnan(item.logprob) else item.logprob for _, item in sorted_items]
+            out.append(
+                {
+                    "sampled_token": sampled_text,
+                    "sampled_logprob": sampled_lp,
+                    "top_tokens": top_tokens,
+                    "top_logprobs": top_logprobs,
+                    "top_token_ids": top_token_ids,
+                }
+            )
+        return out
+
+    def _format_completion_logprobs(output) -> dict | None:
+        """Format `output.logprobs` into OpenAI's `Logprobs` shape (for `/v1/completions`), with TRL extensions.
+
+        OpenAI fields (`tokens`, `token_logprobs`, `top_logprobs`, `text_offset`) are populated when logprobs are
+        present. Token IDs are returned as TRL extensions: `tokens_token_ids` and `top_logprobs_token_ids`.
+        """
+        per_token = _extract_choice_logprobs(output)
+        if per_token is None:
+            return None
+        # Compute character offsets so OpenAI clients that read `text_offset` get sane values.
+        offsets: list[int] = []
+        cursor = 0
+        tokens: list[str] = []
+        for entry in per_token:
+            offsets.append(cursor)
+            tokens.append(entry["sampled_token"])
+            cursor += len(entry["sampled_token"])
+        return {
+            "tokens": tokens,
+            "token_logprobs": [e["sampled_logprob"] for e in per_token],
+            "top_logprobs": [dict(zip(e["top_tokens"], e["top_logprobs"], strict=True)) for e in per_token],
+            "text_offset": offsets,
+            # TRL extensions
+            "tokens_token_ids": list(output.token_ids),
+            "top_logprobs_token_ids": [e["top_token_ids"] for e in per_token],
+            "top_logprobs_values": [e["top_logprobs"] for e in per_token],
+        }
+
+    def _format_chat_logprobs(output) -> dict | None:
+        """Format `output.logprobs` into OpenAI's `ChoiceLogprobs` shape (for `/v1/chat/completions`).
+
+        `token` fields are populated from vLLM's `decoded_token`. `token_id` is added as a TRL extension on each entry
+        so clients can recover the token IDs without re-tokenizing.
+        """
+        per_token = _extract_choice_logprobs(output)
+        if per_token is None:
+            return None
+        content = [
+            {
+                "token": entry["sampled_token"],
+                "bytes": None,
+                "logprob": -1e30 if entry["sampled_logprob"] is None else entry["sampled_logprob"],
+                "top_logprobs": [
+                    {
+                        "token": tok,
+                        "bytes": None,
+                        "logprob": -1e30 if v is None else v,
+                        "token_id": tid,  # TRL extension
+                    }
+                    for tok, v, tid in zip(
+                        entry["top_tokens"], entry["top_logprobs"], entry["top_token_ids"], strict=True
+                    )
+                ],
+                "token_id": sampled_id,  # TRL extension
+            }
+            for sampled_id, entry in zip(output.token_ids, per_token, strict=True)
+        ]
+        return {"content": content, "refusal": None}
+
+    @app.get("/health")
     async def health():
-        """
-        Health check endpoint to verify that the server is running.
-        """
+        """OpenAI-style health check."""
         return {"status": "ok"}
 
-    @app.get("/get_world_size/")
-    async def get_world_size():
+    @app.get("/v1/models")
+    async def list_models():
+        """OpenAI-compatible list-models endpoint. Returns a single entry for the served model."""
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": script_args.model,
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "trl",
+                }
+            ],
+        }
+
+    class CompletionRequest(BaseModel):
+        """OpenAI-style legacy `/v1/completions` request, extended with vLLM/TRL-specific fields.
+
+        OpenAI-standard fields are accepted as-is. TRL extensions:
+        - `images` (list of list of base64 strings, one per prompt): VLM support
+        - `top_k`, `min_p`, `repetition_penalty`: vLLM sampling extensions
+        - `guided_regex`: structured output regex
+        - `generation_kwargs`: forwarded to `SamplingParams`
         """
-        Retrieves the world size of the LLM engine, which is `tensor_parallel_size * data_parallel_size`.
 
-        Returns:
-            `dict`:
-                A dictionary containing the world size.
+        model_config = ConfigDict(extra="allow")
 
-        Example response:
-        ```json
-        {"world_size": 8}
-        ```
-        """
-        return {"world_size": script_args.tensor_parallel_size * script_args.data_parallel_size}
-
-    class GenerateRequest(BaseModel):
-        prompts: list[str] | list[list[int]]
-        images: list[list[str] | None] | None = None
-        n: int = 1
-        repetition_penalty: float = 1.0
+        model: str = ""
+        prompt: str | list[str] | list[int] | list[list[int]] = ""
+        max_tokens: int | None = 16
         temperature: float = 1.0
         top_p: float = 1.0
+        n: int = 1
+        logprobs: int | None = None
+        stream: bool = False
+        seed: int | None = None
+        stop: str | list[str] | None = None
+        frequency_penalty: float = 0.0
+        presence_penalty: float = 0.0
+        echo: bool = False
+        suffix: str | None = None
+        # vLLM / TRL extensions
         top_k: int = -1
         min_p: float = 0.0
-        max_tokens: int = 16
-        logprobs: int | None = 0
-        structured_outputs_regex: str | None = None
-        generation_kwargs: dict = field(default_factory=dict)
+        repetition_penalty: float = 1.0
+        guided_regex: str | None = None
+        generation_kwargs: dict = Field(default_factory=dict)
+        images: list[list[str] | None] | None = None
 
-    class GenerateResponse(BaseModel):
-        prompt_ids: list[list[int]]
-        completion_ids: list[list[int]]
-        logprobs: list[list[list[float | None]]] | None
-        logprob_token_ids: list[list[list[int]]] | None
-
-    @app.post("/generate/", response_model=GenerateResponse)
-    async def generate(request: GenerateRequest):
+    @app.post("/v1/completions")
+    async def create_completion(request: CompletionRequest):
         """
-        Generates completions for the provided prompts.
+        OpenAI-compatible legacy text completions endpoint.
 
-        Args:
-            request (`GenerateRequest`):
-                - `prompts` (list of `str` or list of list of `int`): A list of prompts. It accepts either text strings
-                  or pre-tokenized token ID lists. When text strings are provided, `images` can optionally be included.
-                - `images` (list of list of `str` or `None`, *optional*): A list of image lists. Each element is a list
-                  of base64-encoded images for the corresponding prompt, or `None` if no images for that prompt.
-                - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
-                - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during
-                  generation.
-                - `temperature` (`float`, *optional*, defaults to `1.0`): Temperature for sampling. Higher values lead
-                  to more random outputs.
-                - `top_p` (`float`, *optional*, defaults to `1.0`): Top-p (nucleus) sampling parameter. It controls the
-                  diversity of the generated text.
-                - `top_k` (`int`, *optional*, defaults to `-1`): Top-k sampling parameter. If set to `-1`, it disables
-                  top-k sampling.
-                - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
-                - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
-                  completion.
-                - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
-                  only the sampled token's logprob is returned. When N>0, returns up to N+1 logprobs sorted by
-                  descending probability, because vLLM always includes the sampled token's logprob (which may fall
-                  outside the top-N).
-                - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided,
-                  the model will only generate tokens that match this regex pattern.
-                - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
-                  `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains
-                  keys that conflict with the other parameters, they will override them.
-
-        Returns:
-            `GenerateResponse`:
-                - `prompt_ids` (list of list of `int`): A list of lists of token IDs for each input prompt.
-                - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
-                - `logprobs` (list of list of list of `float`): Per-token logprobs of shape (num_sequences, seq_len,
-                  num_logprobs), sorted by descending probability.
-                - `logprob_token_ids` (list of list of list of `int`): Token IDs corresponding to each logprob, same
-                  shape as `logprobs`.
-
-        Example request (text prompts):
-        ```json
-        {"prompts": ["Hello world", "What is AI?"]}
-        ```
-
-        Example request (token IDs):
-        ```json
-        {"prompts": [[101, 102], [201, 202]]}
-        ```
-
-        Example response:
-        ```json
-        {
-          "prompt_ids": [[101, 102], [201, 202]],
-          "completion_ids": [[103, 104, 105], [203, 204, 205]],
-          "logprobs": [[[-0.1], [-0.2], [-0.3]], [[-0.4], [-0.5], [-0.6]]],
-          "logprob_token_ids": [[[103], [104], [105]], [[203], [204], [205]]]
-        }
-        ```
+        Accepts `prompt` as a string, list of strings, list of token IDs, or list of token-ID lists. Returns an OpenAI
+        `Completion`-shaped JSON response with TRL extensions: each `choice` carries `token_ids` (the completion token
+        IDs) and `prompt_token_ids` (this choice's prompt token IDs).
         """
-        # Build vLLM-compatible prompt inputs
-        is_token_ids = request.prompts and isinstance(request.prompts[0], list)
-        request.images = request.images or [None] * len(request.prompts)
+        if request.stream:
+            raise HTTPException(status_code=400, detail="Streaming is not supported.")
 
-        prompts = []
-        for prompt, image_list in zip(request.prompts, request.images, strict=True):
-            row = {"prompt_token_ids": prompt} if is_token_ids else {"prompt": prompt}
-            if image_list is not None:
-                row["multi_modal_data"] = {"image": [Image.open(BytesIO(base64.b64decode(img))) for img in image_list]}
-            prompts.append(row)
+        # Normalize `prompt` into a list of vLLM prompt dicts.
+        prompt = request.prompt
+        if isinstance(prompt, str):
+            prompts_list = [{"prompt": prompt}]
+        elif isinstance(prompt, list) and prompt and isinstance(prompt[0], str):
+            prompts_list = [{"prompt": p} for p in prompt]
+        elif isinstance(prompt, list) and prompt and isinstance(prompt[0], int):
+            prompts_list = [{"prompt_token_ids": prompt}]
+        elif isinstance(prompt, list) and prompt and isinstance(prompt[0], list):
+            prompts_list = [{"prompt_token_ids": ids} for ids in prompt]
+        else:
+            raise HTTPException(status_code=400, detail="Invalid `prompt`.")
 
-        generation_kwargs = {
-            "n": request.n,
-            "repetition_penalty": request.repetition_penalty,
-            "temperature": request.temperature,
-            "top_p": request.top_p,
-            "top_k": request.top_k,
-            "min_p": request.min_p,
-            "max_tokens": request.max_tokens,
-            "logprobs": request.logprobs,
-        }
-        generation_kwargs.update(request.generation_kwargs)
-
-        # Structured outputs, if enabled
-        if request.structured_outputs_regex is not None:
-            if generation_kwargs.get("structured_outputs") is not None:
-                logger.warning(
-                    "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
-                    "`structured_outputs_regex` takes precedence."
+        # Attach images, if any, as vLLM multimodal data.
+        if request.images is not None:
+            if len(request.images) != len(prompts_list):
+                raise HTTPException(
+                    status_code=400, detail="`images` must have the same length as the number of prompts."
                 )
-            generation_kwargs["structured_outputs"] = StructuredOutputsParams(regex=request.structured_outputs_regex)
-        elif isinstance(structured_outputs_kwargs := generation_kwargs.get("structured_outputs"), dict):
-            generation_kwargs["structured_outputs"] = StructuredOutputsParams(**structured_outputs_kwargs)
-        sampling_params = SamplingParams(**generation_kwargs)
+            for row, image_list in zip(prompts_list, request.images, strict=True):
+                if image_list:
+                    row["multi_modal_data"] = {
+                        "image": [Image.open(BytesIO(base64.b64decode(img))) for img in image_list]
+                    }
 
-        # Evenly distribute prompts across DP ranks
-        chunked_prompts = chunk_list(prompts, script_args.data_parallel_size)
+        sampling_params = _build_sampling_params(
+            n=request.n,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            top_k=request.top_k,
+            min_p=request.min_p,
+            repetition_penalty=request.repetition_penalty,
+            frequency_penalty=request.frequency_penalty,
+            presence_penalty=request.presence_penalty,
+            max_tokens=request.max_tokens,
+            stop=request.stop,
+            seed=request.seed,
+            logprobs=request.logprobs,
+            guided_regex=request.guided_regex,
+            generation_kwargs=request.generation_kwargs,
+        )
 
-        # Send the prompts to each worker
-        for connection, prompts in zip(connections, chunked_prompts, strict=True):
-            # When the number of prompts is less than data_parallel_size, some workers will receive empty prompts.
-            # However, vLLM requires that we always send at least one prompt. So we send a placeholder prompt to comply
-            # with vLLM's requirement, and we later ignore the result.
-            if not prompts:
-                prompts = ["<placeholder>"]
-            kwargs = {"prompts": prompts, "sampling_params": sampling_params}
-            connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
+        # Distribute prompts across DP workers. Empty chunks get a placeholder we discard below.
+        chunked_prompts = chunk_list(prompts_list, script_args.data_parallel_size)
+        loop = asyncio.get_running_loop()
+        async with _workers_lock:
+            for connection, chunk in zip(connections, chunked_prompts, strict=True):
+                if not chunk:
+                    chunk = ["<placeholder>"]
+                connection.send(
+                    {
+                        "type": "call",
+                        "method": "generate",
+                        "kwargs": {"prompts": chunk, "sampling_params": sampling_params},
+                    }
+                )
+            # Recv blocks; offload to executor so concurrent endpoints still progress.
+            all_outputs = await loop.run_in_executor(None, lambda: [c.recv() for c in connections])
+        all_outputs = [out for out, chunk in zip(all_outputs, chunked_prompts, strict=True) if chunk]
+        request_outputs = list(chain.from_iterable(all_outputs))  # one RequestOutput per input prompt
 
-        # Receive results
-        all_outputs = [connection.recv() for connection in connections]
+        choices = []
+        prompt_tokens_total = 0
+        completion_tokens_total = 0
+        choice_index = 0
+        for req_out in request_outputs:
+            prompt_token_ids = list(req_out.prompt_token_ids)
+            prompt_tokens_total += len(prompt_token_ids)
+            for completion in req_out.outputs:
+                completion_token_ids = list(completion.token_ids)
+                completion_tokens_total += len(completion_token_ids)
+                choices.append(
+                    {
+                        "index": choice_index,
+                        "text": completion.text,
+                        "logprobs": _format_completion_logprobs(completion),
+                        "finish_reason": completion.finish_reason or "stop",
+                        # TRL extensions
+                        "token_ids": completion_token_ids,
+                        "prompt_token_ids": prompt_token_ids,
+                    }
+                )
+                choice_index += 1
 
-        # Handle empty prompts (see above)
-        all_outputs = [output for output, prompts in zip(all_outputs, chunked_prompts, strict=True) if prompts]
+        return JSONResponse(
+            {
+                "id": f"cmpl-{uuid.uuid4().hex}",
+                "object": "text_completion",
+                "created": int(time.time()),
+                "model": script_args.model,
+                "choices": choices,
+                "usage": {
+                    "prompt_tokens": prompt_tokens_total,
+                    "completion_tokens": completion_tokens_total,
+                    "total_tokens": prompt_tokens_total + completion_tokens_total,
+                },
+            }
+        )
 
-        # Flatten and combine all results
-        all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
-        prompt_ids = [output.prompt_token_ids for output in all_outputs]
-        completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        logprobs, logprob_token_ids = extract_logprobs(all_outputs)
+    class ChatCompletionRequest(BaseModel):
+        """OpenAI-style `/v1/chat/completions` request, extended with vLLM/TRL-specific fields."""
 
-        return {
-            "prompt_ids": prompt_ids,
-            "completion_ids": completion_ids,
-            "logprobs": logprobs,
-            "logprob_token_ids": logprob_token_ids,
+        model_config = ConfigDict(extra="allow")
+
+        model: str = ""
+        messages: list[dict]
+        max_tokens: int | None = 16
+        temperature: float = 1.0
+        top_p: float = 1.0
+        n: int = 1
+        logprobs: bool = False
+        top_logprobs: int | None = None
+        stream: bool = False
+        seed: int | None = None
+        stop: str | list[str] | None = None
+        frequency_penalty: float = 0.0
+        presence_penalty: float = 0.0
+        tools: list | None = None
+        # vLLM / TRL extensions
+        top_k: int = -1
+        min_p: float = 0.0
+        repetition_penalty: float = 1.0
+        guided_regex: str | None = None
+        generation_kwargs: dict = Field(default_factory=dict)
+        chat_template_kwargs: dict = Field(default_factory=dict)
+        chat_template: str | None = None
+
+    # Maximum number of concurrent chat requests to gather per batcher cycle.
+    _CHAT_BATCH_WAIT_S = 0.005  # 5ms — short enough not to add visible latency when lightly loaded.
+    _CHAT_MAX_BATCH_REQUESTS = max(script_args.data_parallel_size * 8, 32)
+
+    async def _chat_batcher():
+        """Collect concurrent chat requests, group by chat-template/tools, dispatch to DP workers as one
+        batched `LLM.chat()` call (one SamplingParams per conversation).
+        """
+        loop = asyncio.get_running_loop()
+        while True:
+            batch: list[dict] = []
+            try:
+                # Wait for the first request
+                item = await _chat_queue.get()
+                batch.append(item)
+
+                # Collect more requests up to the batch limit or timeout
+                deadline = loop.time() + _CHAT_BATCH_WAIT_S
+                while len(batch) < _CHAT_MAX_BATCH_REQUESTS:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        break
+                    try:
+                        item = await asyncio.wait_for(_chat_queue.get(), timeout=remaining)
+                        batch.append(item)
+                    except asyncio.TimeoutError:
+                        break
+
+                # Group items by chat template options and tools. vLLM's `LLM.chat()` takes one
+                # `chat_template_kwargs`/`tools` per call, so heterogeneous requests must be split.
+                groups: dict[str, list[dict]] = {}
+                for item in batch:
+                    key = json.dumps(
+                        {
+                            "ctk": item["chat_template_kwargs"] or {},
+                            "ct": item["chat_template"],
+                            "tools": item["tools"] or [],
+                        },
+                        sort_keys=True,
+                        default=str,
+                    )
+                    groups.setdefault(key, []).append(item)
+
+                for items in groups.values():
+                    messages_list = [it["messages"] for it in items]
+                    sp_list = [it["sampling_params"] for it in items]
+                    chat_template_kwargs = items[0]["chat_template_kwargs"] or {}
+                    chat_template = items[0]["chat_template"]
+                    tools = items[0]["tools"]
+
+                    chunked_messages = chunk_list(messages_list, script_args.data_parallel_size)
+                    chunked_sp = chunk_list(sp_list, script_args.data_parallel_size)
+
+                    async with _workers_lock:
+                        for connection, msgs, sps in zip(connections, chunked_messages, chunked_sp, strict=True):
+                            # Placeholder for empty chunks; vLLM requires at least one prompt per call.
+                            if not msgs:
+                                msgs = [[{"role": "user", "content": "<placeholder>"}]]
+                                sps = [SamplingParams(max_tokens=1)]
+                            kwargs = {
+                                "messages": msgs,
+                                "sampling_params": sps,
+                                "chat_template_kwargs": chat_template_kwargs,
+                                "tools": tools,
+                            }
+                            if chat_template is not None:
+                                kwargs["chat_template"] = chat_template
+                            connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
+
+                        all_outputs = await loop.run_in_executor(None, lambda: [c.recv() for c in connections])
+                    all_outputs = [out for out, msgs in zip(all_outputs, chunked_messages, strict=True) if msgs]
+                    outputs_flat = list(chain.from_iterable(all_outputs))
+
+                    for item, output in zip(items, outputs_flat, strict=True):
+                        if not item["future"].done():
+                            item["future"].set_result(output)
+            except Exception as e:
+                for item in batch:
+                    if not item["future"].done():
+                        item["future"].set_exception(e)
+
+    @app.post("/v1/chat/completions")
+    async def create_chat_completion(request: ChatCompletionRequest):
+        """
+        OpenAI-compatible chat completions endpoint.
+
+        Accepts a single conversation per request (OpenAI standard). Image parts must use the standard `{"type":
+        "image_url", "image_url": {"url": "data:image/...;base64,..."}}` format. TRL extensions on the response include
+        `prompt_token_ids` at the top level and `token_ids` on each choice.
+        """
+        if request.stream:
+            raise HTTPException(status_code=400, detail="Streaming is not supported.")
+
+        # Per-completion logprobs: OpenAI passes `logprobs: bool` + `top_logprobs: int | None`. We forward
+        # the requested number of top logprobs to vLLM (sampled-token logprob is always included).
+        logprobs_n: int | None = None
+        if request.logprobs:
+            logprobs_n = int(request.top_logprobs) if request.top_logprobs is not None else 0
+
+        sampling_params = _build_sampling_params(
+            n=request.n,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            top_k=request.top_k,
+            min_p=request.min_p,
+            repetition_penalty=request.repetition_penalty,
+            frequency_penalty=request.frequency_penalty,
+            presence_penalty=request.presence_penalty,
+            max_tokens=request.max_tokens,
+            stop=request.stop,
+            seed=request.seed,
+            logprobs=logprobs_n,
+            guided_regex=request.guided_regex,
+            generation_kwargs=request.generation_kwargs,
+        )
+
+        messages = _convert_messages_for_vllm(request.messages)
+
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        await _chat_queue.put(
+            {
+                "messages": messages,
+                "sampling_params": sampling_params,
+                "chat_template_kwargs": request.chat_template_kwargs,
+                "chat_template": request.chat_template,
+                "tools": request.tools,
+                "future": future,
+            }
+        )
+        req_out = await future
+
+        prompt_token_ids = list(req_out.prompt_token_ids)
+        choices = []
+        completion_tokens_total = 0
+        for i, completion in enumerate(req_out.outputs):
+            completion_token_ids = list(completion.token_ids)
+            completion_tokens_total += len(completion_token_ids)
+            choices.append(
+                {
+                    "index": i,
+                    "message": {"role": "assistant", "content": completion.text},
+                    "finish_reason": completion.finish_reason or "stop",
+                    "logprobs": _format_chat_logprobs(completion),
+                    # TRL extension
+                    "token_ids": completion_token_ids,
+                }
+            )
+
+        return JSONResponse(
+            {
+                "id": f"chatcmpl-{uuid.uuid4().hex}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": script_args.model,
+                "choices": choices,
+                "usage": {
+                    "prompt_tokens": len(prompt_token_ids),
+                    "completion_tokens": completion_tokens_total,
+                    "total_tokens": len(prompt_token_ids) + completion_tokens_total,
+                },
+                # TRL extension — included once per response since all choices share the same prompt.
+                "prompt_token_ids": prompt_token_ids,
+            }
+        )
+
+    @app.get("/world_size")
+    async def get_world_size():
+        """Total number of vLLM workers (`tensor_parallel_size * data_parallel_size`). TRL-only."""
+        return {"world_size": script_args.tensor_parallel_size * script_args.data_parallel_size}
+
+    class InitCommunicatorRequest(BaseModel):
+        host: str
+        port: int
+        world_size: int
+        client_device_uuid: str
+
+    @app.post("/init_communicator")
+    async def init_communicator(request: InitCommunicatorRequest):
+        """Initialize the weight-update communicator between client and vLLM workers. TRL-only."""
+        world_size = script_args.tensor_parallel_size * script_args.data_parallel_size + 1
+        kwargs = {
+            "method": "init_communicator",
+            "args": (request.host, request.port, world_size, request.client_device_uuid),
         }
+        for connection in connections:
+            connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
+        return {"message": "Request received, initializing communicator"}
+
+    class UpdateWeightsRequest(BaseModel):
+        name: str
+        dtype: str
+        shape: list[int]
+
+    @app.post("/update_named_param")
+    async def update_named_param(request: UpdateWeightsRequest):
+        """Receive an updated weight tensor (broadcast over the communicator). TRL-only."""
+        kwargs = {"method": "update_named_param", "args": (request.name, request.dtype, tuple(request.shape))}
+        for connection in connections:
+            connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
+        return {"message": "Request received, updating named parameter"}
+
+    @app.post("/reset_prefix_cache")
+    async def reset_prefix_cache():
+        """Reset vLLM's prefix cache. TRL-only."""
+        loop = asyncio.get_running_loop()
+        async with _workers_lock:
+            for connection in connections:
+                connection.send({"type": "call", "method": "reset_prefix_cache"})
+            all_outputs = await loop.run_in_executor(None, lambda: [c.recv() for c in connections])
+        success = all(output for output in all_outputs)
+        return {"message": "Request received, resetting prefix cache status: " + str(success)}
+
+    @app.post("/close_communicator")
+    async def close_communicator():
+        """Tear down the weight-update communicator. TRL-only."""
+        kwargs = {"method": "close_communicator"}
+        for connection in connections:
+            connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
+        return {"message": "Request received, closing communicator"}
 
     class SequenceLogprobsRequest(BaseModel):
         sequences: list[list[int]]
@@ -691,19 +1095,13 @@ def main(script_args: ScriptArguments):
         all_outputs = [output for output, chunk in zip(all_outputs, chunked_prompts, strict=True) if chunk]
         return list(chain.from_iterable(all_outputs))
 
-    # ── Request batching for get_sequence_logprobs ──
-    # Collects concurrent requests into batches and dispatches them together so that
-    # all DP workers stay busy. Without this, async endpoint handlers block the event
-    # loop during pipe I/O, serializing requests and leaving DP workers idle.
-    _logprob_queue: asyncio.Queue = asyncio.Queue()
-
     # Maximum time (seconds) to wait for more requests before dispatching a batch.
     _BATCH_WAIT_S = 0.005  # 5ms - short enough to not add much latency when lightly loaded
     # Maximum number of HTTP requests to collect per batcher cycle
     _MAX_BATCH_REQUESTS = max(script_args.data_parallel_size * 4, 16)
-    # Maximum total tokens per batch. prompt_logprobs materializes full-vocab logits
-    # during the forward pass, so each worker can safely handle ~1 max-length sequence.
-    # Budget = max_model_len * dp_size gives ~1 sequence per worker at max length.
+    # Maximum total tokens per batch. prompt_logprobs materializes full-vocab logits during the forward pass, so each
+    # worker can safely handle ~1 max-length sequence. Budget = max_model_len * dp_size gives ~1 sequence per worker
+    # at max length.
     _max_model_len = script_args.max_model_len or 8192
     _MAX_BATCH_TOKENS = _max_model_len * script_args.data_parallel_size
 
@@ -768,11 +1166,14 @@ def main(script_args: ScriptArguments):
                         prompt_logprobs=top_logprobs,
                     )
 
-                    # Dispatch to workers in a thread to avoid blocking the event loop
+                    # Dispatch to workers in a thread to avoid blocking the event loop. The lock
+                    # serializes pipe send+recv against other concurrent callers (chat batcher,
+                    # `/v1/completions`, `/reset_prefix_cache`).
                     try:
-                        all_outputs = await loop.run_in_executor(
-                            None, _run_prompt_logprobs, all_prompts, sampling_params
-                        )
+                        async with _workers_lock:
+                            all_outputs = await loop.run_in_executor(
+                                None, _run_prompt_logprobs, all_prompts, sampling_params
+                            )
 
                         # Split results back to individual requests
                         for (start, count), (_, prompt_lengths, response_format, future) in zip(
@@ -895,7 +1296,7 @@ def main(script_args: ScriptArguments):
                 all_token_ids.append(seq_token_ids)
             return {"logprobs": all_logprobs, "logprob_token_ids": all_token_ids}
 
-    @app.post("/get_sequence_logprobs/", response_model=SequenceLogprobsResponse)
+    @app.post("/get_sequence_logprobs", response_model=SequenceLogprobsResponse)
     async def get_sequence_logprobs(request: SequenceLogprobsRequest):
         """
         Computes teacher logprobs for existing token sequences without generating new tokens.
@@ -904,27 +1305,7 @@ def main(script_args: ScriptArguments):
         workers. This avoids the event-loop-blocking problem where synchronous pipe I/O serializes requests despite
         having multiple DP workers.
 
-        Args:
-            request (`SequenceLogprobsRequest`):
-                - `sequences` (list of list of `int`): Full token sequences (prompt + completion) per sample.
-                - `prompt_lengths` (list of `int`): Number of prompt tokens per sequence; completion logprobs start
-                  after each prompt.
-                - `top_logprobs` (`int`, *optional*, defaults to `100`): Number of top teacher logprobs to return per
-                  completion position (sorted by vLLM rank).
-                - `temperature` (`float`, *optional*, defaults to `1.0`): Sampling temperature passed to vLLM for
-                  logprob computation.
-                - `response_format` (`str`, *optional*, defaults to `"json"`): Either `"json"` (nested lists,
-                  backward-compatible) or `"binary"` (base64-encoded numpy arrays for fast serialization).
-
-        Returns:
-            `SequenceLogprobsResponse` or Starlette `Response`:
-                When `response_format` is `"json"`, a JSON object with:
-                - `logprobs` (list of list of list of `float` or `None`): Top-k teacher logprobs per completion token.
-                - `logprob_token_ids` (list of list of list of `int`): Token IDs aligned with `logprobs`.
-                When `response_format` is `"binary"`, a JSON response (Starlette `Response` if `orjson` is installed)
-                whose body is a JSON object with base64-encoded float32/int32 arrays: `logprobs_b64`, `token_ids_b64`,
-                `actual_logprobs_b64`, `actual_token_ids_b64`, plus `shape` (`list[int]`, `[batch_size,
-                max_completion_len, top_k]`) and `completion_lengths` (`list[int]`).
+        TRL-only.
         """
         if len(request.sequences) != len(request.prompt_lengths):
             raise ValueError("sequences and prompt_lengths must have the same length.")
@@ -967,238 +1348,6 @@ def main(script_args: ScriptArguments):
         return await loop.run_in_executor(
             None, _format_logprob_response, all_outputs, prompt_lengths, top_k, response_format
         )
-
-    class ChatRequest(BaseModel):
-        messages: list[list[dict]]
-        n: int = 1
-        repetition_penalty: float = 1.0
-        temperature: float = 1.0
-        top_p: float = 1.0
-        top_k: int = -1
-        min_p: float = 0.0
-        max_tokens: int = 16
-        logprobs: int | None = 0
-        structured_outputs_regex: str | None = None
-        generation_kwargs: dict = field(default_factory=dict)
-        chat_template_kwargs: dict = field(default_factory=dict)
-        tools: list | None = None
-
-    class ChatResponse(BaseModel):
-        prompt_ids: list[list[int]]
-        completion_ids: list[list[int]]
-        logprobs: list[list[list[float | None]]] | None
-        logprob_token_ids: list[list[list[int]]] | None
-
-    @app.post("/chat/", response_model=ChatResponse)
-    async def chat(request: ChatRequest):
-        """
-        Generates completions for the provided chat messages.
-
-        Args:
-            request (`ChatRequest`):
-                - `messages` (list of `dict`): A list of messages (dicts with "role" and "content" keys) for the model
-                  to generate completions.
-                - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
-                - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during
-                  generation.
-                - `temperature` (`float`, *optional*, defaults to `1.0`): Temperature for sampling. Higher values lead
-                  to more random outputs.
-                - `top_p` (`float`, *optional*, defaults to `1.0`): Top-p (nucleus) sampling parameter. It controls the
-                  diversity of the generated text.
-                - `top_k` (`int`, *optional*, defaults to `-1`): Top-k sampling parameter. If set to `-1`, it disables
-                  top-k sampling.
-                - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
-                - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
-                  completion.
-                - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
-                  only the sampled token's logprob is returned. When N>0, returns up to N+1 logprobs sorted by
-                  descending probability, because vLLM always includes the sampled token's logprob (which may fall
-                  outside the top-N).
-                - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided,
-                  the model will only generate tokens that match this regex pattern.
-                - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
-                  `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains
-                  keys that conflict with the other parameters, they will override them.
-                - `chat_template_kwargs` (`dict`, *optional*): Additional keyword arguments to pass to the chat
-                  template.
-
-        Returns:
-            `ChatResponse`:
-                - `prompt_ids` (list of list of `int`): A list of lists of token IDs for each input prompt.
-                - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
-                - `logprobs` (list of list of list of `float`): Per-token logprobs of shape (num_sequences, seq_len,
-                  num_logprobs), sorted by descending probability.
-                - `logprob_token_ids` (list of list of list of `int`): Token IDs corresponding to each logprob, same
-                  shape as `logprobs`.
-
-        Example request:
-        ```bash
-        curl -X POST 'http://0.0.0.0:8000/chat/' \
-          -H 'Content-Type: application/json' \
-          -d '{"messages": [[{ "role": "user", "content": "Hello!" }]]}'
-        ```
-
-        Example response:
-        ```json
-        {
-            "prompt_ids": [[151644, 872, 198, 9707, 0, 151645, 198, 151644, 77091, 198]],
-            "completion_ids": [[151667, 198, 32313, 11, 279]],
-            "logprobs": [[[-0.0003], [-3.58e-07], [-0.0902], [-6.39e-05], [-0.0387]]],
-            "logprob_token_ids": [[[151667], [198], [32313], [11], [279]]]
-        }
-        ```
-        """
-        # Convert PIL images to base64 strings
-        for message_list in request.messages:
-            for message in message_list:
-                if isinstance(message["content"], list):
-                    for part in message["content"]:
-                        if part["type"] == "image_pil":
-                            part["image_pil"] = Image.open(BytesIO(base64.b64decode(part["image_pil"])))
-
-        generation_kwargs = {
-            "n": request.n,
-            "repetition_penalty": request.repetition_penalty,
-            "temperature": request.temperature,
-            "top_p": request.top_p,
-            "top_k": request.top_k,
-            "min_p": request.min_p,
-            "max_tokens": request.max_tokens,
-            "logprobs": request.logprobs,
-        }
-        generation_kwargs.update(request.generation_kwargs)
-
-        # Structured outputs, if enabled
-        if request.structured_outputs_regex is not None:
-            if generation_kwargs.get("structured_outputs") is not None:
-                logger.warning(
-                    "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
-                    "`structured_outputs_regex` takes precedence."
-                )
-            generation_kwargs["structured_outputs"] = StructuredOutputsParams(regex=request.structured_outputs_regex)
-        elif isinstance(structured_outputs_kwargs := generation_kwargs.get("structured_outputs"), dict):
-            generation_kwargs["structured_outputs"] = StructuredOutputsParams(**structured_outputs_kwargs)
-        sampling_params = SamplingParams(**generation_kwargs)
-
-        # Evenly distribute prompts across DP ranks
-        chunked_messages = chunk_list(request.messages, script_args.data_parallel_size)
-
-        # Send the messages to each worker
-        for connection, messages in zip(connections, chunked_messages, strict=True):
-            # When the number of messages is less than data_parallel_size, some workers will receive empty messages.
-            # However, vLLM requires that we always send at least one prompt. So we send a placeholder prompt to comply
-            # with vLLM's requirement, and we later ignore the result.
-            if not messages:
-                messages = [[{"role": "user", "content": "<placeholder>"}]]
-            kwargs = {
-                "messages": messages,
-                "sampling_params": sampling_params,
-                "chat_template_kwargs": request.chat_template_kwargs,
-                "tools": request.tools,
-            }
-            connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
-
-        # Receive results
-        all_outputs = [connection.recv() for connection in connections]
-
-        # Handle empty prompts (see above)
-        all_outputs = [output for output, prompts in zip(all_outputs, chunked_messages, strict=True) if prompts]
-
-        # Flatten and combine all results
-        all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
-        prompt_ids = [output.prompt_token_ids for output in all_outputs]
-        completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        logprobs, logprob_token_ids = extract_logprobs(all_outputs)
-
-        return {
-            "prompt_ids": prompt_ids,
-            "completion_ids": completion_ids,
-            "logprobs": logprobs,
-            "logprob_token_ids": logprob_token_ids,
-        }
-
-    class InitCommunicatorRequest(BaseModel):
-        host: str
-        port: int
-        world_size: int
-        client_device_uuid: str
-
-    @app.post("/init_communicator/")
-    async def init_communicator(request: InitCommunicatorRequest):
-        """
-        Initializes the communicator for synchronizing model weights between a client and multiple server workers.
-
-        Args:
-            request (`InitCommunicatorRequest`):
-                - `host` (`str`): Hostname or IP address of the master node.
-                - `port` (`int`): Port number to be used for communication.
-                - `world_size` (`int`): Total number of participating processes in the group.
-                - `client_device_uuid` (`str`): UUID of the device of client main process. Used to assert that devices
-                  are different from vLLM workers devices.
-        """
-        world_size = script_args.tensor_parallel_size * script_args.data_parallel_size + 1
-
-        # The function init_communicator is called this way: init_communicator(host, port, world_size)
-        # So with collective_rpc we need to call it this way:
-        # llm.collective_rpc(method="init_communicator", args=(host, port, world_size))
-        kwargs = {
-            "method": "init_communicator",
-            "args": (request.host, request.port, world_size, request.client_device_uuid),
-        }
-        for connection in connections:
-            connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
-
-        return {"message": "Request received, initializing communicator"}
-
-    class UpdateWeightsRequest(BaseModel):
-        name: str
-        dtype: str
-        shape: list[int]
-
-    @app.post("/update_named_param/")
-    async def update_named_param(request: UpdateWeightsRequest):
-        """
-        Updates the model weights with the provided tensor.
-
-        Once this endpoint is called, the client process should broadcast the updated weights to all server workers.
-
-        Args:
-            request (`UpdateWeightsRequest`):
-                - `name` (`str`): Name of the weight tensor being updated.
-                - `dtype` (`str`): Data type of the weight tensor (e.g., `"torch.float32"`).
-                - `shape` (list of `int`): Shape of the weight
-
-        """
-        # The function update_named_param is called this way: update_named_param("name", "torch.float32", (10, 10))
-        # So with collective_rpc we need to call it this way:
-        # llm.collective_rpc("update_named_param", args=("name", "torch.float32", (10, 10)))
-        kwargs = {"method": "update_named_param", "args": (request.name, request.dtype, tuple(request.shape))}
-        for connection in connections:
-            connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
-
-        return {"message": "Request received, updating named parameter"}
-
-    @app.post("/reset_prefix_cache/")
-    async def reset_prefix_cache():
-        """
-        Resets the prefix cache for the model.
-        """
-        for connection in connections:
-            connection.send({"type": "call", "method": "reset_prefix_cache"})
-        # Wait for and collect all results
-        all_outputs = [connection.recv() for connection in connections]
-        success = all(output for output in all_outputs)
-        return {"message": "Request received, resetting prefix cache status: " + str(success)}
-
-    @app.post("/close_communicator/")
-    async def close_communicator():
-        """
-        Closes the weight update group and cleans up associated resources.
-        """
-        kwargs = {"method": "close_communicator"}
-        for connection in connections:
-            connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
-        return {"message": "Request received, closing communicator"}
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
