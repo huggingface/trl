@@ -390,6 +390,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
+        add_token_type_ids (`bool`, *optional*, defaults to `False`):
+            If set to `True`, the returned batch will include a `"token_type_ids"` tensor of zeros matching the shape
+            of `"input_ids"`. This is required by some models, such as Gemma 3 (`Gemma3ForConditionalGeneration`),
+            which expect `token_type_ids` as a model input during text-only training.
 
     Examples:
     ```python
@@ -434,6 +438,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     padding_free: bool = False
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
+    add_token_type_ids: bool = False
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         input_ids = [example["input_ids"] for example in examples]
@@ -523,6 +528,11 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
             output["labels"][assistant_masks == 0] = -100
+        if self.add_token_type_ids:
+            # Some models (e.g. Gemma 3's `Gemma3ForConditionalGeneration`) require `token_type_ids` as a model input
+            # during training, even for text-only batches. Zero values are the standard "text token" type and match
+            # the workaround documented in https://github.com/huggingface/trl/issues/5807.
+            output["token_type_ids"] = output["input_ids"].new_zeros(output["input_ids"].shape)
         return output
 
     @staticmethod
@@ -1162,6 +1172,10 @@ class SFTTrainer(_BaseTrainer):
                     "in the vocabulary before using it as a padding token."
                 )
             self._tokenizer.pad_token = pad_token
+            # Some models (currently Gemma 3's `Gemma3ForConditionalGeneration`) require `token_type_ids` as a model
+            # input during training. The default text-only language modeling collator does not produce them, so we
+            # opt in here when we detect such a model. See https://github.com/huggingface/trl/issues/5807.
+            add_token_type_ids = getattr(model.config, "model_type", None) == "gemma3"
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=self._tokenizer.pad_token_id,
                 max_length=None if self.padding_free else args.max_length,
@@ -1169,6 +1183,7 @@ class SFTTrainer(_BaseTrainer):
                 completion_only_loss=self.completion_only_loss,
                 padding_free=self.padding_free,
                 pad_to_multiple_of=args.pad_to_multiple_of,
+                add_token_type_ids=add_token_type_ids,
             )
         elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionLanguageModeling(

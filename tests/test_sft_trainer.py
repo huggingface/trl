@@ -242,6 +242,34 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
+    def test_add_token_type_ids(self):
+        """Test that `add_token_type_ids=True` emits zero `token_type_ids` matching `input_ids` shape.
+
+        Regression test for https://github.com/huggingface/trl/issues/5807: Gemma 3
+        (`Gemma3ForConditionalGeneration`) requires `token_type_ids` as a model input during training, even
+        for text-only batches.
+        """
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, add_token_type_ids=True)
+        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "attention_mask", "labels", "token_type_ids"}
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
+        torch.testing.assert_close(result["token_type_ids"], torch.zeros((2, 3), dtype=result["input_ids"].dtype))
+        assert result["token_type_ids"].dtype == result["input_ids"].dtype
+
+    def test_add_token_type_ids_padding_free(self):
+        """Test that `add_token_type_ids=True` works in `padding_free=True` mode."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True, add_token_type_ids=True)
+        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "position_ids", "labels", "token_type_ids"}
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
+        torch.testing.assert_close(result["token_type_ids"], torch.zeros((1, 5), dtype=result["input_ids"].dtype))
+
     def test_assistant_masks(self):
         """Test handling of assistant masks in examples."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0)
@@ -1056,6 +1084,29 @@ class TestSFTTrainer(TrlTestCase):
         assert isinstance(trainer.data_collator, DataCollatorForLanguageModeling)
         assert trainer.data_collator.max_length == 16
         assert trainer.data_collator.truncation_mode == "keep_end"
+
+    def test_text_only_gemma3_collator_adds_token_type_ids(self):
+        """Regression test for https://github.com/huggingface/trl/issues/5807.
+
+        Gemma 3 (`Gemma3ForConditionalGeneration`) requires `token_type_ids` as a model input during training,
+        even for text-only batches. When `SFTTrainer` auto-creates its data collator for a text-only dataset, it
+        should detect Gemma 3 and emit zero `token_type_ids` matching `input_ids`.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert isinstance(trainer.data_collator, DataCollatorForLanguageModeling)
+        assert trainer.data_collator.add_token_type_ids is True
+
+        batch = next(iter(trainer.get_train_dataloader()))
+        assert "token_type_ids" in batch
+        assert batch["token_type_ids"].shape == batch["input_ids"].shape
+        assert torch.all(batch["token_type_ids"] == 0)
 
     def test_padding_free_without_packing_and_max_length_raises(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
