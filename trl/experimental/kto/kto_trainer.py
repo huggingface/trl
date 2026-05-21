@@ -1038,7 +1038,7 @@ class KTOTrainer(_BaseTrainer):
         return_outputs: bool = False,
     ):
         """Compute the KTO loss and other metrics for the given batch of inputs for train or test."""
-        metrics = {}
+        mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
         labels = torch.tensor(batch["label"])
@@ -1113,40 +1113,40 @@ class KTOTrainer(_BaseTrainer):
                 reference_KL_logps,
             )
 
-        metrics["kl"] = kl.item()
+        self._metrics[mode]["kl"].append(kl.item())
 
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
         if all_num_chosen > 0:
-            metrics["rewards/chosen_sum"] = (
+            self._metrics[mode]["rewards/chosen_sum"].append(
                 self.accelerator.gather_for_metrics(chosen_rewards.nansum()).nansum().item()
             )
-            metrics["logps/chosen_sum"] = (
+            self._metrics[mode]["logps/chosen_sum"].append(
                 self.accelerator.gather_for_metrics(policy_chosen_logps.nansum()).nansum().item()
             )
-            metrics["logits/chosen_sum"] = (
+            self._metrics[mode]["logits/chosen_sum"].append(
                 self.accelerator.gather_for_metrics(policy_chosen_logits.nansum()).nansum().item()
             )
-            metrics["count/chosen"] = all_num_chosen
+            self._metrics[mode]["count/chosen"].append(all_num_chosen)
 
         if all_num_rejected > 0:
-            metrics["rewards/rejected_sum"] = (
+            self._metrics[mode]["rewards/rejected_sum"].append(
                 self.accelerator.gather_for_metrics(rejected_rewards.nansum()).nansum().item()
             )
-            metrics["logps/rejected_sum"] = (
+            self._metrics[mode]["logps/rejected_sum"].append(
                 self.accelerator.gather_for_metrics(policy_rejected_logps.nansum()).nansum().item()
             )
-            metrics["logits/rejected_sum"] = (
+            self._metrics[mode]["logits/rejected_sum"].append(
                 self.accelerator.gather_for_metrics(policy_rejected_logits.nansum()).nansum().item()
             )
-            metrics["count/rejected"] = all_num_rejected
+            self._metrics[mode]["count/rejected"].append(all_num_rejected)
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
             loss += self.aux_loss_coef * aux_loss
 
-        return loss, metrics
+        return loss
 
     def compute_loss(
         self,
