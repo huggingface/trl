@@ -1052,73 +1052,60 @@ class KTOTrainer(_BaseTrainer):
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
-        if self.args.use_liger_kernel:
-            model_output = self._compute_loss_liger(model, batch)
-            losses = model_output["loss"]
-            policy_chosen_logits = model_output["chosen_logits_sum"]
-            policy_rejected_logits = model_output["rejected_logits_sum"]
-            policy_chosen_logps = model_output["chosen_logps_sum"]
-            policy_rejected_logps = model_output["rejected_logps_sum"]
-            chosen_rewards = model_output["chosen_rewards_sum"]
-            rejected_rewards = model_output["rejected_rewards_sum"]
-            kl = model_output["kl"]
-            if self.aux_loss_enabled:
-                aux_loss = model_output["aux_loss"]
-        else:
-            forward_output = self.forward(model, batch)
-            (
-                policy_chosen_logps,
-                policy_rejected_logps,
-                policy_chosen_logits,
-                policy_rejected_logits,
-                policy_KL_logps,
-            ) = forward_output[:5]
-            if self.aux_loss_enabled:
-                aux_loss = forward_output[5]
+        forward_output = self.forward(model, batch)
+        (
+            policy_chosen_logps,
+            policy_rejected_logps,
+            policy_chosen_logits,
+            policy_rejected_logits,
+            policy_KL_logps,
+        ) = forward_output[:5]
+        if self.aux_loss_enabled:
+            aux_loss = forward_output[5]
 
-            # if reference_logps in batch use them, otherwise use the reference model
-            if "reference_logps" in batch:
-                # Convert Python lists to tensor indices for efficient CUDA operations
-                device = batch["reference_logps"].device
-                labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
-                chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
-                rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
+        # if reference_logps in batch use them, otherwise use the reference model
+        if "reference_logps" in batch:
+            # Convert Python lists to tensor indices for efficient CUDA operations
+            device = batch["reference_logps"].device
+            labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
+            chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
+            rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
 
-                # Use index_select for efficient CUDA operations
-                reference_chosen_logps = batch["reference_logps"].index_select(0, chosen_idx)
-                reference_rejected_logps = batch["reference_logps"].index_select(0, rejected_idx)
-                if self.calculate_KL:
-                    reference_KL_logps = batch["reference_KL_logps"]
-                else:
-                    reference_KL_logps = None
+            # Use index_select for efficient CUDA operations
+            reference_chosen_logps = batch["reference_logps"].index_select(0, chosen_idx)
+            reference_rejected_logps = batch["reference_logps"].index_select(0, rejected_idx)
+            if self.calculate_KL:
+                reference_KL_logps = batch["reference_KL_logps"]
             else:
-                with torch.no_grad():
-                    if self.ref_model is None:
-                        with self.null_ref_context():
-                            (
-                                reference_chosen_logps,
-                                reference_rejected_logps,
-                                _,
-                                _,
-                                reference_KL_logps,
-                            ) = self.forward(self.model, batch)[:5]
-                    else:
+                reference_KL_logps = None
+        else:
+            with torch.no_grad():
+                if self.ref_model is None:
+                    with self.null_ref_context():
                         (
                             reference_chosen_logps,
                             reference_rejected_logps,
                             _,
                             _,
                             reference_KL_logps,
-                        ) = self.forward(self.ref_model, batch)[:5]
+                        ) = self.forward(self.model, batch)[:5]
+                else:
+                    (
+                        reference_chosen_logps,
+                        reference_rejected_logps,
+                        _,
+                        _,
+                        reference_KL_logps,
+                    ) = self.forward(self.ref_model, batch)[:5]
 
-            losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
-                policy_chosen_logps,
-                policy_rejected_logps,
-                policy_KL_logps,
-                reference_chosen_logps,
-                reference_rejected_logps,
-                reference_KL_logps,
-            )
+        losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
+            policy_chosen_logps,
+            policy_rejected_logps,
+            policy_KL_logps,
+            reference_chosen_logps,
+            reference_rejected_logps,
+            reference_KL_logps,
+        )
 
         self._metrics[mode]["kl"].append(kl.item())
 
