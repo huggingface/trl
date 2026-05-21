@@ -1371,14 +1371,7 @@ class TestRLOOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
-        # Because of the way the tiny models are initialized, the gradient does not flow properly through the
-        # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
-        params_to_skip = (
-            "model.vision_tower.",
-            "model.multi_modal_projector.",
-            "model.visual.",
-            "model.image_newline",
-        )
+        params_to_skip = ("model.vision_tower.",)
         for n, param in previous_trainable_params.items():
             if n.startswith(params_to_skip):
                 continue
@@ -1459,12 +1452,7 @@ class TestRLOOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
-        # Because of the way the tiny models are initialized, the gradient does not flow properly through the
-        # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
-        params_to_skip = ("model.visual.",)
         for n, param in previous_trainable_params.items():
-            if n.startswith(params_to_skip):
-                continue
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 

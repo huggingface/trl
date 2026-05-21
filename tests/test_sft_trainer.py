@@ -1416,7 +1416,12 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_toolcall_data(self):
         dataset = load_dataset("trl-internal-testing/toolcall", "language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # toolcall sequences are longer than standard data, reduce batch size to avoid OOM
+            max_length=512,  # toolcall sequences are longer than standard data, limit length to avoid OOM
+            report_to="none",
+        )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -1444,7 +1449,12 @@ class TestSFTTrainer(TrlTestCase):
 
         dataset = dataset.map(convert_to_json)
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # toolcall sequences are longer than standard data, reduce batch size to avoid OOM
+            max_length=512,  # toolcall sequences are longer than standard data, limit length to avoid OOM
+            report_to="none",
+        )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )

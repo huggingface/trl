@@ -45,6 +45,7 @@ vision_config = {
     # Pick an index inside [0, depth).
     "deepstack_visual_indexes": [1],
     "hidden_size": 16,
+    "num_heads": 4,
     "depth": 2,
     "out_hidden_size": 16,
 }

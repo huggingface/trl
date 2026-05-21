@@ -528,7 +528,6 @@ class DistillationTrainer(_BaseTrainer):
         # Trainer does not need to remove unused columns — the collator handles raw data
         args.remove_unused_columns = False
 
-        # ── Call _BaseTrainer.__init__ (which is transformers.Trainer.__init__) ──
         super().__init__(
             model=model,
             args=args,
