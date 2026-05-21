@@ -789,6 +789,8 @@ class TestDPOTrainer(TrlTestCase):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # toolcall sequences are longer than standard data, reduce batch size to avoid OOM
+            max_length=512,  # toolcall sequences are longer than standard data, limit length to avoid OOM
             report_to="none",
         )
         trainer = DPOTrainer(

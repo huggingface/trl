@@ -601,7 +601,12 @@ class TestRewardTrainer(TrlTestCase):
     def test_train_toolcall_data(self):
         dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")
 
-        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = RewardConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # toolcall sequences are longer than standard data, reduce batch size to avoid OOM
+            max_length=512,  # toolcall sequences are longer than standard data, limit length to avoid OOM
+            report_to="none",
+        )
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
@@ -631,7 +636,12 @@ class TestRewardTrainer(TrlTestCase):
 
         dataset = dataset.map(convert_to_json)
 
-        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = RewardConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # toolcall sequences are longer than standard data, reduce batch size to avoid OOM
+            max_length=512,  # toolcall sequences are longer than standard data, limit length to avoid OOM
+            report_to="none",
+        )
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,

@@ -1985,14 +1985,7 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
-        params_to_skip = (
-            "model.multi_modal_projector.",
-            "model.visual.",
-            "model.image_newline",
-        )
         for n, param in previous_trainable_params.items():
-            if n.startswith(params_to_skip):
-                continue
             new_param = trainer.model.get_parameter(n)
             # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
             # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen.
@@ -2078,12 +2071,7 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
-        # Because of the way the tiny models are initialized, the gradient does not flow properly through the
-        # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
-        params_to_skip = ("model.visual.",)
         for n, param in previous_trainable_params.items():
-            if n.startswith(params_to_skip):
-                continue
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
@@ -2171,12 +2159,7 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
-        # Because of the way the tiny models are initialized, the gradient does not flow properly through the
-        # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
-        params_to_skip = ("model.visual.",)
         for n, param in previous_trainable_params.items():
-            if n.startswith(params_to_skip):
-                continue
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
@@ -2225,12 +2208,7 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
-        # Because of the way the tiny models are initialized, the gradient does not flow properly through the
-        # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
-        params_to_skip = ("model.visual.",)
         for n, param in previous_trainable_params.items():
-            if n.startswith(params_to_skip):
-                continue
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
