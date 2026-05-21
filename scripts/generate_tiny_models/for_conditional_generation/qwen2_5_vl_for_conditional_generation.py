@@ -37,9 +37,9 @@ text_config = {
     "rope_scaling": {"type": "default", "mrope_section": [1, 1], "rope_type": "default"},
 }
 vision_config = {
-    "depth": 2,
     "hidden_size": 16,
     "num_heads": 4,
+    "depth": 2,
     "out_hidden_size": 16,
 }
 
