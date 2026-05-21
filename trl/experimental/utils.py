@@ -537,19 +537,19 @@ def pad_to_length(tensor: torch.Tensor, length: int, pad_value: int | float, dim
 def empty_cache() -> None:
     """Empties the cache of the available torch device.
 
-    This function checks for the availability of different torch devices (XPU, MLU, NPU, MPS, CUDA) and empties the
+    This function checks for the availability of different torch devices (CUDA, MLU, MPS, NPU, XPU) and empties the
     cache of the first available device it finds.
 
     If none of the specific devices are available, it defaults to emptying the CUDA cache.
     """
-    if is_torch_xpu_available():
-        torch.xpu.empty_cache()
-    elif is_torch_mlu_available():
+    if is_torch_mlu_available():
         torch.mlu.empty_cache()
-    elif is_torch_npu_available():
-        torch.npu.empty_cache()
     elif is_torch_mps_available():
         torch.mps.empty_cache()
+    elif is_torch_npu_available():
+        torch.npu.empty_cache()
+    elif is_torch_xpu_available():
+        torch.xpu.empty_cache()
     else:
         torch.cuda.empty_cache()
 
