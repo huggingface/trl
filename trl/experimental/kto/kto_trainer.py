@@ -1143,6 +1143,8 @@ class KTOTrainer(_BaseTrainer):
         return loss
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        if self.use_liger_kernel:
+            return self._compute_loss_liger(model, inputs, return_outputs)
         # return_outputs is not forwarded: _compute_loss delegates to forward(), which hides the raw model outputs
         # Returning real outputs requires refactoring forward(), which is deferred.
         return self._compute_loss(model, inputs)
