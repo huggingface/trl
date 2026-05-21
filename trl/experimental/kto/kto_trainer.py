@@ -437,8 +437,9 @@ class KTOTrainer(_BaseTrainer):
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
+        self.use_liger_kernel = args.use_liger_kernel
         # Import Liger kernel if enabled
-        if self.args.use_liger_kernel:
+        if self.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
                     "You set `use_liger_kernel=True` but the liger kernel is not available. "
