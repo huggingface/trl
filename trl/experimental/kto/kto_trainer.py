@@ -939,30 +939,19 @@ class KTOTrainer(_BaseTrainer):
             )
         return KL_logps
 
-    def _compute_loss_liger(self, model, batch):
-        """
-        Compute the KTO loss using the Liger-Kernel's LigerFusedLinearKTOLoss.
+    def _compute_loss_liger(self, model, inputs, return_outputs):
+        if return_outputs:
+            raise RuntimeError(
+                "return_outputs=True is not supported with the Liger KTO loss. The Liger loss computes the loss "
+                "without materializing logits, so outputs cannot be returned."
+            )
+        mode = "train" if self.model.training else "eval"
+        batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
-        Args:
-            model:
-                The policy model used for generating log probabilities and outputs. It could be an encoder-decoder
-                model or a regular language model.
-            batch: A dictionary containing the input data and labels for the batch.
+        labels = torch.tensor(batch["label"])
+        num_chosen = labels.sum().to(self.accelerator.device)
+        num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
-        Returns:
-            A dictionary containing the following keys:
-                - "loss": The computed KTO loss for the batch.
-                - "chosen_logits_sum": Sum of the logits for the chosen responses from the policy model.
-                - "rejected_logits_sum": Sum of the logits for the rejected responses from the policy model.
-                - "chosen_logps": Log probabilities of the chosen responses from the policy model.
-                - "rejected_logps": Log probabilities of the rejected responses from the policy model.
-                - "chosen_rewards": Rewards for the chosen responses.
-                - "rejected_rewards": Rewards for the rejected responses.
-                - "kl": The KL divergence between the policy and reference models (detached).
-
-            If auxiliary loss is enabled, the dictionary will also include:
-                - "aux_loss": The auxiliary loss from the model outputs.
-        """
         policy_KL_logps = self._compute_kl_logps(model, batch)
         reference_KL_logps = self._compute_kl_logps(self.ref_model, batch)
         if self.calculate_KL:
@@ -1016,21 +1005,39 @@ class KTOTrainer(_BaseTrainer):
             ref_bias=ref_lm_head.bias if hasattr(lm_head, "bias") else None,
             kl=kl,
         )
-
-        output = {
-            "loss": loss,
-            "chosen_logits_sum": chosen_logits_sum,
-            "rejected_logits_sum": rejected_logits_sum,
-            "chosen_logps_sum": chosen_logps_sum,
-            "rejected_logps_sum": rejected_logps_sum,
-            "chosen_rewards_sum": chosen_rewards_sum,
-            "rejected_rewards_sum": rejected_rewards_sum,
-            "kl": kl,
-        }
         if self.aux_loss_enabled:
-            output["aux_loss"] = outputs.aux_loss
+            loss += self.aux_loss_coef * outputs.aux_loss
 
-        return output
+        self._metrics[mode]["kl"].append(kl.item())
+
+        all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
+        all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
+
+        if all_num_chosen > 0:
+            self._metrics[mode]["rewards/chosen_sum"].append(
+                self.accelerator.gather_for_metrics(chosen_rewards_sum.nansum()).nansum().item()
+            )
+            self._metrics[mode]["logps/chosen_sum"].append(
+                self.accelerator.gather_for_metrics(chosen_logps_sum.nansum()).nansum().item()
+            )
+            self._metrics[mode]["logits/chosen_sum"].append(
+                self.accelerator.gather_for_metrics(chosen_logits_sum.nansum()).nansum().item()
+            )
+            self._metrics[mode]["count/chosen"].append(all_num_chosen)
+
+        if all_num_rejected > 0:
+            self._metrics[mode]["rewards/rejected_sum"].append(
+                self.accelerator.gather_for_metrics(rejected_rewards_sum.nansum()).nansum().item()
+            )
+            self._metrics[mode]["logps/rejected_sum"].append(
+                self.accelerator.gather_for_metrics(rejected_logps_sum.nansum()).nansum().item()
+            )
+            self._metrics[mode]["logits/rejected_sum"].append(
+                self.accelerator.gather_for_metrics(rejected_logits_sum.nansum()).nansum().item()
+            )
+            self._metrics[mode]["count/rejected"].append(all_num_rejected)
+
+        return loss
 
     def _compute_loss(
         self,
