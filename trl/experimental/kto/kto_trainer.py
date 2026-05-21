@@ -1035,7 +1035,6 @@ class KTOTrainer(_BaseTrainer):
         self,
         model,
         inputs: dict[str, list | torch.LongTensor],
-        return_outputs: bool = False,
     ):
         """Compute the KTO loss and other metrics for the given batch of inputs for train or test."""
         mode = "train" if self.model.training else "eval"
@@ -1149,7 +1148,7 @@ class KTOTrainer(_BaseTrainer):
         return loss
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        return self._compute_loss(model, inputs, return_outputs)
+        return self._compute_loss(model, inputs)
 
     def _get_train_sampler(self, dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
         if dataset is None:
