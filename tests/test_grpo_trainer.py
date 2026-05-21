@@ -529,6 +529,112 @@ class TestGRPOTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_peft
+    def test_liger_with_lora_targeting_only_lm_head_raises(self):
+        # When `use_liger_kernel=True` and LoRA targets *only* `lm_head`, the Liger fused loss reads `lm_head.weight`
+        # directly from the base model. The LoRA adapter would never receive gradient updates and training would be a
+        # no-op, so we fail fast. See https://github.com/huggingface/trl/issues/4612.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        with pytest.raises(ValueError, match="LoRA adapters that target only `lm_head`"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_modules=["lm_head"]),
+            )
+
+    @require_peft
+    def test_liger_with_lora_targeting_lm_head_and_others_warns(self):
+        # When `use_liger_kernel=True` and LoRA targets `lm_head` alongside other modules, the `lm_head` adapter is
+        # silently ignored by Liger; warn so the user knows that adapter won't train.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        with pytest.warns(UserWarning, match="`lm_head` LoRA adapter will be silently ignored"):
+            try:
+                GRPOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    args=training_args,
+                    train_dataset=dataset,
+                    peft_config=LoraConfig(target_modules=["lm_head", "q_proj"]),
+                )
+            except ImportError:
+                # Liger kernel may not be installed in the test environment; the warning fires before that check, so
+                # `pytest.warns` will still validate it.
+                pass
+
+    @require_peft
+    def test_liger_with_lora_targeting_only_other_modules_is_silent(self):
+        # When `use_liger_kernel=True` and LoRA does *not* target `lm_head`, no warning or error should fire.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            try:
+                GRPOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    args=training_args,
+                    train_dataset=dataset,
+                    peft_config=LoraConfig(target_modules=["q_proj"]),
+                )
+            except ImportError:
+                # Liger kernel may not be installed; the lm_head/liger check fires before the import check.
+                pass
+            except UserWarning as exc:
+                # We turned UserWarning into an error so an unexpected warning surfaces clearly.
+                if "lm_head" in str(exc):
+                    raise
+
+    @require_peft
+    def test_lora_targeting_lm_head_without_liger_is_silent(self):
+        # Without `use_liger_kernel`, LoRA on `lm_head` is fine: the standard loss path uses the adapted head normally.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=False,
+            report_to="none",
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            try:
+                GRPOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    args=training_args,
+                    train_dataset=dataset,
+                    peft_config=LoraConfig(target_modules=["lm_head"]),
+                )
+            except UserWarning as exc:
+                if "lm_head" in str(exc) and "Liger" in str(exc):
+                    raise
+
     def test_train_different_reward_model(self):
         # Use a reward model different from the model: different chat template, tokenization, etc.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")

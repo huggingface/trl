@@ -586,6 +586,33 @@ class GRPOTrainer(_BaseTrainer):
                 "Possible values are 'token' and 'sequence'."
             )
 
+        # Liger's fused GRPO loss reads `unwrapped_model.lm_head.weight` directly (see `compute_liger_loss`), which is
+        # the frozen base weight when LoRA wraps `lm_head`. The LoRA adapter on `lm_head` would never reach the kernel
+        # and never receive gradient updates, so the user would silently train a model with a frozen LM head. See
+        # https://github.com/huggingface/trl/issues/4612.
+        if self.use_liger_kernel and is_peft_model(model):
+            target_modules = model.peft_config["default"].target_modules
+            # `target_modules` can be a list, set, str (regex or single name), or None.
+            # We only inspect the cheap explicit cases; a regex string is opaque so we skip it.
+            if isinstance(target_modules, (list, set, tuple)):
+                targeted = set(target_modules)
+                if "lm_head" in targeted:
+                    if targeted == {"lm_head"}:
+                        raise ValueError(
+                            "GRPOTrainer with `use_liger_kernel=True` does not support LoRA adapters that target only "
+                            "`lm_head`. The Liger fused loss reads `lm_head.weight` directly from the base model, so "
+                            "the `lm_head` LoRA adapter never receives gradient updates and training would be a no-op. "
+                            "Either set `use_liger_kernel=False` or include other modules in `target_modules`."
+                        )
+                    warnings.warn(
+                        "GRPOTrainer with `use_liger_kernel=True` is being used with a LoRA config whose "
+                        "`target_modules` includes `lm_head`. The Liger fused loss reads `lm_head.weight` directly "
+                        "from the base model, so the `lm_head` LoRA adapter will be silently ignored and will not "
+                        "receive gradient updates. Remove `lm_head` from `target_modules` or set "
+                        "`use_liger_kernel=False` if you intend to fine-tune the LM head.",
+                        UserWarning,
+                    )
+
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
 
