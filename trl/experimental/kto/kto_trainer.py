@@ -19,7 +19,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 import torch
@@ -1150,10 +1150,6 @@ class KTOTrainer(_BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         return self._compute_loss(model, inputs, return_outputs)
-
-    def store_metrics(self, metrics: dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
-        for key, value in metrics.items():
-            self._metrics[train_eval][key].append(value)
 
     def _get_train_sampler(self, dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
         if dataset is None:
