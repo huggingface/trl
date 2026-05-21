@@ -1175,7 +1175,7 @@ class SFTTrainer(_BaseTrainer):
             # Some models (currently Gemma 3's `Gemma3ForConditionalGeneration`) require `token_type_ids` as a model
             # input during training. The default text-only language modeling collator does not produce them, so we
             # opt in here when we detect such a model. See https://github.com/huggingface/trl/issues/5807.
-            add_token_type_ids = getattr(model.config, "model_type", None) == "gemma3"
+            add_token_type_ids = model.config.model_type == "gemma3"
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=self._tokenizer.pad_token_id,
                 max_length=None if self.padding_free else args.max_length,
