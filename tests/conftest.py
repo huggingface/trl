@@ -69,8 +69,6 @@ def pytest_runtest_makereport(item, call):
 
 MODEL_REVISIONS = {
     # Add model_id: revision mappings here to test PRs
-    "trl-internal-testing/tiny-LlavaForConditionalGeneration": "refs/pr/4",
-    "trl-internal-testing/tiny-LlavaNextForConditionalGeneration": "refs/pr/7",
 }
 
 
