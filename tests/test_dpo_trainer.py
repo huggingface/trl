@@ -985,13 +985,6 @@ class TestDPOTrainer(TrlTestCase):
                 "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             ) and ("encoder.layers.1" in n or "post_layernorm" in n):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
-            # For some reason, these params are not updated. This is probably not related to TRL, but to
-            # the model itself. We should investigate this further, but for now we just skip these params.
-            elif (
-                model_id == "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration"
-                and "model.visual.deepstack_merger_list" in n
-            ):
-                continue
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
