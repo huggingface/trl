@@ -1031,14 +1031,15 @@ class KTOTrainer(_BaseTrainer):
 
         return output
 
-    def get_batch_loss_metrics(
+    def _compute_loss(
         self,
         model,
-        batch: dict[str, list | torch.LongTensor],
+        inputs: dict[str, list | torch.LongTensor],
+        return_outputs: bool = False,
     ):
         """Compute the KTO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
-        batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
+        batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
         labels = torch.tensor(batch["label"])
         num_chosen = labels.sum().to(self.accelerator.device)
@@ -1154,7 +1155,7 @@ class KTOTrainer(_BaseTrainer):
         return_outputs=False,
         num_items_in_batch=None,
     ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        loss, metrics = self.get_batch_loss_metrics(model, inputs)
+        loss, metrics = self._compute_loss(model, inputs)
 
         # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
         loss = loss.to(self.args.device)
@@ -1191,7 +1192,7 @@ class KTOTrainer(_BaseTrainer):
                 ignore_keys = []
 
         with torch.no_grad():
-            loss, metrics = self.get_batch_loss_metrics(model, inputs)
+            loss, metrics = self._compute_loss(model, inputs)
 
         # force log the metrics
         if self.accelerator.is_main_process:
