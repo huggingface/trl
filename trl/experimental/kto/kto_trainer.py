@@ -1014,28 +1014,26 @@ class KTOTrainer(_BaseTrainer):
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
         if all_num_chosen > 0:
-            self._metrics[mode]["rewards/chosen_sum"].append(
-                self.accelerator.gather_for_metrics(chosen_rewards_sum.nansum()).nansum().item()
+            self._metrics[mode]["rewards/chosen"].append(
+                self.accelerator.gather_for_metrics(chosen_rewards_sum.nansum()).nansum().item() / all_num_chosen
             )
-            self._metrics[mode]["logps/chosen_sum"].append(
-                self.accelerator.gather_for_metrics(chosen_logps_sum.nansum()).nansum().item()
+            self._metrics[mode]["logps/chosen"].append(
+                self.accelerator.gather_for_metrics(chosen_logps_sum.nansum()).nansum().item() / all_num_chosen
             )
-            self._metrics[mode]["logits/chosen_sum"].append(
-                self.accelerator.gather_for_metrics(chosen_logits_sum.nansum()).nansum().item()
+            self._metrics[mode]["logits/chosen"].append(
+                self.accelerator.gather_for_metrics(chosen_logits_sum.nansum()).nansum().item() / all_num_chosen
             )
-            self._metrics[mode]["count/chosen"].append(all_num_chosen)
 
         if all_num_rejected > 0:
-            self._metrics[mode]["rewards/rejected_sum"].append(
-                self.accelerator.gather_for_metrics(rejected_rewards_sum.nansum()).nansum().item()
+            self._metrics[mode]["rewards/rejected"].append(
+                self.accelerator.gather_for_metrics(rejected_rewards_sum.nansum()).nansum().item() / all_num_rejected
             )
-            self._metrics[mode]["logps/rejected_sum"].append(
-                self.accelerator.gather_for_metrics(rejected_logps_sum.nansum()).nansum().item()
+            self._metrics[mode]["logps/rejected"].append(
+                self.accelerator.gather_for_metrics(rejected_logps_sum.nansum()).nansum().item() / all_num_rejected
             )
-            self._metrics[mode]["logits/rejected_sum"].append(
-                self.accelerator.gather_for_metrics(rejected_logits_sum.nansum()).nansum().item()
+            self._metrics[mode]["logits/rejected"].append(
+                self.accelerator.gather_for_metrics(rejected_logits_sum.nansum()).nansum().item() / all_num_rejected
             )
-            self._metrics[mode]["count/rejected"].append(all_num_rejected)
 
         return loss
 
