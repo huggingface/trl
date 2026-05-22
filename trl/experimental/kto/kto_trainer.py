@@ -1166,14 +1166,9 @@ class KTOTrainer(_BaseTrainer):
             if prediction_loss_only:
                 logits, labels = None, None
             else:
-                # logits for the chosen and rejected samples from model
-                logits_dict = {}
-                if self._metrics["eval"]["logits/chosen_sum"]:
-                    logits_dict["eval_logits/chosen"] = self._metrics["eval"]["logits/chosen_sum"][-1]
-                if self._metrics["eval"]["logits/rejected_sum"]:
-                    logits_dict["eval_logits/rejected"] = self._metrics["eval"]["logits/rejected_sum"][-1]
-                logits = torch.tensor(list(logits_dict.values()), device=self.accelerator.device)
-                labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
+                # Return dummy tensors so the Trainer calls compute_metrics. Real logits require refactoring forward()
+                logits = torch.zeros(1, device=self.accelerator.device)
+                labels = torch.zeros(1, device=self.accelerator.device)
         return loss, logits, labels
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
