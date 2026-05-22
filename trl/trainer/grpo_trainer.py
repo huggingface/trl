@@ -2067,7 +2067,8 @@ class GRPOTrainer(_BaseTrainer):
 
                 sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
                 if sequence_level_is:
-                    per_sequence_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
+                    seq_len = mask.sum(dim=-1, keepdim=True).clamp(min=1.0)
+                    per_sequence_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True) / seq_len
                     logps_diff = per_sequence_logps_diff
                 else:
                     logps_diff = per_token_logps_diff
