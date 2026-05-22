@@ -1148,6 +1148,8 @@ class KTOTrainer(_BaseTrainer):
         return loss
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # return_outputs is not forwarded: _compute_loss delegates to forward(), which hides the raw model outputs
+        # Returning real outputs requires refactoring forward(), which is deferred.
         return self._compute_loss(model, inputs)
 
     def _get_train_sampler(self, dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
