@@ -1029,7 +1029,7 @@ def create_model_from_path(
         if architecture is None:
             # Remote-code checkpoint: the architecture name lives in the dynamic module, not in
             # `transformers`. Pick the most specific auto class declared in `config.auto_map`.
-            auto_map = getattr(config, "auto_map", {})
+            auto_map = config.auto_map or {}
             for candidate in (AutoModelForImageTextToText, AutoModelForCausalLM):
                 if candidate.__name__ in auto_map:
                     architecture = candidate
