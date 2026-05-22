@@ -85,7 +85,13 @@ def pick_device(choice: str) -> str:
 
 
 def score_pair(model, tokenizer, prompt: str, completion: str, max_length: int, device: str) -> float:
+    # Mirror RewardTrainer's `add_eos` (trl/trainer/reward_trainer.py): training sequences always end in
+    # `eos_token`, so the causal sequence-classification head learns from EOS hidden states. Inference must
+    # match, otherwise scores read a different last-token representation than the head was trained on.
+    eos = tokenizer.eos_token or ""
     text = prompt + completion
+    if eos and not text.endswith(eos):
+        text = text + eos
     encoded = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length).to(device)
     with torch.no_grad():
         logits = model(**encoded).logits
@@ -171,6 +177,9 @@ def main() -> None:
 
     n = len(margins)
     acc = sum(1 for m in margins if m > 0) / n
+    # Note: `near_zero_frac` and `mispreferred_frac` are not disjoint. `near_zero_frac` is `|margin| < threshold`
+    # (i.e., margins in (-threshold, threshold)), while `mispreferred_frac` is `margin <= 0`. They overlap on
+    # (-threshold, 0]; do not add them when reporting.
     near_zero_frac = sum(1 for m in margins if abs(m) < args.margin_threshold) / n
     mispreferred_frac = sum(1 for m in margins if m <= 0) / n
 

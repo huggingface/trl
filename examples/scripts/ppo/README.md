@@ -29,13 +29,13 @@ On a 200-pair sample of `trl-lib/tldr-preference` (validation split) scored by t
 
 | Metric                 | Value  | Interpretation                                                  |
 |------------------------|--------|-----------------------------------------------------------------|
-| `accuracy`             | 0.595  | The RM prefers `chosen` over `rejected` in 59.5% of pairs — only modestly above the 0.5 chance baseline. |
-| `mean_margin`          | +0.647 | On average chosen scores higher than rejected, by 0.65 reward units. |
-| `mispreferred_fraction`| 0.405  | 40.5% of pairs have margin ≤ 0 — the RM gets them backwards.    |
-| `near_zero_fraction`   | 0.26   | An additional 26% sit within ±0.5 of zero — low-confidence cases. |
-| `length_bias_pearson`  | +0.158 | Modest positive correlation between `len(chosen) − len(rejected)` and margin — some length bias, but not the dominant failure mode at this scale. |
+| `accuracy`             | 0.670  | The RM prefers `chosen` over `rejected` in 67% of pairs — a clear majority but well below what most production RMs target. |
+| `mean_margin`          | +0.594 | On average chosen scores higher than rejected, by ~0.6 reward units. |
+| `mispreferred_fraction`| 0.330  | 33% of pairs have margin ≤ 0 — the RM gets them backwards.       |
+| `near_zero_fraction`   | 0.285  | 28.5% sit within ±0.5 of zero — low-confidence cases. Overlaps with `mispreferred_fraction` on margins in (-0.5, 0]; do not add the two. |
+| `length_bias_pearson`  | +0.312 | Substantial positive correlation between `len(chosen) − len(rejected)` and the RM's margin — the RM rewards length, not just quality. This is a classic preference-RM failure mode and a likely contributor to the PPO instability reported in [issue #2015](https://github.com/huggingface/trl/issues/2015). |
 
-A reward model that's only 60% accurate provides a weak training signal for PPO, which is consistent with the instability reported in [issue #2015](https://github.com/huggingface/trl/issues/2015). The diagnostics above were produced by [`evaluate_reward_model.py`](./evaluate_reward_model.py); run it against your own RM checkpoint and compare. Note that small samples (n ≤ 50) are noisy enough to be misleading on these statistics — prefer n ≥ 200.
+The diagnostics above were produced by [`evaluate_reward_model.py`](./evaluate_reward_model.py); run it against your own RM checkpoint and compare. The script appends `eos_token` to each scored sequence to match what [`RewardTrainer`](../../../trl/trainer/reward_trainer.py) does at training time — omitting it produces systematically different scores. Note that small samples (n ≤ 50) are noisy on `length_bias_pearson` in particular; prefer n ≥ 200.
 
 ## Step 1 — Train the SFT model
 
