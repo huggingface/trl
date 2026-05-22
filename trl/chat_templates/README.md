@@ -183,6 +183,12 @@ Always include the thinking block regardless of message position. The original c
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
+### `qwen3_vl_training.jinja`
+
+Patched Qwen3-VL template. Diff vs `qwen3_vl.jinja`:
+
+Wrap assistant message output (both `content` and `tool_calls`) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
 ### `qwen3_6_training.jinja`
 
 Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (require both `<think>` and `</think>` before parsing, drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted, wrap assistant output in `{% generation %}` / `{% endgeneration %}`), applied to the Qwen3.6 base template.
