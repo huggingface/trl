@@ -56,7 +56,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset_name", default="trl-lib/tldr-preference", help="Preference dataset name.")
     parser.add_argument("--split", default="validation", help="Dataset split to evaluate on.")
     parser.add_argument("--num_samples", type=int, default=1000, help="Number of examples to evaluate.")
-    parser.add_argument("--batch_size", type=int, default=4, help="Inference batch size.")
     parser.add_argument("--max_length", type=int, default=1024, help="Max tokens per (prompt + completion).")
     parser.add_argument(
         "--margin_threshold",
