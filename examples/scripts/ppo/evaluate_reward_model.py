@@ -58,7 +58,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num_samples", type=int, default=1000, help="Number of examples to evaluate.")
     parser.add_argument("--batch_size", type=int, default=4, help="Inference batch size.")
     parser.add_argument("--max_length", type=int, default=1024, help="Max tokens per (prompt + completion).")
-    parser.add_argument("--margin_threshold", type=float, default=0.5, help="Below this absolute margin a pair is flagged as 'near-zero'.")
+    parser.add_argument(
+        "--margin_threshold",
+        type=float,
+        default=0.5,
+        help="Below this absolute margin a pair is flagged as 'near-zero'.",
+    )
     parser.add_argument(
         "--device",
         default="auto",
@@ -93,7 +98,7 @@ def pearson(xs: list[float], ys: list[float]) -> float:
     if len(xs) < 2:
         return 0.0
     mx, my = mean(xs), mean(ys)
-    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=False))
     denom_x = sum((x - mx) ** 2 for x in xs) ** 0.5
     denom_y = sum((y - my) ** 2 for y in ys) ** 0.5
     if denom_x == 0 or denom_y == 0:
@@ -170,7 +175,7 @@ def main() -> None:
     near_zero_frac = sum(1 for m in margins if abs(m) < args.margin_threshold) / n
     mispreferred_frac = sum(1 for m in margins if m <= 0) / n
 
-    length_diff = [c - r for c, r in zip(chosen_lengths, rejected_lengths)]
+    length_diff = [c - r for c, r in zip(chosen_lengths, rejected_lengths, strict=False)]
     length_bias = pearson(length_diff, margins)
 
     summary = {
