@@ -480,6 +480,22 @@ class TestIsChatTemplatePrefixPreserving:
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
         pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            id="qwen35-nothink",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+            id="qwen35-think",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
             id="qwen36",
             marks=pytest.mark.skipif(
