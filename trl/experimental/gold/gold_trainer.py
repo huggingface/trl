@@ -918,7 +918,7 @@ class GOLDTrainer(SFTTrainer):
                 )
                 data_collator = identity
             else:
-                data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
+                data_collator = DataCollatorForChatML(tokenizer=tokenizer, max_length=args.max_length)
 
         # Liger fused GKD loss (JSD)
         self.use_liger_gkd_loss = False
@@ -1213,7 +1213,8 @@ class GOLDTrainer(SFTTrainer):
                         )
                         for ex, imgs in zip(generation_batch, raw_images, strict=True)
                     ]
-                    pending_slice["_gold_vlm_raw_images"] = raw_images
+                    has_images = any(imgs is not None for imgs in raw_images)
+                    pending_slice["_gold_vlm_raw_images"] = raw_images if has_images else None
                     pending_slice["_gold_vlm_raw_prompts"] = raw_prompts
                 return self._materialize_vlm_slice(pending_slice)
             return generation_batch
@@ -1475,7 +1476,8 @@ class GOLDTrainer(SFTTrainer):
                             )
                             for ex, imgs in zip(raw_slices[i], raw_images, strict=True)
                         ]
-                        slice_inputs["_gold_vlm_raw_images"] = raw_images
+                        has_images = any(imgs is not None for imgs in raw_images)
+                        slice_inputs["_gold_vlm_raw_images"] = raw_images if has_images else None
                         slice_inputs["_gold_vlm_raw_prompts"] = raw_prompts
                 else:
                     slice_inputs = slices[i]
