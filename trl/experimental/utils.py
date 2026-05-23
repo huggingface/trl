@@ -139,7 +139,14 @@ def pad_byte_offsets(offsets: list[tuple[int, int]], target_length: int, padding
     return torch.cat([pad_block, offs], dim=0) if padding_side == "left" else torch.cat([offs, pad_block], dim=0)
 
 
-def _repeated_piece_byte_len(piece: str) -> int:
+def piece_byte_len(piece: str) -> int:
+    """UTF-8 byte length of a single token's piece string.
+
+    Works for ByteLevel BPE (each piece char maps to one source byte), SentencePiece byte-fallback (``<0xXX>``
+    represents one byte), and the bare SentencePiece word-start marker ``\u2581``. Used both to disambiguate
+    overlapping char-derived spans (off-policy) and to derive completion-relative offsets directly from generated token
+    ids (on-policy), so both sides share one byte coordinate system without any decode-then-re-encode round-trip.
+    """
     if piece == "\u2581":
         return 0
     if len(piece) == 6 and piece.startswith("<0x") and piece.endswith(">"):
@@ -185,7 +192,7 @@ def _split_repeated_byte_offsets(byte_offsets: list[tuple[int, int]], tokens: li
 
         if j - i > 1:
             start, end = byte_offsets[i]
-            piece_lengths = [_repeated_piece_byte_len(token) for token in tokens[i:j]]
+            piece_lengths = [piece_byte_len(token) for token in tokens[i:j]]
             if sum(piece_lengths) == end - start:
                 cursor = start
                 for offset_idx, length in enumerate(piece_lengths, start=i):
@@ -324,15 +331,23 @@ class DataCollatorForChatML:
                 sample_ids = example["input_ids"]
                 input_ids.append(sample_ids)
                 attention_mask.append(example.get("attention_mask", [1] * len(sample_ids)))
-                tokenized_prompt = self.tokenizer(
-                    formatted_prompt,
-                    truncation=True,
-                    max_length=len(sample_ids),
-                    padding=False,
-                    return_tensors=None,
-                    add_special_tokens=False,
-                )
-                current_prompt_ids = tokenized_prompt["input_ids"]
+                completion_mask = example.get("completion_mask")
+                if completion_mask is not None:
+                    # Boundary tracked at tokenize time: the prompt is the leading non-completion tokens
+                    # of the sequence itself — no re-tokenization, so it stays correct after the sequence
+                    # was truncated keeping the completion end.
+                    prompt_len = completion_mask.index(1) if 1 in completion_mask else len(sample_ids)
+                    current_prompt_ids = sample_ids[:prompt_len]
+                else:
+                    # No tracked boundary: recover the prompt by tokenizing its text. Avoid `truncation=True`
+                    # here: it persists on the backend used by `encode_with_byte_offsets`.
+                    tokenized_prompt = self.tokenizer(
+                        formatted_prompt,
+                        padding=False,
+                        return_tensors=None,
+                        add_special_tokens=False,
+                    )
+                    current_prompt_ids = tokenized_prompt["input_ids"][: len(sample_ids)]
                 byte_offsets.append(example.get("byte_offsets", [(0, 0)] * len(sample_ids)))
 
             prompts_input_ids.append(current_prompt_ids)

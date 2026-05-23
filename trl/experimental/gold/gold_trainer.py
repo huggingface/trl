@@ -59,7 +59,7 @@ from ..utils import (
     empty_cache,
     encode_with_byte_offsets,
     pad_byte_offsets,
-    truncate_dataset,
+    piece_byte_len,
 )
 from .gold_config import GOLDConfig
 
@@ -942,6 +942,7 @@ class GOLDTrainer(SFTTrainer):
             "original_prompt_text",
             "original_completion_text",
             "byte_offsets",
+            "completion_mask",
         ]
         if self._signature_columns is None:
             self._signature_columns = required_columns
@@ -1047,8 +1048,11 @@ class GOLDTrainer(SFTTrainer):
     def _maybe_add_completion_byte_offsets(self, updated_slice: dict[str, torch.Tensor | Any]) -> None:
         """Attach completion-relative byte offsets for on-policy ULD batches.
 
-        Byte offsets come from the same helper used by the off-policy and teacher paths, so cross-tokenizer alignment
-        stays in one coordinate system.
+        The generated tokens are the source of truth: each completion token's byte span is its piece's UTF-8 byte
+        length (via ``piece_byte_len``), accumulated left to right. No decode-then-re-encode round-trip — that round
+        trip is not a fixed point for BPE, so re-encoding the decoded completion could yield different ids than the
+        model sampled. ``piece_byte_len`` is the same primitive the off-policy / teacher path uses, so student and
+        teacher offsets stay in one byte coordinate system.
         """
         if not (
             getattr(self, "use_uld_loss", False)
@@ -1061,26 +1065,20 @@ class GOLDTrainer(SFTTrainer):
         new_input_ids = updated_slice["input_ids"]
         new_labels = updated_slice["labels"]
         seq_len = new_input_ids.shape[1]
-        completion_texts = updated_slice.get("original_completion_text")
-        if completion_texts is None:
-            raise ValueError("On-policy extended ULD batches must include `original_completion_text`.")
-
-        completion_encs = encode_with_byte_offsets(
-            self.processing_class.backend_tokenizer, completion_texts, add_special_tokens=False
-        )
+        cache = self.__dict__.setdefault("_token_byte_len_cache", {})
 
         rows: list[list[tuple[int, int]]] = []
-        for (completion_ids, completion_offsets), row_ids, row_labels in zip(
-            completion_encs, new_input_ids.cpu().tolist(), new_labels.cpu().tolist(), strict=True
-        ):
-            positions = [pos for pos, label in enumerate(row_labels) if label != -100]
-            expected_ids = [row_ids[pos] for pos in positions]
-            if completion_ids != expected_ids:
-                raise ValueError("Generated completion text does not retokenize to the generated completion ids.")
-
+        for row_ids, row_labels in zip(new_input_ids.cpu().tolist(), new_labels.cpu().tolist(), strict=True):
             offs: list[tuple[int, int]] = [(0, 0)] * seq_len
-            for pos, offset in zip(positions, completion_offsets, strict=True):
-                offs[pos] = offset
+            cumulative = 0
+            for pos, (tid, label) in enumerate(zip(row_ids, row_labels, strict=True)):
+                if label == -100:
+                    continue
+                if tid not in cache:
+                    cache[tid] = piece_byte_len(self.processing_class.convert_ids_to_tokens([tid])[0])
+                nb = cache[tid]
+                offs[pos] = (cumulative, cumulative + nb)
+                cumulative += nb
             rows.append(offs)
         updated_slice["byte_offsets"] = torch.tensor(rows, dtype=torch.long, device=new_input_ids.device)
 
@@ -1149,10 +1147,6 @@ class GOLDTrainer(SFTTrainer):
             prompt_ids_list,
             skip_special_tokens=True,
         )
-        prompts_text_with_special = self.processing_class.batch_decode(
-            prompt_ids_list,
-            skip_special_tokens=False,
-        )
 
         if not self.use_vllm:
             self._generate_non_vllm_for_slices(slices, on_policy_indices)
@@ -1177,7 +1171,6 @@ class GOLDTrainer(SFTTrainer):
             local_slice_indices,
             completion_ids,
             prompt_ids_list,
-            prompts_text_with_special,
             prompts_text,
             self.generation_config.max_new_tokens,
         )
@@ -1217,7 +1210,6 @@ class GOLDTrainer(SFTTrainer):
         local_slice_indices: list[int],
         completion_ids: list,
         prompt_ids_list: list[list[int]],
-        prompts_text_with_special: list[str],
         prompts_text: list[str],
         max_completion_length: int,
     ):
@@ -1230,12 +1222,10 @@ class GOLDTrainer(SFTTrainer):
         slice_completions = {idx: [] for idx in on_policy_indices}
         slice_prompt_ids = {idx: [] for idx in on_policy_indices}
         slice_prompts = {idx: [] for idx in on_policy_indices}
-        slice_prompts_special = {idx: [] for idx in on_policy_indices}
 
         for i, slice_idx in enumerate(local_slice_indices):
             slice_completions[slice_idx].append(completion_ids[i])
             slice_prompt_ids[slice_idx].append(prompt_ids_list[i])
-            slice_prompts_special[slice_idx].append(prompts_text_with_special[i])
             slice_prompts[slice_idx].append(prompts_text[i])
 
         for slice_idx in on_policy_indices:
@@ -1243,7 +1233,6 @@ class GOLDTrainer(SFTTrainer):
             completion_ids_for_slice = slice_completions[slice_idx]
             prompt_ids_for_slice = slice_prompt_ids[slice_idx]
             prompt_txts = slice_prompts[slice_idx]
-            prompt_txts_with_special = slice_prompts_special[slice_idx]
 
             prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
             truncated_prompt_ids = []
@@ -1261,6 +1250,14 @@ class GOLDTrainer(SFTTrainer):
 
             prompt_ids = pad(truncated_prompt_ids, padding_side="left", padding_value=pad_token_id)
             prompt_attention_mask = pad(prompt_attention_masks, padding_side="left", padding_value=0)
+
+            # `original_prompt_text` must reflect the truncated prompt the student actually consumed: the teacher
+            # re-encodes this text with its own tokenizer, so using the pre-truncation prompt would let the teacher
+            # condition on more context than the student saw. Decode-only — never re-encode the student's own ids.
+            prompt_txts_with_special = self.processing_class.batch_decode(
+                [ids.tolist() for ids in truncated_prompt_ids],
+                skip_special_tokens=False,
+            )
 
             completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids_for_slice]
             completion_ids_for_text: list[list[int]] = []
@@ -1422,7 +1419,7 @@ class GOLDTrainer(SFTTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset (preserving original text)"
 
-            def tokenize_with_original_text(example, processing_class, dataset_text_field, assistant_only_loss):
+            def tokenize_with_original_text(example, processing_class, dataset_text_field, max_length):
                 """Tokenize the chat-template-rendered message and emit:
                     input_ids, attention_mask, original_prompt_text, original_completion_text, byte_offsets (per-token,
                     completion-relative).
@@ -1506,26 +1503,20 @@ class GOLDTrainer(SFTTrainer):
                     (s - prompt_byte_len, e - prompt_byte_len) for s, e in full_offs[completion_start:]
                 ]
 
+                # Keep the last `max_length` tokens: drop the oldest prompt context first, never the
+                # completion end (which carries the supervised tokens and ULD offsets). The
+                # prompt/completion boundary is tracked here via `completion_mask` rather than recovered
+                # later by re-tokenizing the prompt text, so it stays correct through truncation.
+                if max_length is not None and len(input_ids) > max_length:
+                    drop = len(input_ids) - max_length
+                    input_ids = input_ids[drop:]
+                    byte_offsets = byte_offsets[drop:]
+                    completion_start = max(0, completion_start - drop)
+
                 result["input_ids"] = input_ids
                 result["attention_mask"] = [1] * len(input_ids)
                 result["byte_offsets"] = byte_offsets
-                if "prompt" in example:
-                    result["completion_mask"] = [0] * completion_start + [1] * (len(input_ids) - completion_start)
-                elif assistant_only_loss and is_conversational(example):
-                    processed = processing_class.apply_chat_template(
-                        example["messages"],
-                        return_dict=True,
-                        return_assistant_tokens_mask=True,
-                        **example.get("chat_template_kwargs", {}),
-                    )
-                    if "assistant_masks" not in processed or 1 not in processed["assistant_masks"]:
-                        raise RuntimeError(
-                            "You're using `assistant_only_loss=True`, but at least one example has no assistant "
-                            "tokens. This usually means the chat template does not support assistant masks."
-                        )
-                    if processed["input_ids"] != input_ids:
-                        raise ValueError("Chat-template input ids do not match byte-offset input ids.")
-                    result["assistant_masks"] = processed["assistant_masks"]
+                result["completion_mask"] = [0] * completion_start + [1] * (len(input_ids) - completion_start)
                 return result
 
             dataset = dataset.map(
@@ -1533,12 +1524,14 @@ class GOLDTrainer(SFTTrainer):
                 fn_kwargs={
                     "processing_class": processing_class,
                     "dataset_text_field": args.dataset_text_field,
-                    "assistant_only_loss": args.assistant_only_loss,
+                    "max_length": args.max_length,
                 },
                 **map_kwargs,
             )
 
-            # Pack or truncate
+            # Pack if requested. Truncation already happened in `tokenize_with_original_text`, keeping
+            # the completion end — so the generic front-truncating `truncate_dataset` is intentionally
+            # not applied here (it would drop the completion).
             if packing:
                 if args.max_length is None:
                     raise ValueError("When packing is enabled, `max_length` can't be `None`.")
@@ -1551,10 +1544,6 @@ class GOLDTrainer(SFTTrainer):
 
                 dataset = dataset.select_columns(columns_to_select)
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
-            elif args.max_length is not None:
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
-                dataset = truncate_dataset(dataset, args.max_length, map_kwargs=map_kwargs)
 
             if args.use_liger_kernel:
                 required_columns = {

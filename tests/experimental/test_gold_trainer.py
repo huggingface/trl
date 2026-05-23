@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 
 from trl.experimental.gold import gold_trainer as gold_trainer_module
@@ -316,6 +316,10 @@ def test_chatml_collator_uses_original_prompt_text_for_tokenized_rows(llama_toke
     )
 
     assert torch.equal(batch["labels"][0, -len(labels) :], torch.tensor(labels, dtype=torch.long))
+    [(long_ids, _)] = encode_with_byte_offsets(
+        llama_tokenizer.backend_tokenizer, [" ".join(["token"] * (len(input_ids) + 1))], add_special_tokens=False
+    )
+    assert len(long_ids) > len(input_ids)
 
 
 def pad_tokens(ids, pad_id, target_length):
@@ -352,7 +356,6 @@ def test_process_completions_to_buffer_left_pads_prompt_ids():
         on_policy_indices=[0],
         local_slice_indices=[0, 0],
         completion_ids=[[31], [41]],
-        prompts_text_with_special=["short", "longer"],
         prompt_ids_list=[[11], [21, 22]],
         prompts_text=["short", "longer"],
         max_completion_length=1,
@@ -408,7 +411,6 @@ def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_promp
         local_slice_indices,
         completion_ids,
         prompt_ids_list,
-        prompts_text_with_special,
         prompts_text,
         max_completion_length,
     ):
@@ -418,7 +420,6 @@ def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_promp
         captured["completion_ids"] = completion_ids
         captured["prompt_ids_list"] = prompt_ids_list
         captured["prompts_text"] = prompts_text
-        captured["prompts_text_with_special"] = prompts_text_with_special
         captured["max_completion_length"] = max_completion_length
 
     trainer = GOLDTrainer.__new__(GOLDTrainer)
@@ -448,7 +449,6 @@ def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_promp
     assert captured["completion_ids"] == [[42]]
     assert captured["prompt_ids_list"] == [[5, 9, 6]]
     assert captured["prompts_text"] == ["A B"]
-    assert captured["prompts_text_with_special"] == ["A <eos> B"]
 
 
 def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens():
@@ -525,6 +525,73 @@ def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens()
     assert buffered_inputs["original_prompt_text"] == ["A <special> B"]
     assert buffered_inputs["original_completion_text"] == ["C"]
     assert trainer._buffered_text_logs[0] == (["A B"], ["C"])
+
+
+def test_on_policy_prompt_text_reflects_truncated_prompt():
+    """When the prompt overflows max_length - max_completion_length it is truncated before the student sees it.
+    `original_prompt_text` — which the teacher re-encodes — must reflect that truncated prompt, not the full one, so
+    teacher and student score the completion under the same context."""
+
+    class RecordingVLLMGeneration:
+        def __init__(self):
+            self.prompts = None
+
+        def sync_weights(self):
+            pass
+
+        def generate(self, prompts, images, num_generations):
+            self.prompts = prompts
+            return None, [[42]], None, None
+
+    class RecordingTokenizer:
+        pad_token_id = 0
+        pad_token = "<pad>"
+
+        def __init__(self):
+            self.truncation_side = "right"
+
+        def batch_decode(self, sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            del clean_up_tokenization_spaces
+            token_map = {0: "<pad>", 5: "A", 6: "B", 13: "<special>", 42: "C"}
+            decoded = []
+            for sequence in sequences:
+                tokens = [token_map[int(t)] for t in sequence if int(t) != 0]
+                decoded.append(" ".join(tokens))
+            return decoded
+
+        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            return self.batch_decode([ids], skip_special_tokens, clean_up_tokenization_spaces)[0]
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+    trainer.processing_class = RecordingTokenizer()
+    trainer.args = SimpleNamespace(max_length=3, report_to=[])
+    trainer.use_vllm = True
+    trainer.use_uld_loss = False
+    trainer.teacher_tokenizer = None
+    trainer.uld_loss_fn = None
+    trainer.vllm_generation = RecordingVLLMGeneration()
+    trainer.vllm_sync_frequency = 1
+    trainer._last_vllm_sync_step = -1
+    trainer.state = SimpleNamespace(global_step=0)
+    trainer.num_generations = 1
+    trainer.generation_config = SimpleNamespace(max_new_tokens=1)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+
+    slices = [
+        {
+            "prompts": torch.tensor([[0, 0, 5, 13, 6]], dtype=torch.long),
+            "prompt_attention_mask": torch.tensor([[0, 0, 1, 1, 1]], dtype=torch.long),
+        }
+    ]
+
+    GOLDTrainer._generate_on_policy_for_slices(trainer, slices, [0])
+
+    buffered_inputs = trainer._buffered_inputs[0]
+    # prompt_max_length = max_length - max_completion_length = 3 - 1 = 2; right-truncation keeps [5, 13].
+    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[5, 13, 42]], dtype=torch.long))
+    assert buffered_inputs["original_prompt_text"] == ["A <special>"]
 
 
 def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypatch):
@@ -668,6 +735,43 @@ def test_chatml_collator_truncates_keeping_completion_end(llama_tokenizer):
     assert tuple(batch["byte_offsets"][0, -1].tolist())[1] > 0  # last completion-relative offset is non-zero
 
 
+def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenizer):
+    """When a GOLD row's prompt overflows max_length, dataset prep must keep the LAST max_length tokens (the
+    completion end), tracking the prompt/completion boundary via completion_mask so the collator labels the completion
+    instead of masking the whole sequence."""
+    long_user = "Please summarize:\n" + ("very long context. " * 200)  # prompt alone overflows max_length
+    assistant = "the short answer"
+    dataset = Dataset.from_dict(
+        {"messages": [[{"role": "user", "content": long_user}, {"role": "assistant", "content": assistant}]]}
+    )
+
+    max_length = 64
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=max_length,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    prepared = trainer._prepare_dataset_with_original_text(
+        dataset, llama_tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
+    )
+    row = prepared[0]
+
+    assert len(row["input_ids"]) == max_length  # truncated, not dropped
+    assert 1 in row["completion_mask"]  # completion survived front-truncation
+
+    collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=max_length)
+    batch = collator([row])
+
+    # The collator labels exactly the tracked completion tokens — never all -100 — and the assistant text survives.
+    completion_ids = [tid for tid, m in zip(row["input_ids"], row["completion_mask"], strict=False) if m == 1]
+    supervised = [label for label in batch["labels"][0].tolist() if label != -100]
+    assert supervised == completion_ids
+    assert assistant in llama_tokenizer.decode(completion_ids)
+
+
 def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
     config = build_config()
     loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
@@ -691,23 +795,26 @@ def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
         assert student_span == teacher_span
 
 
-def test_on_policy_completion_byte_offsets_use_tokenizer_offsets(llama_tokenizer, qwen_tokenizer):
+def test_on_policy_completion_byte_offsets_match_encode_offsets(smollm_tokenizer, qwen_tokenizer):
+    """On-policy offsets are derived from the generated token ids directly (per-token piece byte length, no
+    decode-then-re-encode round-trip). For ByteLevel BPE — the family of every cross-tokenizer pair GOLD targets
+    (SmolLM, Qwen, Llama 3+, …) — those per-token spans match what `encode_with_byte_offsets` produces on the same
+    text, so student and teacher offsets share one byte coordinate system."""
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.use_uld_loss = True
     trainer.teacher_tokenizer = qwen_tokenizer
     trainer.uld_loss_fn = SimpleNamespace(use_extended_uld=True)
-    trainer.processing_class = llama_tokenizer
+    trainer.processing_class = smollm_tokenizer
 
     completion_text = "hello 你好 😊"
     [(completion_ids, expected_offsets)] = encode_with_byte_offsets(
-        llama_tokenizer.backend_tokenizer, [completion_text], add_special_tokens=False
+        smollm_tokenizer.backend_tokenizer, [completion_text], add_special_tokens=False
     )
-    input_ids = [llama_tokenizer.pad_token_id] + completion_ids
+    input_ids = [smollm_tokenizer.pad_token_id] + completion_ids
     labels = [-100] + completion_ids
     updated_slice = {
         "input_ids": torch.tensor([input_ids]),
         "labels": torch.tensor([labels]),
-        "original_completion_text": [completion_text],
     }
 
     trainer._maybe_add_completion_byte_offsets(updated_slice)
