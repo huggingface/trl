@@ -2404,6 +2404,8 @@ class GOLDTrainer(SFTTrainer):
                         self.accelerator.device
                     )
             else:
+                # Text-only cross-tokenizer ULD: teacher inputs are rebuilt independently
+                teacher_forward_kwargs = {}
                 (
                     teacher_input_ids,
                     teacher_labels,
