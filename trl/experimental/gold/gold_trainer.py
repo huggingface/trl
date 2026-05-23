@@ -1560,7 +1560,6 @@ class GOLDTrainer(SFTTrainer):
                     "position_ids",
                     "completion_mask",
                     "messages",
-                    "assistant_masks",
                     "original_prompt_text",
                     "original_completion_text",
                     "byte_offsets",
