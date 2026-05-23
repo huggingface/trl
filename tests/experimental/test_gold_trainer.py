@@ -772,6 +772,43 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenize
     assert assistant in llama_tokenizer.decode(completion_ids)
 
 
+def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
+    messages = [
+        {"role": "system", "content": "Be terse."},
+        {"role": "user", "content": "First?"},
+        {"role": "assistant", "content": "One."},
+        {"role": "user", "content": "Second?"},
+        {"role": "assistant", "content": "Two."},
+    ]
+    dataset = Dataset.from_dict({"messages": [messages]})
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=512,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+
+    prepared = trainer._prepare_dataset_with_original_text(
+        dataset, qwen_tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
+    )
+    row = prepared[0]
+    expected_prompt = qwen_tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=True, tokenize=False)
+    expected_full = qwen_tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
+
+    assert row["original_prompt_text"] == expected_prompt
+    assert row["original_completion_text"] == expected_full[len(expected_prompt) :]
+    assert "One." not in row["original_completion_text"]
+    assert "Two." in row["original_completion_text"]
+
+    completion_ids = [tid for tid, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1]
+    decoded_completion = qwen_tokenizer.decode(
+        completion_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+    )
+    assert decoded_completion == row["original_completion_text"]
+
+
 def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
     config = build_config()
     loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)

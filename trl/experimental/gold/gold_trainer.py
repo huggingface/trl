@@ -18,6 +18,7 @@ from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
+from itertools import takewhile
 from typing import Any, Optional
 
 import torch
@@ -1444,7 +1445,10 @@ class GOLDTrainer(SFTTrainer):
                             tokenize=False,
                             **example.get("chat_template_kwargs", {}),
                         )
-                        completion_text = full_text[len(prompt_text) :] if full_text.startswith(prompt_text) else ""
+                        prompt_text = "".join(
+                            x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt_text, full_text, strict=False))
+                        )
+                        completion_text = full_text[len(prompt_text) :]
                     else:
                         prompt_text = example["prompt"]
                         completion_text = example["completion"]
@@ -1453,26 +1457,30 @@ class GOLDTrainer(SFTTrainer):
                     result["original_completion_text"] = completion_text
                 elif is_conversational(example):
                     messages = example["messages"]
-                    user_messages = [msg for msg in messages if msg["role"] != "assistant"]
-                    assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
-                    if user_messages and assistant_messages:
-                        prompt_text = processing_class.apply_chat_template(
-                            user_messages,
-                            add_generation_prompt=True,
-                            tokenize=False,
-                            **example.get("chat_template_kwargs", {}),
-                        )
+                    assistant_indices = [idx for idx, msg in enumerate(messages) if msg["role"] == "assistant"]
+                    if assistant_indices:
+                        completion_idx = assistant_indices[-1]
+                        prompt_messages = messages[:completion_idx]
+                        full_messages = messages[: completion_idx + 1]
+                        if prompt_messages:
+                            prompt_text = processing_class.apply_chat_template(
+                                prompt_messages,
+                                add_generation_prompt=True,
+                                tokenize=False,
+                                **example.get("chat_template_kwargs", {}),
+                            )
+                        else:
+                            prompt_text = ""
                         full_text = processing_class.apply_chat_template(
-                            messages,
+                            full_messages,
                             add_generation_prompt=False,
                             tokenize=False,
                             **example.get("chat_template_kwargs", {}),
                         )
-                        completion_text = (
-                            full_text[len(prompt_text) :]
-                            if full_text.startswith(prompt_text)
-                            else assistant_messages[0]["content"] + getattr(processing_class, "eos_token", "")
+                        prompt_text = "".join(
+                            x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt_text, full_text, strict=False))
                         )
+                        completion_text = full_text[len(prompt_text) :]
                         result["original_prompt_text"] = prompt_text
                         result["original_completion_text"] = completion_text
                     else:
