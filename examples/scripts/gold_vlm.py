@@ -132,6 +132,11 @@ if __name__ == "__main__":
     dataset = dataset.map(convert_to_rgb)
     dataset = dataset.map(make_conversation)
 
+    # Hold out 5% for evaluation
+    dataset = dataset.train_test_split(test_size=0.05, seed=42)
+    train_dataset = dataset["train"]
+    eval_dataset = dataset["test"]
+
     # ──────────────────────────────────────────────
     # Training config
     # ──────────────────────────────────────────────
@@ -162,6 +167,10 @@ if __name__ == "__main__":
         max_steps=300,
         learning_rate=1e-4,
         warmup_steps=10,
+        # Evaluation
+        per_device_eval_batch_size=2,
+        eval_strategy="steps",
+        eval_steps=50,
         # Precision
         bf16=True,
         # Logging
@@ -177,7 +186,8 @@ if __name__ == "__main__":
         model=student_model,
         teacher_model=teacher_model,
         args=args,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         processing_class=processor,
         peft_config=peft_config,
     )
