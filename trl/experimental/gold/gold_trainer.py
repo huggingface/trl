@@ -1196,6 +1196,26 @@ class GOLDTrainer(SFTTrainer):
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         if not self.model.training:
+            # Evaluation is off-policy only
+            if self._vlm_collator is not None:
+                # Mirror the off-policy slice construction in _fill_buffer: extract raw images and prompts BEFORE
+                # collation
+                pending_slice = {"_gold_vlm_lazy_examples": list(generation_batch)}
+                if self._teacher_processor is not None:
+                    raw_images = [
+                        ex.get("images") or ([ex["image"]] if "image" in ex else None) for ex in generation_batch
+                    ]
+                    raw_prompts = [
+                        (
+                            prepare_multimodal_messages(ex["prompt"], images=imgs)
+                            if imgs is not None
+                            else ex.get("prompt")
+                        )
+                        for ex, imgs in zip(generation_batch, raw_images, strict=True)
+                    ]
+                    pending_slice["_gold_vlm_raw_images"] = raw_images
+                    pending_slice["_gold_vlm_raw_prompts"] = raw_prompts
+                return self._materialize_vlm_slice(pending_slice)
             return generation_batch
 
         buffer_steps = self.args.gradient_accumulation_steps
@@ -2305,7 +2325,9 @@ class GOLDTrainer(SFTTrainer):
                         }
                     ]
                     teacher_prompt_completion_text = self._teacher_processor.apply_chat_template(
-                        raw_prompt + teacher_completion, tokenize=False, add_generation_prompt=False
+                        raw_prompt + teacher_completion,
+                        tokenize=False,
+                        add_generation_prompt=False,
                     )
                     if teacher_prompt_completion_text.startswith(teacher_prompt_text):
                         teacher_completion_texts.append(teacher_prompt_completion_text[len(teacher_prompt_text) :])
@@ -2326,7 +2348,6 @@ class GOLDTrainer(SFTTrainer):
                 teacher_sequences = []
                 teacher_attention_masks = []
                 teacher_labels_list = []
-                teacher_prompt_token_lengths = []
                 teacher_sequence_kwargs = defaultdict(list)
                 teacher_sequence_keys = ("token_type_ids", "mm_token_type_ids")
 
@@ -2336,7 +2357,6 @@ class GOLDTrainer(SFTTrainer):
                     if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
                         prompt_ids = prompt_ids[:-1]
 
-                    teacher_prompt_token_lengths.append(len(prompt_ids))
                     sequence = list(prompt_ids)
                     sequence.extend(completion_ids)
                     if eos_token_id is not None and eos_token_id not in completion_ids:
@@ -2371,7 +2391,6 @@ class GOLDTrainer(SFTTrainer):
                 )
                 teacher_attention_mask = pad(teacher_attention_masks, padding_side="right", padding_value=0).bool()
                 teacher_labels = pad(teacher_labels_list, padding_side="right", padding_value=-100)
-                teacher_prompt_length = min(teacher_prompt_token_lengths)
 
                 # Override teacher_forward_kwargs with multimodal keys from teacher processing.
                 teacher_forward_kwargs = {
@@ -2389,7 +2408,7 @@ class GOLDTrainer(SFTTrainer):
                     teacher_input_ids,
                     teacher_labels,
                     teacher_attention_mask,
-                    teacher_prompt_length,
+                    _,
                 ) = build_teacher_inputs_from_texts(
                     self.teacher_tokenizer,
                     prompt_texts,
@@ -2414,17 +2433,6 @@ class GOLDTrainer(SFTTrainer):
                     attention_mask=teacher_attention_mask,
                     **teacher_forward_kwargs,
                 )
-
-            # These are not used for ULD loss but are needed if JSD loss were to be used in this branch
-            # For VLMs, prompts are left-padded but input_ids are flushed left, so prompts.shape[1]
-            # would overcount. Derive prompt length from the flushed labels instead.
-            if self._is_vlm:
-                student_prompt_length = self._get_min_completion_start_from_labels(inputs["labels"])
-            else:
-                student_prompt_length = inputs["prompts"].shape[1]
-            shifted_student_logits = outputs_student.logits[:, student_prompt_length - 1 : -1, :]
-            shifted_teacher_logits = outputs_teacher.logits[:, teacher_prompt_length - 1 : -1, :]
-            shifted_labels = inputs["labels"][:, student_prompt_length:]
         else:
             if self.use_liger_gkd_loss:
                 # Forward only through the base models (avoid lm_head to save memory)
