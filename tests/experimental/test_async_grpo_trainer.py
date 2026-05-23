@@ -14,13 +14,16 @@
 
 import itertools
 import queue
+from unittest.mock import patch
 
 import numpy as np
+import pytest
 import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl.experimental.async_grpo import async_grpo_trainer as async_grpo_trainer_module
 from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
 
 from ..testing_utils import TrlTestCase
@@ -92,6 +95,81 @@ class _StubRolloutWorker:
 
 
 class TestAsyncGRPOTrainer(TrlTestCase):
+    def test_init_defaults_to_auto_dtype(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, num_generations=3, report_to="none")
+        original_from_pretrained = async_grpo_trainer_module.AutoModelForCausalLM.from_pretrained
+
+        with patch.object(
+            async_grpo_trainer_module.AutoModelForCausalLM,
+            "from_pretrained",
+            wraps=original_from_pretrained,
+        ) as mock_from_pretrained:
+            AsyncGRPOTrainer(
+                model=model_id,
+                args=training_args,
+                reward_funcs=dummy_reward_func,
+                train_dataset=dataset,
+                processing_class=tokenizer,
+                rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
+            )
+
+        assert mock_from_pretrained.call_args.kwargs["dtype"] == "auto"
+        assert mock_from_pretrained.call_args.kwargs["device_map"] is None
+
+    def test_init_converts_model_init_dtype_string(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            num_generations=3,
+            model_init_kwargs={"dtype": "bfloat16"},
+            report_to="none",
+        )
+        original_from_pretrained = async_grpo_trainer_module.AutoModelForCausalLM.from_pretrained
+
+        with patch.object(
+            async_grpo_trainer_module.AutoModelForCausalLM,
+            "from_pretrained",
+            wraps=original_from_pretrained,
+        ) as mock_from_pretrained:
+            trainer = AsyncGRPOTrainer(
+                model=model_id,
+                args=training_args,
+                reward_funcs=dummy_reward_func,
+                train_dataset=dataset,
+                processing_class=tokenizer,
+                rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
+            )
+
+        assert mock_from_pretrained.call_args.kwargs["dtype"] == torch.bfloat16
+        assert mock_from_pretrained.call_args.kwargs["device_map"] is None
+        assert next(trainer.model.parameters()).dtype == torch.bfloat16
+
+    def test_init_rejects_invalid_model_init_dtype(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            num_generations=3,
+            model_init_kwargs={"dtype": "not_a_dtype"},
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="Invalid `dtype` passed to `AsyncGRPOConfig`"):
+            AsyncGRPOTrainer(
+                model=model_id,
+                args=training_args,
+                reward_funcs=dummy_reward_func,
+                train_dataset=dataset,
+                processing_class=tokenizer,
+                rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
+            )
+
     def test_init_minimal(self):
         # Test that AsyncGRPOTrainer can be instantiated with only model, reward_model and train_dataset
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
