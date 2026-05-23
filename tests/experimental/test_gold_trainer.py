@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 from types import SimpleNamespace
 
 import pytest
@@ -2081,7 +2082,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
 
     class StubProcessor:
         @staticmethod
-        def apply_chat_template(conversation, add_generation_prompt, tokenize, return_dict, padding):
+        def apply_chat_template(conversation, add_generation_prompt, tokenize, return_dict, processor_kwargs):
             return {
                 "input_ids": [[1, 2, 3] for _ in conversation],
                 "attention_mask": [[1, 1, 1] for _ in conversation],
@@ -2217,11 +2218,10 @@ def test_off_policy_vlm_collates_only_consumed_slice(monkeypatch):
 
 
 def test_eval_vlm_collates_raw_batch_off_policy():
-    """During eval the identity collator yields raw dicts; `_prepare_inputs` must collate them off-policy.
+    """VLM eval (identity collator yields raw dicts) must collate off-policy in `_prepare_inputs`.
 
-    Regression test: previously the eval branch returned the raw `list[dict]` unchanged, which crashed `compute_loss`
-    on `inputs["input_ids"]`. Eval must run the VLM collator over the whole batch (no slicing, no buffering, no
-    generation).
+    Regression test for the eval crash: the inherited path indexed the raw `list[dict]`. Eval must run the VLM collator
+    over the whole batch (no slicing, no buffering, no generation).
     """
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
@@ -2249,7 +2249,7 @@ def test_eval_vlm_collates_raw_batch_off_policy():
     assert len(collated_per_call) == 1
     assert collated_per_call[0] == generation_batch
     assert inputs["input_ids"].shape[0] == len(generation_batch)
-    # Off-policy only: no generation occurred, so no on-policy buffer/log state was created.
+    # Off-policy only: no generation occurred, so no on-policy buffer state was created.
     assert not hasattr(trainer, "_buffered_inputs") or trainer._buffered_inputs is None
 
 
@@ -2279,6 +2279,35 @@ def test_eval_vlm_attaches_raw_images_for_teacher_processor(monkeypatch):
 
     assert inputs["_raw_images"] == [[img0], [img1]]
     assert inputs["_raw_prompts"] == [ex["prompt"] for ex in generation_batch]
+
+
+def test_prediction_step_collates_and_computes_loss():
+    """prediction_step must collate via _prepare_inputs and force compute_loss (no raw-input indexing)."""
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.model = SimpleNamespace(training=False)
+    trainer.compute_loss_context_manager = contextlib.nullcontext
+
+    seen = {}
+
+    def fake_prepare_inputs(batch):
+        seen["prepared"] = batch
+        return {"input_ids": torch.zeros(len(batch), 1, dtype=torch.long)}
+
+    def fake_compute_loss(model, inputs):
+        seen["compute_inputs"] = inputs
+        return torch.tensor([2.0, 4.0])
+
+    trainer._prepare_inputs = fake_prepare_inputs
+    trainer.compute_loss = fake_compute_loss
+
+    raw_batch = [{"prompt": "q0"}, {"prompt": "q1"}]
+    loss, logits, labels = trainer.prediction_step(object(), raw_batch, prediction_loss_only=True)
+
+    # Raw list is routed through _prepare_inputs before any dict indexing, then compute_loss runs.
+    assert seen["prepared"] is raw_batch
+    assert "input_ids" in seen["compute_inputs"]
+    assert loss.item() == 3.0
+    assert logits is None and labels is None
 
 
 def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):

@@ -1196,10 +1196,13 @@ class GOLDTrainer(SFTTrainer):
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         if not self.model.training:
-            # Evaluation is off-policy only
+            # Evaluation is off-policy (no generation): the student never samples, both models are forwarded over
+            # the dataset's ground-truth prompt+completion and the distillation loss is taken over the completion.
+            # For text the collated tensor dict is consumed directly. For VLMs the identity collator yields raw
+            # dicts (to preserve PIL images for the train-time on-policy path), so collate them here -- mirroring
+            # the off-policy slice construction in _fill_buffer -- including the raw images/prompts the cross-arch
+            # / ULD teacher processor needs.
             if self._vlm_collator is not None:
-                # Mirror the off-policy slice construction in _fill_buffer: extract raw images and prompts BEFORE
-                # collation
                 pending_slice = {"_gold_vlm_lazy_examples": list(generation_batch)}
                 if self._teacher_processor is not None:
                     raw_images = [
@@ -2669,6 +2672,18 @@ class GOLDTrainer(SFTTrainer):
         if teacher_head.bias is not None:
             params.append(teacher_head.bias)
         return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
+
+    # During eval, Trainer calls prediction_step. The inherited SFT prediction_step indexes the raw inputs before
+    # collation, which breaks the VLM identity-collator path (inputs is a list of raw examples). We override it to
+    # collate via _prepare_inputs and force compute_loss, evaluating the off-policy distillation loss over the
+    # ground-truth completion (no generation).
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
+        inputs = self._prepare_inputs(inputs)
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+            loss = loss.mean().detach()
+        return loss, None, None
 
     @profiling_decorator
     def training_step(
