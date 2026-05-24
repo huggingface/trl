@@ -14,7 +14,7 @@
 
 import pytest
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers.utils import is_peft_available
 
 from trl.experimental.tpo import TPOConfig, TPOTrainer
@@ -291,6 +291,34 @@ class TestTPOTrainer(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
             )
+
+    def test_evaluate_no_nan_when_completions_truncated(self):
+        # Regression test: when max_length is smaller than the prompt length, all completion
+        # tokens are truncated away and shift_completion_mask for the reference branch is
+        # entirely False. Previously, F.cross_entropy on the resulting empty tensor returned
+        # NaN which propagated into eval_loss.
+        prompts = ["Tell me all about the history of computing and its wide impact."] * 4
+        chosen = ["Great."] * 4
+        rejected = ["Bad."] * 4
+        reference = ["Perfect."] * 4
+        dataset = Dataset.from_dict({"prompt": prompts, "chosen": chosen, "rejected": rejected, "reference": reference})
+
+        training_args = TPOConfig(
+            output_dir=self.tmp_dir,
+            max_length=5,  # prompt tokenizes to more than 5 tokens; completions are fully truncated
+            report_to="none",
+        )
+        trainer = TPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset.select(range(2)),
+            eval_dataset=dataset.select(range(2, 4)),
+        )
+
+        results = trainer.evaluate()
+        assert not torch.isnan(torch.tensor(results["eval_loss"])), (
+            "eval_loss must be finite when completions are truncated"
+        )
 
     def test_missing_reference_column_raises(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
