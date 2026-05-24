@@ -2578,9 +2578,10 @@ class GRPOTrainer(_BaseTrainer):
         elif self.loss_type == "dapo_prompt_mean":
             row_token = mask.sum(dim=1).clamp(min=1.0)
             row_loss = (per_token_loss * mask).sum(dim=1) / row_token
-            prompt_loss = row_loss.view(-1, self.num_generations).mean(dim=1)
+            num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+            prompt_loss = row_loss.view(-1, num_generations).mean(dim=1)
             loss = prompt_loss.mean()        
-            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
         elif self.loss_type in ["cispo", "dapo", "vespo"]:
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
