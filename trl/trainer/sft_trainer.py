@@ -68,10 +68,6 @@ from .utils import (
     selective_log_softmax,
 )
 
-
-_CHUNKED_LM_HEAD_CHUNK_SIZE = 256
-
-
 if is_peft_available():
     from peft import PeftConfig, PeftModel, PeftType, get_peft_model
 
@@ -1272,7 +1268,7 @@ class SFTTrainer(_BaseTrainer):
                             "this is a real use case for you, please open an issue at "
                             "https://github.com/huggingface/trl/issues."
                         )
-                _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
+                _patch_chunked_ce_lm_head(target, chunk_size=args.chunked_nll_chunk_size, is_vlm=self._is_vlm)
             else:
                 raise ValueError(
                     f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
