@@ -676,13 +676,20 @@ class TPOTrainer(_BaseTrainer):
             _, _, ref_labels = shift_labels.chunk(3, dim=0)
             _, _, ref_mask = shift_completion_mask.chunk(3, dim=0)
             ref_mask = ref_mask.bool()
-            nll_loss = F.cross_entropy(ref_logits[ref_mask], ref_labels[ref_mask])
-            loss = loss + self.tpo_alpha * nll_loss
+            if ref_mask.any():
+                nll_loss = F.cross_entropy(ref_logits[ref_mask], ref_labels[ref_mask])
+                loss = loss + self.tpo_alpha * nll_loss
+            else:
+                logger.warning(
+                    "Skipping NLL loss for a batch where all reference completion tokens were truncated. "
+                    "Consider increasing `max_length`."
+                )
 
         # Log the metrics
         # Entropy
         per_token_entropy = entropy_from_logits(shift_logits.detach())
-        entropy = per_token_entropy[shift_completion_mask.bool()].mean()
+        masked_entropy = per_token_entropy[shift_completion_mask.bool()]
+        entropy = masked_entropy.mean() if masked_entropy.numel() > 0 else masked_entropy.sum()
         entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
         self._metrics[mode]["entropy"].append(entropy)
 
