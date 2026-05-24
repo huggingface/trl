@@ -676,7 +676,10 @@ class TPOTrainer(_BaseTrainer):
             _, _, ref_labels = shift_labels.chunk(3, dim=0)
             _, _, ref_mask = shift_completion_mask.chunk(3, dim=0)
             ref_mask = ref_mask.bool()
-            nll_loss = F.cross_entropy(ref_logits[ref_mask], ref_labels[ref_mask])
+            if ref_mask.any():
+                nll_loss = F.cross_entropy(ref_logits[ref_mask], ref_labels[ref_mask])
+            else:
+                nll_loss = torch.tensor(0.0, device=loss.device)
             loss = loss + self.tpo_alpha * nll_loss
 
         # Log the metrics
