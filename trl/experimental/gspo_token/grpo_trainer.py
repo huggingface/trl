@@ -120,6 +120,8 @@ class GRPOTrainer(_GRPOTrainer):
             row_loss = (per_token_loss * completion_mask).sum(dim=1) / row_token
             prompt_loss = row_loss.view(-1, self.num_generations).mean(dim=1)
             loss = prompt_loss.mean()
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+            loss = loss / normalizer
         elif self.loss_type == "dapo":
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
             loss = (per_token_loss * completion_mask).sum() / normalizer
