@@ -1855,7 +1855,7 @@ class TestSFTTrainer(TrlTestCase):
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
-            per_device_train_batch_size=1,  # audio training is memory intensive
+            per_device_train_batch_size=2,  # audio training is memory intensive
             max_length=None,  # for audio LMs, truncating can remove audio tokens, leading to errors
             report_to="none",
         )
@@ -1889,7 +1889,7 @@ class TestSFTTrainer(TrlTestCase):
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
-            per_device_train_batch_size=1,
+            per_device_train_batch_size=2,  # audio training is memory intensive
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_length=None,
             report_to="none",
