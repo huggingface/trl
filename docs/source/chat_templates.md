@@ -126,12 +126,6 @@ Patched Phi-3.5 template. Diff vs `phi3_5.jinja`:
 
 Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
-### `qwen2_vl_training.jinja`
-
-Patched Qwen2-VL template. Diff vs `qwen2_vl.jinja`:
-
-Split the assistant message into its own branch so the `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
-
 ### `qwen2_5_training.jinja`
 
 Patched Qwen2.5 template. Diff vs `qwen2_5.jinja`:
@@ -140,7 +134,7 @@ Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endge
 
 ### `qwen2_5_vl_training.jinja`
 
-Patched Qwen2.5-VL template. Diff vs `qwen2_5_vl.jinja`:
+Patched Qwen2.5-VL template (also used for Qwen2-VL, which ships a byte-identical template). Diff vs `qwen2_5_vl.jinja`:
 
 Split the assistant message into its own branch so the `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers wrap the assistant content.  This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
 
