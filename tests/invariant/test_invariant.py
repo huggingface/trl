@@ -200,6 +200,18 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
             _build("sft_ddp2", "sft", SFT_DATASET, per_device_train_batch_size=4, num_processes=2),
         ],
     },
+    # padding-free can't be tested against the eager baseline: it requires a flash-attention backend (without FA's
+    # variable-length kernels, the flattened sequence leaks attention across document boundaries), and switching
+    # attention backend has its own numerical drift. So the baseline here uses FA2 too, isolating padding-free as
+    # the only varying axis.
+    "sft_fa2": {
+        "tol": 5e-2,
+        "residual_tol": 1e-2,
+        "members": [
+            _build("sft_fa2", "sft", SFT_DATASET, attn="kernels-community/flash-attn2"),
+            _build("sft_fa2_padfree", "sft", SFT_DATASET, attn="kernels-community/flash-attn2", padding_free=True),
+        ],
+    },
     "dpo": {
         "tol": 5e-2,
         "residual_tol": 1e-2,
