@@ -245,7 +245,7 @@ class TestCPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("loss_type", ["sigmoid", "hinge", "ipo"])
+    @pytest.mark.parametrize("loss_type", ["sigmoid", "hinge", "ipo", "simpo", "alphapo"])
     def test_train_loss_types(self, loss_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
