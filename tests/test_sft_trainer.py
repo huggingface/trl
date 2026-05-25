@@ -1842,12 +1842,8 @@ class TestSFTTrainer(TrlTestCase):
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
-    @pytest.mark.parametrize(
-        "model_id",
-        ["trl-internal-testing/tiny-Qwen2AudioForConditionalGeneration"],
-    )
     @require_torchcodec
-    def test_train_audio(self, model_id):
+    def test_train_audio(self):
         dataset = load_dataset("trl-internal-testing/zen-audio", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(
@@ -1856,7 +1852,11 @@ class TestSFTTrainer(TrlTestCase):
             max_length=None,  # for audio LMs, truncating can remove audio tokens, leading to errors
             report_to="none",
         )
-        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2AudioForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -1869,12 +1869,8 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
-    @pytest.mark.parametrize(
-        "model_id",
-        ["trl-internal-testing/tiny-Qwen2AudioForConditionalGeneration"],
-    )
     @require_torchcodec
-    def test_train_audio_prompt_completion(self, model_id):
+    def test_train_audio_prompt_completion(self):
         dataset = load_dataset("trl-internal-testing/zen-audio", "conversational_prompt_completion", split="train")
 
         training_args = SFTConfig(
@@ -1884,7 +1880,11 @@ class TestSFTTrainer(TrlTestCase):
             max_length=None,
             report_to="none",
         )
-        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2AudioForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 

@@ -91,6 +91,10 @@ vlm = [
     "torchvision",
     "num2words==0.5.14"
 ]
+audio = [
+    "torchcodec",
+    "soundfile"
+]
 math_verify = [
     "math-verify>=0.5.2",
 ]
@@ -128,6 +132,9 @@ dev = [
     "Pillow",
     "torchvision",
     "num2words==0.5.14",
+    # audio
+    "torchcodec",
+    "soundfile",
     # for response parsing (required for training with tools)
     "jmespath",
 ]

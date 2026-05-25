@@ -1207,9 +1207,7 @@ class SFTTrainer(_BaseTrainer):
         else:
             self.completion_only_loss = args.completion_only_loss
 
-        self._is_multimodal_dataset = any(
-            key in dataset_sample for key in ("image", "images", "audio", "audios")
-        )
+        self._is_multimodal_dataset = any(key in dataset_sample for key in ("image", "images", "audio", "audios"))
         if self._is_multimodal_dataset and not self._is_vlm:
             raise ValueError(
                 "The dataset appears to be multimodal (contains 'image', 'images', 'audio', or 'audios' keys), but "
