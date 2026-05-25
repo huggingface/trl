@@ -1810,3 +1810,18 @@ class SFTTrainer(_BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
+
+
+# Backward-compat alias for one release. The old name was internal-ish, but a deprecation
+# window is cheap and avoids surprise breakage. Remove in v1.6.0.
+class DataCollatorForVisionLanguageModeling(DataCollatorForMultimodalLanguageModeling):
+    """Deprecated alias for [`DataCollatorForMultimodalLanguageModeling`]. Remove in v1.6.0."""
+
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "`DataCollatorForVisionLanguageModeling` is deprecated and will be removed in v1.6.0. "
+            "Use `DataCollatorForMultimodalLanguageModeling` instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
