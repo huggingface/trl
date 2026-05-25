@@ -211,7 +211,15 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
         "tol": 1e-1,
         "residual_tol": 2e-2,
         "members": [
-            _build("sft_fa2", "sft", SFT_DATASET, attn="kernels-community/flash-attn2", bf16=True, max_length=None),
+            _build(
+                "sft_fa2",
+                "sft",
+                SFT_DATASET,
+                attn="kernels-community/flash-attn2",
+                bf16=True,
+                max_length=None,
+                per_device_train_batch_size=2,
+            ),
             _build(
                 "sft_fa2_padfree",
                 "sft",
@@ -219,6 +227,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
                 attn="kernels-community/flash-attn2",
                 bf16=True,
                 max_length=None,
+                per_device_train_batch_size=2,
                 padding_free=True,
             ),
         ],

@@ -53,9 +53,8 @@ def string_to_bool(v):
 def _accept_none(inner: Callable[[str], Any]) -> Callable[[str], Any]:
     """Wrap a type converter so the literal string `'None'` parses to Python `None`.
 
-    Used for `T | None` fields so they can be set to `None` from the CLI (argparse's `type=int` rejects `'None'`).
-    Only the exact spelling `'None'` is recognized — keeping the sentinel tight avoids shadowing legitimate string
-    values like `'none'` or `'null'` in fields that happen to accept them.
+    Used for `T | None` fields so they can be set to `None` from the CLI (argparse's `type=int` rejects `'None'`). Only
+    the exact spelling `'None'` is recognized.
     """
 
     def parse(v: str) -> Any:
