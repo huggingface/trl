@@ -308,7 +308,13 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
                 num_experts_per_tok = self.num_experts_per_tok
                 router_aux_loss_coef = self.router_aux_loss_coef
             else:
-                num_experts = text_config.num_experts
+                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
+                if text_config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
+                    transformers.__version__
+                ) < Version("5.6.0"):
+                    num_experts = self.num_experts
+                else:
+                    num_experts = text_config.num_experts
                 num_experts_per_tok = text_config.num_experts_per_tok
                 router_aux_loss_coef = text_config.router_aux_loss_coef
             aux_loss = load_balancing_loss_func(
@@ -1730,7 +1736,7 @@ class SFTTrainer(_BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
