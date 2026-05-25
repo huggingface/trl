@@ -1962,7 +1962,7 @@ class TestGRPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -2518,7 +2518,7 @@ class TestGRPOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+            model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,

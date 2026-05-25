@@ -131,11 +131,18 @@ class TestOpenRewardSpec(TrlTestCase):
     def test_environment_factory_returns_rollout_env_with_bound_tools(self, echo_env_url):
         spec = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=2)
         env = spec.environment_factory()
-        # The single ORS tool is bound as a Python method with a typed signature.
+        # Shared + task-scoped ORS tools (ORS /tools vs /task_tools) are both bound for GRPO.
         assert callable(env.echo)
         sig = env.echo.__annotations__
         assert sig["text"] is str
         assert sig["return"] is str
+        assert callable(env.hint)
+
+    def test_discover_task_tools_false_skips_task_scoped_binding(self, echo_env_url):
+        spec = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=1, discover_task_tools=False)
+        env = spec.environment_factory()
+        assert callable(env.echo)
+        assert not hasattr(env, "hint")
 
     def test_reset_returns_prompt_and_opens_session(self, echo_env_url):
         spec = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=1)
@@ -202,6 +209,32 @@ class TestOpenRewardSpec(TrlTestCase):
         assert ds[0]["prompt"][0]["role"] == "user"
         # `task_index` is the int we set, not anything from the spec.
         assert isinstance(ds[0]["task_index"], int)
+
+    def test_task_tools_discovery_index_probes_single_task(self, echo_env_url):
+        # task_tools_discovery_index=0 tells the spec to probe only task 0 for
+        # tool discovery (ORS /task_tools), regardless of how many tasks are in
+        # the dataset. This is the Toolathlon pattern: all tasks expose the same
+        # meta-tools, so probing one is sufficient and avoids N sessions.
+        spec = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=4, task_tools_discovery_index=0)
+        env = spec.environment_factory()
+        # Shared tool (echo) and task-specific tool (hint) are both bound.
+        assert callable(env.echo)
+        assert callable(env.hint)
+        # Dataset still has 4 tasks even though discovery only probed index 0.
+        assert len(spec.train_dataset) == 4
+        env._close()
+
+    def test_task_tools_discovery_index_with_indices(self, echo_env_url):
+        # When indices= is set AND task_tools_discovery_index is set, discovery
+        # uses only the explicit discovery index (not all indices for probing).
+        spec = OpenRewardSpec(
+            echo_env_url, env_name="echoenvironment", indices=[0, 1, 2, 3], task_tools_discovery_index=2
+        )
+        env = spec.environment_factory()
+        # Task tools are still discovered (via index 2).
+        assert callable(env.hint)
+        assert len(spec.train_dataset) == 4
+        env._close()
 
     def test_two_specs_get_isolated_rollout_subclasses(self, echo_env_url):
         # Two specs (potentially against different envs with different tool
