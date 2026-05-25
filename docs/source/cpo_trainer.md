@@ -13,7 +13,6 @@ The abstract from the paper is the following:
 > [!WARNING]
 > **Migrating from the pre-refactor CPO API.** This refactor rebuilds [`experimental.cpo.CPOTrainer`] on top of the DPO trainer, which introduces breaking changes:
 >
-> - The constructor's `tokenizer=` keyword was renamed to `processing_class=` (transformers convention).
 > - The following [`experimental.cpo.CPOConfig`] fields were removed: `label_smoothing`, `generate_during_eval`, `is_encoder_decoder`, `max_completion_length`. Passing them now raises `TypeError`.
 > - `max_length` default changed from `None` (no truncation) to `1024`. Existing scripts that relied on the old default should set `max_length=None` explicitly.
 > - `loss_type` is now `list[str]` instead of `str`. A bare string is auto-wrapped, so `loss_type="sigmoid"` still works, but `args.loss_type == "sigmoid"` checks will now compare a list to a string.
