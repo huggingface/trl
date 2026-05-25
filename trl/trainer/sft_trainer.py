@@ -557,9 +557,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 def _normalize_audio(audio):
     """Normalize an audio sample to a 1-D float array suitable for an audio feature extractor.
 
-    Accepts raw `np.ndarray`, the dict format produced by older `datasets.Audio()` decoding
-    (`{"array": np.ndarray, "sampling_rate": int}`), and the `torchcodec` `AudioDecoder` object
-    produced by newer `datasets.Audio()` decoding.
+    Accepts raw `np.ndarray`, the dict format produced by older `datasets.Audio()` decoding (`{"array": np.ndarray,
+    "sampling_rate": int}`), and the `torchcodec` `AudioDecoder` object produced by newer `datasets.Audio()` decoding.
     """
     if isinstance(audio, np.ndarray):
         return audio
