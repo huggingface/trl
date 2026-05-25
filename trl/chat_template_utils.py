@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import warnings
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from jinja2 import TemplateError
 from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
@@ -349,7 +350,9 @@ qwen3_6_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6.jinja").read_text()
 ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizerBase, ProcessorMixin)
 
 
-def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
+def add_response_schema(
+    processing_class: ProcessingClassT, response_schema: dict[str, Any] | str | None = None
+) -> ProcessingClassT:
     r"""
     Adds the appropriate response schema to the given tokenizer based on its chat template.
 
@@ -363,6 +366,9 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
             Tokenizer or VLM processor to which the response schema will be added.
+        response_schema (`dict[str, Any]` or `str`, *optional*):
+            Explicit response schema to set on the tokenizer. When provided, this bypasses chat-template identity
+            matching, which is useful for forked templates that remain response-parse compatible.
 
     Returns:
         `PreTrainedTokenizerBase` or `ProcessorMixin`:
@@ -389,6 +395,10 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
+    # Explicit override is opt-in and lets callers skip exact template fingerprinting for forked templates.
+    if response_schema is not None:
+        tokenizer.response_schema = json.loads(response_schema) if isinstance(response_schema, str) else response_schema
+        return processing_class
     if chat_template == glm4moe_chat_template:
         tokenizer.response_schema = glm4moe_schema
     elif chat_template == gptoss_chat_template:

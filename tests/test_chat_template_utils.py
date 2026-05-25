@@ -157,6 +157,34 @@ class TestAddResponseSchema:
         # The correctness of the parsing is tested in TestParseResponse
         tokenizer.parse_response(response)
 
+    def test_add_response_schema_with_explicit_override(self):
+        tokenizer_name = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+
+        baseline_tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        baseline_tokenizer = add_response_schema(baseline_tokenizer)
+        expected_schema = copy.deepcopy(baseline_tokenizer.response_schema)
+
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer.chat_template = tokenizer.chat_template + "\n"
+
+        with pytest.raises(ValueError, match="Unrecognized chat template"):
+            add_response_schema(copy.deepcopy(tokenizer))
+
+        tokenizer = add_response_schema(tokenizer, response_schema=expected_schema)
+        assert tokenizer.response_schema == expected_schema
+
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {
+                "role": "assistant",
+                "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}],
+            },
+        ]
+        prefix = tokenizer.apply_chat_template(messages[:1], tokenize=False, add_generation_prompt=True)
+        text = tokenizer.apply_chat_template(messages, tokenize=False)
+        response = text[len(prefix) :]
+        tokenizer.parse_response(response)
+
     @pytest.mark.parametrize(
         "processor_name",
         [
@@ -188,6 +216,27 @@ class TestAddResponseSchema:
         # Here, we just test that the parsing doesn't raise an error.
         # The correctness of the parsing is tested in TestParseResponse
         processor.tokenizer.parse_response(response)
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        strict=True,
+    )
+    def test_add_response_schema_vlm_with_explicit_override(self):
+        processor_name = "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink"
+
+        baseline_processor = AutoProcessor.from_pretrained(processor_name)
+        baseline_processor = add_response_schema(baseline_processor)
+        expected_schema = copy.deepcopy(baseline_processor.tokenizer.response_schema)
+
+        processor = AutoProcessor.from_pretrained(processor_name)
+        processor.chat_template = processor.chat_template + "\n"
+
+        with pytest.raises(ValueError, match="Unrecognized chat template"):
+            add_response_schema(processor)
+
+        processor = add_response_schema(processor, response_schema=expected_schema)
+        assert processor.tokenizer.response_schema == expected_schema
 
 
 class TestSupportsToolCalling:

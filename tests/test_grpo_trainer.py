@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import gc
 import os
 import warnings
@@ -37,7 +38,7 @@ from transformers import (
 from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
-from trl import GRPOConfig, GRPOTrainer
+from trl import GRPOConfig, GRPOTrainer, add_response_schema
 from trl.import_utils import is_liger_kernel_available
 from trl.trainer.utils import get_kbit_device_map
 
@@ -2371,6 +2372,44 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_jmespath
+    def test_init_with_tools_and_explicit_response_schema(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train[:1]")
+        model_name = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+
+        baseline_tokenizer = AutoTokenizer.from_pretrained(model_name)
+        baseline_tokenizer = add_response_schema(baseline_tokenizer)
+        explicit_response_schema = copy.deepcopy(baseline_tokenizer.response_schema)
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.chat_template = tokenizer.chat_template + "\n"
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            bf16=False,
+            response_schema=explicit_response_schema,
+        )
+
+        def reward_func(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        trainer = GRPOTrainer(
+            model=AutoModelForCausalLM.from_pretrained(model_name),
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=tokenizer,
+            tools=[multiply_tool],
+        )
+
+        assert trainer._tokenizer.response_schema == explicit_response_schema
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
