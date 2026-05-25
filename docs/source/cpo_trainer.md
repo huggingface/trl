@@ -10,6 +10,15 @@ The abstract from the paper is the following:
 
 > Moderate-sized large language models (LLMs) -- those with 7B or 13B parameters -- exhibit promising machine translation (MT) performance. However, even the top-performing 13B LLM-based translation models, like ALMA, does not match the performance of state-of-the-art conventional encoder-decoder translation models or larger-scale LLMs such as GPT-4. In this study, we bridge this performance gap. We first assess the shortcomings of supervised fine-tuning for LLMs in the MT task, emphasizing the quality issues present in the reference data, despite being human-generated. Then, in contrast to SFT which mimics reference translations, we introduce Contrastive Preference Optimization (CPO), a novel approach that trains models to avoid generating adequate but not perfect translations. Applying CPO to ALMA models with only 22K parallel sentences and 12M parameters yields significant improvements. The resulting model, called ALMA-R, can match or exceed the performance of the WMT competition winners and GPT-4 on WMT'21, WMT'22 and WMT'23 test datasets.
 
+> [!WARNING]
+> **Migrating from the pre-refactor CPO API.** This refactor rebuilds [`experimental.cpo.CPOTrainer`] on top of the DPO trainer, which introduces breaking changes:
+>
+> - The constructor's `tokenizer=` keyword was renamed to `processing_class=` (transformers convention).
+> - The following [`experimental.cpo.CPOConfig`] fields were removed: `label_smoothing`, `generate_during_eval`, `is_encoder_decoder`, `max_completion_length`. Passing them now raises `TypeError`.
+> - `max_length` default changed from `None` (no truncation) to `1024`. Existing scripts that relied on the old default should set `max_length=None` explicitly.
+> - `loss_type` is now `list[str]` instead of `str`. A bare string is auto-wrapped, so `loss_type="sigmoid"` still works, but `args.loss_type == "sigmoid"` checks will now compare a list to a string.
+
+
 ## Quick start
 
 This example demonstrates how to train a language model using the [`experimental.cpo.CPOTrainer`] from TRL. We train a [Qwen 3 0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) model on the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback).

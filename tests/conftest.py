@@ -13,11 +13,18 @@
 # limitations under the License.
 
 import gc
+import os
 import traceback
 from functools import wraps
 
 import pytest
 import torch
+
+
+# Suppress TRL's per-trainer Hub ping during pytest runs so local maintainer runs don't bias adoption
+# stats. `setdefault` preserves an explicit user setting; only the telemetry channel is silenced, so
+# model/dataset downloads still resolve from the Hub as usual.
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 
 @pytest.hookimpl(hookwrapper=True)
