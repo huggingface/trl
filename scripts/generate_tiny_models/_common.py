@@ -79,34 +79,42 @@ def smoke_test(model, tokenizer_or_processor=None):
     if isinstance(tokenizer_or_processor, ProcessorMixin):
         # Multimodal path: build dummy inputs from whichever modalities the processor declares.
         processor = tokenizer_or_processor
-        attributes = processor.attributes
-        has_image = "image_processor" in attributes
-        has_audio = "feature_extractor" in attributes
+        has_image = "image_processor" in processor.attributes
+        has_audio = "feature_extractor" in processor.attributes
 
-        def _user_content(prompt, attach_image, attach_audio):
-            import numpy as np
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Audio: write a 1s silent WAV and reference it by path — LCD format accepted by both
+            # Jinja-based templates (Qwen2-Audio) and Mistral-common backed ones (Voxtral).
+            audio_path = None
+            if has_audio:
+                import wave
+
+                import numpy as np
+
+                audio_path = os.path.join(tmpdir, "smoke.wav")
+                with wave.open(audio_path, "wb") as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)  # 16-bit PCM
+                    wav.setframerate(16000)
+                    wav.writeframes(np.zeros(16000, dtype=np.int16).tobytes())
+
             from PIL import Image
 
             content = []
-            if attach_image:
+            if has_image:
                 content.append({"type": "image", "image": Image.new("RGB", (24, 24), color="red")})
-            if attach_audio:
-                content.append({"type": "audio", "audio": np.zeros(16000, dtype=np.float32)})
-            content.append({"type": "text", "text": prompt})
-            return content
+            if has_audio:
+                content.append({"type": "audio", "path": audio_path})
+            content.append({"type": "text", "text": "What is this?"})
+            messages = [[{"role": "user", "content": content}]]
 
-        messages = [
-            [{"role": "user", "content": _user_content("What is this?", has_image, has_audio)}],
-            [{"role": "user", "content": _user_content("And this?", has_image, has_audio)}],
-        ]
-        inputs = processor.apply_chat_template(
-            conversation=messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
-            padding=True,
-        ).to(device)
+            inputs = processor.apply_chat_template(
+                conversation=messages,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+                padding=True,
+            ).to(device)
     else:
         inputs = {"input_ids": torch.tensor([[1, 2, 3, 4]], device=device)}
 
