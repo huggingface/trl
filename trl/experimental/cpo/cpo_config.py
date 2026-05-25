@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,50 +34,61 @@ class CPOConfig(_BaseConfig):
     command line.
 
     Parameters:
-        max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
-            to use the default data collator.
-        max_completion_length (`int`, *optional*):
-            Maximum length of the completion. This argument is required if you want to use the default data collator
-            and your model is an encoder-decoder.
-        beta (`float`, *optional*, defaults to `0.1`):
-            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
-            reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
-            the [paper](https://huggingface.co/papers/2310.12036).
-        label_smoothing (`float`, *optional*, defaults to `0.0`):
-            Label smoothing factor. This argument is required if you want to use the default data collator.
-        loss_type (`str`, *optional*, defaults to `"sigmoid"`):
-            Type of loss to use. Possible values are:
+        > Parameters that control the model
 
-                - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
-                - `"hinge"`: hinge loss on the normalized likelihood from the
-                  [SLiC](https://huggingface.co/papers/2305.10425) paper.
-                - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
-                - `"simpo"`: SimPO loss from the [SimPO](https://huggingface.co/papers/2405.14734) paper.
-                - `"alphapo"`: AlphaPO loss from the [AlphaPO](https://huggingface.co/papers/2501.03884) paper. This
-                  automatically sets `loss_type="simpo"` and `cpo_alpha=0.0`.
-
+        model_init_kwargs (`dict[str, Any]`, *optional*):
+            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
+            argument of the [`CPOTrainer`] is provided as a string.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
-        cpo_alpha (`float`, *optional*, defaults to `1.0`):
-            Weight of the BC regularizer in CPO training.
-        simpo_gamma (`float`, *optional*, defaults to `0.5`):
-            Target reward margin for the SimPO loss, used only when the `loss_type="simpo"`.
-        alpha (`float`, *optional*, defaults to `0.0`):
-            Alpha parameter that controls reward function shape across all loss types. When alpha=0 (default), uses
-            standard log probability rewards. When `alpha != 0`, applies AlphaPO transformation: `r = (1 - p^(-alpha))
-            / alpha` from the [AlphaPO paper](https://huggingface.co/papers/2501.03884). This parameter works with all
-            loss types.
-        generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from the model to W&B or Comet during evaluation.
-        is_encoder_decoder (`bool`, *optional*):
-            When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
-            you need to specify if the model returned by the callable is an encoder-decoder model.
-        model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
-            string.
+
+        > Parameters that control the data preprocessing
+
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
+        max_length (`int` or `None`, *optional*, defaults to `1024`):
+            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left or
+            right depending on the `truncation_mode`. If `None`, no truncation is applied.
+        truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
+            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is
+            `"keep_start"`. The `"keep_end"` value is deprecated and will be removed in v2.0.0.
+        padding_free (`bool`, *optional*, defaults to `False`):
+            Whether to perform forward passes without padding by flattening all sequences in the batch into a single
+            continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
+            supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the sequences will be padded to a multiple of this value.
+
+        > Parameters that control the training
+
+        loss_type (`list[str]`, *optional*, defaults to `["sigmoid"]`):
+            Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`. If multiple loss types are
+            provided, they will be combined using the weights specified in `loss_weights`.
+        loss_weights (`list[float]`, *optional*):
+            List of loss weights for multi-loss combinations. Used when combining multiple loss types. Example: `[0.8,
+            0.2, 1.0]` for MPO. If not provided, defaults to equal weights (`1.0`) for all loss types.
+        ld_alpha (`float`, *optional*):
+            α parameter from the LD-DPO paper, which controls the weighting of the verbose token log-probabilities in
+            responses. If `None`, no weighting is applied to the verbose part, and the loss is equivalent to the
+            standard DPO loss. Must be in [0.0, 1.0]: `ld_alpha=1.0` applies no weighting, and `ld_alpha=0.0` masks
+            tokens beyond shared lengths.
+        f_divergence_type (`str`, *optional*, defaults to `"reverse_kl"`):
+            f-divergence regularizer between policy and reference (f-DPO paper). Possible values are: `reverse_kl`
+            (default), `forward_kl`, `js_divergence`, `alpha_divergence`.
+        f_alpha_divergence_coef (`float`, *optional*, defaults to `0.5`):
+            α coefficient for the α-divergence u^-α regularizer, used only when `f_divergence_type='alpha_divergence'`.
+        beta (`float`, *optional*, defaults to `0.1`):
+            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
+            reference model. For the IPO loss (`loss_type='ipo'`), this value is the regularization parameter denoted
+            by τ in the [paper](https://huggingface.co/papers/2310.12036).
+        use_weighting (`bool`, *optional*, defaults to `False`):
+            Whether to apply WPO-style weighting (https://huggingface.co/papers/2406.11827) to preference pairs using
+            the policy's length-normalized sequence probabilities.
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
+        cpo_alpha (`float`, *optional*, defaults to `1.0`):
+            α parameter from the CPO paper, which controls the weight of the NLL term on chosen completions added to
+            the preference loss. Setting `cpo_alpha=0` recovers the pure preference loss.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -94,79 +106,133 @@ class CPOConfig(_BaseConfig):
         metadata={"help": "The initial learning rate for AdamW."},
     )
 
-    max_length: int | None = field(
-        default=1024,
-        metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
-    )
-    max_completion_length: int | None = field(
+    # Parameters that control the model
+    model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
-            "help": "Maximum length of the completion. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
+            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
+            "the `DPOTrainer` is provided as a string."
+        },
+    )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Whether to disable dropout in the model and reference model."},
+    )
+
+    # Parameters that control the data preprocessing
+    dataset_num_proc: int | None = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    max_length: int | None = field(
+        default=1024,
+        metadata={
+            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
+            "the left or right depending on the `truncation_mode`. If `None`, no truncation is applied."
+        },
+    )
+    truncation_mode: str = field(
+        default="keep_start",
+        metadata={
+            "help": "Truncation mode to use when the sequence exceeds `max_length`. The only supported value is "
+            "`'keep_start'`. The `'keep_end'` value is deprecated and will be removed in v2.0.0.",
+            "choices": ["keep_end", "keep_start"],
+        },
+    )
+    padding_free: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
+            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
+            "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
+            "structure."
+        },
+    )
+    pad_to_multiple_of: int | None = field(
+        default=None,
+        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
+    )
+
+    # Parameters that control the training
+    loss_type: list[str] = field(
+        default_factory=lambda: ["sigmoid"],
+        metadata={
+            "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`. If multiple loss types "
+            "are provided, they will be combined using the weights specified in `loss_weights`.",
+        },
+    )
+    loss_weights: list[float] | None = field(
+        default=None,
+        metadata={
+            "help": "List of loss weights for multi-loss combinations. Used when combining multiple loss types. "
+            "Example: `[0.8, 0.2, 1.0]` for MPO. If not provided, defaults to equal weights (`1.0`) for all loss "
+            "types."
+        },
+    )
+    ld_alpha: float | None = field(
+        default=None,
+        metadata={
+            "help": "α parameter from the LD-DPO paper, which controls the weighting of the verbose token "
+            "log-probabilities in responses. If `None`, no weighting is applied to the verbose part, and the loss is "
+            "equivalent to the standard DPO loss. Must be in [0.0, 1.0]: `ld_alpha=1.0` applies no weighting, and "
+            "`ld_alpha=0.0` masks tokens beyond shared lengths.",
+        },
+    )
+    f_divergence_type: str = field(
+        default="reverse_kl",
+        metadata={
+            "help": "f-divergence regularizer between policy and reference (f-DPO paper). Possible values are: "
+            "`reverse_kl` (default), `forward_kl`, `js_divergence`, `alpha_divergence`.",
+        },
+    )
+    f_alpha_divergence_coef: float = field(
+        default=0.5,
+        metadata={
+            "help": "α coefficient for the α-divergence u^-α regularizer, used only when "
+            "`f_divergence_type='alpha_divergence'`."
         },
     )
     beta: float = field(
         default=0.1,
         metadata={
             "help": "Parameter controlling the deviation from the reference model. Higher β means less deviation from "
-            "the reference model."
+            "the reference model. For the IPO loss (`loss_type='ipo'`), this value is the regularization parameter "
+            "denoted by τ in the [paper](https://huggingface.co/papers/2310.12036)."
         },
     )
-    label_smoothing: float = field(
-        default=0.0,
-        metadata={"help": "Label smoothing factor."},
-    )
-    loss_type: str = field(
-        default="sigmoid",
+    use_weighting: bool = field(
+        default=False,
         metadata={
-            "help": "Type of loss to use.",
-            "choices": ["sigmoid", "hinge", "ipo", "simpo", "alphapo"],
+            "help": "Whether to apply WPO-style weighting (https://huggingface.co/papers/2406.11827) to preference "
+            "pairs using the policy's length-normalized sequence probabilities."
         },
     )
-    disable_dropout: bool = field(
-        default=True,
-        metadata={"help": "Whether to disable dropout in the model."},
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )
     cpo_alpha: float = field(
         default=1.0,
-        metadata={"help": "Weight of the BC regularizer in CPO training."},
-    )
-    simpo_gamma: float = field(
-        default=0.5,
-        metadata={"help": "Target reward margin for the SimPO loss, used only when the `loss_type='simpo'`."},
-    )
-    alpha: float = field(
-        default=0.0,
         metadata={
-            "help": "Alpha parameter that controls reward function shape across all loss types. When alpha=0 "
-            "(default), uses standard log probability rewards. When `alpha != 0`, applies AlphaPO transformation: "
-            "`r = (1 - p^(-alpha)) / alpha` from the AlphaPO paper. This parameter works with all loss types."
+            "help": "α parameter from the CPO paper, which controls the weight of the NLL term on chosen completions "
+            "added to the preference loss. Setting `cpo_alpha=0` recovers the pure preference loss."
         },
-    )
-    generate_during_eval: bool = field(
-        default=False,
-        metadata={"help": "If `True`, generates and logs completions from the model to W&B during evaluation."},
-    )
-    is_encoder_decoder: bool | None = field(
-        default=None,
-        metadata={"help": "Whether the model is an encoder-decoder model."},
-    )
-    model_init_kwargs: dict[str, Any] | str | None = field(
-        default=None,
-        metadata={
-            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
-            "from a string."
-        },
-    )
-    dataset_num_proc: int | None = field(
-        default=None,
-        metadata={"help": "Number of processes to use for processing the dataset."},
     )
 
     def __post_init__(self):
-        # Syntactic sugar for AlphaPO: set loss_type to "simpo" and cpo_alpha to 0.0
-        if self.loss_type == "alphapo":
-            self.loss_type = "simpo"
-            self.cpo_alpha = 0.0
+        if isinstance(self.loss_type, str):
+            self.loss_type = [self.loss_type]
+        if self.loss_weights is not None and len(self.loss_weights) != len(self.loss_type):
+            raise ValueError(
+                "`loss_weights` must have the same length as `loss_type` when combining multiple losses. "
+                f"Got {len(self.loss_weights)} weights for {len(self.loss_type)} loss types."
+            )
+        if self.truncation_mode == "keep_end":
+            warnings.warn(
+                "The `'keep_end'` truncation mode is deprecated and will be removed in v2.0.0. "
+                "Use `truncation_mode='keep_start'` (the default) instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
 
         super().__post_init__()
