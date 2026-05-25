@@ -22,31 +22,14 @@ from datasets import Dataset
 from transformers import AutoModelForCausalLM
 from transformers.utils import is_peft_available
 
-from trl.experimental.self_distillation.base_self_distillation_trainer import (
-    BaseSelfDistillationTrainer,
-    DistillationLogits,
-)
-from trl.experimental.self_distillation.self_distillation_config import SelfDistillationConfig
+from trl.experimental.sdft import SDFTConfig, SDFTTrainer
+from trl.experimental.sdft.sdft_trainer import DistillationLogits
 
 from ..testing_utils import TrlTestCase
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
-
-
-class MinimalSelfDistillationTrainer(BaseSelfDistillationTrainer):
-    def finalize_batch(self, inputs, rollout_batch):
-        del inputs
-        batch = rollout_batch.as_dict()
-        batch["teacher_input_ids"] = rollout_batch.prompt_ids
-        batch["teacher_attention_mask"] = rollout_batch.prompt_mask
-        return batch
-
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        del inputs, num_items_in_batch
-        anchor = next(model.parameters())
-        return anchor.sum() * 0.0
 
 
 class FakeTextTokenizer:
@@ -76,10 +59,10 @@ class FakeChatProcessor:
         return {"input_ids": [[21, 22, 23, 24]]}
 
 
-class TestBaseSelfDistillationTrainer(TrlTestCase):
+class TestSelfDistillationTrainerBehavior(TrlTestCase):
     @staticmethod
     def _make_loss_test_trainer(**args_overrides):
-        trainer = object.__new__(MinimalSelfDistillationTrainer)
+        trainer = object.__new__(SDFTTrainer)
         args = {
             "distillation_mode": "sampled_token",
             "distillation_topk": None,
@@ -96,12 +79,12 @@ class TestBaseSelfDistillationTrainer(TrlTestCase):
             "train": defaultdict(list),
             "eval": defaultdict(list),
         }
-        trainer._name = "Minimal Self Distillation"
+        trainer._name = "SDFT"
         return trainer
 
     def test_teacher_model_kind_live_uses_student_model(self):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
-        training_args = SelfDistillationConfig(
+        training_args = SDFTConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=1,
             max_completion_length=8,
@@ -111,7 +94,7 @@ class TestBaseSelfDistillationTrainer(TrlTestCase):
             report_to="none",
         )
 
-        trainer = MinimalSelfDistillationTrainer(
+        trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -122,7 +105,7 @@ class TestBaseSelfDistillationTrainer(TrlTestCase):
     @pytest.mark.skipif(not is_peft_available(), reason="PEFT is required for this test")
     def test_warns_when_initial_student_already_has_a_peft_adapter(self, caplog):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
-        training_args = SelfDistillationConfig(
+        training_args = SDFTConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=1,
             max_completion_length=8,
@@ -143,10 +126,8 @@ class TestBaseSelfDistillationTrainer(TrlTestCase):
             ),
         )
 
-        with caplog.at_level(
-            logging.WARNING, logger="trl.experimental.self_distillation.base_self_distillation_trainer"
-        ):
-            MinimalSelfDistillationTrainer(
+        with caplog.at_level(logging.WARNING, logger="trl.experimental.sdft.sdft_trainer"):
+            SDFTTrainer(
                 model=model,
                 args=training_args,
                 train_dataset=dataset,
@@ -158,7 +139,7 @@ class TestBaseSelfDistillationTrainer(TrlTestCase):
     @pytest.mark.parametrize("teacher_model_kind", ["base", "ema"])
     def test_teacher_model_kind_base_and_ema_use_frozen_teacher_copy(self, teacher_model_kind):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
-        training_args = SelfDistillationConfig(
+        training_args = SDFTConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=1,
             max_completion_length=8,
@@ -168,7 +149,7 @@ class TestBaseSelfDistillationTrainer(TrlTestCase):
             report_to="none",
         )
 
-        trainer = MinimalSelfDistillationTrainer(
+        trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -183,7 +164,7 @@ class TestBaseSelfDistillationTrainer(TrlTestCase):
         assert teacher_param.data_ptr() != student_param.data_ptr()
 
     def test_tokenize_prompts_truncates_text_prompts_from_left(self):
-        trainer = object.__new__(MinimalSelfDistillationTrainer)
+        trainer = object.__new__(SDFTTrainer)
         trainer.processing_class = FakeTextTokenizer()
         trainer.max_prompt_length = 3
 
@@ -192,7 +173,7 @@ class TestBaseSelfDistillationTrainer(TrlTestCase):
         assert prompt_ids == [[12, 13, 14], [1, 2, 3]]
 
     def test_tokenize_prompts_for_conversational_prompts_forwards_chat_template_kwargs(self):
-        trainer = object.__new__(MinimalSelfDistillationTrainer)
+        trainer = object.__new__(SDFTTrainer)
         trainer.processing_class = FakeChatProcessor()
         trainer.max_prompt_length = 2
         trainer.chat_template_kwargs = {"enable_thinking": False}

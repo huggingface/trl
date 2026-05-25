@@ -61,6 +61,9 @@ class SelfDistillationCaptureCallback(TrainerCallback):
 
 
 class TestSDPOTrainer(TrlTestCase):
+    def test_trainer_is_self_contained(self):
+        assert "BaseSelfDistillationTrainer" not in [cls.__name__ for cls in SDPOTrainer.__mro__]
+
     def test_training_with_positional_config_argument(self):
         dataset = Dataset.from_dict(
             {

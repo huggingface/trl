@@ -50,6 +50,9 @@ class SelfDistillationCaptureCallback(TrainerCallback):
 
 
 class TestSDFTTrainer(TrlTestCase):
+    def test_trainer_is_self_contained(self):
+        assert "BaseSelfDistillationTrainer" not in [cls.__name__ for cls in SDFTTrainer.__mro__]
+
     def test_training_rejects_none_privileged_context(self):
         dataset = Dataset.from_dict(
             {
