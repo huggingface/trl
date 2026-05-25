@@ -204,14 +204,22 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
     # variable-length kernels, the flattened sequence leaks attention across document boundaries), and switching
     # attention backend has its own numerical drift. So the baseline here uses FA2 too, isolating padding-free as
     # the only varying axis. FA2 only supports fp16/bf16, so this class runs bf16 — a different determinism regime
-    # than the fp32 `sft` class above. Tolerances are loosened accordingly to absorb bf16 noise.
+    # than the fp32 `sft` class above. Tolerances are loosened accordingly to absorb bf16 noise. `max_length=None`
+    # because SFT forbids `padding_free=True` with a finite `max_length` (without packing); both members keep it
+    # off to remain an apples-to-apples comparison.
     "sft_fa2": {
         "tol": 1e-1,
         "residual_tol": 2e-2,
         "members": [
-            _build("sft_fa2", "sft", SFT_DATASET, attn="kernels-community/flash-attn2", bf16=True),
+            _build("sft_fa2", "sft", SFT_DATASET, attn="kernels-community/flash-attn2", bf16=True, max_length=None),
             _build(
-                "sft_fa2_padfree", "sft", SFT_DATASET, attn="kernels-community/flash-attn2", bf16=True, padding_free=True
+                "sft_fa2_padfree",
+                "sft",
+                SFT_DATASET,
+                attn="kernels-community/flash-attn2",
+                bf16=True,
+                max_length=None,
+                padding_free=True,
             ),
         ],
     },
