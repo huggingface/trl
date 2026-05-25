@@ -717,7 +717,7 @@ class TestDPOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             padding_free=True,
-            model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2", "dtype": "bfloat16"},
+            model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"},
             bf16=True,  # flash_attention_2 only supports bf16 and fp16
             report_to="none",
         )
