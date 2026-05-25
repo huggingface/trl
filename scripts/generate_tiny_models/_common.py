@@ -77,20 +77,27 @@ def smoke_test(model, tokenizer_or_processor=None):
     device = next(model.parameters()).device
 
     if isinstance(tokenizer_or_processor, ProcessorMixin):
-        # VLM path: build a dummy (image, text) input via the processor.
-        from PIL import Image
-
+        # Multimodal path: build dummy inputs from whichever modalities the processor declares.
         processor = tokenizer_or_processor
-        red = Image.new("RGB", (24, 24), color="red")
-        blue = Image.new("RGB", (24, 24), color="blue")
+        attributes = processor.attributes
+        has_image = "image_processor" in attributes
+        has_audio = "feature_extractor" in attributes
+
+        def _user_content(prompt, attach_image, attach_audio):
+            import numpy as np
+            from PIL import Image
+
+            content = []
+            if attach_image:
+                content.append({"type": "image", "image": Image.new("RGB", (24, 24), color="red")})
+            if attach_audio:
+                content.append({"type": "audio", "audio": np.zeros(16000, dtype=np.float32)})
+            content.append({"type": "text", "text": prompt})
+            return content
+
         messages = [
-            [
-                {
-                    "role": "user",
-                    "content": [{"type": "image", "image": red}, {"type": "text", "text": "What is this?"}],
-                }
-            ],
-            [{"role": "user", "content": [{"type": "text", "text": "Is it blue?"}, {"type": "image", "image": blue}]}],
+            [{"role": "user", "content": _user_content("What is this?", has_image, has_audio)}],
+            [{"role": "user", "content": _user_content("And this?", has_image, has_audio)}],
         ]
         inputs = processor.apply_chat_template(
             conversation=messages,

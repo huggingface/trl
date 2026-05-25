@@ -54,6 +54,7 @@ from .testing_utils import (
     require_peft,
     require_torch_accelerator,
     require_torch_multi_accelerator,
+    require_torchcodec,
     require_vision,
 )
 
@@ -1840,6 +1841,60 @@ class TestSFTTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    @pytest.mark.parametrize(
+        "model_id",
+        ["trl-internal-testing/tiny-Qwen2AudioForConditionalGeneration"],
+    )
+    @require_torchcodec
+    def test_train_audio(self, model_id):
+        dataset = load_dataset("trl-internal-testing/zen-audio", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,  # audio training is memory intensive
+            max_length=None,  # for audio LMs, truncating can remove audio tokens, leading to errors
+            report_to="none",
+        )
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    @pytest.mark.parametrize(
+        "model_id",
+        ["trl-internal-testing/tiny-Qwen2AudioForConditionalGeneration"],
+    )
+    @require_torchcodec
+    def test_train_audio_prompt_completion(self, model_id):
+        dataset = load_dataset("trl-internal-testing/zen-audio", "conversational_prompt_completion", split="train")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            max_length=None,
+            report_to="none",
+        )
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     @require_peft
     def test_prompt_tuning(self):
