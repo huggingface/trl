@@ -1867,7 +1867,14 @@ class TestSFTTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Param {n} is not updated"
+            # Qwen2-Audio's audio encoder positional embedding is frozen in `__init__`
+            # (`embed_positions.requires_grad_(False)`, Whisper-style sinusoidal). Pre-5.0 transformers preserves that
+            # through `from_pretrained` so the param stays frozen; transformers >= 5.0 (weight-loading refactor in
+            # #41580 + meta-init in #42941) resets `requires_grad=True` on load, so it ends up updated.
+            if n == "audio_tower.embed_positions.weight" and Version(transformers.__version__) < Version("5.0.0"):
+                assert torch.equal(param, new_param), f"Param {n} expected frozen pre-5.0, but changed"
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     @require_torchcodec
     def test_train_audio_prompt_completion(self):
@@ -1894,6 +1901,12 @@ class TestSFTTrainer(TrlTestCase):
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
+            if n == "audio_tower.embed_positions.weight":  # see test_train_audio for the version split
+                if Version(transformers.__version__) < Version("5.0.0"):
+                    assert torch.equal(param, new_param), f"Param {n} expected frozen pre-5.0, but changed"
+                else:
+                    assert not torch.equal(param, new_param), f"Param {n} expected updated on >=5.0, but unchanged"
+                continue
             assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     @require_peft
