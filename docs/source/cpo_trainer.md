@@ -105,6 +105,8 @@ Several formulations of the objective have been proposed in the literature. Init
 | `"sigmoid"` (default) | Given the preference data, we can fit a binary classifier according to the Bradley-Terry model and in fact the [DPO](https://huggingface.co/papers/2305.18290) authors propose the sigmoid loss on the normalized likelihood via the `logsigmoid` to fit a logistic regression. |
 | `"hinge"` | The [RSO](https://huggingface.co/papers/2309.06657) authors propose to use a hinge loss on the normalized likelihood from the [SLiC](https://huggingface.co/papers/2305.10425) paper. In this case, the `beta` is the reciprocal of the margin. |
 | `"ipo"` | The [IPO](https://huggingface.co/papers/2310.12036) authors argue the logit transform can overfit and propose the identity transform to optimize preferences directly; TRL exposes this as `loss_type="ipo"`. |
+| `"simpo"` | [SimPO](https://huggingface.co/papers/2405.14734) uses length-normalized log-probabilities as the implicit reward and adds a target reward margin γ (`simpo_gamma`) in the Bradley-Terry sigmoid. Typically combined with `cpo_alpha=0` (no NLL term). |
+| `"alphapo"` | Syntactic sugar for `loss_type=["simpo"]` with `cpo_alpha=0.0`. The actual [AlphaPO](https://huggingface.co/papers/2501.03884) reward reshaping `r = (1 - p^(-α)) / α` is controlled by the `alpha` config field and can be combined with any loss type. |
 
 ## Logged metrics
 

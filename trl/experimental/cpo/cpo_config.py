@@ -62,8 +62,10 @@ class CPOConfig(_BaseConfig):
         > Parameters that control the training
 
         loss_type (`list[str]`, *optional*, defaults to `["sigmoid"]`):
-            Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`. If multiple loss types are
-            provided, they will be combined using the weights specified in `loss_weights`.
+            Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'simpo'`, `'alphapo'`.
+            `'alphapo'` is syntactic sugar for `loss_type=['simpo']` with `cpo_alpha=0.0`; the actual AlphaPO reward
+            transformation is controlled by `alpha`. If multiple loss types are provided, they will be combined using
+            the weights specified in `loss_weights`.
         loss_weights (`list[float]`, *optional*):
             List of loss weights for multi-loss combinations. Used when combining multiple loss types. Example: `[0.8,
             0.2, 1.0]` for MPO. If not provided, defaults to equal weights (`1.0`) for all loss types.
@@ -89,6 +91,13 @@ class CPOConfig(_BaseConfig):
         cpo_alpha (`float`, *optional*, defaults to `1.0`):
             α parameter from the CPO paper, which controls the weight of the NLL term on chosen completions added to
             the preference loss. Setting `cpo_alpha=0` recovers the pure preference loss.
+        simpo_gamma (`float`, *optional*, defaults to `0.5`):
+            Target reward margin γ for the [SimPO](https://huggingface.co/papers/2405.14734) loss, used only when
+            `loss_type='simpo'`.
+        alpha (`float`, *optional*, defaults to `0.0`):
+            α parameter from the [AlphaPO](https://huggingface.co/papers/2501.03884) paper that reshapes the reward
+            function across all loss types. When `alpha=0` (default), the rewards are standard log-probabilities. When
+            `alpha != 0`, the AlphaPO transformation `r = (1 - p^(-alpha)) / alpha` is applied.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -157,8 +166,10 @@ class CPOConfig(_BaseConfig):
     loss_type: list[str] = field(
         default_factory=lambda: ["sigmoid"],
         metadata={
-            "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`. If multiple loss types "
-            "are provided, they will be combined using the weights specified in `loss_weights`.",
+            "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'simpo'`, `'alphapo'`. "
+            "`'alphapo'` is syntactic sugar for `loss_type=['simpo']` with `cpo_alpha=0.0`; the actual AlphaPO reward "
+            "transformation is controlled by `alpha`. If multiple loss types are provided, they will be combined using "
+            "the weights specified in `loss_weights`.",
         },
     )
     loss_weights: list[float] | None = field(
@@ -218,10 +229,26 @@ class CPOConfig(_BaseConfig):
             "added to the preference loss. Setting `cpo_alpha=0` recovers the pure preference loss."
         },
     )
+    simpo_gamma: float = field(
+        default=0.5,
+        metadata={"help": "Target reward margin γ for the SimPO loss, used only when `loss_type='simpo'`."},
+    )
+    alpha: float = field(
+        default=0.0,
+        metadata={
+            "help": "α parameter from the AlphaPO paper that reshapes the reward function across all loss types. "
+            "When `alpha=0` (default), rewards are standard log-probabilities. When `alpha != 0`, the AlphaPO "
+            "transformation `r = (1 - p^(-alpha)) / alpha` is applied."
+        },
+    )
 
     def __post_init__(self):
         if isinstance(self.loss_type, str):
             self.loss_type = [self.loss_type]
+        # Syntactic sugar from the original CPO API: `loss_type='alphapo'` is equivalent to SimPO with no BC term.
+        if self.loss_type == ["alphapo"]:
+            self.loss_type = ["simpo"]
+            self.cpo_alpha = 0.0
         if self.loss_weights is not None and len(self.loss_weights) != len(self.loss_type):
             raise ValueError(
                 "`loss_weights` must have the same length as `loss_type` when combining multiple losses. "

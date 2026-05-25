@@ -636,6 +636,8 @@ class CPOTrainer(_BaseTrainer):
         # Training arguments
         self.beta = args.beta
         self.cpo_alpha = args.cpo_alpha
+        self.simpo_gamma = args.simpo_gamma
+        self.alpha = args.alpha
         self.loss_types = args.loss_type  # args.loss_type is already a list
         self.loss_weights = args.loss_weights or [1.0] * len(self.loss_types)
         self.ld_alpha = args.ld_alpha
@@ -972,9 +974,14 @@ class CPOTrainer(_BaseTrainer):
         ref_chosen_logps = torch.zeros_like(chosen_logps)
         ref_rejected_logps = torch.zeros_like(rejected_logps)
 
-        # Get the log ratios for the chosen and rejected responses
-        chosen_logratios = chosen_logps - ref_chosen_logps
-        rejected_logratios = rejected_logps - ref_rejected_logps
+        # Get the log ratios for the chosen and rejected responses. AlphaPO (https://huggingface.co/papers/2501.03884)
+        # reshapes the reward via `r = (1 - p^(-α)) / α` instead of the raw log-prob; recovered when α = 0.
+        if self.alpha != 0.0:
+            chosen_logratios = (1 - torch.exp(chosen_logps).pow(-self.alpha)) / self.alpha
+            rejected_logratios = (1 - torch.exp(rejected_logps).pow(-self.alpha)) / self.alpha
+        else:
+            chosen_logratios = chosen_logps - ref_chosen_logps
+            rejected_logratios = rejected_logps - ref_rejected_logps
 
         if self.f_divergence_type == "reverse_kl":  # standard DPO
             chosen_scores = chosen_logratios
@@ -1029,8 +1036,19 @@ class CPOTrainer(_BaseTrainer):
                 # (Eq. 17) of the paper where beta is the regularization parameter for the IPO loss, denoted by τ.
                 per_sequence_loss = (ipo_delta - 1 / (2 * self.beta)) ** 2
 
+            elif loss_type == "simpo":
+                # SimPO (https://huggingface.co/papers/2405.14734) uses length-normalized log-probs with a target
+                # reward margin γ (`simpo_gamma`) inside the Bradley-Terry sigmoid.
+                chosen_mask, rejected_mask = completion_mask.chunk(2, dim=0)
+                chosen_avg_score = chosen_scores / chosen_mask.sum(dim=1).clamp(min=1.0)
+                rejected_avg_score = rejected_scores / rejected_mask.sum(dim=1).clamp(min=1.0)
+                delta = chosen_avg_score - rejected_avg_score - self.simpo_gamma / self.beta
+                per_sequence_loss = -F.logsigmoid(self.beta * delta)
+
             else:
-                raise ValueError(f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo']")
+                raise ValueError(
+                    f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'simpo']"
+                )
 
             if self.use_weighting:
                 # Eq (2) of the WPO paper: https://huggingface.co/papers/2406.11827
