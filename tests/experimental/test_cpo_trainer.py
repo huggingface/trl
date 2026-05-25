@@ -275,6 +275,38 @@ class TestCPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_alphapo_loss_type_remaps_to_simpo(self):
+        # __post_init__ syntactic sugar: `loss_type='alphapo'` should remap to ['simpo'] with cpo_alpha=0.0.
+        args = CPOConfig(output_dir=self.tmp_dir, loss_type="alphapo", report_to="none")
+        assert args.loss_type == ["simpo"]
+        assert args.cpo_alpha == 0.0
+
+    def test_train_with_alphapo_reward_transform(self):
+        # Exercise the AlphaPO reward reshape `r = (1 - p^(-α)) / α`, which only kicks in when `alpha != 0`.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = CPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="alphapo",
+            alpha=0.25,
+            simpo_gamma=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = CPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_train_multi_loss_types(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
