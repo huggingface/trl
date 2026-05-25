@@ -2417,6 +2417,45 @@ class TestGRPOTrainer(TrlTestCase):
         strict=True,
     )
     @require_jmespath
+    def test_init_with_tools_and_explicit_response_schema_overrides_existing_schema(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train[:1]")
+        model_name = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+
+        baseline_tokenizer = AutoTokenizer.from_pretrained(model_name)
+        baseline_tokenizer = add_response_schema(baseline_tokenizer)
+        explicit_response_schema = copy.deepcopy(baseline_tokenizer.response_schema)
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.chat_template = tokenizer.chat_template + "\n"
+        tokenizer.response_schema = {"type": "json_schema", "json_schema": {"name": "stale", "schema": {"type": "object"}}}
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            bf16=False,
+            response_schema=explicit_response_schema,
+        )
+
+        def reward_func(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        trainer = GRPOTrainer(
+            model=AutoModelForCausalLM.from_pretrained(model_name),
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=tokenizer,
+            tools=[multiply_tool],
+        )
+
+        assert trainer._tokenizer.response_schema == explicit_response_schema
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_jmespath
     @pytest.mark.parametrize("tools", [[multiply_tool], [async_multiply_tool]])
     def test_train_with_tools(self, tools: list[Callable]):
         # In this test, we define a simple tool that multiplies two integers. Regardless of the input prompt,

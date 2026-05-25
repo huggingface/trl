@@ -538,7 +538,9 @@ class GRPOTrainer(_BaseTrainer):
         # known chat templates. `response_schema` lives on the (inner) tokenizer, since `parse_response` is a tokenizer
         # method that reads `self.response_schema`. An explicit schema lets users opt out of exact template matching
         # when they are using a forked but response-compatible template.
-        if self.tools and getattr(self._tokenizer, "response_schema", None) is None:
+        if self.tools and (
+            args.response_schema is not None or getattr(self._tokenizer, "response_schema", None) is None
+        ):
             processing_class = add_response_schema(processing_class, response_schema=args.response_schema)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
