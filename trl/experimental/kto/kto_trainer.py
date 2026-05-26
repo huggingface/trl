@@ -1142,7 +1142,7 @@ class KTOTrainer(_BaseTrainer):
                 logits, labels = None, None
             else:
                 loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
-                logits, labels = outputs.logits, inputs["input_ids"]
+                logits, labels = outputs.logits, inputs["completion_input_ids"]
         return loss, logits, labels
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
