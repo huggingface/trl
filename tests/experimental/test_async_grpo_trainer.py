@@ -112,10 +112,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
         )
 
-    @pytest.mark.skipif(
-        not is_ampere_or_newer() and torch_device != "xpu",
-        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
-    )
     def test_train(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
