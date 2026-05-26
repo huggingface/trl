@@ -461,10 +461,10 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_chunked_nll_loss(self):
+    def test_train_nll_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="chunked_nll", report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="nll", report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -481,14 +481,14 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    def test_train_chunked_nll_loss_peft(self):
+    def test_train_nll_loss_peft(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="chunked_nll", report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="nll", report_to="none")
         trainer = SFTTrainer(
             model=model_id,
             args=training_args,
@@ -551,12 +551,12 @@ class TestSFTTrainer(TrlTestCase):
         ],
     )
     @require_vision
-    def test_train_chunked_nll_loss_vlm(self, model_id):
+    def test_train_nll_loss_vlm(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
-            loss_type="chunked_nll",
+            loss_type="nll",
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
