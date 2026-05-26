@@ -193,7 +193,7 @@ def _build(
 EQUIVALENCE_CLASSES: dict[str, dict] = {
     "sft": {
         "tol": {"loss": 1e-3, "grad_norm": 1e-1},
-        "residual_tol": {"loss": 1e-4, "grad_norm": 1e-3},
+        "residual_tol": {"loss": 1e-5, "grad_norm": 1e-3},
         "members": [
             _build("sft_default", "sft", SFT_DATASET),
             _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
