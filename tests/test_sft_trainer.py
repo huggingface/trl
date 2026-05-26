@@ -535,7 +535,7 @@ class TestSFTTrainer(TrlTestCase):
                 ],
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1479,6 +1479,27 @@ class TestSFTTrainer(TrlTestCase):
 
         assert trainer.state.log_history[0]["eval_loss"] is not None
 
+    def test_train_with_metric_for_best_model(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            eval_strategy="steps",
+            eval_steps=3,
+            # It's important to use a key that SFTTrainer adds itself (not one from the base Trainer), since the bug is
+            # that trainer-specific metrics don't reach the dict returned by `evaluate()`.
+            metric_for_best_model="eval_mean_token_accuracy",
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        trainer.train()
+
     def test_train_with_multiple_eval_dataset(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
@@ -1617,7 +1638,7 @@ class TestSFTTrainer(TrlTestCase):
                 ],
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -2281,7 +2302,7 @@ _CHUNKED_CE_VLM_MODEL_IDS = [
         ),
     ),
     pytest.param(
-        "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+        "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.2.0"),
             reason="Qwen3.5 models were introduced in transformers-5.2.0",

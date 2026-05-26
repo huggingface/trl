@@ -45,10 +45,18 @@ from collections.abc import Callable
 from functools import cached_property
 from typing import Any
 
-from .environment import _import_openreward, _RolloutEnvironment
+from .environment import _import_openreward, _RolloutEnvironment, _spec_to_dict
 
 
 logger = logging.getLogger(__name__)
+
+
+def _tool_specs_from_session_list_tools(out: Any) -> list[Any]:
+    """Normalise ``session.list_tools()`` / ``environment.list_tools()`` to a flat list.
+
+    The client SDK (``openreward.api``) returns ``list[ToolSpec]`` directly.
+    """
+    return list(out)
 
 
 def _to_spec(task) -> dict[str, Any]:
@@ -91,6 +99,17 @@ class OpenRewardSpec:
         include_metadata (`bool`, *optional*, defaults to `True`):
             Fold per-task metadata (`difficulty`, `category`, `tags`, ...) into the dataset rows so reward funcs can
             read them via TRL's ``inputs`` argument.
+        discover_task_tools (`bool`, *optional*, defaults to `True`):
+            If ``True``, opens a short-lived ORS session and uses ``session.list_tools()`` so task-specific tools
+            (``GET …/task_tools`` per ORS — e.g. ``@tool(shared=False)`` and ``list_task_tools()``) are bound for GRPO.
+            If probe fails, falls back to ``environment.list_tools()`` only. Set ``False`` to skip the extra session
+            (shared tools only / offline quirks).
+        task_tools_discovery_index (`int`, *optional*):
+            Task index used only for the discovery session when set; **overrides** multi-index probing below. When
+            omitted and ``indices=`` is set, discovery opens one probe session per **distinct** entry in ``indices``
+            (sorted) and **merges** tool specs by name so task-specific tools from every listed task are bound. When
+            omitted and ``num_tasks`` / full-list mode is used, probes task ``0`` only. Ignored when
+            ``discover_task_tools=False``.
     """
 
     def __init__(
@@ -104,6 +123,8 @@ class OpenRewardSpec:
         secrets: dict[str, str] | None = None,
         env_name: str | None = None,
         include_metadata: bool = True,
+        discover_task_tools: bool = True,
+        task_tools_discovery_index: int | None = None,
     ) -> None:
         if num_tasks is not None and indices is not None:
             raise ValueError("Provide num_tasks or indices, not both.")
@@ -117,6 +138,8 @@ class OpenRewardSpec:
         self._secrets = secrets
         self._env_name = env_name
         self._include_metadata = include_metadata
+        self._discover_task_tools = discover_task_tools
+        self._task_tools_discovery_index = task_tools_discovery_index
 
     # ── public surface ──────────────────────────────────────────────
 
@@ -182,9 +205,11 @@ class OpenRewardSpec:
         construction time, so each rollout has an isolated ORS session. Reuses the spec's already-discovered SDK env +
         tool specs to skip per-env HTTP at trainer init.
         """
-        # Pre-fetch tool specs once at the spec level.
+        # Pre-fetch tool specs once at the spec level. ORS exposes shared tools on GET /tools and the full
+        # shared+task-specific set on GET /task_tools (session-scoped). GRPO inspects methods before reset(), so we
+        # must bind every tool the episode will see — use session.list_tools() when discover_task_tools=True.
         env = self._sdk_env
-        tool_specs = env.list_tools()
+        tool_specs = self._discovered_tool_specs(env)
         client = self._sdk_client
 
         # Each spec gets its own `_RolloutEnvironment` subclass so two specs
@@ -232,6 +257,82 @@ class OpenRewardSpec:
             return self._secrets
         key = self._api_key or os.environ.get("OPENREWARD_API_KEY")
         return {"api_key": key} if key else None
+
+    def _task_tools_probe_indices(self) -> list[int]:
+        """Pick task indices for ``session.list_tools()`` discovery (ORS ``/task_tools``)."""
+        if self._task_tools_discovery_index is not None:
+            return [self._task_tools_discovery_index]
+        if self._indices is not None:
+            return sorted(set(self._indices))
+        return [0]
+
+    def _discovered_tool_specs(self, env):
+        """Return ToolSpec list for binding on `_RolloutEnvironment`.
+
+        Prefer ``session.list_tools()`` (ORS ``/task_tools``) so task-specific tools match what the OpenReward SDK
+        exposes during rollouts. Fall back to ``environment.list_tools()`` on failure or when disabled.
+        """
+        shared = env.list_tools()
+        shared = _tool_specs_from_session_list_tools(shared)
+        if not self._discover_task_tools:
+            return shared
+
+        try:
+            n = env.num_tasks(self._split)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("OpenRewardSpec: num_tasks failed (%s); using shared tools only.", e)
+            return shared
+
+        if n <= 0:
+            return shared
+
+        probe_indices = self._task_tools_probe_indices()
+        bad = [idx for idx in probe_indices if idx < 0 or idx >= n]
+        if bad:
+            logger.warning(
+                "OpenRewardSpec: task tool probe index(es) %s out of range for split=%r (num_tasks=%s); ignoring them.",
+                bad,
+                self._split,
+                n,
+            )
+        probe_indices = [idx for idx in probe_indices if 0 <= idx < n]
+        if not probe_indices:
+            logger.warning("OpenRewardSpec: no valid task indices for tool discovery; using shared tools only.")
+            return shared
+
+        secrets = self._effective_secrets()
+        merged: list[Any] = []
+        seen: dict[str, Any] = {}
+        any_probe_ok = False
+
+        for idx in probe_indices:
+            try:
+                with env.session(split=self._split, index=idx, secrets=secrets) as sess:
+                    specs = _tool_specs_from_session_list_tools(sess.list_tools())
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "OpenRewardSpec: session tool discovery failed for task_index=%s (%s); skipping.",
+                    idx,
+                    e,
+                )
+                continue
+            any_probe_ok = True
+            for spec in specs:
+                d = _spec_to_dict(spec)
+                name = d["name"]
+                if name not in seen:
+                    seen[name] = spec
+                    merged.append(spec)
+                elif _spec_to_dict(seen[name]) != d:
+                    logger.warning(
+                        "OpenRewardSpec: tool %r has differing schemas across probe tasks; keeping first.",
+                        name,
+                    )
+
+        if not any_probe_ok:
+            logger.warning("OpenRewardSpec: all task tool probes failed; using shared tools only.")
+            return shared
+        return merged
 
     @cached_property
     def _sdk_client(self):

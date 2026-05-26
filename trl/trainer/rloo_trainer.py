@@ -991,12 +991,11 @@ class RLOOTrainer(_BaseTrainer):
                     unwrapped_model.to(torch.bfloat16)
                 elif self.args.fp16:
                     unwrapped_model.to(torch.float16)
-                with torch.inference_mode():
-                    # Continuous batching API expects 'inputs' arg only
-                    all_outputs = unwrapped_model.generate_batch(
-                        prompt_ids, generation_config=self.generation_config, progress_bar=False
-                    )
-                    unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
+                # Continuous batching API expects 'inputs' arg only
+                all_outputs = unwrapped_model.generate_batch(
+                    prompt_ids, generation_config=self.generation_config, progress_bar=False
+                )
+                unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
 
         else:
@@ -1473,7 +1472,7 @@ class RLOOTrainer(_BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
