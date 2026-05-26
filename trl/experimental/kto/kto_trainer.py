@@ -1044,16 +1044,16 @@ class KTOTrainer(_BaseTrainer):
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
-        forward_output = self.forward(model, batch)
         (
             policy_chosen_logps,
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
             policy_KL_logps,
-        ) = forward_output[:5]
+            outputs,
+        ) = self.forward(model, batch)
         if self.aux_loss_enabled:
-            aux_loss = forward_output[5]
+            aux_loss = outputs.aux_loss
 
         # if reference_logps in batch use them, otherwise use the reference model
         if "reference_logps" in batch:
@@ -1074,21 +1074,13 @@ class KTOTrainer(_BaseTrainer):
             with torch.no_grad():
                 if self.ref_model is None:
                     with self.null_ref_context():
-                        (
-                            reference_chosen_logps,
-                            reference_rejected_logps,
-                            _,
-                            _,
-                            reference_KL_logps,
-                        ) = self.forward(self.model, batch)[:5]
+                        reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = self.forward(
+                            self.model, batch
+                        )
                 else:
-                    (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        _,
-                        _,
-                        reference_KL_logps,
-                    ) = self.forward(self.ref_model, batch)[:5]
+                    reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = self.forward(
+                        self.ref_model, batch
+                    )
 
         losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
             policy_chosen_logps,
