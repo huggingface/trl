@@ -713,7 +713,7 @@ class KTOTrainer(_BaseTrainer):
         return dataset
 
     def compute_ref_log_probs(self, inputs):
-        """Computes log probabilities of the reference model for a single padded batch of a KTO specific dataset."""
+        """Computes reference log probabilities for a single padded batch."""
         with torch.no_grad():
             if self.ref_model is None:
                 with self.null_ref_context():
