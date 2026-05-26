@@ -105,9 +105,7 @@ class _BaseTrainer(Trainer):
         # custom trainer subclasses or private model architectures.
         cls = type(self)
         trainer = (
-            cls.__name__
-            if cls.__name__ in _TELEMETRY_TRAINERS and cls.__module__.startswith("trl.")
-            else "other"
+            cls.__name__ if cls.__name__ in _TELEMETRY_TRAINERS and cls.__module__.startswith("trl.") else "other"
         )
         model_type = self.model.config.model_type
         model_arch = model_type if model_type in CONFIG_MAPPING else "other"
