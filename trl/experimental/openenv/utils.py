@@ -165,7 +165,7 @@ def _generate_rollout_completions_server(
             {
                 "prompt_ids": prompt_ids[i],
                 "completion_ids": list(completion_ids[i]),
-                "logprobs": list(logprobs[i]),
+                "logprobs": [lp[0] for lp in logprobs[i]],
                 "text": trainer.processing_class.decode(completion_ids[i], skip_special_tokens=True),
             }
         )
