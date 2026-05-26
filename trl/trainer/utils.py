@@ -1284,6 +1284,10 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
 def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: float) -> None:
     final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
 
+    # Keep a reference to the unpatched class-level forward so calls that don't request the chunked
+    # output (e.g. continuous batching inference) still get a standard `CausalLMOutput` with `.logits`.
+    _standard_forward = type(model).forward
+
     def _chunked_forward(
         self: torch.nn.Module,
         input_ids: torch.Tensor | None = None,
@@ -1293,7 +1297,11 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
         use_cache: bool = False,
         **kwargs,
     ) -> dict[str, torch.Tensor]:
-        assert labels is not None, "requires labels to not be None for logprob computation"
+        if labels is None:
+            # Inference path — return the model's normal output.
+            return _standard_forward(
+                self, input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **kwargs
+            )
 
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **kwargs)
         # NOTE(@aminediro): supporting Cohere2 models
