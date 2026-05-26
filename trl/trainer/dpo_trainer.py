@@ -815,13 +815,11 @@ class DPOTrainer(_BaseTrainer):
 
         # MVP scope cuts for the chunked `lm_head` path: same constraints as Liger plus a few of our own. The chunked
         # path doesn't materialize logits, so any feature that reads `outputs.logits` (entropy/logits/accuracy metrics,
-        # `loss_type='sft'`, `use_weighting`, `compute_metrics`) is incompatible. `ld_alpha` and VLMs are deferred.
+        # `loss_type='sft'`, `use_weighting`, `compute_metrics`) is incompatible. VLMs are deferred.
         self.use_chunked_loss = args.use_chunked_loss
         if args.use_chunked_loss:
             if args.use_liger_kernel:
                 raise ValueError("`use_chunked_loss` is not compatible with `use_liger_kernel`.")
-            if args.ld_alpha is not None:
-                raise NotImplementedError("`use_chunked_loss` is not compatible with `ld_alpha` (MVP).")
             if args.use_weighting:
                 raise NotImplementedError("`use_chunked_loss` is not compatible with `use_weighting` (MVP).")
             if "sft" in self.loss_types:

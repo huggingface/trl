@@ -108,8 +108,8 @@ class DPOConfig(_BaseConfig):
             Whether to compute per-token log-probabilities through a chunked `lm_head` projection that never
             materializes the full `[B, S, V]` logits tensor, reducing peak activation memory. Both the policy and
             reference forwards use the chunked path (so they share the same precision profile under bf16). Same math
-            as the default path. Not compatible with `use_liger_kernel`, `ld_alpha`, `precompute_ref_log_probs`, PEFT,
-            VLMs, or `compute_metrics`.
+            as the default path. Not compatible with `use_liger_kernel`, `precompute_ref_log_probs`, PEFT, VLMs, or
+            `compute_metrics`.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originates from the
@@ -296,7 +296,7 @@ class DPOConfig(_BaseConfig):
             "help": "Whether to compute per-token log-probabilities through a chunked `lm_head` projection that never "
             "materializes the full `[B, S, V]` logits tensor, reducing peak activation memory. Both the policy and "
             "reference forwards use the chunked path. Same math as the default path. Not compatible with "
-            "`use_liger_kernel`, `ld_alpha`, `precompute_ref_log_probs`, PEFT, VLMs, or `compute_metrics`."
+            "`use_liger_kernel`, `precompute_ref_log_probs`, PEFT, VLMs, or `compute_metrics`."
         },
     )
     sync_ref_model: bool = field(

@@ -205,7 +205,7 @@ from trl import DPOConfig
 training_args = DPOConfig(..., use_chunked_loss=True)
 ```
 
-Expect ~25 % less peak VRAM at typical configurations (measured on `Qwen2.5-0.5B-Instruct`, bf16, `batch_size=4`, `max_length=1024`: 26.5 GB → 19.5 GB peak). Not compatible with `use_liger_kernel`, `ld_alpha`, `precompute_ref_log_probs`, `use_weighting`, `loss_type='sft'`, `compute_metrics`, PEFT, or VLMs.
+Expect ~25 % less peak VRAM at typical configurations (measured on `Qwen2.5-0.5B-Instruct`, bf16, `batch_size=4`, `max_length=1024`: 26.5 GB → 19.5 GB peak). Not compatible with `use_liger_kernel`, `precompute_ref_log_probs`, `use_weighting`, `loss_type='sft'`, `compute_metrics`, PEFT, or VLMs.
 
 ## Padding-free
 
