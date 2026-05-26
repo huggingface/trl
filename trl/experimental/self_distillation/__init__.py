@@ -12,7 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .self_distillation_config import SelfDistillationConfig
-
-
-__all__ = ["SelfDistillationConfig"]
+__all__ = []

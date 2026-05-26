@@ -13,13 +13,15 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
-from ..self_distillation.self_distillation_config import SelfDistillationConfig
+from transformers import TrainingArguments
+
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class SDFTConfig(SelfDistillationConfig):
+class SDFTConfig(_BaseConfig):
     r"""
     Configuration class for [`SDFTTrainer`]..
 
@@ -43,9 +45,147 @@ class SDFTConfig(SelfDistillationConfig):
             Number of initial completion tokens to exclude from the distillation loss.
     """
 
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    model_init_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={"help": "Keyword arguments for model initialization when `model` is passed as a string."},
+    )
     disable_dropout: bool = field(
         default=True,
         metadata={"help": "Whether to disable dropout in the student and teacher models."},
+    )
+    remove_unused_columns: bool = field(
+        default=False,
+        metadata={"help": "Whether to drop dataset columns unused by the trainer."},
+    )
+    max_prompt_length: int | None = field(
+        default=512,
+        metadata={"help": "Maximum prompt length. Longer prompts are truncated from the left."},
+    )
+    num_generations: int = field(
+        default=8,
+        metadata={"help": "Number of sampled generations per prompt."},
+    )
+    num_generations_eval: int | None = field(
+        default=None,
+        metadata={"help": "Number of sampled generations per prompt during evaluation."},
+    )
+    max_completion_length: int | None = field(
+        default=256,
+        metadata={"help": "Maximum generated completion length."},
+    )
+    ds3_gather_for_generation: bool = field(
+        default=True,
+        metadata={"help": "Whether to gather ZeRO-3 weights for generation."},
+    )
+    shuffle_dataset: bool = field(
+        default=True,
+        metadata={"help": "Whether to shuffle the training dataset."},
+    )
+    generation_batch_size: int | None = field(
+        default=None,
+        metadata={"help": "Global batch size used for generation. Mutually exclusive with `steps_per_generation`."},
+    )
+    steps_per_generation: int | None = field(
+        default=None,
+        metadata={
+            "help": "Number of optimizer steps that reuse one generated batch. Mutually exclusive with `generation_batch_size`."
+        },
+    )
+    temperature: float = field(
+        default=1.0,
+        metadata={"help": "Sampling temperature."},
+    )
+    top_p: float = field(
+        default=1.0,
+        metadata={"help": "Top-p sampling parameter."},
+    )
+    top_k: int = field(
+        default=0,
+        metadata={"help": "Top-k sampling parameter. `0` disables top-k filtering."},
+    )
+    min_p: float | None = field(
+        default=None,
+        metadata={"help": "Minimum token probability for sampling."},
+    )
+    generation_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={"help": "Extra generation kwargs passed to `GenerationConfig`."},
+    )
+    chat_template_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={"help": "Extra kwargs forwarded to chat template application."},
+    )
+    repetition_penalty: float = field(
+        default=1.0,
+        metadata={"help": "Repetition penalty used during generation."},
+    )
+    cache_implementation: str | None = field(
+        default=None,
+        metadata={"help": "Cache implementation used by transformers generation."},
+    )
+    use_vllm: bool = field(
+        default=False,
+        metadata={"help": "Whether to use vLLM for generation."},
+    )
+    vllm_mode: str = field(
+        default="colocate",
+        metadata={"help": "vLLM mode: 'colocate' (shared GPU) or 'server' (separate vLLM server)."},
+    )
+    vllm_model_impl: str = field(
+        default="vllm",
+        metadata={"help": "Model implementation for vLLM: 'vllm' or 'transformers'."},
+    )
+    vllm_enable_sleep_mode: bool = field(
+        default=False,
+        metadata={"help": "Whether to enable sleep mode for colocated vLLM engine."},
+    )
+    vllm_server_base_url: str | None = field(
+        default=None,
+        metadata={
+            "help": "Base URL for the vLLM server. If provided, vllm_server_host and vllm_server_port are ignored."
+        },
+    )
+    vllm_server_host: str = field(
+        default="0.0.0.0",
+        metadata={"help": "Host of the vLLM server (server mode only)."},
+    )
+    vllm_server_port: int = field(
+        default=8000,
+        metadata={"help": "Port of the vLLM server (server mode only)."},
+    )
+    vllm_group_port: int = field(
+        default=51216,
+        metadata={"help": "Port for the weight update group (server mode only)."},
+    )
+    vllm_server_timeout: float = field(
+        default=240.0,
+        metadata={"help": "Timeout in seconds to wait for the vLLM server."},
+    )
+    vllm_tensor_parallel_size: int = field(
+        default=1,
+        metadata={"help": "Tensor parallel size for colocated vLLM."},
+    )
+    vllm_gpu_memory_utilization: float = field(
+        default=0.3,
+        metadata={"help": "GPU memory utilization ratio for colocated vLLM."},
+    )
+    vllm_max_model_length: int | None = field(
+        default=None,
+        metadata={"help": "Model context length for vLLM. Inferred from model config if not set."},
+    )
+    num_iterations: int = field(
+        default=1,
+        metadata={"help": "Number of optimization iterations per generated batch."},
+    )
+    loss_type: str = field(
+        default="dapo",
+        metadata={"help": "Policy loss aggregation. Supported: `grpo`, `bnpo`, `dr_grpo`, `dapo`."},
+    )
+    mask_truncated_completions: bool = field(
+        default=False,
+        metadata={"help": "Whether to exclude truncated completions from the loss."},
     )
     teacher_model_kind: str = field(
         default="base",
@@ -53,6 +193,21 @@ class SDFTConfig(SelfDistillationConfig):
             "help": "Semantic teacher choice for SDFT. `base` uses the initial student, `live` uses the current "
             "student, and `ema` uses an exponentially averaged teacher."
         },
+    )
+    teacher_update_rate: float = field(
+        default=0.6,
+        metadata={
+            "help": 'EMA update rate used when `teacher_model_kind="ema"`. A value of `1.0` reduces the update '
+            "to a hard overwrite, periodically resyncing the teacher to the current student weights."
+        },
+    )
+    teacher_sync_steps: int = field(
+        default=512,
+        metadata={"help": "Number of optimizer steps between teacher updates."},
+    )
+    top_entropy_quantile: float = field(
+        default=1.0,
+        metadata={"help": "Reserved for entropy-based token filtering."},
     )
     distillation_alpha: float = field(
         default=0.5,
@@ -65,6 +220,32 @@ class SDFTConfig(SelfDistillationConfig):
     distillation_topk: int | None = field(
         default=100,
         metadata={"help": "Number of top tokens used by the default SDFT top-k logit objective."},
+    )
+    distillation_is_clip: float | None = field(
+        default=2.0,
+        metadata={
+            "help": "Clipping coefficient for importance sampling in self-distillation. `None` disables clipping."
+        },
+    )
+    distillation_add_tail: bool = field(
+        default=False,
+        metadata={"help": "Whether to add a tail bucket for non-top-k probability mass."},
+    )
+    distillation_weight: float = field(
+        default=1.0,
+        metadata={"help": "Weight applied to the self-distillation loss term."},
+    )
+    diagnostics_warning_interval: int = field(
+        default=10,
+        metadata={
+            "help": "Emit repeated trainer diagnostics every N consecutive degenerate steps. Set to 0 to disable."
+        },
+    )
+    diagnostics_flat_tolerance: float = field(
+        default=1e-8,
+        metadata={
+            "help": "Tolerance used to decide whether reward variance or reprompt activity is effectively zero."
+        },
     )
     generate_from_teacher: bool = field(
         default=False,
@@ -83,6 +264,65 @@ class SDFTConfig(SelfDistillationConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        if self.loss_type not in ["grpo", "bnpo", "dr_grpo", "dapo"]:
+            raise ValueError("loss_type must be one of: 'grpo', 'bnpo', 'dr_grpo', 'dapo'")
+        if self.teacher_model_kind not in {"base", "live", "ema"}:
+            raise ValueError("teacher_model_kind must be one of: 'base', 'live', 'ema'")
+        if not 0.0 <= self.teacher_update_rate <= 1.0:
+            raise ValueError("teacher_update_rate must be in [0, 1]")
+        if self.teacher_sync_steps <= 0:
+            raise ValueError("teacher_sync_steps must be positive")
+        if self.num_generations < 1:
+            raise ValueError("num_generations must be at least 1")
+        if not 0.0 <= self.distillation_alpha <= 1.0:
+            raise ValueError("distillation_alpha must be in [0, 1]")
+        if self.distillation_mode not in {"sampled_token", "full_logits", "topk_logits"}:
+            raise ValueError("distillation_mode must be one of: 'sampled_token', 'full_logits', 'topk_logits'")
+        if self.distillation_topk is not None and self.distillation_topk <= 0:
+            raise ValueError("distillation_topk must be positive when provided")
+        if self.distillation_mode == "topk_logits":
+            if self.distillation_topk is None:
+                raise ValueError("`distillation_mode='topk_logits'` requires `distillation_topk` to be set.")
+        elif self.distillation_topk is not None:
+            raise ValueError("`distillation_topk` is only valid when `distillation_mode='topk_logits'`.")
+        if self.distillation_is_clip is not None and self.distillation_is_clip <= 0:
+            raise ValueError("distillation_is_clip must be positive when provided")
+        if self.distillation_weight < 0:
+            raise ValueError("distillation_weight must be non-negative")
+        if self.diagnostics_warning_interval < 0:
+            raise ValueError("diagnostics_warning_interval must be non-negative")
+        if self.diagnostics_flat_tolerance < 0:
+            raise ValueError("diagnostics_flat_tolerance must be non-negative")
+
+        num_processes = self.world_size
+        if self.generation_batch_size is None and self.steps_per_generation is None:
+            self.steps_per_generation = self.gradient_accumulation_steps
+            self.generation_batch_size = self.per_device_train_batch_size * num_processes * self.steps_per_generation
+        elif self.generation_batch_size is not None and self.steps_per_generation is None:
+            global_batch_size = self.per_device_train_batch_size * num_processes
+            if self.generation_batch_size % global_batch_size != 0:
+                raise ValueError(
+                    f"generation_batch_size ({self.generation_batch_size}) must be divisible by the global batch size ({global_batch_size})."
+                )
+            self.steps_per_generation = self.generation_batch_size // global_batch_size
+        elif self.generation_batch_size is None and self.steps_per_generation is not None:
+            self.generation_batch_size = self.per_device_train_batch_size * num_processes * self.steps_per_generation
+        else:
+            raise ValueError("'generation_batch_size' and 'steps_per_generation' can not both be configured")
+
+        if self.generation_batch_size % self.num_generations != 0:
+            raise ValueError(
+                f"generation_batch_size ({self.generation_batch_size}) must be divisible by num_generations ({self.num_generations})."
+            )
+
+        if self.do_eval and self.eval_strategy != "no":
+            num_generations_eval = self.num_generations_eval or self.num_generations
+            if (self.per_device_eval_batch_size * num_processes) % num_generations_eval != 0:
+                raise ValueError(
+                    f"The global eval batch size ({self.per_device_eval_batch_size} * {num_processes}) must be "
+                    f"divisible by the number of generations used for evaluation ({num_generations_eval})."
+                )
+
         if (
             "{prompt}" not in self.teacher_prompt_template
             or "{privileged_context}" not in self.teacher_prompt_template

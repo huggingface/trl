@@ -15,6 +15,7 @@
 import logging
 
 import torch
+from accelerate.utils import is_peft_model
 from transformers import (
     TrainerCallback,
     TrainerControl,
@@ -26,6 +27,28 @@ from ...trainer.callbacks import SyncRefModelCallback
 
 
 logger = logging.getLogger(__name__)
+
+
+def is_pure_lora_training(model, accelerator=None) -> bool:
+    """Return `True` when the active adapter is LoRA and every trainable parameter is a LoRA parameter."""
+    if not is_peft_model(model):
+        return False
+
+    if accelerator is not None:
+        model = accelerator.unwrap_model(model)
+
+    adapter_name = model.active_adapter
+    if adapter_name is None:
+        adapter_name = "default"
+    adapter_config = model.peft_config.get(adapter_name)
+    peft_type = adapter_config.peft_type
+    if peft_type is None or str(peft_type).split(".")[-1] != "LORA":
+        return False
+
+    for name, param in model.named_parameters():
+        if param.requires_grad and "lora_" not in name:
+            return False
+    return True
 
 
 class SyncTeacherModelCallback(SyncRefModelCallback):

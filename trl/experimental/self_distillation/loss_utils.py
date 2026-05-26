@@ -107,7 +107,7 @@ def aggregate_loss(
         return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
     if loss_type == "dr_grpo":
         return (per_token_loss * response_mask).sum() / (per_token_loss.size(0) * max_completion_length)
-    if loss_type in ["dapo", "luspo", "cispo", "sapo"]:
+    if loss_type == "dapo":
         return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
     raise ValueError(f"Unsupported loss_type: {loss_type}")
 
