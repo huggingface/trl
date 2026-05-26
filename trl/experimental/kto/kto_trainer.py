@@ -1137,7 +1137,6 @@ class KTOTrainer(_BaseTrainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad(), self.compute_loss_context_manager():
-            loss = self.compute_loss(model, inputs)
             if prediction_loss_only:
                 loss = self.compute_loss(model, inputs, return_outputs=False)  # logits aren't materialized with liger
                 logits, labels = None, None
