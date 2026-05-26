@@ -143,10 +143,10 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                 padding_side="right",
             )
 
-        if "reference_logps" in examples[0]:
-            batch["reference_logps"] = torch.tensor([ex["reference_logps"] for ex in examples])
-        if "reference_KL_logps" in examples[0]:
-            batch["reference_KL_logps"] = torch.tensor([ex["reference_KL_logps"] for ex in examples])
+        if "ref_logps" in examples[0]:
+            batch["ref_logps"] = torch.tensor([ex["ref_logps"] for ex in examples])
+        if "ref_KL_logps" in examples[0]:
+            batch["ref_KL_logps"] = torch.tensor([ex["ref_KL_logps"] for ex in examples])
         batch["label"] = [ex["label"] for ex in examples]
         return batch
 
@@ -666,9 +666,9 @@ class KTOTrainer(_BaseTrainer):
         cache_file = dataset._get_cache_file_path(fingerprint).removesuffix(".arrow") + ".npz"
         if os.path.exists(cache_file):
             loaded = np.load(cache_file)
-            reference_logps = loaded["reference_logps"]
+            ref_logps = loaded["ref_logps"]
             if self.calculate_KL:
-                reference_KL_logps = loaded["reference_KL_logps"]
+                ref_KL_logps = loaded["ref_KL_logps"]
         else:
             dataloader = DataLoader(
                 dataset,
@@ -679,36 +679,32 @@ class KTOTrainer(_BaseTrainer):
                 shuffle=False,
             )
             data_loader = self.accelerator.prepare(dataloader)
-            reference_logps = []
-            reference_KL_logps = []
+            ref_logps = []
+            ref_KL_logps = []
             for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-                reference_logp, reference_KL_logp = self.compute_ref_log_probs(padded_batch)
+                ref_logp, ref_KL_logp = self.compute_ref_log_probs(padded_batch)
                 if self.calculate_KL:
-                    reference_logp, reference_KL_logp = self.accelerator.gather_for_metrics(
-                        (reference_logp, reference_KL_logp)
-                    )
-                    reference_KL_logps.append(reference_KL_logp.cpu())
+                    ref_logp, ref_KL_logp = self.accelerator.gather_for_metrics((ref_logp, ref_KL_logp))
+                    ref_KL_logps.append(ref_KL_logp.cpu())
                 else:
-                    reference_logp = self.accelerator.gather_for_metrics(reference_logp)
-                reference_logps.append(reference_logp.cpu())
+                    ref_logp = self.accelerator.gather_for_metrics(ref_logp)
+                ref_logps.append(ref_logp.cpu())
 
             # Save the reference log probabilities to cache. We need .float() because bf16 is not supported by numpy
-            reference_logps = torch.cat(reference_logps).float().numpy()
-            save_dict = {"reference_logps": reference_logps}
+            ref_logps = torch.cat(ref_logps).float().numpy()
+            save_dict = {"ref_logps": ref_logps}
             if self.calculate_KL:
-                reference_KL_logps = torch.cat(reference_KL_logps).float().numpy()
-                save_dict["reference_KL_logps"] = reference_KL_logps
+                ref_KL_logps = torch.cat(ref_KL_logps).float().numpy()
+                save_dict["ref_KL_logps"] = ref_KL_logps
             if self.accelerator.is_main_process:
                 np.savez_compressed(cache_file, **save_dict)
             self.accelerator.wait_for_everyone()
 
         if self.calculate_KL:
-            dataset = dataset.add_column(name="reference_logps", column=reference_logps)
-            dataset = dataset.add_column(
-                name="reference_KL_logps", column=reference_KL_logps, new_fingerprint=fingerprint
-            )
+            dataset = dataset.add_column(name="ref_logps", column=ref_logps)
+            dataset = dataset.add_column(name="ref_KL_logps", column=ref_KL_logps, new_fingerprint=fingerprint)
         else:
-            dataset = dataset.add_column(name="reference_logps", column=reference_logps, new_fingerprint=fingerprint)
+            dataset = dataset.add_column(name="ref_logps", column=ref_logps, new_fingerprint=fingerprint)
 
         return dataset
 
@@ -1053,37 +1049,37 @@ class KTOTrainer(_BaseTrainer):
 
         if self.precompute_ref_logps:
             # Convert Python lists to tensor indices for efficient CUDA operations
-            device = batch["reference_logps"].device
+            device = batch["ref_logps"].device
             labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
             chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
             rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
 
             # Use index_select for efficient CUDA operations
-            reference_chosen_logps = batch["reference_logps"].index_select(0, chosen_idx)
-            reference_rejected_logps = batch["reference_logps"].index_select(0, rejected_idx)
+            ref_chosen_logps = batch["ref_logps"].index_select(0, chosen_idx)
+            ref_rejected_logps = batch["ref_logps"].index_select(0, rejected_idx)
             if self.calculate_KL:
-                reference_KL_logps = batch["reference_KL_logps"]
+                ref_KL_logps = batch["ref_KL_logps"]
             else:
-                reference_KL_logps = None
+                ref_KL_logps = None
         else:
             with torch.no_grad():
                 if self.ref_model is None:
                     with self.null_ref_context():
-                        reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = (
-                            self._compute_logps(self.model, batch)
+                        ref_chosen_logps, ref_rejected_logps, _, _, ref_KL_logps, _ = self._compute_logps(
+                            self.model, batch
                         )
                 else:
-                    reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = (
-                        self._compute_logps(self.ref_model, batch)
+                    ref_chosen_logps, ref_rejected_logps, _, _, ref_KL_logps, _ = self._compute_logps(
+                        self.ref_model, batch
                     )
 
         losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
             policy_chosen_logps,
             policy_rejected_logps,
             policy_KL_logps,
-            reference_chosen_logps,
-            reference_rejected_logps,
-            reference_KL_logps,
+            ref_chosen_logps,
+            ref_rejected_logps,
+            ref_KL_logps,
         )
 
         self._metrics[mode]["kl"].append(kl.item())
