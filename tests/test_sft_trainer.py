@@ -911,9 +911,13 @@ class TestSFTTrainer(TrlTestCase):
     def test_compute_loss_skip_logits_on_eval_without_metrics_with_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:1]")
 
+        # Init with `use_liger_kernel=False` to skip Liger model wrapping, then flip the flag after to exercise the
+        # Liger branch of `compute_loss`. `loss_type="nll"` so the chunked path isn't patched in (incompatible with
+        # Liger), keeping `model.forward` unmodified.
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             use_liger_kernel=False,
+            loss_type="nll",
             report_to="none",
             max_length=8,
             bf16=False,
@@ -953,9 +957,12 @@ class TestSFTTrainer(TrlTestCase):
     def test_predict_does_not_skip_logits_with_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:1]")
 
+        # Same pattern as `test_compute_loss_skip_logits_on_eval_without_metrics_with_liger`: init without Liger then
+        # flip the flag, and force `loss_type="nll"` to keep `model.forward` unpatched.
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             use_liger_kernel=False,
+            loss_type="nll",
             report_to="none",
             max_length=8,
             bf16=False,
