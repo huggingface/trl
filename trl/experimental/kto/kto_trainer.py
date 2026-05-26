@@ -1031,11 +1031,7 @@ class KTOTrainer(_BaseTrainer):
 
         return loss
 
-    def _compute_loss(
-        self,
-        model,
-        inputs: dict[str, list | torch.LongTensor],
-    ):
+    def _compute_loss(self, model, inputs, return_outputs):
         """Compute the KTO loss and other metrics for the given batch of inputs for train or test."""
         mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
@@ -1122,7 +1118,7 @@ class KTOTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             loss += self.aux_loss_coef * aux_loss
 
-        return loss
+        return (loss, outputs) if return_outputs else loss
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if self.use_liger_kernel:
