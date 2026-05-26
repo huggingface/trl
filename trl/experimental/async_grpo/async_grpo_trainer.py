@@ -61,6 +61,7 @@ class RolloutWorkerProtocol(Protocol):
     def resume(self) -> None: ...
     def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None: ...
     def update_model_version(self, version: int) -> None: ...
+    def check_health(self, stale_after_s: float) -> None: ...
 
 
 class StepIntervalCallback(TrainerCallback):
@@ -78,23 +79,33 @@ class StepIntervalCallback(TrainerCallback):
 
 
 class RolloutQueueDataset(torch.utils.data.IterableDataset):
-    def __init__(self, rollout_queue, model_version_fn, max_staleness=3, timeout=120.0):
+    def __init__(
+        self,
+        rollout_queue,
+        model_version_fn,
+        check_health_fn,
+        stale_after_s,
+        max_staleness=3,
+        poll_interval_s=5.0,
+    ):
         self.queue = rollout_queue
         self.model_version_fn = model_version_fn
+        self.check_health_fn = check_health_fn
+        self.stale_after_s = stale_after_s
         self.max_staleness = max_staleness
-        self.timeout = timeout
+        self.poll_interval_s = poll_interval_s
 
     def __iter__(self):
         while True:
             t0 = time.time()
-            qsize = self.queue.qsize()
-            if qsize == 0:
+            if self.queue.qsize() == 0:
                 logger.info("queue empty, waiting for rollout samples...")
             try:
-                sample = self.queue.get(timeout=self.timeout)
+                sample = self.queue.get(timeout=self.poll_interval_s)
             except queue.Empty:
-                logger.warning(f"Rollout queue empty for {self.timeout}s, stopping epoch")
-                return  # StopIteration ends epoch
+                # Returning here would broadcast None through accelerate's dispatch loop.
+                self.check_health_fn(self.stale_after_s)
+                continue
             queue_wait_time_s = time.time() - t0
             if queue_wait_time_s > 1.0:
                 logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={self.queue.qsize()})")
@@ -399,8 +410,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             dataset = RolloutQueueDataset(
                 rollout_queue=self.rollout_queue,
                 model_version_fn=lambda: self.model_version,
+                check_health_fn=self.rollout_worker.check_health,
+                stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
-                timeout=self.args.vllm_server_timeout,
             )
         else:
             dataset = _EmptyIterableDataset()
