@@ -682,7 +682,7 @@ class KTOTrainer(_BaseTrainer):
             reference_logps = []
             reference_KL_logps = []
             for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-                reference_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
+                reference_logp, reference_KL_logp = self.compute_ref_log_probs(padded_batch)
                 if self.calculate_KL:
                     reference_logp, reference_KL_logp = self.accelerator.gather_for_metrics(
                         (reference_logp, reference_KL_logp)
@@ -712,7 +712,7 @@ class KTOTrainer(_BaseTrainer):
 
         return dataset
 
-    def compute_reference_log_probs(self, padded_batch: dict) -> dict:
+    def compute_ref_log_probs(self, padded_batch: dict) -> dict:
         """Computes log probabilities of the reference model for a single padded batch of a KTO specific dataset."""
         with torch.no_grad():
             if self.ref_model is None:
