@@ -140,7 +140,8 @@ def load(path: Path) -> Trajectory:
 
 
 def compare_scalars(a: Trajectory, b: Trajectory, tol: dict[str, float], residual_tol: dict[str, float]) -> list[str]:
-    """Compare scalar series (loss, grad_norm). `tol` and `residual_tol` are per-field dicts."""
+    """Compare scalar series (loss, grad_norm). `tol` and `residual_tol` are per-field dicts keyed by `'loss'` and
+    `'grad_norm'`."""
     errors: list[str] = []
     if len(a.steps) != len(b.steps):
         return [f"length mismatch: {len(a.steps)} vs {len(b.steps)}"]
@@ -194,7 +195,7 @@ def _build(
 EQUIVALENCE_CLASSES: dict[str, dict] = {
     "sft": {
         "tol": {"loss": 1e-3, "grad_norm": 1e-1},
-        "residual_tol": {"loss": 1e-4, "grad_norm": 1e-3},
+        "residual_tol": {"loss": 1e-5, "grad_norm": 1e-3},
         "members": [
             _build("sft_default", "sft", SFT_DATASET),
             _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
