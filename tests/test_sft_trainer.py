@@ -535,7 +535,7 @@ class TestSFTTrainer(TrlTestCase):
                 ],
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1638,7 +1638,7 @@ class TestSFTTrainer(TrlTestCase):
                 ],
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -2302,7 +2302,7 @@ _CHUNKED_CE_VLM_MODEL_IDS = [
         ),
     ),
     pytest.param(
-        "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+        "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.2.0"),
             reason="Qwen3.5 models were introduced in transformers-5.2.0",
