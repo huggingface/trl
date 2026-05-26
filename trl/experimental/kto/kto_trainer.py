@@ -796,7 +796,7 @@ class KTOTrainer(_BaseTrainer):
         else:
             return (per_token_logps * loss_mask).sum(-1)
 
-    def forward(self, model, batch):
+    def _compute_logps(self, model, batch):
         KL_logps = self._compute_kl_logps(model, batch)
 
         model_kwargs = {}
@@ -1047,7 +1047,7 @@ class KTOTrainer(_BaseTrainer):
             policy_rejected_logits,
             policy_KL_logps,
             outputs,
-        ) = self.forward(model, batch)
+        ) = self._compute_logps(model, batch)
         if self.aux_loss_enabled:
             aux_loss = outputs.aux_loss
 
@@ -1070,12 +1070,12 @@ class KTOTrainer(_BaseTrainer):
             with torch.no_grad():
                 if self.ref_model is None:
                     with self.null_ref_context():
-                        reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = self.forward(
-                            self.model, batch
+                        reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = (
+                            self._compute_logps(self.model, batch)
                         )
                 else:
-                    reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = self.forward(
-                        self.ref_model, batch
+                    reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = (
+                        self._compute_logps(self.ref_model, batch)
                     )
 
         losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
