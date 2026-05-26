@@ -23,7 +23,6 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
@@ -797,9 +796,7 @@ class KTOTrainer(_BaseTrainer):
         else:
             return (per_token_logps * loss_mask).sum(-1)
 
-    def forward(
-        self, model: nn.Module, batch: dict[str, list | torch.LongTensor]
-    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    def _compute_logps(self, model, batch):
         KL_logps = self._compute_kl_logps(model, batch)
 
         model_kwargs = {}
@@ -838,10 +835,7 @@ class KTOTrainer(_BaseTrainer):
         chosen_logits = completion_logits.index_select(0, chosen_idx)
         rejected_logits = completion_logits.index_select(0, rejected_idx)
 
-        if self.aux_loss_enabled:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, outputs.aux_loss)
-        else:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps)
+        return chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, outputs
 
     def kto_loss(
         self,
@@ -1037,11 +1031,7 @@ class KTOTrainer(_BaseTrainer):
 
         return loss
 
-    def _compute_loss(
-        self,
-        model,
-        inputs: dict[str, list | torch.LongTensor],
-    ):
+    def _compute_loss(self, model, inputs, return_outputs):
         """Compute the KTO loss and other metrics for the given batch of inputs for train or test."""
         mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
@@ -1050,16 +1040,16 @@ class KTOTrainer(_BaseTrainer):
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
-        forward_output = self.forward(model, batch)
         (
             policy_chosen_logps,
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
             policy_KL_logps,
-        ) = forward_output[:5]
+            outputs,
+        ) = self._compute_logps(model, batch)
         if self.aux_loss_enabled:
-            aux_loss = forward_output[5]
+            aux_loss = outputs.aux_loss
 
         # if reference_logps in batch use them, otherwise use the reference model
         if "reference_logps" in batch:
@@ -1080,21 +1070,13 @@ class KTOTrainer(_BaseTrainer):
             with torch.no_grad():
                 if self.ref_model is None:
                     with self.null_ref_context():
-                        (
-                            reference_chosen_logps,
-                            reference_rejected_logps,
-                            _,
-                            _,
-                            reference_KL_logps,
-                        ) = self.forward(self.model, batch)[:5]
+                        reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = (
+                            self._compute_logps(self.model, batch)
+                        )
                 else:
-                    (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        _,
-                        _,
-                        reference_KL_logps,
-                    ) = self.forward(self.ref_model, batch)[:5]
+                    reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = (
+                        self._compute_logps(self.ref_model, batch)
+                    )
 
         losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
             policy_chosen_logps,
@@ -1136,14 +1118,12 @@ class KTOTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             loss += self.aux_loss_coef * aux_loss
 
-        return loss
+        return (loss, outputs) if return_outputs else loss
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if self.use_liger_kernel:
             return self._compute_loss_liger(model, inputs, return_outputs)
-        # return_outputs is not forwarded: _compute_loss delegates to forward(), which hides the raw model outputs
-        # Returning real outputs requires refactoring forward(), which is deferred.
-        return self._compute_loss(model, inputs)
+        return self._compute_loss(model, inputs, return_outputs)
 
     def _get_train_sampler(self, dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
         if dataset is None:
@@ -1157,13 +1137,12 @@ class KTOTrainer(_BaseTrainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad(), self.compute_loss_context_manager():
-            loss = self.compute_loss(model, inputs)
             if prediction_loss_only:
+                loss = self.compute_loss(model, inputs, return_outputs=False)  # logits aren't materialized with liger
                 logits, labels = None, None
             else:
-                # Return dummy tensors so the Trainer calls compute_metrics. Real logits require refactoring forward()
-                logits = torch.zeros(1, device=self.accelerator.device)
-                labels = torch.zeros(1, device=self.accelerator.device)
+                loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+                logits, labels = outputs.logits, inputs["completion_input_ids"]
         return loss, logits, labels
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
