@@ -245,6 +245,78 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_train_chunked_loss(self):
+        """`use_chunked_loss=True` should train end-to-end and update params."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            report_to="none",
+            use_chunked_loss=True,
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_chunked_loss_matches_default(self):
+        """Chunked path must produce the same loss and logps as the default path on identical inputs."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        def loss_and_logps(use_chunked: bool) -> tuple[float, float, float]:
+            args = DPOConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                per_device_train_batch_size=2,
+                seed=42,
+                data_seed=42,
+                use_chunked_loss=use_chunked,
+            )
+            trainer = DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=args, train_dataset=dataset
+            )
+            trainer.model.eval()
+            batch = next(iter(trainer.get_train_dataloader()))
+            batch = {k: v.to(trainer.accelerator.device) if torch.is_tensor(v) else v for k, v in batch.items()}
+            with torch.no_grad():
+                loss = trainer.compute_loss(trainer.model, batch).item()
+            return loss, trainer._metrics["eval"]["logps/chosen"][-1], trainer._metrics["eval"]["logps/rejected"][-1]
+
+        loss_default, logps_c_default, logps_r_default = loss_and_logps(use_chunked=False)
+        loss_chunked, logps_c_chunked, logps_r_chunked = loss_and_logps(use_chunked=True)
+
+        torch.testing.assert_close(loss_default, loss_chunked, atol=1e-5, rtol=0)
+        torch.testing.assert_close(logps_c_default, logps_c_chunked, atol=1e-3, rtol=0)
+        torch.testing.assert_close(logps_r_default, logps_r_chunked, atol=1e-3, rtol=0)
+
+    @pytest.mark.parametrize(
+        "incompatible_kwargs",
+        [
+            {"ld_alpha": 0.5},
+            {"use_weighting": True},
+            {"loss_type": "sft"},
+            {"precompute_ref_log_probs": True},
+        ],
+    )
+    def test_chunked_loss_incompatibilities(self, incompatible_kwargs):
+        """Each MVP-incompatible option should raise at trainer construction."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        args = DPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            use_chunked_loss=True,
+            **incompatible_kwargs,
+        )
+        with pytest.raises((ValueError, NotImplementedError)):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=args, train_dataset=dataset
+            )
+
     @pytest.mark.parametrize(
         "loss_type",
         [
