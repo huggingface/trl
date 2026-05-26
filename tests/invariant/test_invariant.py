@@ -140,7 +140,8 @@ def load(path: Path) -> Trajectory:
 
 
 def compare_scalars(a: Trajectory, b: Trajectory, tol: dict[str, float], residual_tol: dict[str, float]) -> list[str]:
-    """Compare scalar series (loss, grad_norm). `tol` and `residual_tol` are per-field dicts."""
+    """Compare scalar series (loss, grad_norm). `tol` and `residual_tol` are per-field dicts keyed by `'loss'` and
+    `'grad_norm'`."""
     errors: list[str] = []
     if len(a.steps) != len(b.steps):
         return [f"length mismatch: {len(a.steps)} vs {len(b.steps)}"]
