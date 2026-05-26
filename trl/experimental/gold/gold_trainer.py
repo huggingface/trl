@@ -849,17 +849,28 @@ class GOLDTrainer(SFTTrainer):
         # VLMs so that both receive images and multimodal inputs.
         self._teacher_processor = None
         self._is_cross_architecture_vlm = False
-        if self._is_vlm and isinstance(teacher_model, str):
-            # Teacher not yet instantiated -- validate it's a VLM
-            teacher_proc = AutoProcessor.from_pretrained(teacher_model)
-            if not isinstance(teacher_proc, ProcessorMixin):
-                raise ValueError(
-                    "VLM distillation requires both student and teacher to be vision-language models. "
-                    "The student has a `ProcessorMixin` but the teacher does not."
-                )
+        if self._is_vlm:
+            if isinstance(teacher_model, str):
+                # Teacher not yet instantiated -- validate it's a VLM
+                teacher_proc = AutoProcessor.from_pretrained(teacher_model)
+                if not isinstance(teacher_proc, ProcessorMixin):
+                    raise ValueError(
+                        "VLM distillation requires both student and teacher to be vision-language models. "
+                        "The student has a `ProcessorMixin` but the teacher does not."
+                    )
+                teacher_model_type = AutoConfig.from_pretrained(teacher_model).model_type
+            else:
+                # Teacher already instantiated — check if it looks like a VLM by checking for a vision config
+                if not hasattr(teacher_model.config, "vision_config"):
+                    raise ValueError(
+                        "VLM distillation requires both student and teacher to be vision-language models. "
+                        "The student has a `ProcessorMixin` but the teacher model does not appear to be a VLM "
+                        "(missing `vision_config`)."
+                    )
+                teacher_model_type = teacher_model.config.model_type
+
             # Check for cross-architecture VLM distillation
             student_model_type = model.config.model_type if not isinstance(model, str) else None
-            teacher_model_type = AutoConfig.from_pretrained(teacher_model).model_type
             is_cross_architecture = student_model_type and teacher_model_type != student_model_type
             self._is_cross_architecture_vlm = is_cross_architecture
             if is_cross_architecture:
@@ -869,28 +880,11 @@ class GOLDTrainer(SFTTrainer):
                     "model's processor, which may increase memory usage and computation time."
                 )
             if is_cross_architecture or args.use_uld_loss:
-                self._teacher_processor = teacher_proc
-        elif self._is_vlm and not isinstance(teacher_model, str):
-            # Teacher already instantiated — check if it looks like a VLM by checking for a vision config
-            if not hasattr(teacher_model, "config") or not hasattr(teacher_model.config, "vision_config"):
-                raise ValueError(
-                    "VLM distillation requires both student and teacher to be vision-language models. "
-                    "The student has a `ProcessorMixin` but the teacher model does not appear to be a VLM "
-                    "(missing `vision_config`)."
+                self._teacher_processor = (
+                    teacher_proc
+                    if isinstance(teacher_model, str)
+                    else AutoProcessor.from_pretrained(teacher_model.config._name_or_path)
                 )
-            # Check for cross-architecture VLM distillation
-            student_model_type = model.config.model_type if not isinstance(model, str) else None
-            teacher_model_type = teacher_model.config.model_type
-            is_cross_architecture = student_model_type and teacher_model_type != student_model_type
-            self._is_cross_architecture_vlm = is_cross_architecture
-            if is_cross_architecture:
-                warnings.warn(
-                    f"Cross-architecture VLM distillation detected: student is '{student_model_type}', "
-                    f"teacher is '{teacher_model_type}'. Images will be processed separately through each "
-                    "model's processor, which may increase memory usage and computation time."
-                )
-            if is_cross_architecture or args.use_uld_loss:
-                self._teacher_processor = AutoProcessor.from_pretrained(teacher_model.config._name_or_path)
         if self._is_cross_architecture_vlm and not args.use_uld_loss:
             raise ValueError(
                 "Cross-architecture VLM distillation (student and teacher have different `model_type`) is not "
@@ -976,7 +970,7 @@ class GOLDTrainer(SFTTrainer):
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
         elif args.use_uld_loss and args.teacher_tokenizer_name_or_path is not None:
             self.teacher_tokenizer = AutoTokenizer.from_pretrained(args.teacher_tokenizer_name_or_path)
-            if not hasattr(self.teacher_tokenizer, "pad_token") or self.teacher_tokenizer.pad_token is None:
+            if self.teacher_tokenizer.pad_token is None:
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
 
         # Hybrid ULD loss configuration is handled in ULDLoss class
@@ -1193,6 +1187,30 @@ class GOLDTrainer(SFTTrainer):
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
 
+    def _extract_images_and_prompts(self, examples: list[dict]) -> tuple[list | None, list]:
+        """
+        Extract per-example images and build prompts with multimodal messages, mirroring GRPOTrainer.
+
+        Returns `(images, prompts)` where `images` is a per-example list (entries may be `None`), or `None` when the
+        batch carries no images, and `prompts` are the prepared multimodal messages.
+        """
+        if "images" in examples[0]:
+            images = [example.get("images") for example in examples]
+        elif "image" in examples[0]:
+            images = [[example.get("image")] if example.get("image") is not None else None for example in examples]
+        else:
+            images = None
+        if images is not None and all(img_list is None or img_list == [] for img_list in images):
+            images = None
+
+        prompts = [example["prompt"] for example in examples]
+        if images is not None:
+            prompts = [
+                prepare_multimodal_messages(prompt, images=img_list)
+                for prompt, img_list in zip(prompts, images, strict=True)
+            ]
+        return images, prompts
+
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         if not self.model.training:
@@ -1205,19 +1223,8 @@ class GOLDTrainer(SFTTrainer):
             if self._vlm_collator is not None:
                 pending_slice = {"_gold_vlm_lazy_examples": list(generation_batch)}
                 if self._teacher_processor is not None:
-                    raw_images = [
-                        ex.get("images") or ([ex["image"]] if "image" in ex else None) for ex in generation_batch
-                    ]
-                    raw_prompts = [
-                        (
-                            prepare_multimodal_messages(ex["prompt"], images=imgs)
-                            if imgs is not None
-                            else ex.get("prompt")
-                        )
-                        for ex, imgs in zip(generation_batch, raw_images, strict=True)
-                    ]
-                    has_images = any(imgs is not None for imgs in raw_images)
-                    pending_slice["_gold_vlm_raw_images"] = raw_images if has_images else None
+                    raw_images, raw_prompts = self._extract_images_and_prompts(list(generation_batch))
+                    pending_slice["_gold_vlm_raw_images"] = raw_images
                     pending_slice["_gold_vlm_raw_prompts"] = raw_prompts
                 return self._materialize_vlm_slice(pending_slice)
             return generation_batch
@@ -1468,19 +1475,8 @@ class GOLDTrainer(SFTTrainer):
                     # mutates examples in place (pops "image", overwrites "prompt").
                     slice_inputs = {"_gold_vlm_lazy_examples": raw_slices[i]}
                     if self._teacher_processor is not None:
-                        raw_images = [
-                            ex.get("images") or ([ex["image"]] if "image" in ex else None) for ex in raw_slices[i]
-                        ]
-                        raw_prompts = [
-                            (
-                                prepare_multimodal_messages(ex["prompt"], images=imgs)
-                                if imgs is not None
-                                else ex.get("prompt")
-                            )
-                            for ex, imgs in zip(raw_slices[i], raw_images, strict=True)
-                        ]
-                        has_images = any(imgs is not None for imgs in raw_images)
-                        slice_inputs["_gold_vlm_raw_images"] = raw_images if has_images else None
+                        raw_images, raw_prompts = self._extract_images_and_prompts(raw_slices[i])
+                        slice_inputs["_gold_vlm_raw_images"] = raw_images
                         slice_inputs["_gold_vlm_raw_prompts"] = raw_prompts
                 else:
                     slice_inputs = slices[i]
@@ -1615,25 +1611,8 @@ class GOLDTrainer(SFTTrainer):
         for slice_idx in on_policy_indices:
             raw_examples = raw_slices[slice_idx]
 
-            # Extract raw PIL images from examples (like GRPOTrainer)
-            if "images" in raw_examples[0]:
-                images = [example.get("images") for example in raw_examples]
-            elif "image" in raw_examples[0]:
-                images = [
-                    [example.get("image")] if example.get("image") is not None else None for example in raw_examples
-                ]
-            else:
-                images = None
-            if images is not None and all(img_list is None or img_list == [] for img_list in images):
-                images = None
-
-            # Extract prompts and prepare multimodal messages
-            prompts = [example["prompt"] for example in raw_examples]
-            if images is not None:
-                prompts = [
-                    prepare_multimodal_messages(prompt, images=img_list)
-                    for prompt, img_list in zip(prompts, images, strict=True)
-                ]
+            # Extract raw PIL images and build prompts with multimodal messages (like GRPOTrainer)
+            images, prompts = self._extract_images_and_prompts(raw_examples)
 
             # Normalize string content to content blocks for VLM processors that don't handle plain strings
             # copied from GRPOTrainer
@@ -2288,6 +2267,9 @@ class GOLDTrainer(SFTTrainer):
         # the teacher processor below.
         teacher_forward_kwargs = student_forward_kwargs
 
+        teacher_labels = None
+        teacher_input_ids = None
+
         if self.use_uld_loss and self.teacher_tokenizer is not None:
             if "original_prompt_text" in inputs and "original_completion_text" in inputs:
                 prompt_texts = inputs["original_prompt_text"]
@@ -2542,18 +2524,14 @@ class GOLDTrainer(SFTTrainer):
         if self.use_uld_loss:
             student_input_ids = inputs["input_ids"]
 
-            teacher_labels_for_loss = teacher_labels if "teacher_labels" in locals() else inputs["labels"]
-            teacher_input_ids_for_loss = teacher_input_ids if "teacher_input_ids" in locals() else inputs["input_ids"]
+            teacher_labels_for_loss = teacher_labels if teacher_labels is not None else inputs["labels"]
+            teacher_input_ids_for_loss = teacher_input_ids if teacher_input_ids is not None else inputs["input_ids"]
 
             student_labels = inputs["labels"].clone()
             if self.pad_token_id is not None:
                 student_labels[student_labels == self.pad_token_id] = -100
 
-            if (
-                hasattr(self, "teacher_tokenizer")
-                and hasattr(self.teacher_tokenizer, "pad_token_id")
-                and self.teacher_tokenizer.pad_token_id is not None
-            ):
+            if self.teacher_tokenizer is not None and self.teacher_tokenizer.pad_token_id is not None:
                 teacher_labels[teacher_labels == self.teacher_tokenizer.pad_token_id] = -100
 
             loss = self.uld_loss_fn(
@@ -2565,24 +2543,21 @@ class GOLDTrainer(SFTTrainer):
                 teacher_input_ids=teacher_input_ids_for_loss,
             )
 
-            if hasattr(self.uld_loss_fn, "last_matched_loss") and hasattr(self.uld_loss_fn, "last_unmatched_loss"):
-                ga = max(1, int(self.args.gradient_accumulation_steps))
-                step_eq = 1.0 / ga
-                matched_val = (
-                    self.uld_loss_fn.last_matched_loss.item()
-                    if self.uld_loss_fn.last_matched_loss is not None
-                    else 0.0
-                )
-                unmatched_val = (
-                    self.uld_loss_fn.last_unmatched_loss.item()
-                    if self.uld_loss_fn.last_unmatched_loss is not None
-                    else 0.0
-                )
+            ga = max(1, int(self.args.gradient_accumulation_steps))
+            step_eq = 1.0 / ga
+            matched_val = (
+                self.uld_loss_fn.last_matched_loss.item() if self.uld_loss_fn.last_matched_loss is not None else 0.0
+            )
+            unmatched_val = (
+                self.uld_loss_fn.last_unmatched_loss.item()
+                if self.uld_loss_fn.last_unmatched_loss is not None
+                else 0.0
+            )
 
-                self._matched_sum += matched_val
-                self._unmatched_sum += unmatched_val
-                self._matched_step_eq += step_eq
-                self._unmatched_step_eq += step_eq
+            self._matched_sum += matched_val
+            self._unmatched_sum += unmatched_val
+            self._matched_step_eq += step_eq
+            self._unmatched_step_eq += step_eq
 
         empty_cache()
 
@@ -2739,7 +2714,7 @@ class GOLDTrainer(SFTTrainer):
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
         if mode == "train":
-            device = self.accelerator.device if hasattr(self.accelerator, "device") else torch.device("cpu")
+            device = self.accelerator.device
             vec = torch.tensor(
                 [
                     self._on_policy_loss_total,

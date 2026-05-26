@@ -2272,7 +2272,7 @@ def test_eval_vlm_attaches_raw_images_for_teacher_processor(monkeypatch):
     img0, img1 = object(), object()
     generation_batch = [
         {"prompt": [{"role": "user", "content": "q0"}], "image": img0},
-        {"prompt": [{"role": "user", "content": "q1"}], "images": [img1]},
+        {"prompt": [{"role": "user", "content": "q1"}], "image": img1},
     ]
 
     inputs = trainer._prepare_inputs(generation_batch)
