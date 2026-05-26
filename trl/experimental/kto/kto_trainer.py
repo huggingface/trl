@@ -1014,28 +1014,26 @@ class KTOTrainer(_BaseTrainer):
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
         if all_num_chosen > 0:
-            self._metrics[mode]["rewards/chosen_sum"].append(
-                self.accelerator.gather_for_metrics(chosen_rewards_sum.nansum()).nansum().item()
+            self._metrics[mode]["rewards/chosen"].append(
+                self.accelerator.gather_for_metrics(chosen_rewards_sum.nansum()).nansum().item() / all_num_chosen
             )
-            self._metrics[mode]["logps/chosen_sum"].append(
-                self.accelerator.gather_for_metrics(chosen_logps_sum.nansum()).nansum().item()
+            self._metrics[mode]["logps/chosen"].append(
+                self.accelerator.gather_for_metrics(chosen_logps_sum.nansum()).nansum().item() / all_num_chosen
             )
-            self._metrics[mode]["logits/chosen_sum"].append(
-                self.accelerator.gather_for_metrics(chosen_logits_sum.nansum()).nansum().item()
+            self._metrics[mode]["logits/chosen"].append(
+                self.accelerator.gather_for_metrics(chosen_logits_sum.nansum()).nansum().item() / all_num_chosen
             )
-            self._metrics[mode]["count/chosen"].append(all_num_chosen)
 
         if all_num_rejected > 0:
-            self._metrics[mode]["rewards/rejected_sum"].append(
-                self.accelerator.gather_for_metrics(rejected_rewards_sum.nansum()).nansum().item()
+            self._metrics[mode]["rewards/rejected"].append(
+                self.accelerator.gather_for_metrics(rejected_rewards_sum.nansum()).nansum().item() / all_num_rejected
             )
-            self._metrics[mode]["logps/rejected_sum"].append(
-                self.accelerator.gather_for_metrics(rejected_logps_sum.nansum()).nansum().item()
+            self._metrics[mode]["logps/rejected"].append(
+                self.accelerator.gather_for_metrics(rejected_logps_sum.nansum()).nansum().item() / all_num_rejected
             )
-            self._metrics[mode]["logits/rejected_sum"].append(
-                self.accelerator.gather_for_metrics(rejected_logits_sum.nansum()).nansum().item()
+            self._metrics[mode]["logits/rejected"].append(
+                self.accelerator.gather_for_metrics(rejected_logits_sum.nansum()).nansum().item() / all_num_rejected
             )
-            self._metrics[mode]["count/rejected"].append(all_num_rejected)
 
         return loss
 
@@ -1113,28 +1111,26 @@ class KTOTrainer(_BaseTrainer):
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
         if all_num_chosen > 0:
-            self._metrics[mode]["rewards/chosen_sum"].append(
-                self.accelerator.gather_for_metrics(chosen_rewards.nansum()).nansum().item()
+            self._metrics[mode]["rewards/chosen"].append(
+                self.accelerator.gather_for_metrics(chosen_rewards.nansum()).nansum().item() / all_num_chosen
             )
-            self._metrics[mode]["logps/chosen_sum"].append(
-                self.accelerator.gather_for_metrics(policy_chosen_logps.nansum()).nansum().item()
+            self._metrics[mode]["logps/chosen"].append(
+                self.accelerator.gather_for_metrics(policy_chosen_logps.nansum()).nansum().item() / all_num_chosen
             )
-            self._metrics[mode]["logits/chosen_sum"].append(
-                self.accelerator.gather_for_metrics(policy_chosen_logits.nansum()).nansum().item()
+            self._metrics[mode]["logits/chosen"].append(
+                self.accelerator.gather_for_metrics(policy_chosen_logits.nansum()).nansum().item() / all_num_chosen
             )
-            self._metrics[mode]["count/chosen"].append(all_num_chosen)
 
         if all_num_rejected > 0:
-            self._metrics[mode]["rewards/rejected_sum"].append(
-                self.accelerator.gather_for_metrics(rejected_rewards.nansum()).nansum().item()
+            self._metrics[mode]["rewards/rejected"].append(
+                self.accelerator.gather_for_metrics(rejected_rewards.nansum()).nansum().item() / all_num_rejected
             )
-            self._metrics[mode]["logps/rejected_sum"].append(
-                self.accelerator.gather_for_metrics(policy_rejected_logps.nansum()).nansum().item()
+            self._metrics[mode]["logps/rejected"].append(
+                self.accelerator.gather_for_metrics(policy_rejected_logps.nansum()).nansum().item() / all_num_rejected
             )
-            self._metrics[mode]["logits/rejected_sum"].append(
-                self.accelerator.gather_for_metrics(policy_rejected_logits.nansum()).nansum().item()
+            self._metrics[mode]["logits/rejected"].append(
+                self.accelerator.gather_for_metrics(policy_rejected_logits.nansum()).nansum().item() / all_num_rejected
             )
-            self._metrics[mode]["count/rejected"].append(all_num_rejected)
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
@@ -1171,38 +1167,17 @@ class KTOTrainer(_BaseTrainer):
         return loss, logits, labels
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
-        """
-        Log `logs` on the various objects watching training, including stored metrics.
-
-        Args:
-            logs (`dict[str, float]`):
-                The values to log.
-            start_time (`float`, *optional*):
-                Start time of the training.
-        """
-        # logs either has 'loss' or 'eval_loss'
-        train_eval = "train" if "loss" in logs else "eval"
-        # train metrics should have no prefix, eval should have 'eval_'
-        prefix = "eval_" if train_eval == "eval" else ""
-        # accumulate average metrics from sums and lengths
-        for split in ["chosen", "rejected"]:
-            if f"count/{split}" in self._metrics[train_eval]:
-                count_sum = torch.Tensor(self._metrics[train_eval][f"count/{split}"]).sum().item()
-                for metric in ["rewards", "logps", "logits"]:
-                    logs[f"{prefix}{metric}/{split}"] = (
-                        torch.Tensor(self._metrics[train_eval][f"{metric}/{split}_sum"]).sum().item() / count_sum
-                    )
-                    # delete obsolete metric
-                    del self._metrics[train_eval][f"{metric}/{split}_sum"]
-                del self._metrics[train_eval][f"count/{split}"]
-        # calculate reward margin
-        if f"{prefix}rewards/chosen" in logs and f"{prefix}rewards/rejected" in logs:
-            logs[f"{prefix}rewards/margins"] = logs[f"{prefix}rewards/chosen"] - logs[f"{prefix}rewards/rejected"]
-        # Add averaged stored metrics to logs
-        for key, metrics in self._metrics[train_eval].items():
-            logs[f"{prefix}{key}"] = torch.Tensor(metrics).mean().item()
-        self._metrics[train_eval].clear()
-        return super().log(logs, start_time)
+        mode = "train" if self.model.training else "eval"
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+        if "rewards/chosen" in metrics and "rewards/rejected" in metrics:
+            metrics["rewards/margins"] = metrics["rewards/chosen"] - metrics["rewards/rejected"]
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        if mode == "eval":
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+        logs.update(metrics)
+        super().log(logs, start_time)
+        self._metrics[mode].clear()
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):
