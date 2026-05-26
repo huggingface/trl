@@ -682,7 +682,7 @@ class KTOTrainer(_BaseTrainer):
             reference_logps = []
             reference_KL_logps = []
             for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-                reference_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
+                reference_logp, reference_KL_logp = self.compute_ref_log_probs(padded_batch)
                 if self.calculate_KL:
                     reference_logp, reference_KL_logp = self.accelerator.gather_for_metrics(
                         (reference_logp, reference_KL_logp)
@@ -712,42 +712,42 @@ class KTOTrainer(_BaseTrainer):
 
         return dataset
 
-    def compute_reference_log_probs(self, padded_batch: dict) -> dict:
-        """Computes log probabilities of the reference model for a single padded batch of a KTO specific dataset."""
+    def compute_ref_log_probs(self, inputs):
+        """Computes reference log probabilities for a single padded batch."""
         with torch.no_grad():
             if self.ref_model is None:
                 with self.null_ref_context():
                     completion_logits = self.model(
-                        padded_batch["completion_input_ids"],
-                        attention_mask=padded_batch["completion_attention_mask"],
+                        inputs["completion_input_ids"],
+                        attention_mask=inputs["completion_attention_mask"],
                     ).logits
 
                     if self.calculate_KL:
                         KL_logits = self.model(
-                            padded_batch["KL_completion_input_ids"],
-                            attention_mask=padded_batch["KL_completion_attention_mask"],
+                            inputs["KL_completion_input_ids"],
+                            attention_mask=inputs["KL_completion_attention_mask"],
                         ).logits
             else:
                 completion_logits = self.ref_model(
-                    padded_batch["completion_input_ids"], attention_mask=padded_batch["completion_attention_mask"]
+                    inputs["completion_input_ids"], attention_mask=inputs["completion_attention_mask"]
                 ).logits
 
                 if self.calculate_KL:
                     KL_logits = self.ref_model(
-                        padded_batch["KL_completion_input_ids"],
-                        attention_mask=padded_batch["KL_completion_attention_mask"],
+                        inputs["KL_completion_input_ids"],
+                        attention_mask=inputs["KL_completion_attention_mask"],
                     ).logits
 
         completion_logps = self.get_batch_logps(
             completion_logits,
-            padded_batch["completion_labels"],
+            inputs["completion_labels"],
             average_log_prob=False,
         )
 
         if self.calculate_KL:
             KL_logps = self.get_batch_logps(
                 KL_logits,
-                padded_batch["KL_completion_labels"],
+                inputs["KL_completion_labels"],
                 average_log_prob=False,
             )
         else:
