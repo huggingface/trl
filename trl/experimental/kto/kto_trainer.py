@@ -23,7 +23,6 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
@@ -797,9 +796,7 @@ class KTOTrainer(_BaseTrainer):
         else:
             return (per_token_logps * loss_mask).sum(-1)
 
-    def forward(
-        self, model: nn.Module, batch: dict[str, list | torch.LongTensor]
-    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    def forward(self, model, batch):
         KL_logps = self._compute_kl_logps(model, batch)
 
         model_kwargs = {}
@@ -838,10 +835,7 @@ class KTOTrainer(_BaseTrainer):
         chosen_logits = completion_logits.index_select(0, chosen_idx)
         rejected_logits = completion_logits.index_select(0, rejected_idx)
 
-        if self.aux_loss_enabled:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, outputs.aux_loss)
-        else:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps)
+        return chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, outputs
 
     def kto_loss(
         self,
