@@ -16,14 +16,16 @@ import itertools
 import queue
 
 import numpy as np
+import pytest
 import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
+from transformers.testing_utils import torch_device
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
 
-from ..testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase, is_ampere_or_newer
 
 
 def dummy_reward_func(completions, **kwargs):
@@ -94,6 +96,10 @@ class _StubRolloutWorker:
         pass
 
 
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu",
+    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+)
 class TestAsyncGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
         # Test that AsyncGRPOTrainer can be instantiated with only model, reward_model and train_dataset
@@ -106,6 +112,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
         )
 
+    @pytest.mark.skipif(
+        not is_ampere_or_newer() and torch_device != "xpu",
+        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    )
     def test_train(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
