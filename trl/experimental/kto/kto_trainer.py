@@ -1139,11 +1139,11 @@ class KTOTrainer(_BaseTrainer):
         with torch.no_grad(), self.compute_loss_context_manager():
             loss = self.compute_loss(model, inputs)
             if prediction_loss_only:
+                loss = self.compute_loss(model, inputs, return_outputs=False)  # logits aren't materialized with liger
                 logits, labels = None, None
             else:
-                # Return dummy tensors so the Trainer calls compute_metrics. Real logits require refactoring forward()
-                logits = torch.zeros(1, device=self.accelerator.device)
-                labels = torch.zeros(1, device=self.accelerator.device)
+                loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+                logits, labels = outputs.logits, inputs["input_ids"]
         return loss, logits, labels
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
