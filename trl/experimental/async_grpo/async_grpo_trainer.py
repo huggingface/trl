@@ -300,7 +300,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Model
         model_name = model
-        model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.float32)
+        # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
+        # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
+        model = AutoModelForCausalLM.from_pretrained(
+            model, device_map=None, dtype=torch.float32, attn_implementation="kernels-community/flash-attn2"
+        )
 
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
@@ -452,19 +456,29 @@ class AsyncGRPOTrainer(_BaseTrainer):
         old_log_probs = inputs["old_log_probs"]
         advantages = inputs["advantages"]
 
-        # The collator pads to the global batch max length (across all ranks). After DataLoaderDispatcher slices and
-        # sends rows to each rank, the local slice is still padded to that global max. Truncate to the longest real
-        # sequence in this rank's slice so we don't run the forward pass over pure-padding columns.
-        local_max_len = attention_mask.sum(dim=1).max()
-        input_ids = input_ids[:, :local_max_len]
-        attention_mask = attention_mask[:, :local_max_len]
-        completion_mask = completion_mask[:, :local_max_len]
-        old_log_probs = old_log_probs[:, :local_max_len]
+        # Padding-free: the collator pads to the global batch max length (required so DataLoaderDispatcher can slice
+        # rows across ranks). On each rank, we unpack the padded slice back into a single concatenated sequence of
+        # real tokens, build `position_ids` that reset at each sequence start, and expand per-sample advantages
+        # per-token. FlashAttention derives `cu_seq_lens` from these position resets, so we drop `attention_mask`
+        # entirely. This avoids the wasted forward over pure-padding columns.
+        seq_lengths = attention_mask.sum(dim=1).long()
+        local_max_len = seq_lengths.max()
+        mask_bool = attention_mask.bool()
+        input_ids = input_ids[mask_bool].unsqueeze(0)
+        completion_mask = completion_mask[mask_bool].unsqueeze(0)
+        old_log_probs = old_log_probs[mask_bool].unsqueeze(0)
+
+        total_len = input_ids.size(1)
+        seq_offsets = torch.cumsum(seq_lengths, dim=0) - seq_lengths  # exclusive cumsum: start index of each sequence
+        flat_offsets = torch.repeat_interleave(seq_offsets, seq_lengths)
+        position_ids = (torch.arange(total_len, device=input_ids.device) - flat_offsets).unsqueeze(0)
+
+        per_token_advantages = torch.repeat_interleave(advantages, seq_lengths).unsqueeze(0)
 
         forward_start = time.time()
         outputs = model(
             input_ids=input_ids,
-            attention_mask=attention_mask,
+            position_ids=position_ids,
             labels=input_ids,
             completion_mask=completion_mask,
             use_cache=False,
@@ -474,11 +488,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         completion_mask = completion_mask[:, 1:]
         old_log_probs = old_log_probs[:, 1:]
-        advantages = advantages.unsqueeze(1)
+        per_token_advantages = per_token_advantages[:, 1:]
         log_ratio = log_probs - old_log_probs
         ratio = torch.exp(log_ratio)
         clipped = torch.clamp(ratio, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss = -torch.min(ratio * advantages, clipped * advantages)
+        per_token_loss = -torch.min(ratio * per_token_advantages, clipped * per_token_advantages)
 
         # DDP/FSDP averages gradients across ranks (world_size).
         # To get correct per-token normalization we scale by 1/tokens_per_rank
@@ -531,7 +545,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             sample_metrics = inputs["metrics"]  # dict[str, Tensor(shape=[B_local])]
             keys = list(sample_metrics.keys())
             device = completion_mask.device
-            n_samples = torch.tensor(completion_mask.shape[0], dtype=torch.float32, device=device)
+            n_samples = torch.tensor(float(seq_lengths.shape[0]), dtype=torch.float32, device=device)
             if keys:
                 local_sums = torch.stack([sample_metrics[k].to(device).sum() for k in keys])
                 stats = torch.cat([local_sums, n_samples.unsqueeze(0)])
@@ -540,8 +554,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 for k, global_sum in zip(keys, global_sums, strict=True):
                     self._metrics["train"][k].append((global_sum / global_n_samples).item())
 
-            completion_length = completion_mask.sum(dim=1).float()
-            length_stats = torch.stack([completion_length.sum(), n_samples])
+            length_stats = torch.stack([completion_mask.sum().float(), n_samples])
             length_stats = self.accelerator.reduce(length_stats, reduction="sum")
             self._metrics["train"]["completions/mean_length"].append((length_stats[0] / length_stats[1]).item())
 
