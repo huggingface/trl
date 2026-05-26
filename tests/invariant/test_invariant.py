@@ -193,8 +193,8 @@ def _build(
 # to ~1.5–2× the observed noise.
 EQUIVALENCE_CLASSES: dict[str, dict] = {
     "sft": {
-        "tol": {"loss": 5e-2, "grad_norm": 5e-2},
-        "residual_tol": {"loss": 1e-2, "grad_norm": 1e-2},
+        "tol": {"loss": 1e-3, "grad_norm": 1e-1},
+        "residual_tol": {"loss": 1e-4, "grad_norm": 1e-3},
         "members": [
             _build("sft_default", "sft", SFT_DATASET),
             _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
@@ -230,8 +230,8 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
         ],
     },
     "dpo": {
-        "tol": {"loss": 5e-2, "grad_norm": 5e-2},
-        "residual_tol": {"loss": 1e-2, "grad_norm": 1e-2},
+        "tol": {"loss": 1e-4, "grad_norm": 1e-2},
+        "residual_tol": {"loss": 1e-5, "grad_norm": 1e-3},
         "members": [
             _build("dpo_default", "dpo", DPO_DATASET),
             _build("dpo_pdb1_gas8", "dpo", DPO_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
