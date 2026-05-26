@@ -1061,8 +1061,7 @@ class KTOTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             aux_loss = forward_output[5]
 
-        # if reference_logps in batch use them, otherwise use the reference model
-        if "reference_logps" in batch:
+        if self.precompute_ref_logps:
             # Convert Python lists to tensor indices for efficient CUDA operations
             device = batch["reference_logps"].device
             labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
