@@ -333,6 +333,7 @@ phi3_5_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5.jinja").read_text()
 
 qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text()
 
+# Also matches Qwen2-VL, which ships a byte-identical chat template.
 qwen2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_vl.jinja").read_text()
 
 qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text()
@@ -594,7 +595,8 @@ def get_training_chat_template(
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
     Currently Cohere, Cohere 2, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Phi-3.5,
-    Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, and Qwen3.6 are supported.
+    Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, and Qwen3.6 are
+    supported.
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
