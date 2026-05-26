@@ -212,7 +212,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
                 "sft_fa2",
                 "sft",
                 SFT_DATASET,
-                attn="kernels-community/flash-attn2",   # to avoid cross-contamination between samples when padding_free=True
+                attn="kernels-community/flash-attn2",  # to avoid cross-contamination between samples when padding_free=True
                 bf16=True,  # required for FA2 kernels, which are bfloat16-only
                 max_length=None,  # Required when padding_free=True
                 per_device_train_batch_size=2,
