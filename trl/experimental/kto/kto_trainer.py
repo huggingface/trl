@@ -344,7 +344,7 @@ class KTOTrainer(_BaseTrainer):
 
         # Training arguments
         self.beta = args.beta
-        self.precompute_ref_log_probs = args.precompute_ref_log_probs
+        self.precompute_ref_logps = args.precompute_ref_log_probs
         self.loss_type = args.loss_type
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
@@ -449,7 +449,7 @@ class KTOTrainer(_BaseTrainer):
                     "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
                     "Only KTO loss is supported with liger-kernel."
                 )
-            if self.precompute_ref_log_probs:
+            if self.precompute_ref_logps:
                 raise ValueError(
                     "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
                     "`precompute_ref_log_probs=False`."
@@ -460,7 +460,7 @@ class KTOTrainer(_BaseTrainer):
                 )
             self.kto_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
-        if self.precompute_ref_log_probs:
+        if self.precompute_ref_logps:
             if isinstance(self.train_dataset, IterableDataset) or isinstance(
                 self.eval_dataset, (IterableDataset, IterableDatasetDict)
             ):
@@ -1051,8 +1051,7 @@ class KTOTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             aux_loss = outputs.aux_loss
 
-        # if reference_logps in batch use them, otherwise use the reference model
-        if "reference_logps" in batch:
+        if self.precompute_ref_logps:
             # Convert Python lists to tensor indices for efficient CUDA operations
             device = batch["reference_logps"].device
             labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
