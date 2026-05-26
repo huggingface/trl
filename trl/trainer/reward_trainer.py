@@ -533,6 +533,11 @@ class RewardTrainer(_BaseTrainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
 
+        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
+        # self.model_accepts_loss_kwargs to False to enable scaling.
+        self.model_accepts_loss_kwargs = False
+
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
@@ -692,7 +697,7 @@ class RewardTrainer(_BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 

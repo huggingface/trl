@@ -798,10 +798,10 @@ class GOLDTrainer(SFTTrainer):
             )
         else:
             teacher_model_init_kwargs = args.teacher_model_init_kwargs
-            teacher_model_init_kwargs["torch_dtype"] = (
-                teacher_model_init_kwargs["torch_dtype"]
-                if teacher_model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, teacher_model_init_kwargs["torch_dtype"])
+            teacher_model_init_kwargs["dtype"] = (
+                teacher_model_init_kwargs["dtype"]
+                if teacher_model_init_kwargs["dtype"] in ["auto", None]
+                else getattr(torch, teacher_model_init_kwargs["dtype"])
             )
 
         if args.use_uld_loss and args.teacher_tokenizer_name_or_path is None:
@@ -816,8 +816,6 @@ class GOLDTrainer(SFTTrainer):
             init_kwargs = dict(teacher_model_init_kwargs)
             if args.teacher_model_revision is not None:
                 init_kwargs.setdefault("revision", args.teacher_model_revision)
-            if "torch_dtype" in init_kwargs and "dtype" not in init_kwargs:
-                init_kwargs["dtype"] = init_kwargs.pop("torch_dtype")
             teacher_model = create_model_from_path(teacher_model, **init_kwargs)
         self.use_uld_loss = args.use_uld_loss
         self.teacher_tokenizer = None
@@ -845,7 +843,7 @@ class GOLDTrainer(SFTTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
         if not args.use_uld_loss:
-            teacher_model.resize_token_embeddings(self.model.config.vocab_size)
+            teacher_model.resize_token_embeddings(self.model.config.get_text_config().vocab_size)
 
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
@@ -2037,7 +2035,7 @@ class GOLDTrainer(SFTTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 

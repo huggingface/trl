@@ -5,6 +5,8 @@
     title: Installation
   - local: quickstart
     title: Quickstart
+  - local: usage_stats
+    title: Usage Stats Collection
   title: Getting started
 - sections:
   - local: chat_templates

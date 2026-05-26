@@ -66,17 +66,12 @@ import argparse
 def main(script_args, training_args, model_args, dataset_args):
     from accelerate import logging
     from datasets import load_dataset
-    from transformers import AutoConfig, AutoModelForCausalLM
-    from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 
     from trl import SFTTrainer, get_dataset, get_kbit_device_map, get_peft_config, get_quantization_config
 
     logger = logging.get_logger(__name__)
 
-    ################
-    # Model init kwargs
-    ################
-    model_kwargs = dict(
+    training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
@@ -85,19 +80,8 @@ def main(script_args, training_args, model_args, dataset_args):
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
-        model_kwargs["quantization_config"] = quantization_config
-
-    # Create model
-    config = AutoConfig.from_pretrained(model_args.model_name_or_path)
-    valid_image_text_architectures = MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.values()
-
-    if config.architectures and any(arch in valid_image_text_architectures for arch in config.architectures):
-        from transformers import AutoModelForImageTextToText
-
-        model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)
-    else:
-        model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+        training_args.model_init_kwargs["device_map"] = get_kbit_device_map()
+        training_args.model_init_kwargs["quantization_config"] = quantization_config
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
@@ -117,7 +101,7 @@ def main(script_args, training_args, model_args, dataset_args):
 
     # Initialize the SFT trainer
     trainer = SFTTrainer(
-        model=model,
+        model=model_args.model_name_or_path,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
