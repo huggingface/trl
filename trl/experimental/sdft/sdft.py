@@ -315,10 +315,6 @@ if __name__ == "__main__":
 
     if model_args.model_name_or_path is None:
         raise ValueError("`model_name_or_path` is required.")
-    if training_args.generate_from_teacher:
-        raise ValueError(
-            "`generate_from_teacher` is not yet supported by the transitioned SDFT trainer used in this script."
-        )
     if model_args.dtype in ["auto", None]:
         if training_args.bf16:
             dtype = torch.bfloat16

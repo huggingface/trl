@@ -295,6 +295,7 @@ class SDFTTrainer(_BaseTrainer):
         self.loss_type = args.loss_type
         self.mask_truncated_completions = args.mask_truncated_completions
         self.temperature = args.temperature
+        self.generate_from_teacher = args.generate_from_teacher
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self._step = 0
         self._buffered_inputs = None
@@ -528,10 +529,19 @@ class SDFTTrainer(_BaseTrainer):
 
     def sample_rollouts(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
         prompts = [example["prompt"] for example in inputs]
-        prompt_ids = self._tokenize_prompts(prompts)
+        privileged_contexts = [example.get("privileged_context") for example in inputs]
+
+        student_prompt_ids_list = self._tokenize_prompts(prompts)
+        if self.generate_from_teacher:
+            generation_prompts = self.teacher_context_builder.select_generation_prompts(prompts, privileged_contexts)
+            generation_prompt_ids_list = self._tokenize_prompts(generation_prompts)
+        else:
+            generation_prompts = prompts
+            generation_prompt_ids_list = student_prompt_ids_list
+
         self._dispatch_self_distillation_callback(
             "on_generation_prompts_selected",
-            generation_prompts=prompts,
+            generation_prompts=generation_prompts,
             generation_prompt_text=None,
         )
 
@@ -540,13 +550,12 @@ class SDFTTrainer(_BaseTrainer):
             self.generation_engine.sync_weights()
             self._last_loaded_step = self.state.global_step
         generation_output = self.generation_engine.generate(
-            prompt_ids,
+            generation_prompt_ids_list,
             num_generations=num_generations,
         )
-        prompt_ids_list = generation_output.prompt_ids
         completion_ids_list = generation_output.completion_ids
         device = self.accelerator.device
-        prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
+        prompt_ids = [torch.tensor(ids) for ids in student_prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
         prompt_ids = pad(prompt_ids, padding_value=self._tokenizer.pad_token_id, padding_side="left").to(device=device)
         prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left").to(device=device)
@@ -563,12 +572,14 @@ class SDFTTrainer(_BaseTrainer):
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
-        old_per_token_logps = self._compute_rollout_logps(
-            prompt_ids=prompt_ids,
-            prompt_mask=prompt_mask,
-            completion_ids=completion_ids,
-            completion_mask=completion_mask,
-        )
+        old_per_token_logps = None
+        if not self.generate_from_teacher:
+            old_per_token_logps = self._compute_rollout_logps(
+                prompt_ids=prompt_ids,
+                prompt_mask=prompt_mask,
+                completion_ids=completion_ids,
+                completion_mask=completion_mask,
+            )
         batch: TrainingBatch = {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,

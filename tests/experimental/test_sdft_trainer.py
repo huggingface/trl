@@ -31,15 +31,18 @@ class SelfDistillationCaptureCallback(TrainerCallback):
     def __init__(self):
         self.captured_generation_prompts = None
         self.captured_old_per_token_logps = None
+        self.captured_prompt_ids = None
         self.generation_batch_build_count = 0
 
     def on_generation_prompts_selected(self, generation_prompts=None, **kwargs):
         if self.captured_generation_prompts is None and generation_prompts is not None:
             self.captured_generation_prompts = generation_prompts
 
-    def on_self_distillation_batch_prepared(self, old_per_token_logps=None, **kwargs):
+    def on_self_distillation_batch_prepared(self, old_per_token_logps=None, prompt_ids=None, **kwargs):
         if self.captured_old_per_token_logps is None and old_per_token_logps is not None:
             self.captured_old_per_token_logps = old_per_token_logps.detach().cpu()
+        if self.captured_prompt_ids is None and prompt_ids is not None:
+            self.captured_prompt_ids = prompt_ids.detach().cpu()
 
     def on_generation_batch_built(self, **kwargs):
         self.generation_batch_build_count += 1
@@ -116,7 +119,6 @@ class TestSDFTTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="`privileged_context` must not be None"):
             trainer.train()
 
-    @pytest.mark.skip(reason="`generate_from_teacher` is not ported yet")
     def test_train_with_generate_from_teacher(self):
         dataset = Dataset.from_dict(
             {
@@ -149,8 +151,15 @@ class TestSDFTTrainer(TrlTestCase):
 
         trainer.train()
 
-        assert capture_callback.captured_generation_prompts is not None
-        assert capture_callback.captured_generation_prompts[0] != dataset[0]["prompt"]
+        assert capture_callback.captured_generation_prompts == [
+            "Solve 2+2.\n\nTeacher hint: answer with 4 and explain briefly."
+        ]
+        student_prompt_text = trainer.processing_class.decode(
+            capture_callback.captured_prompt_ids[0],
+            skip_special_tokens=True,
+        )
+        assert "Teacher hint" not in student_prompt_text
+        assert "Solve 2+2." in student_prompt_text
 
     def test_train_with_chat_template_kwargs(self):
         dataset = Dataset.from_dict(
@@ -304,6 +313,42 @@ class TestSDFTTrainer(TrlTestCase):
         trainer.train()
 
         assert capture_callback.captured_old_per_token_logps is not None
+
+    def test_train_with_generate_from_teacher_skips_old_log_probs_for_distillation_clipping(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Solve 3+3."],
+                "privileged_context": [
+                    "Teacher hint: answer with 4.",
+                    "Teacher hint: answer with 6.",
+                ],
+            }
+        )
+
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=3,
+            steps_per_generation=2,
+            max_completion_length=8,
+            max_steps=1,
+            num_generations=1,
+            generate_from_teacher=True,
+            report_to="none",
+        )
+
+        capture_callback = SelfDistillationCaptureCallback()
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            callbacks=[capture_callback],
+        )
+
+        trainer.train()
+
+        assert capture_callback.captured_old_per_token_logps is None
 
     def test_train_reuses_buffered_generation_batches(self):
         dataset = Dataset.from_dict(
