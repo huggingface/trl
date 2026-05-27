@@ -888,8 +888,8 @@ class OnlineDPOTrainer(_BaseTrainer):
             ),
         }
 
-        # Keep the Qwen3.5 remapping logic inline here because TRL deliberately duplicates weight-sync logic across
-        # trainers instead of abstracting it into a shared helper.
+        # Qwen3.5 text-only/VLM checkpoints use Hugging Face parameter prefixes that do not match the current
+        # vLLM runtime namespace, so we apply a narrow TRL-side compatibility shim during weight sync.
         for architecture in self.model.config.architectures or []:
             prefix_map = qwen3_hf_to_vllm_prefix_maps.get(architecture)
             if prefix_map is None:

@@ -15,6 +15,10 @@ EXPECTED_RULE_SNIPPETS = [
     '"language_model.lm_head."',
     '"visual."',
 ]
+EXPECTED_INLINE_COMMENT = (
+    "# Qwen3.5 text-only/VLM checkpoints use Hugging Face parameter prefixes that do not match the current\n"
+    "        # vLLM runtime namespace, so we apply a narrow TRL-side compatibility shim during weight sync."
+)
 
 
 def _get_fix_method_source(path: Path) -> str:
@@ -47,3 +51,11 @@ def test_online_dpo_fix_param_name_inlines_qwen35_remap_rules():
 
     for snippet in EXPECTED_RULE_SNIPPETS:
         assert snippet in source
+
+
+def test_duplicated_qwen35_inline_comments_match_word_for_word():
+    generation_source = _get_fix_method_source(VLLM_GENERATION_PATH)
+    online_dpo_source = _get_fix_method_source(ONLINE_DPO_PATH)
+
+    assert EXPECTED_INLINE_COMMENT in generation_source
+    assert EXPECTED_INLINE_COMMENT in online_dpo_source
