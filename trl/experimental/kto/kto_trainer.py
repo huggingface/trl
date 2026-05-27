@@ -330,14 +330,6 @@ class KTOTrainer(_BaseTrainer):
                 max_length=args.max_length,
             )
 
-            if args.remove_unused_columns:
-                args.remove_unused_columns = False
-                # warn users
-                logger.warning(
-                    "When using DataCollatorForUnpairedPreference, you should set `remove_unused_columns=False` in your KTOConfig"
-                    " we have set it for you, but you should do it yourself in the future.",
-                )
-
             self.use_dpo_data_collator = True
         else:
             self.use_dpo_data_collator = False
@@ -655,6 +647,20 @@ class KTOTrainer(_BaseTrainer):
                             "See the documentation on how to optimally set these weights.",
                         )
         return dataset
+
+    def _set_signature_columns_if_needed(self):
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
+        # and "attention_mask").
+        if self._signature_columns is None:
+            self._signature_columns = [
+                "prompt_ids",
+                "completion_ids",
+                "KL_completion_ids",
+                "label",
+                "reference_logps",
+                "reference_KL_logps",
+            ]
 
     @contextmanager
     def null_ref_context(self):
