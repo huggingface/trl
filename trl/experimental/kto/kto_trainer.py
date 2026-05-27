@@ -650,6 +650,20 @@ class KTOTrainer(_BaseTrainer):
                         )
         return dataset
 
+    def _set_signature_columns_if_needed(self):
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
+        # and "attention_mask").
+        if self._signature_columns is None:
+            self._signature_columns = [
+                "prompt_ids",
+                "completion_ids",
+                "KL_completion_ids",
+                "label",
+                "reference_logps",
+                "reference_KL_logps",
+            ]
+
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
