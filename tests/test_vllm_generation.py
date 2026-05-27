@@ -66,10 +66,6 @@ class TinyQwen35Conditional(nn.Module):
         self.config = SimpleNamespace(architectures=architectures or ["Qwen3_5ForConditionalGeneration"])
 
 
-class Qwen3_5ForCausalLM(TinyQwen35Causal):
-    pass
-
-
 def make_vllm_generation(model: nn.Module, mode: str) -> tuple[VLLMGeneration, MagicMock]:
     generation = VLLMGeneration.__new__(VLLMGeneration)
     generation.model = model
@@ -153,10 +149,10 @@ def test_fix_param_name_uses_first_supported_architecture():
     assert generation._fix_param_name_to_vllm("model.layers.weight") == "language_model.model.layers.weight"
 
 
-def test_fix_param_name_falls_back_to_model_class_name_when_architectures_are_missing():
-    generation, _ = make_vllm_generation(Qwen3_5ForCausalLM(architectures=None), mode="server")
+def test_fix_param_name_keeps_missing_architectures_unchanged():
+    generation, _ = make_vllm_generation(TinyQwen35Causal(architectures=None), mode="server")
 
-    assert generation._fix_param_name_to_vllm("model.layers.weight") == "language_model.model.layers.weight"
+    assert generation._fix_param_name_to_vllm("model.layers.weight") == "model.layers.weight"
 
 
 def test_sync_weights_server_uses_qwen35_mapped_names():

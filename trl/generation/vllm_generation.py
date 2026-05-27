@@ -36,6 +36,7 @@ from ..extras.profiling import ProfilingContext
 from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
 from .vllm_client import VLLMClient
+from .vllm_sync_utils import fix_param_name_to_vllm
 
 
 if is_vllm_available():
@@ -44,23 +45,6 @@ if is_vllm_available():
 
 
 logger = logging.getLogger(__name__)
-
-QWEN3_HF_TO_VLLM_PREFIX_MAPS = {
-    "Qwen3_5ForCausalLM": (
-        ("lm_head.", "language_model.lm_head."),
-        ("model.", "language_model.model."),
-    ),
-    "Qwen3_5ForConditionalGeneration": (
-        ("model.visual.", "visual."),
-        ("lm_head.", "language_model.lm_head."),
-        ("model.language_model.", "language_model.model."),
-    ),
-    "Qwen3VLForConditionalGeneration": (
-        ("model.visual.", "visual."),
-        ("lm_head.", "language_model.lm_head."),
-        ("model.language_model.", "language_model.model."),
-    ),
-}
 
 
 def empty_cache() -> None:
@@ -392,26 +376,9 @@ class VLLMGeneration:
 
     def _fix_param_name_to_vllm(self, name: str, extra_prefixes: list[str] | None = None) -> str:
         """Fix parameter name for vLLM compatibility."""
-        extra_prefixes = extra_prefixes or []
-        prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
-        for prefix in prefixes:
-            name = name.replace(prefix, "")
-
-        architectures = list(getattr(getattr(self.model, "config", None), "architectures", None) or [])
-        if not architectures:
-            architectures.append(type(self.model).__name__)
-        for architecture in architectures:
-            prefix_map = QWEN3_HF_TO_VLLM_PREFIX_MAPS.get(architecture)
-            if prefix_map is None:
-                continue
-
-            # Qwen3.5 text-only/VLM checkpoints use Hugging Face parameter prefixes that do not match the current
-            # vLLM runtime namespace, so we apply a narrow TRL-side compatibility shim during weight sync.
-            for hf_prefix, vllm_prefix in prefix_map:
-                if name.startswith(hf_prefix):
-                    return name.replace(hf_prefix, vllm_prefix, 1)
-            break
-        return name
+        # Qwen3.5 text-only/VLM checkpoints use Hugging Face parameter prefixes that do not match the current
+        # vLLM runtime namespace, so we apply a narrow TRL-side compatibility shim during weight sync.
+        return fix_param_name_to_vllm(name, self.model.config.architectures or [], extra_prefixes)
 
     def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited: set[str] | None = None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""

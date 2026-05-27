@@ -51,6 +51,7 @@ from transformers.utils import is_peft_available, is_sagemaker_mp_enabled
 from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ...extras.profiling import profiling_context
 from ...generation.vllm_client import VLLMClient
+from ...generation.vllm_sync_utils import fix_param_name_to_vllm
 from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
@@ -866,11 +867,7 @@ class OnlineDPOTrainer(_BaseTrainer):
 
     def _fix_param_name_to_vllm(self, name, extra_prefixes: list[str] | None = None):
         """Clean parameter names for vLLM compatibility"""
-        extra_prefixes = extra_prefixes or []
-        prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
-        for prefix in prefixes:
-            name = name.replace(prefix, "")
-        return name
+        return fix_param_name_to_vllm(name, self.model.config.architectures or [], extra_prefixes)
 
     def process_vision_row(
         self, features: dict[str, list | torch.Tensor], processing_class=None
