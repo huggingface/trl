@@ -427,22 +427,22 @@ class TestDistillationTrainer(TrlTestCase):
         return DistillationConfig(**args)
 
     def _make_local_trainer(self, **kwargs):
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         return DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=self._make_args(**kwargs),
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dataset,
             processing_class=self.tokenizer,
         )
 
     def _make_server_trainer(self, **kwargs):
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         return DistillationTrainer(
             model=self.model_id,
             teacher_model=None,
             args=self._make_args(use_teacher_server=True, teacher_model_server_url="http://localhost:8000", **kwargs),
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dataset,
             processing_class=self.tokenizer,
         )
 
@@ -464,13 +464,13 @@ class TestDistillationTrainer(TrlTestCase):
             save_steps=2,
             per_device_eval_batch_size=2,
         )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
         trainer = DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=training_args,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
             processing_class=self.tokenizer,
         )
 
@@ -487,13 +487,13 @@ class TestDistillationTrainer(TrlTestCase):
         import importlib
 
         training_args = self._make_args(use_liger_kernel=True, use_cpu=False)
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         trainer = DistillationTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=training_args,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dataset,
             processing_class=self.tokenizer,
         )
 

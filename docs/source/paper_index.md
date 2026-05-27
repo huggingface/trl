@@ -1137,6 +1137,25 @@ training_args = DPOConfig(
 )
 ```
 
+### TÜLU 3: Pushing Frontiers in Open Language Model Post-Training
+
+**📜 Paper**: https://huggingface.co/papers/2411.15124
+
+The length-normalized sigmoid loss addresses length bias in DPO by dividing chosen and rejected log-ratio scores by their respective completion lengths before computing the Bradley-Terry loss. This per-token normalization was introduced in [SimPO](https://huggingface.co/papers/2405.14734) (Appendix I "DPO w/ LN" ablation) as an average log-probability reward for a reference-free setting, and was later adopted for standard reference-model-based DPO in post-training recipes such as [Tülu 3](https://huggingface.co/papers/2411.15124) (Section 4.3). The loss is:
+
+$$
+\mathcal{L}_{\text{sigmoid\_norm}} = -\log\sigma\!\left(\beta \left({\color{red}\frac{1}{|y_w|}}\log\frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - {\color{red}\frac{1}{|y_l|}}\log\frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)\right),
+$$
+which can be set with:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="sigmoid_norm",
+)
+```
+
 ## Kahneman–Tversky Optimization
 
 Papers relating to the [`experimental.kto.KTOTrainer`]

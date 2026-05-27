@@ -516,23 +516,18 @@ class DistillationTrainer(_BaseTrainer):
                 )
 
             if isinstance(teacher_model, str):
-                torch_dtype = teacher_model_init_kwargs.get("torch_dtype")
-                teacher_model_init_kwargs["torch_dtype"] = (
-                    torch_dtype if torch_dtype in ["auto", None] else getattr(torch, torch_dtype)
-                )
+                dtype = teacher_model_init_kwargs.get("dtype")
+                teacher_model_init_kwargs["dtype"] = dtype if dtype in ["auto", None] else getattr(torch, dtype)
 
             if isinstance(teacher_model, str):
                 init_kwargs = dict(teacher_model_init_kwargs)
                 if args.teacher_model_revision is not None:
                     init_kwargs.setdefault("revision", args.teacher_model_revision)
-                if "torch_dtype" in init_kwargs and "dtype" not in init_kwargs:
-                    init_kwargs["dtype"] = init_kwargs.pop("torch_dtype")
                 teacher_model = create_model_from_path(teacher_model, **init_kwargs)
 
         # Trainer does not need to remove unused columns — the collator handles raw data
         args.remove_unused_columns = False
 
-        # ── Call _BaseTrainer.__init__ (which is transformers.Trainer.__init__) ──
         super().__init__(
             model=model,
             args=args,
@@ -549,7 +544,7 @@ class DistillationTrainer(_BaseTrainer):
         # ── Prepare teacher model (after super().__init__ so accelerator is ready) ──
         if teacher_model is not None:
             if self._local_teacher_tokenizer_matches_student:
-                teacher_model.resize_token_embeddings(self.model.config.vocab_size)
+                teacher_model.resize_token_embeddings(self.model.config.get_text_config().vocab_size)
             if self.is_deepspeed_enabled:
                 self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
             else:
@@ -1666,7 +1661,7 @@ class DistillationTrainer(_BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 

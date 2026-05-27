@@ -132,7 +132,7 @@ config_set = List([
             fp16=True,
         ),
         model_type="causal_lm",
-        model_kwargs={"device_map": "auto", "torch_dtype": "auto", "use_cache": False},
+        model_kwargs={"device_map": "auto", "dtype": "auto", "use_cache": False},
         formatting_func=formatting_function,
     ),
     RFModelConfig(
@@ -145,7 +145,7 @@ config_set = List([
             fp16=True,
         ),
         model_type="causal_lm",
-        model_kwargs={"device_map": "auto", "torch_dtype": "auto", "use_cache": False},
+        model_kwargs={"device_map": "auto", "dtype": "auto", "use_cache": False},
         formatting_func=formatting_function,
     )
 ])
@@ -361,7 +361,7 @@ model_config = RFModelConfig(
         },
     ),
     model_type="causal_lm",
-    model_kwargs={"torch_dtype": "auto"},
+    model_kwargs={"dtype": "auto"},
 )
 ```
 

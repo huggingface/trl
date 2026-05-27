@@ -109,4 +109,4 @@ For each function call, output the function name and arguments within the follow
 {%- endfor -%}
 {%- if add_generation_prompt -%}
     <|assistant|>{{- '\n<think></think>' if (enable_thinking is defined and not enable_thinking) else '' -}}
-{%- endif -%}
+{%- endif -%}

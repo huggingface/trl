@@ -1,0 +1,63 @@
+{#- Training variant of the Qwen 2.5 VL chat template (see qwen2_5_vl.jinja for the original).
+    Also used for Qwen 2 VL, which ships a byte-identical chat template.
+    Modifications vs the original:
+    - Split the assistant message into its own branch so the {% generation %} / {% endgeneration %}
+      markers wrap the assistant content (everything after the '<|im_start|>assistant\n' prompt
+      cue, up to and including the trailing '<|im_end|>\n'). This enables assistant-only loss
+      masking in SFT training.
+-#}
+{%- set image_count = namespace(value=0) %}
+{%- set video_count = namespace(value=0) %}
+{%- for message in messages %}
+    {%- if loop.first and message['role'] != 'system' %}
+        {{- '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n' }}
+    {%- endif %}
+    {%- if message['role'] == 'assistant' %}
+        {{- '<|im_start|>assistant\n' }}
+        {%- generation -%}
+            {%- if message['content'] is string %}
+                {{- message['content'] }}
+                {{- '<|im_end|>\n' }}
+            {%- else %}
+                {%- for content in message['content'] %}
+                    {%- if content['type'] == 'image' or 'image' in content or 'image_url' in content %}
+                        {%- set image_count.value = image_count.value + 1 %}
+                        {%- if add_vision_id %}Picture {{ image_count.value }}: {% endif -%}
+                        <|vision_start|><|image_pad|><|vision_end|>
+                    {%- elif content['type'] == 'video' or 'video' in content %}
+                        {%- set video_count.value = video_count.value + 1 %}
+                        {%- if add_vision_id %}Video {{ video_count.value }}: {% endif -%}
+                        <|vision_start|><|video_pad|><|vision_end|>
+                    {%- elif 'text' in content %}
+                        {{- content['text'] }}
+                    {%- endif %}
+                {%- endfor %}
+                {{- '<|im_end|>\n' }}
+            {%- endif %}
+        {%- endgeneration -%}
+    {%- else %}
+        {{- '<|im_start|>' + message['role'] + '\n' }}
+        {%- if message['content'] is string %}
+            {{- message['content'] }}
+            {{- '<|im_end|>\n' }}
+        {%- else %}
+            {%- for content in message['content'] %}
+                {%- if content['type'] == 'image' or 'image' in content or 'image_url' in content %}
+                    {%- set image_count.value = image_count.value + 1 %}
+                    {%- if add_vision_id %}Picture {{ image_count.value }}: {% endif -%}
+                    <|vision_start|><|image_pad|><|vision_end|>
+                {%- elif content['type'] == 'video' or 'video' in content %}
+                    {%- set video_count.value = video_count.value + 1 %}
+                    {%- if add_vision_id %}Video {{ video_count.value }}: {% endif -%}
+                    <|vision_start|><|video_pad|><|vision_end|>
+                {%- elif 'text' in content %}
+                    {{- content['text'] }}
+                {%- endif %}
+            {%- endfor %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+{%- endif %}

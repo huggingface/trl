@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from pathlib import Path
 from typing import TypeVar
 
@@ -119,7 +120,7 @@ def clone_chat_template(
 
 
 glm4moe_schema = {
-    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?$",
+    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>(?:(?!<tool_call>)[\s\S])*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|$))(?P<tool_calls>(?:<tool_call>(?:(?!</tool_call>)[\s\S])+</tool_call>\s*)+)?$",
     "type": "object",
     "properties": {
         "role": {"const": "assistant"},
@@ -199,7 +200,7 @@ gptoss_schema = {
 # Adapted and corrected versions of the schemas from:
 # https://github.com/huggingface/transformers/blob/main/tests/utils/test_chat_parsing_utils.py
 qwen3_schema = {
-    "x-regex": r"^(?:<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
+    "x-regex": r"^(?:<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>(?:(?!<tool_call>)[\s\S])*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>(?:(?!</tool_call>)[\s\S])+</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
     "properties": {
         "role": {"const": "assistant"},
@@ -271,7 +272,7 @@ llama3_schema = {
 }
 
 qwen3_5_schema = {
-    "x-regex": r"^(?:(?:<think>\n?)?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n+(?=<tool_call>))?(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
+    "x-regex": r"^(?:(?:<think>\n?)?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>(?:(?!<tool_call>)[\s\S])*?)(?:\n+(?=<tool_call>))?(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>(?:(?!</tool_call>)[\s\S])+</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
     "properties": {
         "role": {"const": "assistant"},
@@ -308,9 +309,13 @@ qwen3_5_schema = {
 
 cohere_chat_template = (_CHAT_TEMPLATES_DIR / "cohere.jinja").read_text()
 
+cohere2_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2.jinja").read_text()
+
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text()
 
 gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text()
+
+gemma3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3.jinja").read_text()
 
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text()
 
@@ -324,15 +329,22 @@ llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text()
 
 phi3_chat_template = (_CHAT_TEMPLATES_DIR / "phi3.jinja").read_text()
 
+phi3_5_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5.jinja").read_text()
+
 qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text()
+
+# Also matches Qwen2-VL, which ships a byte-identical chat template.
+qwen2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_vl.jinja").read_text()
 
 qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text()
 
+qwen3_instruct_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507.jinja").read_text()
+
 qwen3_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl.jinja").read_text()
 
-qwen3_5_chat_template_2b_and_below = (_CHAT_TEMPLATES_DIR / "qwen3_5_2b_and_below.jinja").read_text()
+qwen3_5_nothink_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_nothink.jinja").read_text()
 
-qwen3_5_chat_template_4b_and_above = (_CHAT_TEMPLATES_DIR / "qwen3_5_4b_and_above.jinja").read_text()
+qwen3_5_think_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think.jinja").read_text()
 
 qwen3_6_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6.jinja").read_text()
 
@@ -386,11 +398,16 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer.response_schema = gptoss_schema
     elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
         tokenizer.response_schema = llama3_schema
-    elif chat_template in [qwen3_chat_template, qwen3_vl_chat_template]:
+    elif chat_template in [
+        qwen2_5_chat_template,
+        qwen3_chat_template,
+        qwen3_instruct_2507_chat_template,
+        qwen3_vl_chat_template,
+    ]:
         tokenizer.response_schema = qwen3_schema
     elif chat_template in [
-        qwen3_5_chat_template_2b_and_below,
-        qwen3_5_chat_template_4b_and_above,
+        qwen3_5_nothink_chat_template,
+        qwen3_5_think_chat_template,
         qwen3_6_chat_template,
     ]:
         tokenizer.response_schema = qwen3_5_schema
@@ -533,9 +550,13 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase
 
 cohere_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere_training.jinja").read_text()
 
+cohere2_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2_training.jinja").read_text()
+
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text()
 
 gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma_training.jinja").read_text()
+
+gemma3_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3_training.jinja").read_text()
 
 glm4moe_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe_training.jinja").read_text()
 
@@ -545,25 +566,41 @@ llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").
 
 phi3_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_training.jinja").read_text()
 
+phi3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5_training.jinja").read_text()
+
 qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text()
 
+qwen2_5_vl_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_vl_training.jinja").read_text()
+
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text()
+
+qwen3_instruct_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507_training.jinja").read_text()
+
+qwen3_vl_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl_training.jinja").read_text()
+
+qwen3_5_nothink_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_nothink_training.jinja").read_text()
+
+qwen3_5_think_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think_training.jinja").read_text()
 
 qwen3_6_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6_training.jinja").read_text()
 
 
-def get_training_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None:
+def get_training_chat_template(
+    processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+    tokenizer: PreTrainedTokenizerBase | None = None,
+) -> str | None:
     r"""
     Get a training-compatible chat template, if needed.
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
-    %%}` markers for assistant-only loss masking. Returns `None` if the tokenizer's template already satisfies both
-    requirements. Currently Cohere, DeepSeek-V3, Gemma, Gemma2, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Qwen2.5, Qwen3, and
-    Qwen3.6 are supported.
+    %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
+    Currently Cohere, Cohere 2, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Phi-3.5,
+    Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, and Qwen3.6 are
+    supported.
 
     Args:
-        tokenizer (`PreTrainedTokenizerBase`):
-            Tokenizer instance to check.
+        processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
+            Tokenizer or processor instance to check.
 
     Returns:
         `str` or `None`:
@@ -604,46 +641,84 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None
     '<|im_start|>user\nWhat is 2 * 3?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n{"name": "multiply", "arguments": {"a": 2, "b": 3}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n6\n</tool_response><|im_end|>\n<|im_start|>assistant\n'
     ```
     """
+    if tokenizer is not None:
+        if processing_class is not None:
+            raise TypeError(
+                "Pass only `processing_class`; `tokenizer` is a deprecated alias for backward compatibility."
+            )
+        warnings.warn(
+            "The `tokenizer` argument of `get_training_chat_template` is deprecated and will be removed in TRL 2.0. "
+            "Use `processing_class` instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        processing_class = tokenizer
+    if processing_class is None:
+        raise TypeError("get_training_chat_template() missing required argument: 'processing_class'")
+
     # First check if patching is needed. Prefix-preservation only matters when the template actually supports tools
     # (the check itself renders a tool message), so skip it otherwise.
-    prefix_ok = not supports_tool_calling(tokenizer) or is_chat_template_prefix_preserving(tokenizer)
-    if prefix_ok and "{% generation %}" in tokenizer.chat_template:
+    prefix_ok = not supports_tool_calling(processing_class) or is_chat_template_prefix_preserving(processing_class)
+    if prefix_ok and "{% generation %}" in processing_class.chat_template:
         return None  # No patching needed
 
-    if tokenizer.chat_template == cohere_chat_template:
+    if processing_class.chat_template == cohere_chat_template:
         return cohere_training_chat_template
 
-    if tokenizer.chat_template == deepseekv3_chat_template:
+    if processing_class.chat_template == cohere2_chat_template:
+        return cohere2_training_chat_template
+
+    if processing_class.chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
 
-    if tokenizer.chat_template == gemma_chat_template:
+    if processing_class.chat_template == gemma_chat_template:
         return gemma_training_chat_template
 
-    if tokenizer.chat_template == glm4moe_chat_template:
+    if processing_class.chat_template == gemma3_chat_template:
+        return gemma3_training_chat_template
+
+    if processing_class.chat_template == glm4moe_chat_template:
         return glm4moe_training_chat_template
 
-    if tokenizer.chat_template == gptoss_chat_template:
+    if processing_class.chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
 
-    if tokenizer.chat_template == llama3_chat_template:
+    if processing_class.chat_template == llama3_chat_template:
         return llama3_training_chat_template
 
-    if tokenizer.chat_template == phi3_chat_template:
+    if processing_class.chat_template == phi3_chat_template:
         return phi3_training_chat_template
 
-    if tokenizer.chat_template == qwen2_5_chat_template:
+    if processing_class.chat_template == phi3_5_chat_template:
+        return phi3_5_training_chat_template
+
+    if processing_class.chat_template == qwen2_5_chat_template:
         return qwen2_5_training_chat_template
 
-    if tokenizer.chat_template == qwen3_chat_template:
+    if processing_class.chat_template == qwen2_5_vl_chat_template:
+        return qwen2_5_vl_training_chat_template
+
+    if processing_class.chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
 
-    if tokenizer.chat_template == qwen3_6_chat_template:
+    if processing_class.chat_template == qwen3_instruct_2507_chat_template:
+        return qwen3_instruct_2507_training_chat_template
+
+    if processing_class.chat_template == qwen3_vl_chat_template:
+        return qwen3_vl_training_chat_template
+
+    if processing_class.chat_template == qwen3_5_nothink_chat_template:
+        return qwen3_5_nothink_training_chat_template
+
+    if processing_class.chat_template == qwen3_5_think_chat_template:
+        return qwen3_5_think_training_chat_template
+
+    if processing_class.chat_template == qwen3_6_chat_template:
         return qwen3_6_training_chat_template
 
     raise ValueError(
-        "The tokenizer's chat template is not training-compatible (missing prefix-preservation or "
-        "`{% generation %}` markers) and patching is not supported for this template. "
-        "Please manually modify the tokenizer's chat template for training."
+        "The chat template is not training-compatible (missing prefix-preservation or `{% generation %}` markers) "
+        "and patching is not supported for this template. Please manually modify the chat template for training."
     )
 
 
@@ -685,7 +760,7 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
                 tool_call["arguments"] = {}
 
 
-def parse_response(processing_class: PreTrainedTokenizerBase | ProcessorMixin, ids: list[int]) -> dict:
+def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int]) -> dict:
     r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
 
@@ -695,11 +770,9 @@ def parse_response(processing_class: PreTrainedTokenizerBase | ProcessorMixin, i
     Also removes incorrectly appended EOS tokens from tool call content when present, and validates tool_calls to
     ensure all required fields exist.
 
-    For VLM processors, automatically uses the inner tokenizer for parsing.
-
     Args:
-        processing_class (`PreTrainedTokenizerBase` or VLM processor):
-            Tokenizer or processor with a `parse_response()` method (directly or via inner tokenizer).
+        tokenizer (`PreTrainedTokenizerBase`):
+            Tokenizer with a `parse_response()` method.
         ids (`list[int]`):
             List of token sequences.
 
@@ -720,10 +793,10 @@ def parse_response(processing_class: PreTrainedTokenizerBase | ProcessorMixin, i
     {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
     ```
     """
-    # VLM processors don't have parse_response directly; use the inner tokenizer
-    tokenizer = getattr(processing_class, "tokenizer", processing_class)
     try:
         parsed = tokenizer.parse_response(ids)
+        if parsed is None:  # this can happen if the response is heavily truncated and even the content is lost
+            raise ValueError("parse_response returned None")
         # Hotfix: remove incorrectly appended EOS token from tool calls
         # See https://github.com/huggingface/transformers/issues/42249
         if isinstance(parsed.get("content"), str):

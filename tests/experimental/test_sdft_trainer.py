@@ -57,7 +57,7 @@ class TestSDFTTrainer(TrlTestCase):
             for name, previous_param in previous_trainable_params.items()
         )
 
-    def test_training(self):
+    def test_train(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
@@ -90,7 +90,7 @@ class TestSDFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
         self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
-    def test_training_rejects_none_privileged_context(self):
+    def test_train_rejects_none_privileged_context(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2."],
@@ -117,7 +117,7 @@ class TestSDFTTrainer(TrlTestCase):
             trainer.train()
 
     @pytest.mark.skip(reason="`generate_from_teacher` is not ported yet")
-    def test_training_with_generate_from_teacher(self):
+    def test_train_with_generate_from_teacher(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
@@ -152,7 +152,7 @@ class TestSDFTTrainer(TrlTestCase):
         assert capture_callback.captured_generation_prompts is not None
         assert capture_callback.captured_generation_prompts[0] != dataset[0]["prompt"]
 
-    def test_training_with_chat_template_kwargs(self):
+    def test_train_with_chat_template_kwargs(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": [
@@ -191,7 +191,7 @@ class TestSDFTTrainer(TrlTestCase):
         self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
     @require_peft
-    def test_training_with_peft_model(self):
+    def test_train_with_peft_model(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
@@ -230,7 +230,7 @@ class TestSDFTTrainer(TrlTestCase):
         self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
     @require_peft
-    def test_training_with_peft_model_and_ema_teacher_sync(self):
+    def test_train_with_peft_model_and_ema_teacher_sync(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
@@ -270,7 +270,7 @@ class TestSDFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
         self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
-    def test_training_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
+    def test_train_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
@@ -305,7 +305,7 @@ class TestSDFTTrainer(TrlTestCase):
 
         assert capture_callback.captured_old_per_token_logps is not None
 
-    def test_training_reuses_buffered_generation_batches(self):
+    def test_train_reuses_buffered_generation_batches(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],

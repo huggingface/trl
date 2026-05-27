@@ -90,6 +90,9 @@ class _StubRolloutWorker:
     def send_weights(self, iterator):
         pass
 
+    def check_health(self, stale_after_s):
+        pass
+
 
 class TestAsyncGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
@@ -103,7 +106,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
         )
 
-    def test_training(self):
+    def test_train(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 

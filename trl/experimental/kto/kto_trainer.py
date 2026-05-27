@@ -12,21 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import textwrap
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any
 
+import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
 from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
+from datasets.fingerprint import Hasher
 from packaging.version import Version
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
@@ -53,6 +55,7 @@ from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
     get_config_model_id,
+    hash_module,
     pad,
     selective_log_softmax,
     use_adapter,
@@ -65,10 +68,6 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
-
-
-if TYPE_CHECKING:
-    from transformers import PreTrainedModel
 
 
 logger = logging.get_logger(__name__)
@@ -324,26 +323,11 @@ class KTOTrainer(_BaseTrainer):
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
 
-        # KTO only supports causal language models, not encoder-decoder models
-        if model is not None and hasattr(model.config, "is_encoder_decoder") and model.config.is_encoder_decoder:
-            raise ValueError(
-                "KTO only supports causal language models. Encoder-decoder models are not supported. "
-                "Please use a causal LM (e.g., GPT, Llama, Mistral) instead of an encoder-decoder model (e.g., T5, BART)."
-            )
-
-        if args.max_length is None:
-            logger.warning(
-                "When using DataCollatorForUnpairedPreference, you should set `max_length` in the KTOTrainer's init"
-                " it will be set to `512` by default, but you should do it yourself in the future.",
-            )
-            max_length = 512
-        if args.max_length is not None:
-            max_length = args.max_length
-
+        # Data collator
         if data_collator is None:
             data_collator = DataCollatorForUnpairedPreference(
                 pad_token_id=self._tokenizer.pad_token_id,
-                max_length=max_length,
+                max_length=args.max_length,
             )
 
             if args.remove_unused_columns:
@@ -358,28 +342,19 @@ class KTOTrainer(_BaseTrainer):
         else:
             self.use_dpo_data_collator = False
 
-        self.loss_type = args.loss_type
-        self.max_length = max_length
-        self.precompute_ref_log_probs = args.precompute_ref_log_probs
-
-        # Not all losses require a KL calculation
-        self.calculate_KL = True
-        if self.loss_type in ["apo_zero_unpaired"]:
-            self.calculate_KL = False
-        if self.calculate_KL and args.per_device_train_batch_size <= 1:
-            raise ValueError(
-                "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
-            )
-
-        # metric
-        self._stored_metrics = defaultdict(lambda: defaultdict(list))
-
-        # KTO parameter
+        # Training arguments
         self.beta = args.beta
+        self.precompute_ref_logps = args.precompute_ref_log_probs
+        self.loss_type = args.loss_type
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        self.calculate_KL = False if self.loss_type in ["apo_zero_unpaired"] else True
+        if self.calculate_KL and args.per_device_train_batch_size <= 1:
+            raise ValueError(
+                "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
+            )
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
             logger.warning(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
@@ -442,6 +417,9 @@ class KTOTrainer(_BaseTrainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
+        # Initialize the metrics
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
@@ -458,8 +436,9 @@ class KTOTrainer(_BaseTrainer):
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
+        self.use_liger_kernel = args.use_liger_kernel
         # Import Liger kernel if enabled
-        if self.args.use_liger_kernel:
+        if self.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
                     "You set `use_liger_kernel=True` but the liger kernel is not available. "
@@ -470,7 +449,7 @@ class KTOTrainer(_BaseTrainer):
                     "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
                     "Only KTO loss is supported with liger-kernel."
                 )
-            if self.precompute_ref_log_probs:
+            if self.precompute_ref_logps:
                 raise ValueError(
                     "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
                     "`precompute_ref_log_probs=False`."
@@ -481,7 +460,7 @@ class KTOTrainer(_BaseTrainer):
                 )
             self.kto_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
-        if self.precompute_ref_log_probs:
+        if self.precompute_ref_logps:
             if isinstance(self.train_dataset, IterableDataset) or isinstance(
                 self.eval_dataset, (IterableDataset, IterableDatasetDict)
             ):
@@ -682,68 +661,93 @@ class KTOTrainer(_BaseTrainer):
             yield
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
-        dataloader_params = {
-            "batch_size": batch_size,
-            "collate_fn": self.data_collator,
-            "num_workers": self.args.dataloader_num_workers,
-            "pin_memory": self.args.dataloader_pin_memory,
-            "shuffle": False,
-        }
-        data_loader = self.accelerator.prepare(DataLoader(dataset, **dataloader_params))
-        reference_completion_logps = []
-        reference_KL_logps = []
-        for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-            reference_completion_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
-            reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
-            reference_completion_logps.append(reference_completion_logp.cpu())
+        model_hash = hash_module(self.ref_model or self.model)
+        fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
+        cache_file = dataset._get_cache_file_path(fingerprint).removesuffix(".arrow") + ".npz"
+        if os.path.exists(cache_file):
+            loaded = np.load(cache_file)
+            reference_logps = loaded["reference_logps"]
             if self.calculate_KL:
-                reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
-                reference_KL_logps.append(reference_KL_logp.cpu())
-        dataset = dataset.add_column(
-            name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
-        )
-        if self.calculate_KL:
-            dataset = dataset.add_column(
-                name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
+                reference_KL_logps = loaded["reference_KL_logps"]
+        else:
+            dataloader = DataLoader(
+                dataset,
+                batch_size=batch_size,
+                collate_fn=self.data_collator,
+                num_workers=self.args.dataloader_num_workers,
+                pin_memory=self.args.dataloader_pin_memory,
+                shuffle=False,
             )
+            data_loader = self.accelerator.prepare(dataloader)
+            reference_logps = []
+            reference_KL_logps = []
+            for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
+                reference_logp, reference_KL_logp = self.compute_ref_log_probs(padded_batch)
+                if self.calculate_KL:
+                    reference_logp, reference_KL_logp = self.accelerator.gather_for_metrics(
+                        (reference_logp, reference_KL_logp)
+                    )
+                    reference_KL_logps.append(reference_KL_logp.cpu())
+                else:
+                    reference_logp = self.accelerator.gather_for_metrics(reference_logp)
+                reference_logps.append(reference_logp.cpu())
+
+            # Save the reference log probabilities to cache. We need .float() because bf16 is not supported by numpy
+            reference_logps = torch.cat(reference_logps).float().numpy()
+            save_dict = {"reference_logps": reference_logps}
+            if self.calculate_KL:
+                reference_KL_logps = torch.cat(reference_KL_logps).float().numpy()
+                save_dict["reference_KL_logps"] = reference_KL_logps
+            if self.accelerator.is_main_process:
+                np.savez_compressed(cache_file, **save_dict)
+            self.accelerator.wait_for_everyone()
+
+        if self.calculate_KL:
+            dataset = dataset.add_column(name="reference_logps", column=reference_logps)
+            dataset = dataset.add_column(
+                name="reference_KL_logps", column=reference_KL_logps, new_fingerprint=fingerprint
+            )
+        else:
+            dataset = dataset.add_column(name="reference_logps", column=reference_logps, new_fingerprint=fingerprint)
+
         return dataset
 
-    def compute_reference_log_probs(self, padded_batch: dict) -> dict:
-        """Computes log probabilities of the reference model for a single padded batch of a KTO specific dataset."""
+    def compute_ref_log_probs(self, inputs):
+        """Computes reference log probabilities for a single padded batch."""
         with torch.no_grad():
             if self.ref_model is None:
                 with self.null_ref_context():
                     completion_logits = self.model(
-                        padded_batch["completion_input_ids"],
-                        attention_mask=padded_batch["completion_attention_mask"],
+                        inputs["completion_input_ids"],
+                        attention_mask=inputs["completion_attention_mask"],
                     ).logits
 
                     if self.calculate_KL:
                         KL_logits = self.model(
-                            padded_batch["KL_completion_input_ids"],
-                            attention_mask=padded_batch["KL_completion_attention_mask"],
+                            inputs["KL_completion_input_ids"],
+                            attention_mask=inputs["KL_completion_attention_mask"],
                         ).logits
             else:
                 completion_logits = self.ref_model(
-                    padded_batch["completion_input_ids"], attention_mask=padded_batch["completion_attention_mask"]
+                    inputs["completion_input_ids"], attention_mask=inputs["completion_attention_mask"]
                 ).logits
 
                 if self.calculate_KL:
                     KL_logits = self.ref_model(
-                        padded_batch["KL_completion_input_ids"],
-                        attention_mask=padded_batch["KL_completion_attention_mask"],
+                        inputs["KL_completion_input_ids"],
+                        attention_mask=inputs["KL_completion_attention_mask"],
                     ).logits
 
         completion_logps = self.get_batch_logps(
             completion_logits,
-            padded_batch["completion_labels"],
+            inputs["completion_labels"],
             average_log_prob=False,
         )
 
         if self.calculate_KL:
             KL_logps = self.get_batch_logps(
                 KL_logits,
-                padded_batch["KL_completion_labels"],
+                inputs["KL_completion_labels"],
                 average_log_prob=False,
             )
         else:
@@ -792,9 +796,7 @@ class KTOTrainer(_BaseTrainer):
         else:
             return (per_token_logps * loss_mask).sum(-1)
 
-    def forward(
-        self, model: nn.Module, batch: dict[str, list | torch.LongTensor]
-    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    def _compute_logps(self, model, batch):
         KL_logps = self._compute_kl_logps(model, batch)
 
         model_kwargs = {}
@@ -833,10 +835,7 @@ class KTOTrainer(_BaseTrainer):
         chosen_logits = completion_logits.index_select(0, chosen_idx)
         rejected_logits = completion_logits.index_select(0, rejected_idx)
 
-        if self.aux_loss_enabled:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, outputs.aux_loss)
-        else:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps)
+        return chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, outputs
 
     def kto_loss(
         self,
@@ -934,30 +933,19 @@ class KTOTrainer(_BaseTrainer):
             )
         return KL_logps
 
-    def _compute_loss_liger(self, model, batch):
-        """
-        Compute the KTO loss using the Liger-Kernel's LigerFusedLinearKTOLoss.
+    def _compute_loss_liger(self, model, inputs, return_outputs):
+        if return_outputs:
+            raise RuntimeError(
+                "return_outputs=True is not supported with the Liger KTO loss. The Liger loss computes the loss "
+                "without materializing logits, so outputs cannot be returned."
+            )
+        mode = "train" if self.model.training else "eval"
+        batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
-        Args:
-            model:
-                The policy model used for generating log probabilities and outputs. It could be an encoder-decoder
-                model or a regular language model.
-            batch: A dictionary containing the input data and labels for the batch.
+        labels = torch.tensor(batch["label"])
+        num_chosen = labels.sum().to(self.accelerator.device)
+        num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
-        Returns:
-            A dictionary containing the following keys:
-                - "loss": The computed KTO loss for the batch.
-                - "chosen_logits_sum": Sum of the logits for the chosen responses from the policy model.
-                - "rejected_logits_sum": Sum of the logits for the rejected responses from the policy model.
-                - "chosen_logps": Log probabilities of the chosen responses from the policy model.
-                - "rejected_logps": Log probabilities of the rejected responses from the policy model.
-                - "chosen_rewards": Rewards for the chosen responses.
-                - "rejected_rewards": Rewards for the rejected responses.
-                - "kl": The KL divergence between the policy and reference models (detached).
-
-            If auxiliary loss is enabled, the dictionary will also include:
-                - "aux_loss": The auxiliary loss from the model outputs.
-        """
         policy_KL_logps = self._compute_kl_logps(model, batch)
         reference_KL_logps = self._compute_kl_logps(self.ref_model, batch)
         if self.calculate_KL:
@@ -1011,160 +999,130 @@ class KTOTrainer(_BaseTrainer):
             ref_bias=ref_lm_head.bias if hasattr(lm_head, "bias") else None,
             kl=kl,
         )
-
-        output = {
-            "loss": loss,
-            "chosen_logits_sum": chosen_logits_sum,
-            "rejected_logits_sum": rejected_logits_sum,
-            "chosen_logps_sum": chosen_logps_sum,
-            "rejected_logps_sum": rejected_logps_sum,
-            "chosen_rewards_sum": chosen_rewards_sum,
-            "rejected_rewards_sum": rejected_rewards_sum,
-            "kl": kl,
-        }
         if self.aux_loss_enabled:
-            output["aux_loss"] = outputs.aux_loss
+            loss += self.aux_loss_coef * outputs.aux_loss
 
-        return output
-
-    def get_batch_loss_metrics(
-        self,
-        model,
-        batch: dict[str, list | torch.LongTensor],
-    ):
-        """Compute the KTO loss and other metrics for the given batch of inputs for train or test."""
-        metrics = {}
-        batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
-
-        labels = torch.tensor(batch["label"])
-        num_chosen = labels.sum().to(self.accelerator.device)
-        num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
-
-        if self.args.use_liger_kernel:
-            model_output = self._compute_loss_liger(model, batch)
-            losses = model_output["loss"]
-            policy_chosen_logits = model_output["chosen_logits_sum"]
-            policy_rejected_logits = model_output["rejected_logits_sum"]
-            policy_chosen_logps = model_output["chosen_logps_sum"]
-            policy_rejected_logps = model_output["rejected_logps_sum"]
-            chosen_rewards = model_output["chosen_rewards_sum"]
-            rejected_rewards = model_output["rejected_rewards_sum"]
-            kl = model_output["kl"]
-            if self.aux_loss_enabled:
-                aux_loss = model_output["aux_loss"]
-        else:
-            forward_output = self.forward(model, batch)
-            (
-                policy_chosen_logps,
-                policy_rejected_logps,
-                policy_chosen_logits,
-                policy_rejected_logits,
-                policy_KL_logps,
-            ) = forward_output[:5]
-            if self.aux_loss_enabled:
-                aux_loss = forward_output[5]
-
-            # if reference_logps in batch use them, otherwise use the reference model
-            if "reference_logps" in batch:
-                # Convert Python lists to tensor indices for efficient CUDA operations
-                device = batch["reference_logps"].device
-                labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
-                chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
-                rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
-
-                # Use index_select for efficient CUDA operations
-                reference_chosen_logps = batch["reference_logps"].index_select(0, chosen_idx)
-                reference_rejected_logps = batch["reference_logps"].index_select(0, rejected_idx)
-                if self.calculate_KL:
-                    reference_KL_logps = batch["reference_KL_logps"]
-                else:
-                    reference_KL_logps = None
-            else:
-                with torch.no_grad():
-                    if self.ref_model is None:
-                        with self.null_ref_context():
-                            (
-                                reference_chosen_logps,
-                                reference_rejected_logps,
-                                _,
-                                _,
-                                reference_KL_logps,
-                            ) = self.forward(self.model, batch)[:5]
-                    else:
-                        (
-                            reference_chosen_logps,
-                            reference_rejected_logps,
-                            _,
-                            _,
-                            reference_KL_logps,
-                        ) = self.forward(self.ref_model, batch)[:5]
-
-            losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
-                policy_chosen_logps,
-                policy_rejected_logps,
-                policy_KL_logps,
-                reference_chosen_logps,
-                reference_rejected_logps,
-                reference_KL_logps,
-            )
-
-        metrics["kl"] = kl.item()
+        self._metrics[mode]["kl"].append(kl.item())
 
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
         if all_num_chosen > 0:
-            metrics["rewards/chosen_sum"] = (
-                self.accelerator.gather_for_metrics(chosen_rewards.nansum()).nansum().item()
+            self._metrics[mode]["rewards/chosen"].append(
+                self.accelerator.gather_for_metrics(chosen_rewards_sum.nansum()).nansum().item() / all_num_chosen
             )
-            metrics["logps/chosen_sum"] = (
-                self.accelerator.gather_for_metrics(policy_chosen_logps.nansum()).nansum().item()
+            self._metrics[mode]["logps/chosen"].append(
+                self.accelerator.gather_for_metrics(chosen_logps_sum.nansum()).nansum().item() / all_num_chosen
             )
-            metrics["logits/chosen_sum"] = (
-                self.accelerator.gather_for_metrics(policy_chosen_logits.nansum()).nansum().item()
+            self._metrics[mode]["logits/chosen"].append(
+                self.accelerator.gather_for_metrics(chosen_logits_sum.nansum()).nansum().item() / all_num_chosen
             )
-            metrics["count/chosen"] = all_num_chosen
 
         if all_num_rejected > 0:
-            metrics["rewards/rejected_sum"] = (
-                self.accelerator.gather_for_metrics(rejected_rewards.nansum()).nansum().item()
+            self._metrics[mode]["rewards/rejected"].append(
+                self.accelerator.gather_for_metrics(rejected_rewards_sum.nansum()).nansum().item() / all_num_rejected
             )
-            metrics["logps/rejected_sum"] = (
-                self.accelerator.gather_for_metrics(policy_rejected_logps.nansum()).nansum().item()
+            self._metrics[mode]["logps/rejected"].append(
+                self.accelerator.gather_for_metrics(rejected_logps_sum.nansum()).nansum().item() / all_num_rejected
             )
-            metrics["logits/rejected_sum"] = (
-                self.accelerator.gather_for_metrics(policy_rejected_logits.nansum()).nansum().item()
+            self._metrics[mode]["logits/rejected"].append(
+                self.accelerator.gather_for_metrics(rejected_logits_sum.nansum()).nansum().item() / all_num_rejected
             )
-            metrics["count/rejected"] = all_num_rejected
+
+        return loss
+
+    def _compute_loss(self, model, inputs, return_outputs):
+        """Compute the KTO loss and other metrics for the given batch of inputs for train or test."""
+        mode = "train" if self.model.training else "eval"
+        batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
+
+        labels = torch.tensor(batch["label"])
+        num_chosen = labels.sum().to(self.accelerator.device)
+        num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
+
+        (
+            policy_chosen_logps,
+            policy_rejected_logps,
+            policy_chosen_logits,
+            policy_rejected_logits,
+            policy_KL_logps,
+            outputs,
+        ) = self._compute_logps(model, batch)
+        if self.aux_loss_enabled:
+            aux_loss = outputs.aux_loss
+
+        if self.precompute_ref_logps:
+            # Convert Python lists to tensor indices for efficient CUDA operations
+            device = batch["reference_logps"].device
+            labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
+            chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
+            rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
+
+            # Use index_select for efficient CUDA operations
+            reference_chosen_logps = batch["reference_logps"].index_select(0, chosen_idx)
+            reference_rejected_logps = batch["reference_logps"].index_select(0, rejected_idx)
+            if self.calculate_KL:
+                reference_KL_logps = batch["reference_KL_logps"]
+            else:
+                reference_KL_logps = None
+        else:
+            with torch.no_grad():
+                if self.ref_model is None:
+                    with self.null_ref_context():
+                        reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = (
+                            self._compute_logps(self.model, batch)
+                        )
+                else:
+                    reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = (
+                        self._compute_logps(self.ref_model, batch)
+                    )
+
+        losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
+            policy_chosen_logps,
+            policy_rejected_logps,
+            policy_KL_logps,
+            reference_chosen_logps,
+            reference_rejected_logps,
+            reference_KL_logps,
+        )
+
+        self._metrics[mode]["kl"].append(kl.item())
+
+        all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
+        all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
+
+        if all_num_chosen > 0:
+            self._metrics[mode]["rewards/chosen"].append(
+                self.accelerator.gather_for_metrics(chosen_rewards.nansum()).nansum().item() / all_num_chosen
+            )
+            self._metrics[mode]["logps/chosen"].append(
+                self.accelerator.gather_for_metrics(policy_chosen_logps.nansum()).nansum().item() / all_num_chosen
+            )
+            self._metrics[mode]["logits/chosen"].append(
+                self.accelerator.gather_for_metrics(policy_chosen_logits.nansum()).nansum().item() / all_num_chosen
+            )
+
+        if all_num_rejected > 0:
+            self._metrics[mode]["rewards/rejected"].append(
+                self.accelerator.gather_for_metrics(rejected_rewards.nansum()).nansum().item() / all_num_rejected
+            )
+            self._metrics[mode]["logps/rejected"].append(
+                self.accelerator.gather_for_metrics(policy_rejected_logps.nansum()).nansum().item() / all_num_rejected
+            )
+            self._metrics[mode]["logits/rejected"].append(
+                self.accelerator.gather_for_metrics(policy_rejected_logits.nansum()).nansum().item() / all_num_rejected
+            )
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
             loss += self.aux_loss_coef * aux_loss
 
-        return loss, metrics
+        return (loss, outputs) if return_outputs else loss
 
-    def compute_loss(
-        self,
-        model: PreTrainedModel | nn.Module,
-        inputs: dict[str, torch.Tensor | Any],
-        return_outputs=False,
-        num_items_in_batch=None,
-    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        loss, metrics = self.get_batch_loss_metrics(model, inputs)
-
-        # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
-        loss = loss.to(self.args.device)
-        # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="train")
-
-        if return_outputs:
-            return (loss, metrics)
-        return loss
-
-    def store_metrics(self, metrics: dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
-        for key, value in metrics.items():
-            self._stored_metrics[train_eval][key].append(value)
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        if self.use_liger_kernel:
+            return self._compute_loss_liger(model, inputs, return_outputs)
+        return self._compute_loss(model, inputs, return_outputs)
 
     def _get_train_sampler(self, dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
         if dataset is None:
@@ -1173,75 +1131,31 @@ class KTOTrainer(_BaseTrainer):
             return None
         return SequentialSampler(dataset)
 
-    def prediction_step(
-        self,
-        model: PreTrainedModel | nn.Module,
-        inputs: dict[str, torch.Tensor | Any],
-        prediction_loss_only: bool,
-        ignore_keys: list[str] | None = None,
-    ):
-        if ignore_keys is None:
-            if hasattr(model, "config"):
-                ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
+    # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
+    # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        inputs = self._prepare_inputs(inputs)
+        with torch.no_grad(), self.compute_loss_context_manager():
+            if prediction_loss_only:
+                loss = self.compute_loss(model, inputs, return_outputs=False)  # logits aren't materialized with liger
+                logits, labels = None, None
             else:
-                ignore_keys = []
-
-        with torch.no_grad():
-            loss, metrics = self.get_batch_loss_metrics(model, inputs)
-
-        # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="eval")
-
-        if prediction_loss_only:
-            return (loss.detach(), None, None)
-
-        # logits for the chosen and rejected samples from model
-        logits_dict = {}
-        if "logits/chosen_sum" in metrics:
-            logits_dict["eval_logits/chosen"] = metrics["logits/chosen_sum"]
-        if "logits/rejected_sum" in metrics:
-            logits_dict["eval_logits/rejected"] = metrics["logits/rejected_sum"]
-        logits = [v for k, v in logits_dict.items() if k not in ignore_keys]
-        logits = torch.tensor(logits, device=self.accelerator.device)
-        labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
-
-        return (loss.detach(), logits, labels)
+                loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+                logits, labels = outputs.logits, inputs["completion_input_ids"]
+        return loss, logits, labels
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
-        """
-        Log `logs` on the various objects watching training, including stored metrics.
-
-        Args:
-            logs (`dict[str, float]`):
-                The values to log.
-            start_time (`float`, *optional*):
-                Start time of the training.
-        """
-        # logs either has 'loss' or 'eval_loss'
-        train_eval = "train" if "loss" in logs else "eval"
-        # train metrics should have no prefix, eval should have 'eval_'
-        prefix = "eval_" if train_eval == "eval" else ""
-        # accumulate average metrics from sums and lengths
-        for split in ["chosen", "rejected"]:
-            if f"count/{split}" in self._stored_metrics[train_eval]:
-                count_sum = torch.Tensor(self._stored_metrics[train_eval][f"count/{split}"]).sum().item()
-                for metric in ["rewards", "logps", "logits"]:
-                    logs[f"{prefix}{metric}/{split}"] = (
-                        torch.Tensor(self._stored_metrics[train_eval][f"{metric}/{split}_sum"]).sum().item()
-                        / count_sum
-                    )
-                    # delete obsolete metric
-                    del self._stored_metrics[train_eval][f"{metric}/{split}_sum"]
-                del self._stored_metrics[train_eval][f"count/{split}"]
-        # calculate reward margin
-        if f"{prefix}rewards/chosen" in logs and f"{prefix}rewards/rejected" in logs:
-            logs[f"{prefix}rewards/margins"] = logs[f"{prefix}rewards/chosen"] - logs[f"{prefix}rewards/rejected"]
-        # Add averaged stored metrics to logs
-        for key, metrics in self._stored_metrics[train_eval].items():
-            logs[f"{prefix}{key}"] = torch.Tensor(metrics).mean().item()
-        del self._stored_metrics[train_eval]
-        return super().log(logs, start_time)
+        mode = "train" if self.model.training else "eval"
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+        if "rewards/chosen" in metrics and "rewards/rejected" in metrics:
+            metrics["rewards/margins"] = metrics["rewards/chosen"] - metrics["rewards/rejected"]
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        if mode == "eval":
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+        logs.update(metrics)
+        super().log(logs, start_time)
+        self._metrics[mode].clear()
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):

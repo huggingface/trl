@@ -5,6 +5,8 @@
     title: Installation
   - local: quickstart
     title: Quickstart
+  - local: usage_stats
+    title: Usage Stats Collection
   title: Getting started
 - sections:
   - local: chat_templates
@@ -51,6 +53,8 @@
     title: Liger Kernel
   - local: openenv
     title: OpenEnv
+  - local: openreward
+    title: OpenReward
   - local: peft_integration
     title: PEFT
   - local: ptt_integration
@@ -117,8 +121,6 @@
     title: MiniLLM
   - local: nash_md_trainer
     title: Nash-MD
-  - local: nemo_gym
-    title: NeMo Gym
   - local: online_dpo_trainer
     title: Online DPO
   - local: orpo_trainer
