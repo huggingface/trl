@@ -104,6 +104,10 @@ Original Qwen3.5 chat templates. The two differ only in the default value of the
 
 Original Qwen3.6 chat template (shared across `Qwen3.6-27B`, `Qwen3.6-35B-A3B`, and their FP8 variants). Differs from `qwen3_5_think.jinja` by adding a `preserve_thinking` flag and tweaking how non-string tool-call argument values are stringified.
 
+### `smolvlm.jinja`
+
+Original SmolVLM chat template. Also matches SmolVLM2, which ships a byte-identical template. Does not support tool calling.
+
 ## Training templates
 
 Patched templates that fix training-specific issues. Swapped in at init when tools are enabled (GRPO) or when `assistant_only_loss=True` (SFT).
@@ -262,3 +266,9 @@ Patched Qwen3.5 templates. Same diff as `qwen3_training.jinja` (require both `<t
 ### `qwen3_6_training.jinja`
 
 Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (require both `<think>` and `</think>` before parsing, drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted, wrap assistant output in `{% generation %}` / `{% endgeneration %}`), applied to the Qwen3.6 base template.
+
+### `smolvlm_training.jinja`
+
+Patched SmolVLM template (also used for SmolVLM2, which ships a byte-identical template). Diff vs `smolvlm.jinja`:
+
+Split the assistant message into its own branch so the `{% generation %}` / `{% endgeneration %}` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.

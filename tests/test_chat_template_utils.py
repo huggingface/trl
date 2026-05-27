@@ -664,6 +664,7 @@ class TestIsChatTemplateStopTokenTrained:
                 ),
             ],
         ),
+        pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm"),
     ],
 )
 class TestGetTrainingChatTemplate:
