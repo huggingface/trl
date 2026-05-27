@@ -30,7 +30,7 @@ from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
-from torch.utils.data import DataLoader, SequentialSampler
+from torch.utils.data import DataLoader
 from transformers import (
     AutoProcessor,
     DataCollator,
@@ -40,7 +40,7 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_utils import EvalLoopOutput, has_length
+from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available
 
 from ...data_utils import (
@@ -1129,13 +1129,6 @@ class KTOTrainer(_BaseTrainer):
         if self.use_liger_kernel:
             return self._compute_loss_liger(model, inputs, return_outputs)
         return self._compute_loss(model, inputs, return_outputs)
-
-    def _get_train_sampler(self, dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
-        if dataset is None:
-            dataset = self.train_dataset
-        if dataset is None or not has_length(dataset):
-            return None
-        return SequentialSampler(dataset)
 
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
     # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
