@@ -90,15 +90,17 @@ def _maybe_gather_lm_head_ctx(w, b):
     # Allgather ZeRO-3 partitioned `lm_head` weight/bias for the chunked matmul. No-op if not ZeRO-3, or if the
     # param is already gathered (tied embeddings: `embed_tokens` shares the weight and keeps it `AVAILABLE`, so
     # partitioning on our exit would collide with its active-submodule tracking).
-    params = [w] if b is None else [w, b]
-    if not any(hasattr(p, "ds_id") for p in params):
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+
+    if not is_deepspeed_zero3_enabled():
         return contextlib.nullcontext()
+
+    import deepspeed
     from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 
+    params = [w] if b is None else [w, b]
     if all(p.ds_status == ZeroParamStatus.AVAILABLE for p in params):
         return contextlib.nullcontext()
-    import deepspeed
-
     return deepspeed.zero.GatheredParameters(params)
 
 
