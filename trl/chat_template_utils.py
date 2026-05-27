@@ -574,13 +574,19 @@ qwen2_5_vl_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_vl_training.
 
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text(encoding="utf-8")
 
-qwen3_instruct_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507_training.jinja").read_text(encoding="utf-8")
+qwen3_instruct_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507_training.jinja").read_text(
+    encoding="utf-8"
+)
 
 qwen3_vl_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl_training.jinja").read_text(encoding="utf-8")
 
-qwen3_5_nothink_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_nothink_training.jinja").read_text(encoding="utf-8")
+qwen3_5_nothink_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_nothink_training.jinja").read_text(
+    encoding="utf-8"
+)
 
-qwen3_5_think_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think_training.jinja").read_text(encoding="utf-8")
+qwen3_5_think_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think_training.jinja").read_text(
+    encoding="utf-8"
+)
 
 qwen3_6_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6_training.jinja").read_text(encoding="utf-8")
 
