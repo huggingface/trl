@@ -2,28 +2,48 @@ import ast
 from pathlib import Path
 
 
-def test_online_dpo_fix_param_name_delegates_to_shared_helper():
-    source = Path("trl/experimental/online_dpo/online_dpo_trainer.py").read_text()
+VLLM_GENERATION_PATH = Path("trl/generation/vllm_generation.py")
+ONLINE_DPO_PATH = Path("trl/experimental/online_dpo/online_dpo_trainer.py")
+SHARED_HELPER_PATH = Path("trl/generation/vllm_sync_utils.py")
+
+EXPECTED_RULE_SNIPPETS = [
+    "self.model.config.architectures or []",
+    '"Qwen3_5ForCausalLM"',
+    '"Qwen3_5ForConditionalGeneration"',
+    '"Qwen3VLForConditionalGeneration"',
+    '"language_model.model."',
+    '"language_model.lm_head."',
+    '"visual."',
+]
+
+
+def _get_fix_method_source(path: Path) -> str:
+    source = path.read_text()
     tree = ast.parse(source)
-
-    assert any(
-        isinstance(node, ast.ImportFrom)
-        and node.module == "generation.vllm_sync_utils"
-        and node.level == 3
-        and any(alias.name == "fix_param_name_to_vllm" for alias in node.names)
-        for node in tree.body
-    )
-
-    online_dpo_trainer = next(
-        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "OnlineDPOTrainer"
-    )
+    trainer_class = next(node for node in tree.body if isinstance(node, ast.ClassDef))
     fix_method = next(
-        node
-        for node in online_dpo_trainer.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_fix_param_name_to_vllm"
+        node for node in trainer_class.body if isinstance(node, ast.FunctionDef) and node.name == "_fix_param_name_to_vllm"
     )
-    return_stmt = next(node for node in fix_method.body if isinstance(node, ast.Return))
+    return ast.get_source_segment(source, fix_method)
 
-    assert isinstance(return_stmt.value, ast.Call)
-    assert isinstance(return_stmt.value.func, ast.Name)
-    assert return_stmt.value.func.id == "fix_param_name_to_vllm"
+
+def test_weight_sync_logic_stays_inline_in_call_sites():
+    assert not SHARED_HELPER_PATH.exists()
+
+    for path in [VLLM_GENERATION_PATH, ONLINE_DPO_PATH]:
+        source = path.read_text()
+        assert "vllm_sync_utils" not in source
+
+
+def test_vllm_generation_fix_param_name_inlines_qwen35_remap_rules():
+    source = _get_fix_method_source(VLLM_GENERATION_PATH)
+
+    for snippet in EXPECTED_RULE_SNIPPETS:
+        assert snippet in source
+
+
+def test_online_dpo_fix_param_name_inlines_qwen35_remap_rules():
+    source = _get_fix_method_source(ONLINE_DPO_PATH)
+
+    for snippet in EXPECTED_RULE_SNIPPETS:
+        assert snippet in source

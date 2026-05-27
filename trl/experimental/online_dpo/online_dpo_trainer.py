@@ -51,7 +51,6 @@ from transformers.utils import is_peft_available, is_sagemaker_mp_enabled
 from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ...extras.profiling import profiling_context
 from ...generation.vllm_client import VLLMClient
-from ...generation.vllm_sync_utils import fix_param_name_to_vllm
 from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
@@ -867,7 +866,41 @@ class OnlineDPOTrainer(_BaseTrainer):
 
     def _fix_param_name_to_vllm(self, name, extra_prefixes: list[str] | None = None):
         """Clean parameter names for vLLM compatibility"""
-        return fix_param_name_to_vllm(name, self.model.config.architectures or [], extra_prefixes)
+        extra_prefixes = extra_prefixes or []
+        prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
+        for prefix in prefixes:
+            name = name.replace(prefix, "")
+
+        qwen3_hf_to_vllm_prefix_maps = {
+            "Qwen3_5ForCausalLM": (
+                ("lm_head.", "language_model.lm_head."),
+                ("model.", "language_model.model."),
+            ),
+            "Qwen3_5ForConditionalGeneration": (
+                ("model.visual.", "visual."),
+                ("lm_head.", "language_model.lm_head."),
+                ("model.language_model.", "language_model.model."),
+            ),
+            "Qwen3VLForConditionalGeneration": (
+                ("model.visual.", "visual."),
+                ("lm_head.", "language_model.lm_head."),
+                ("model.language_model.", "language_model.model."),
+            ),
+        }
+
+        # Keep the Qwen3.5 remapping logic inline here because TRL deliberately duplicates weight-sync logic across
+        # trainers instead of abstracting it into a shared helper.
+        for architecture in self.model.config.architectures or []:
+            prefix_map = qwen3_hf_to_vllm_prefix_maps.get(architecture)
+            if prefix_map is None:
+                continue
+
+            for hf_prefix, vllm_prefix in prefix_map:
+                if name.startswith(hf_prefix):
+                    return name.replace(hf_prefix, vllm_prefix, 1)
+            break
+
+        return name
 
     def process_vision_row(
         self, features: dict[str, list | torch.Tensor], processing_class=None
