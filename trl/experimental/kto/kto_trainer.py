@@ -343,6 +343,12 @@ class KTOTrainer(_BaseTrainer):
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         self.calculate_KL = False if self.loss_type in ["apo_zero_unpaired"] else True
+        if args.train_sampling_strategy != "sequential":
+            raise ValueError(
+                f"KTO requires `train_sampling_strategy='sequential'` because the KL completion for each example is "
+                f"precomputed against its neighbors in a fixed-order batch; any other strategy breaks that pairing. "
+                f"Got `train_sampling_strategy='{args.train_sampling_strategy}'`."
+            )
         if self.calculate_KL and args.per_device_train_batch_size <= 1:
             raise ValueError(
                 "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
@@ -1130,12 +1136,14 @@ class KTOTrainer(_BaseTrainer):
             return self._compute_loss_liger(model, inputs, return_outputs)
         return self._compute_loss(model, inputs, return_outputs)
 
-    def _get_train_sampler(self, dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
-        if dataset is None:
-            dataset = self.train_dataset
-        if dataset is None or not has_length(dataset):
-            return None
-        return SequentialSampler(dataset)
+    def _get_train_sampler(self, train_dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
+        if Version(transformers.__version__) < Version("5.2.0"):
+            if train_dataset is None:
+                train_dataset = self.train_dataset
+            if train_dataset is None or not has_length(train_dataset):
+                return None
+            return SequentialSampler(train_dataset)
+        return super()._get_train_sampler(train_dataset)
 
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
     # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
