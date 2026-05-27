@@ -27,6 +27,42 @@ if is_wandb_available():
     import wandb
 
 
+# Trainer class names that may appear in telemetry topics. Any class outside this set — internal helpers,
+# in-flight subclasses not yet shipped, user-defined subclasses — is reported as "other" so unreleased or
+# private names never leak. Adding a new trainer requires an explicit entry here.
+_TELEMETRY_TRAINERS = {
+    # Stable
+    "DPOTrainer",
+    "GRPOTrainer",
+    "KTOTrainer",
+    "RewardTrainer",
+    "RLOOTrainer",
+    "SFTTrainer",
+    # Experimental
+    "AsyncGRPOTrainer",
+    "BCOTrainer",
+    "CPOTrainer",
+    "DistillationTrainer",
+    "DPPOTrainer",
+    "GFPOTrainer",
+    "GKDTrainer",
+    "GOLDTrainer",
+    "GRPOWithReplayBufferTrainer",
+    "MiniLLMTrainer",
+    "NashMDTrainer",
+    "OnlineDPOTrainer",
+    "ORPOTrainer",
+    "PAPOTrainer",
+    "PPOTrainer",
+    "PRMTrainer",
+    "SDFTTrainer",
+    "SDPOTrainer",
+    "SSDTrainer",
+    "TPOTrainer",
+    "XPOTrainer",
+}
+
+
 class _BaseTrainer(Trainer):
     _tag_names = []
     _name = "Base"
@@ -68,7 +104,9 @@ class _BaseTrainer(Trainer):
         # transformers `CONFIG_MAPPING`); anything else is reported as "other" so we never leak the names of internal,
         # custom trainer subclasses or private model architectures.
         cls = type(self)
-        trainer = cls.__name__ if cls.__module__.startswith("trl.") else "other"
+        trainer = (
+            cls.__name__ if cls.__name__ in _TELEMETRY_TRAINERS and cls.__module__.startswith("trl.") else "other"
+        )
         model_type = self.model.config.model_type
         model_arch = model_type if model_type in CONFIG_MAPPING else "other"
         send_telemetry(
