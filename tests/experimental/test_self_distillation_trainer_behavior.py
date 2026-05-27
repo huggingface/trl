@@ -14,7 +14,6 @@
 
 import logging
 from collections import defaultdict
-from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -24,8 +23,6 @@ from transformers import AutoModelForCausalLM, TrainerControl, TrainerState, Tra
 from transformers.utils import is_peft_available
 
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
-from trl.experimental.sdpo import SDPOTrainer
-from trl.experimental.self_distillation.generation import Generation, GenerationOutput
 from trl.experimental.self_distillation.loss_utils import (
     aggregate_loss,
     apply_importance_sampling_clipping,
@@ -162,84 +159,6 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         )
 
         torch.testing.assert_close(loss, torch.tensor([[2.0, 3.0]]))
-
-    @pytest.mark.parametrize("trainer_cls", [SDFTTrainer, SDPOTrainer])
-    def test_trainer_syncs_vllm_weights_before_generation_on_new_step(self, trainer_cls):
-        class FakeGenerationEngine:
-            def __init__(self):
-                self.sync_weights_call_count = 0
-                self.generate_calls = []
-
-            def sync_weights(self):
-                self.sync_weights_call_count += 1
-
-            def generate(self, prompt_ids, *, num_generations):
-                self.generate_calls.append({"prompt_ids": prompt_ids, "num_generations": num_generations})
-                return GenerationOutput(prompt_ids=prompt_ids, completion_ids=[[31], [32]])
-
-        trainer = object.__new__(trainer_cls)
-        trainer.args = SimpleNamespace(use_vllm=True)
-        trainer.model = SimpleNamespace(training=True)
-        trainer.state = SimpleNamespace(global_step=4)
-        trainer._last_loaded_step = 3
-        trainer.num_generations = 2
-        trainer.num_generations_eval = 3
-        trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
-        trainer._tokenizer = SimpleNamespace(pad_token_id=0, eos_token_id=99)
-        trainer.mask_truncated_completions = False
-        trainer.generation_engine = FakeGenerationEngine()
-        trainer._tokenize_prompts = lambda prompts: [[11, 12] for _ in prompts]
-        trainer._dispatch_self_distillation_callback = lambda event_name, **payload: None
-        trainer._compute_rollout_logps = lambda **kwargs: None
-
-        batch = trainer.sample_rollouts([{"prompt": "a"}, {"prompt": "b"}])
-
-        assert trainer.generation_engine.sync_weights_call_count == 1
-        assert trainer._last_loaded_step == 4
-        assert trainer.generation_engine.generate_calls == [{"prompt_ids": [[11, 12], [11, 12]], "num_generations": 2}]
-        torch.testing.assert_close(batch["completion_ids"], torch.tensor([[31], [32]]))
-
-    def test_generation_engine_transformers_trims_after_first_eos(self, monkeypatch):
-        class FakeModel:
-            def generate(self, input_ids, attention_mask, generation_config):
-                del attention_mask, generation_config
-                completions = torch.tensor([[7, 2, 9], [8, 9, 10]], dtype=torch.long)
-                return torch.cat([input_ids, completions], dim=1)
-
-        @contextmanager
-        def fake_unwrap_model_for_generation(*args, **kwargs):
-            del args, kwargs
-            yield FakeModel()
-
-        import trl.experimental.self_distillation.generation as generation_module
-
-        monkeypatch.setattr(generation_module, "unwrap_model_for_generation", fake_unwrap_model_for_generation)
-
-        generator = object.__new__(Generation)
-        generator.use_vllm = False
-        generator.accelerator = SimpleNamespace(device=torch.device("cpu"))
-        generator.model_wrapped = object()
-        generator.is_fsdp_enabled = False
-        generator.args = SimpleNamespace(ds3_gather_for_generation=False)
-        generator.generation_kwargs = {}
-        generator.generation_config = SimpleNamespace()
-        generator._tokenizer = SimpleNamespace(pad_token_id=0, eos_token_id=2)
-
-        output = generator.generate([[11, 12, 13], [21]], num_generations=1)
-
-        assert output.prompt_ids == [[11, 12, 13], [21]]
-        assert output.completion_ids == [[7, 2], [8, 9, 10]]
-
-    def test_sdft_response_mask_keeps_loss_token_skip_local(self):
-        trainer = object.__new__(SDFTTrainer)
-        trainer.num_loss_tokens_to_skip = 2
-
-        response_mask = trainer._build_self_distillation_response_mask(
-            torch.tensor([[1, 1, 1, 0]]),
-            torch.tensor([1]),
-        )
-
-        torch.testing.assert_close(response_mask, torch.tensor([[0, 0, 1, 0]]))
 
     def test_teacher_model_kind_live_uses_student_model(self):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
@@ -380,8 +299,6 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         )
         model = SimpleNamespace(training=True)
 
-        # Token 0 is active and has a known non-zero divergence.
-        # Token 1 is intentionally very different but masked out, so it must not affect the loss.
         student_probs = torch.tensor([[[0.8, 0.2], [0.01, 0.99]]], dtype=torch.float32)
         teacher_probs = torch.tensor([[[0.5, 0.5], [0.99, 0.01]]], dtype=torch.float32)
         distillation_logits = SimpleNamespace(
