@@ -143,10 +143,10 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                 padding_side="right",
             )
 
-        if "reference_logps" in examples[0]:
-            batch["reference_logps"] = torch.tensor([ex["reference_logps"] for ex in examples])
-        if "reference_KL_logps" in examples[0]:
-            batch["reference_KL_logps"] = torch.tensor([ex["reference_KL_logps"] for ex in examples])
+        if "ref_logps" in examples[0]:
+            batch["ref_logps"] = torch.tensor([ex["ref_logps"] for ex in examples])
+        if "ref_KL_logps" in examples[0]:
+            batch["ref_KL_logps"] = torch.tensor([ex["ref_KL_logps"] for ex in examples])
         batch["label"] = [ex["label"] for ex in examples]
         return batch
 
@@ -658,8 +658,8 @@ class KTOTrainer(_BaseTrainer):
                 "completion_ids",
                 "KL_completion_ids",
                 "label",
-                "reference_logps",
-                "reference_KL_logps",
+                "ref_logps",
+                "ref_KL_logps",
             ]
 
     @contextmanager
@@ -674,13 +674,14 @@ class KTOTrainer(_BaseTrainer):
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
-        fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
+        # "ref_logps" is included to invalidate caches written before the key was renamed from "reference_logps"
+        fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL, "ref_logps"))
         cache_file = dataset._get_cache_file_path(fingerprint).removesuffix(".arrow") + ".npz"
         if os.path.exists(cache_file):
             loaded = np.load(cache_file)
-            reference_logps = loaded["reference_logps"]
+            ref_logps = loaded["ref_logps"]
             if self.calculate_KL:
-                reference_KL_logps = loaded["reference_KL_logps"]
+                ref_KL_logps = loaded["ref_KL_logps"]
         else:
             dataloader = DataLoader(
                 dataset,
@@ -691,36 +692,32 @@ class KTOTrainer(_BaseTrainer):
                 shuffle=False,
             )
             data_loader = self.accelerator.prepare(dataloader)
-            reference_logps = []
-            reference_KL_logps = []
+            ref_logps = []
+            ref_KL_logps = []
             for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-                reference_logp, reference_KL_logp = self.compute_ref_log_probs(padded_batch)
+                ref_logp, ref_KL_logp = self.compute_ref_log_probs(padded_batch)
                 if self.calculate_KL:
-                    reference_logp, reference_KL_logp = self.accelerator.gather_for_metrics(
-                        (reference_logp, reference_KL_logp)
-                    )
-                    reference_KL_logps.append(reference_KL_logp.cpu())
+                    ref_logp, ref_KL_logp = self.accelerator.gather_for_metrics((ref_logp, ref_KL_logp))
+                    ref_KL_logps.append(ref_KL_logp.cpu())
                 else:
-                    reference_logp = self.accelerator.gather_for_metrics(reference_logp)
-                reference_logps.append(reference_logp.cpu())
+                    ref_logp = self.accelerator.gather_for_metrics(ref_logp)
+                ref_logps.append(ref_logp.cpu())
 
             # Save the reference log probabilities to cache. We need .float() because bf16 is not supported by numpy
-            reference_logps = torch.cat(reference_logps).float().numpy()
-            save_dict = {"reference_logps": reference_logps}
+            ref_logps = torch.cat(ref_logps).float().numpy()
+            save_dict = {"ref_logps": ref_logps}
             if self.calculate_KL:
-                reference_KL_logps = torch.cat(reference_KL_logps).float().numpy()
-                save_dict["reference_KL_logps"] = reference_KL_logps
+                ref_KL_logps = torch.cat(ref_KL_logps).float().numpy()
+                save_dict["ref_KL_logps"] = ref_KL_logps
             if self.accelerator.is_main_process:
                 np.savez_compressed(cache_file, **save_dict)
             self.accelerator.wait_for_everyone()
 
         if self.calculate_KL:
-            dataset = dataset.add_column(name="reference_logps", column=reference_logps)
-            dataset = dataset.add_column(
-                name="reference_KL_logps", column=reference_KL_logps, new_fingerprint=fingerprint
-            )
+            dataset = dataset.add_column(name="ref_logps", column=ref_logps)
+            dataset = dataset.add_column(name="ref_KL_logps", column=ref_KL_logps, new_fingerprint=fingerprint)
         else:
-            dataset = dataset.add_column(name="reference_logps", column=reference_logps, new_fingerprint=fingerprint)
+            dataset = dataset.add_column(name="ref_logps", column=ref_logps, new_fingerprint=fingerprint)
 
         return dataset
 
@@ -854,9 +851,9 @@ class KTOTrainer(_BaseTrainer):
         policy_chosen_logps: torch.FloatTensor,
         policy_rejected_logps: torch.FloatTensor,
         policy_KL_logps: torch.FloatTensor,
-        reference_chosen_logps: torch.FloatTensor,
-        reference_rejected_logps: torch.FloatTensor,
-        reference_KL_logps: torch.FloatTensor,
+        ref_chosen_logps: torch.FloatTensor,
+        ref_rejected_logps: torch.FloatTensor,
+        ref_KL_logps: torch.FloatTensor,
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute the KTO loss for a batch of policy and reference model log probabilities.
 
@@ -866,12 +863,12 @@ class KTOTrainer(_BaseTrainer):
             policy_rejected_logps:
                 Log probabilities of the policy model for the rejected responses. Shape: (num(rejected) in batch_size,)
             policy_KL_logps: Log probabilities of the policy model for the KL responses. Shape: (batch_size,)
-            reference_chosen_logps:
+            ref_chosen_logps:
                 Log probabilities of the reference model for the chosen responses. Shape: (num(chosen) in batch_size,)
-            reference_rejected_logps:
+            ref_rejected_logps:
                 Log probabilities of the reference model for the rejected responses. Shape: (num(rejected) in
                 batch_size,)
-            reference_KL_logps: Log probabilities of the reference model for the KL responses. Shape: (batch_size,)
+            ref_KL_logps: Log probabilities of the reference model for the KL responses. Shape: (batch_size,)
 
         Returns:
             A tuple of four tensors: (losses, chosen_rewards, rejected_rewards, KL). The losses tensor contains the KTO
@@ -880,14 +877,14 @@ class KTOTrainer(_BaseTrainer):
             between the policy and reference models.
         """
         if self.calculate_KL:
-            kl = (policy_KL_logps - reference_KL_logps).mean().detach()
+            kl = (policy_KL_logps - ref_KL_logps).mean().detach()
             kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
         else:
             kl = torch.zeros(1).to(policy_chosen_logps.device)
 
         # Chosen losses
-        if policy_chosen_logps.shape[0] != 0 or reference_chosen_logps.shape[0] != 0:
-            chosen_logratios = policy_chosen_logps - reference_chosen_logps
+        if policy_chosen_logps.shape[0] != 0 or ref_chosen_logps.shape[0] != 0:
+            chosen_logratios = policy_chosen_logps - ref_chosen_logps
 
             if self.loss_type == "kto":
                 # Eqn (7) of the KTO paper (https://huggingface.co/papers/2402.01306)
@@ -905,8 +902,8 @@ class KTOTrainer(_BaseTrainer):
             chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
 
         # Rejected losses
-        if policy_rejected_logps.shape[0] != 0 or reference_rejected_logps.shape[0] != 0:
-            rejected_logratios = policy_rejected_logps - reference_rejected_logps
+        if policy_rejected_logps.shape[0] != 0 or ref_rejected_logps.shape[0] != 0:
+            rejected_logratios = policy_rejected_logps - ref_rejected_logps
 
             if self.loss_type == "kto":
                 rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
@@ -959,9 +956,9 @@ class KTOTrainer(_BaseTrainer):
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
         policy_KL_logps = self._compute_kl_logps(model, batch)
-        reference_KL_logps = self._compute_kl_logps(self.ref_model, batch)
+        ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
         if self.calculate_KL:
-            kl = (policy_KL_logps - reference_KL_logps).mean().detach()
+            kl = (policy_KL_logps - ref_KL_logps).mean().detach()
             kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
         else:
             kl = torch.zeros(1).to(self.accelerator.device)
@@ -1065,37 +1062,37 @@ class KTOTrainer(_BaseTrainer):
 
         if self.precompute_ref_logps:
             # Convert Python lists to tensor indices for efficient CUDA operations
-            device = batch["reference_logps"].device
+            device = batch["ref_logps"].device
             labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
             chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
             rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
 
             # Use index_select for efficient CUDA operations
-            reference_chosen_logps = batch["reference_logps"].index_select(0, chosen_idx)
-            reference_rejected_logps = batch["reference_logps"].index_select(0, rejected_idx)
+            ref_chosen_logps = batch["ref_logps"].index_select(0, chosen_idx)
+            ref_rejected_logps = batch["ref_logps"].index_select(0, rejected_idx)
             if self.calculate_KL:
-                reference_KL_logps = batch["reference_KL_logps"]
+                ref_KL_logps = batch["ref_KL_logps"]
             else:
-                reference_KL_logps = None
+                ref_KL_logps = None
         else:
             with torch.no_grad():
                 if self.ref_model is None:
                     with self.null_ref_context():
-                        reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = (
-                            self._compute_logps(self.model, batch)
+                        ref_chosen_logps, ref_rejected_logps, _, _, ref_KL_logps, _ = self._compute_logps(
+                            self.model, batch
                         )
                 else:
-                    reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = (
-                        self._compute_logps(self.ref_model, batch)
+                    ref_chosen_logps, ref_rejected_logps, _, _, ref_KL_logps, _ = self._compute_logps(
+                        self.ref_model, batch
                     )
 
         losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
             policy_chosen_logps,
             policy_rejected_logps,
             policy_KL_logps,
-            reference_chosen_logps,
-            reference_rejected_logps,
-            reference_KL_logps,
+            ref_chosen_logps,
+            ref_rejected_logps,
+            ref_KL_logps,
         )
 
         self._metrics[mode]["kl"].append(kl.item())
