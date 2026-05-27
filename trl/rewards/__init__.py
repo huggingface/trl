@@ -19,15 +19,25 @@ from .._lazy_module import _LazyModule
 
 
 _import_structure = {
-    "accuracy_rewards": ["accuracy_reward", "get_cosine_scaled_reward", "reasoning_accuracy_reward"],
-    "format_rewards": ["think_format_reward"],
+    "accuracy_rewards": [
+        "accuracy_reward",
+        "get_cosine_scaled_reward",
+        "get_length_scaled_accuracy_reward",
+        "reasoning_accuracy_reward",
+    ],
+    "format_rewards": ["graduated_format_reward", "think_format_reward"],
     "other_rewards": ["get_repetition_penalty_reward", "get_soft_overlong_punishment"],
 }
 
 
 if TYPE_CHECKING:
-    from .accuracy_rewards import accuracy_reward, get_cosine_scaled_reward, reasoning_accuracy_reward
-    from .format_rewards import think_format_reward
+    from .accuracy_rewards import (
+        accuracy_reward,
+        get_cosine_scaled_reward,
+        get_length_scaled_accuracy_reward,
+        reasoning_accuracy_reward,
+    )
+    from .format_rewards import graduated_format_reward, think_format_reward
     from .other_rewards import get_repetition_penalty_reward, get_soft_overlong_punishment
 
 
