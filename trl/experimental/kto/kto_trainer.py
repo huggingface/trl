@@ -1137,11 +1137,13 @@ class KTOTrainer(_BaseTrainer):
         return self._compute_loss(model, inputs, return_outputs)
 
     def _get_train_sampler(self, train_dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
-        if train_dataset is None:
-            train_dataset = self.train_dataset
-        if train_dataset is None or not has_length(train_dataset):
-            return None
-        return SequentialSampler(train_dataset)
+        if Version(transformers.__version__) < Version("5.2.0"):
+            if train_dataset is None:
+                train_dataset = self.train_dataset
+            if train_dataset is None or not has_length(train_dataset):
+                return None
+            return SequentialSampler(train_dataset)
+        return super()._get_train_sampler(train_dataset)
 
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
     # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
