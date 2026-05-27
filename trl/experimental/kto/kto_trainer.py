@@ -330,14 +330,6 @@ class KTOTrainer(_BaseTrainer):
                 max_length=args.max_length,
             )
 
-            if args.remove_unused_columns:
-                args.remove_unused_columns = False
-                # warn users
-                logger.warning(
-                    "When using DataCollatorForUnpairedPreference, you should set `remove_unused_columns=False` in your KTOConfig"
-                    " we have set it for you, but you should do it yourself in the future.",
-                )
-
             self.use_dpo_data_collator = True
         else:
             self.use_dpo_data_collator = False
