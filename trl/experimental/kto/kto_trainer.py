@@ -343,10 +343,11 @@ class KTOTrainer(_BaseTrainer):
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         self.calculate_KL = False if self.loss_type in ["apo_zero_unpaired"] else True
-        if args.train_sampling_strategy != "sequential":
+        if self.calculate_KL and args.train_sampling_strategy != "sequential":
             raise ValueError(
-                f"KTO requires `train_sampling_strategy='sequential'` because the KL completion for each example is "
-                f"precomputed against its neighbors in a fixed-order batch; any other strategy breaks that pairing. "
+                f"Loss type `'{args.loss_type}'` estimates the KL divergence term and requires "
+                f"`train_sampling_strategy='sequential'` because the KL completion for each example is precomputed "
+                f"against its neighbors in a fixed-order batch; any other strategy breaks that pairing. "
                 f"Got `train_sampling_strategy='{args.train_sampling_strategy}'`."
             )
         if self.calculate_KL and args.per_device_train_batch_size <= 1:
