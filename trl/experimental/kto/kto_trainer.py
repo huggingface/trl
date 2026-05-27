@@ -330,21 +330,13 @@ class KTOTrainer(_BaseTrainer):
                 max_length=args.max_length,
             )
 
-            if args.remove_unused_columns:
-                args.remove_unused_columns = False
-                # warn users
-                logger.warning(
-                    "When using DataCollatorForUnpairedPreference, you should set `remove_unused_columns=False` in your KTOConfig"
-                    " we have set it for you, but you should do it yourself in the future.",
-                )
-
             self.use_dpo_data_collator = True
         else:
             self.use_dpo_data_collator = False
 
         # Training arguments
         self.beta = args.beta
-        self.precompute_ref_log_probs = args.precompute_ref_log_probs
+        self.precompute_ref_logps = args.precompute_ref_log_probs
         self.loss_type = args.loss_type
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
@@ -449,7 +441,7 @@ class KTOTrainer(_BaseTrainer):
                     "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
                     "Only KTO loss is supported with liger-kernel."
                 )
-            if self.precompute_ref_log_probs:
+            if self.precompute_ref_logps:
                 raise ValueError(
                     "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
                     "`precompute_ref_log_probs=False`."
@@ -460,7 +452,7 @@ class KTOTrainer(_BaseTrainer):
                 )
             self.kto_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
-        if self.precompute_ref_log_probs:
+        if self.precompute_ref_logps:
             if isinstance(self.train_dataset, IterableDataset) or isinstance(
                 self.eval_dataset, (IterableDataset, IterableDatasetDict)
             ):
@@ -650,6 +642,20 @@ class KTOTrainer(_BaseTrainer):
                         )
         return dataset
 
+    def _set_signature_columns_if_needed(self):
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
+        # and "attention_mask").
+        if self._signature_columns is None:
+            self._signature_columns = [
+                "prompt_ids",
+                "completion_ids",
+                "KL_completion_ids",
+                "label",
+                "reference_logps",
+                "reference_KL_logps",
+            ]
+
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
@@ -682,7 +688,7 @@ class KTOTrainer(_BaseTrainer):
             reference_logps = []
             reference_KL_logps = []
             for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-                reference_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
+                reference_logp, reference_KL_logp = self.compute_ref_log_probs(padded_batch)
                 if self.calculate_KL:
                     reference_logp, reference_KL_logp = self.accelerator.gather_for_metrics(
                         (reference_logp, reference_KL_logp)
@@ -712,42 +718,42 @@ class KTOTrainer(_BaseTrainer):
 
         return dataset
 
-    def compute_reference_log_probs(self, padded_batch: dict) -> dict:
-        """Computes log probabilities of the reference model for a single padded batch of a KTO specific dataset."""
+    def compute_ref_log_probs(self, inputs):
+        """Computes reference log probabilities for a single padded batch."""
         with torch.no_grad():
             if self.ref_model is None:
                 with self.null_ref_context():
                     completion_logits = self.model(
-                        padded_batch["completion_input_ids"],
-                        attention_mask=padded_batch["completion_attention_mask"],
+                        inputs["completion_input_ids"],
+                        attention_mask=inputs["completion_attention_mask"],
                     ).logits
 
                     if self.calculate_KL:
                         KL_logits = self.model(
-                            padded_batch["KL_completion_input_ids"],
-                            attention_mask=padded_batch["KL_completion_attention_mask"],
+                            inputs["KL_completion_input_ids"],
+                            attention_mask=inputs["KL_completion_attention_mask"],
                         ).logits
             else:
                 completion_logits = self.ref_model(
-                    padded_batch["completion_input_ids"], attention_mask=padded_batch["completion_attention_mask"]
+                    inputs["completion_input_ids"], attention_mask=inputs["completion_attention_mask"]
                 ).logits
 
                 if self.calculate_KL:
                     KL_logits = self.ref_model(
-                        padded_batch["KL_completion_input_ids"],
-                        attention_mask=padded_batch["KL_completion_attention_mask"],
+                        inputs["KL_completion_input_ids"],
+                        attention_mask=inputs["KL_completion_attention_mask"],
                     ).logits
 
         completion_logps = self.get_batch_logps(
             completion_logits,
-            padded_batch["completion_labels"],
+            inputs["completion_labels"],
             average_log_prob=False,
         )
 
         if self.calculate_KL:
             KL_logps = self.get_batch_logps(
                 KL_logits,
-                padded_batch["KL_completion_labels"],
+                inputs["KL_completion_labels"],
                 average_log_prob=False,
             )
         else:
@@ -1051,8 +1057,7 @@ class KTOTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             aux_loss = outputs.aux_loss
 
-        # if reference_logps in batch use them, otherwise use the reference model
-        if "reference_logps" in batch:
+        if self.precompute_ref_logps:
             # Convert Python lists to tensor indices for efficient CUDA operations
             device = batch["reference_logps"].device
             labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)

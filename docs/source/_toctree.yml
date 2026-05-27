@@ -121,8 +121,6 @@
     title: MiniLLM
   - local: nash_md_trainer
     title: Nash-MD
-  - local: nemo_gym
-    title: NeMo Gym
   - local: online_dpo_trainer
     title: Online DPO
   - local: orpo_trainer
