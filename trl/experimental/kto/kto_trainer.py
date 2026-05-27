@@ -838,9 +838,9 @@ class KTOTrainer(_BaseTrainer):
         policy_chosen_logps: torch.FloatTensor,
         policy_rejected_logps: torch.FloatTensor,
         policy_KL_logps: torch.FloatTensor,
-        reference_chosen_logps: torch.FloatTensor,
-        reference_rejected_logps: torch.FloatTensor,
-        reference_KL_logps: torch.FloatTensor,
+        ref_chosen_logps: torch.FloatTensor,
+        ref_rejected_logps: torch.FloatTensor,
+        ref_KL_logps: torch.FloatTensor,
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute the KTO loss for a batch of policy and reference model log probabilities.
 
@@ -850,12 +850,12 @@ class KTOTrainer(_BaseTrainer):
             policy_rejected_logps:
                 Log probabilities of the policy model for the rejected responses. Shape: (num(rejected) in batch_size,)
             policy_KL_logps: Log probabilities of the policy model for the KL responses. Shape: (batch_size,)
-            reference_chosen_logps:
+            ref_chosen_logps:
                 Log probabilities of the reference model for the chosen responses. Shape: (num(chosen) in batch_size,)
-            reference_rejected_logps:
+            ref_rejected_logps:
                 Log probabilities of the reference model for the rejected responses. Shape: (num(rejected) in
                 batch_size,)
-            reference_KL_logps: Log probabilities of the reference model for the KL responses. Shape: (batch_size,)
+            ref_KL_logps: Log probabilities of the reference model for the KL responses. Shape: (batch_size,)
 
         Returns:
             A tuple of four tensors: (losses, chosen_rewards, rejected_rewards, KL). The losses tensor contains the KTO
@@ -864,14 +864,14 @@ class KTOTrainer(_BaseTrainer):
             between the policy and reference models.
         """
         if self.calculate_KL:
-            kl = (policy_KL_logps - reference_KL_logps).mean().detach()
+            kl = (policy_KL_logps - ref_KL_logps).mean().detach()
             kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
         else:
             kl = torch.zeros(1).to(policy_chosen_logps.device)
 
         # Chosen losses
-        if policy_chosen_logps.shape[0] != 0 or reference_chosen_logps.shape[0] != 0:
-            chosen_logratios = policy_chosen_logps - reference_chosen_logps
+        if policy_chosen_logps.shape[0] != 0 or ref_chosen_logps.shape[0] != 0:
+            chosen_logratios = policy_chosen_logps - ref_chosen_logps
 
             if self.loss_type == "kto":
                 # Eqn (7) of the KTO paper (https://huggingface.co/papers/2402.01306)
@@ -889,8 +889,8 @@ class KTOTrainer(_BaseTrainer):
             chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
 
         # Rejected losses
-        if policy_rejected_logps.shape[0] != 0 or reference_rejected_logps.shape[0] != 0:
-            rejected_logratios = policy_rejected_logps - reference_rejected_logps
+        if policy_rejected_logps.shape[0] != 0 or ref_rejected_logps.shape[0] != 0:
+            rejected_logratios = policy_rejected_logps - ref_rejected_logps
 
             if self.loss_type == "kto":
                 rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
