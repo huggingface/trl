@@ -662,7 +662,8 @@ class KTOTrainer(_BaseTrainer):
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
-        fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
+        # "ref_logps" is included to invalidate caches written before the key was renamed from "reference_logps"
+        fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL, "ref_logps"))
         cache_file = dataset._get_cache_file_path(fingerprint).removesuffix(".arrow") + ".npz"
         if os.path.exists(cache_file):
             loaded = np.load(cache_file)
