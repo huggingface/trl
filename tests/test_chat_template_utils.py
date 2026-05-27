@@ -613,6 +613,7 @@ class TestIsChatTemplatePrefixPreserving:
                 ),
             ],
         ),
+        pytest.param("trl-internal-testing/tiny-Idefics3ForConditionalGeneration", id="idefics3"),
     ],
 )
 class TestGetTrainingChatTemplate:
