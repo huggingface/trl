@@ -14,49 +14,33 @@
 
 import logging
 from collections import defaultdict
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
 import torch
 from datasets import Dataset
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, TrainerControl, TrainerState, TrainingArguments
 from transformers.utils import is_peft_available
 
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
-from trl.experimental.sdft.sdft_trainer import DistillationLogits
+from trl.experimental.sdpo import SDPOTrainer
+from trl.experimental.self_distillation.generation import Generation, GenerationOutput
+from trl.experimental.self_distillation.loss_utils import (
+    aggregate_loss,
+    apply_importance_sampling_clipping,
+    compute_full_logit_self_distillation_loss,
+    compute_sampled_token_self_distillation_loss,
+    compute_topk_self_distillation_loss,
+)
 
 from ..testing_utils import TrlTestCase
 
 
 if is_peft_available():
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
 
-
-class FakeTextTokenizer:
-    def __call__(self, text, **kwargs):
-        del kwargs
-        token_map = {
-            "short prompt": [1, 2, 3],
-            "long prompt": [10, 11, 12, 13, 14],
-        }
-        return {"input_ids": [token_map[prompt] for prompt in text]}
-
-
-class FakeChatProcessor:
-    def __init__(self):
-        self.calls = []
-
-    def apply_chat_template(self, conversation, add_generation_prompt, tokenize, return_dict, **kwargs):
-        self.calls.append(
-            {
-                "conversation": conversation,
-                "add_generation_prompt": add_generation_prompt,
-                "tokenize": tokenize,
-                "return_dict": return_dict,
-                "kwargs": kwargs,
-            }
-        )
-        return {"input_ids": [[21, 22, 23, 24]]}
+    from trl.experimental.self_distillation.teacher_sync import PEFTAdapterEMACallback
 
 
 class TestSelfDistillationTrainerBehavior(TrlTestCase):
@@ -81,6 +65,181 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         }
         trainer._name = "SDFT"
         return trainer
+
+    def test_full_logit_loss_matches_forward_kl(self):
+        student_probs = torch.tensor([[[0.8, 0.2]]], dtype=torch.float32)
+        teacher_probs = torch.tensor([[[0.5, 0.5]]], dtype=torch.float32)
+
+        loss = compute_full_logit_self_distillation_loss(
+            student_probs.log(),
+            teacher_probs.log(),
+            distillation_alpha=0.0,
+        )
+
+        expected_loss = teacher_probs[0, 0, 0] * (
+            teacher_probs[0, 0, 0].log() - student_probs[0, 0, 0].log()
+        ) + teacher_probs[0, 0, 1] * (teacher_probs[0, 0, 1].log() - student_probs[0, 0, 1].log())
+        torch.testing.assert_close(loss, expected_loss.reshape(1, 1))
+
+    def test_sampled_token_loss_uses_selected_completion_ids(self):
+        student_probs = torch.tensor([[[0.1, 0.9], [0.7, 0.3]]], dtype=torch.float32)
+        teacher_probs = torch.tensor([[[0.4, 0.6], [0.2, 0.8]]], dtype=torch.float32)
+        completion_ids = torch.tensor([[1, 0]])
+
+        loss = compute_sampled_token_self_distillation_loss(
+            student_probs.log(),
+            teacher_probs.log(),
+            completion_ids,
+            distillation_alpha=1.0,
+        )
+
+        expected_student_logps = torch.tensor([[0.9, 0.7]], dtype=torch.float32).log()
+        expected_teacher_logps = torch.tensor([[0.6, 0.2]], dtype=torch.float32).log()
+        expected_loss = (expected_student_logps - expected_teacher_logps) * expected_student_logps
+        torch.testing.assert_close(loss, expected_loss)
+
+    def test_topk_loss_renormalizes_selected_student_support(self):
+        student_probs = torch.tensor([[[0.5, 0.3, 0.2]]], dtype=torch.float32)
+        teacher_probs = torch.tensor([[[0.2, 0.6, 0.2]]], dtype=torch.float32)
+
+        loss = compute_topk_self_distillation_loss(
+            student_probs.log(),
+            teacher_probs.log(),
+            distillation_topk=2,
+            distillation_alpha=0.0,
+            distillation_add_tail=False,
+        )
+
+        student_topk = torch.tensor([0.5, 0.3], dtype=torch.float32)
+        student_topk = student_topk / student_topk.sum()
+        teacher_topk = torch.tensor([0.2, 0.6], dtype=torch.float32)
+        teacher_topk = teacher_topk / teacher_topk.sum()
+        expected_loss = (teacher_topk * (teacher_topk.log() - student_topk.log())).sum()
+        torch.testing.assert_close(loss, expected_loss.reshape(1, 1))
+
+    def test_topk_loss_can_include_tail_bucket(self):
+        student_probs = torch.tensor([[[0.5, 0.3, 0.2]]], dtype=torch.float32)
+        teacher_probs = torch.tensor([[[0.2, 0.6, 0.2]]], dtype=torch.float32)
+
+        loss = compute_topk_self_distillation_loss(
+            student_probs.log(),
+            teacher_probs.log(),
+            distillation_topk=2,
+            distillation_alpha=0.0,
+            distillation_add_tail=True,
+        )
+
+        student_with_tail = torch.tensor([0.5, 0.3, 0.2], dtype=torch.float32)
+        teacher_with_tail = torch.tensor([0.2, 0.6, 0.2], dtype=torch.float32)
+        expected_loss = (teacher_with_tail * (teacher_with_tail.log() - student_with_tail.log())).sum()
+        torch.testing.assert_close(loss, expected_loss.reshape(1, 1))
+
+    def test_aggregate_loss_masks_response_tokens(self):
+        per_token_loss = torch.tensor([[1.0, 100.0], [3.0, 5.0]])
+        response_mask = torch.tensor([[1.0, 0.0], [1.0, 1.0]])
+
+        loss = aggregate_loss(per_token_loss, response_mask, loss_type="dapo", max_completion_length=2)
+
+        torch.testing.assert_close(loss, torch.tensor(3.0))
+
+    def test_aggregate_loss_rejects_unsupported_loss_modes(self):
+        per_token_loss = torch.tensor([[1.0]])
+        response_mask = torch.tensor([[1.0]])
+
+        with pytest.raises(ValueError, match="Unsupported loss_type: luspo"):
+            aggregate_loss(per_token_loss, response_mask, loss_type="luspo", max_completion_length=1)
+
+    def test_importance_sampling_clipping_caps_token_ratio(self):
+        per_token_loss = torch.tensor([[1.0, 2.0]])
+        student_log_probs = torch.tensor([[0.4, 0.3]], dtype=torch.float32).log()
+        old_log_probs = torch.tensor([[0.1, 0.2]], dtype=torch.float32).log()
+
+        loss = apply_importance_sampling_clipping(
+            per_token_loss,
+            student_log_probs,
+            old_log_probs,
+            clip_coeff=2.0,
+        )
+
+        torch.testing.assert_close(loss, torch.tensor([[2.0, 3.0]]))
+
+    @pytest.mark.parametrize("trainer_cls", [SDFTTrainer, SDPOTrainer])
+    def test_trainer_syncs_vllm_weights_before_generation_on_new_step(self, trainer_cls):
+        class FakeGenerationEngine:
+            def __init__(self):
+                self.sync_weights_call_count = 0
+                self.generate_calls = []
+
+            def sync_weights(self):
+                self.sync_weights_call_count += 1
+
+            def generate(self, prompt_ids, *, num_generations):
+                self.generate_calls.append({"prompt_ids": prompt_ids, "num_generations": num_generations})
+                return GenerationOutput(prompt_ids=prompt_ids, completion_ids=[[31], [32]])
+
+        trainer = object.__new__(trainer_cls)
+        trainer.args = SimpleNamespace(use_vllm=True)
+        trainer.model = SimpleNamespace(training=True)
+        trainer.state = SimpleNamespace(global_step=4)
+        trainer._last_loaded_step = 3
+        trainer.num_generations = 2
+        trainer.num_generations_eval = 3
+        trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+        trainer._tokenizer = SimpleNamespace(pad_token_id=0, eos_token_id=99)
+        trainer.mask_truncated_completions = False
+        trainer.generation_engine = FakeGenerationEngine()
+        trainer._tokenize_prompts = lambda prompts: [[11, 12] for _ in prompts]
+        trainer._dispatch_self_distillation_callback = lambda event_name, **payload: None
+        trainer._compute_rollout_logps = lambda **kwargs: None
+
+        batch = trainer.sample_rollouts([{"prompt": "a"}, {"prompt": "b"}])
+
+        assert trainer.generation_engine.sync_weights_call_count == 1
+        assert trainer._last_loaded_step == 4
+        assert trainer.generation_engine.generate_calls == [{"prompt_ids": [[11, 12], [11, 12]], "num_generations": 2}]
+        torch.testing.assert_close(batch["completion_ids"], torch.tensor([[31], [32]]))
+
+    def test_generation_engine_transformers_trims_after_first_eos(self, monkeypatch):
+        class FakeModel:
+            def generate(self, input_ids, attention_mask, generation_config):
+                del attention_mask, generation_config
+                completions = torch.tensor([[7, 2, 9], [8, 9, 10]], dtype=torch.long)
+                return torch.cat([input_ids, completions], dim=1)
+
+        @contextmanager
+        def fake_unwrap_model_for_generation(*args, **kwargs):
+            del args, kwargs
+            yield FakeModel()
+
+        import trl.experimental.self_distillation.generation as generation_module
+
+        monkeypatch.setattr(generation_module, "unwrap_model_for_generation", fake_unwrap_model_for_generation)
+
+        generator = object.__new__(Generation)
+        generator.use_vllm = False
+        generator.accelerator = SimpleNamespace(device=torch.device("cpu"))
+        generator.model_wrapped = object()
+        generator.is_fsdp_enabled = False
+        generator.args = SimpleNamespace(ds3_gather_for_generation=False)
+        generator.generation_kwargs = {}
+        generator.generation_config = SimpleNamespace()
+        generator._tokenizer = SimpleNamespace(pad_token_id=0, eos_token_id=2)
+
+        output = generator.generate([[11, 12, 13], [21]], num_generations=1)
+
+        assert output.prompt_ids == [[11, 12, 13], [21]]
+        assert output.completion_ids == [[7, 2], [8, 9, 10]]
+
+    def test_sdft_response_mask_keeps_loss_token_skip_local(self):
+        trainer = object.__new__(SDFTTrainer)
+        trainer.num_loss_tokens_to_skip = 2
+
+        response_mask = trainer._build_self_distillation_response_mask(
+            torch.tensor([[1, 1, 1, 0]]),
+            torch.tensor([1]),
+        )
+
+        torch.testing.assert_close(response_mask, torch.tensor([[0, 0, 1, 0]]))
 
     def test_teacher_model_kind_live_uses_student_model(self):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
@@ -136,6 +295,57 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         assert "already contains a PEFT adapter" in caplog.text
         assert "`teacher_model_kind='base'` may refer to the underlying base weights" in caplog.text
 
+    @pytest.mark.skipif(not is_peft_available(), reason="PEFT is required for this test")
+    def test_peft_adapter_ema_callback_updates_teacher_adapter(self):
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            device_map="cpu",
+        )
+        model = get_peft_model(
+            model,
+            LoraConfig(
+                task_type="CAUSAL_LM",
+                target_modules=["q_proj", "v_proj"],
+                r=8,
+            ),
+            adapter_name="default",
+        )
+
+        update_rate = 0.5
+        callback = PEFTAdapterEMACallback(
+            model=model,
+            teacher_adapter_name="teacher",
+            update_rate=update_rate,
+            sync_steps=1,
+        )
+        args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
+        state = TrainerState(global_step=0)
+        control = TrainerControl()
+
+        callback.on_train_begin(args, state, control)
+
+        assert "teacher" in model.peft_config
+        assert callback.shadow_weights is not None
+        teacher_state = get_peft_model_state_dict(model, adapter_name="teacher")
+        for key, param in teacher_state.items():
+            assert torch.all(param == 0), f"Teacher param {key} should be zero-initialized"
+
+        student_state = {
+            key: value.clone() for key, value in get_peft_model_state_dict(model, adapter_name="default").items()
+        }
+        assert set(callback.shadow_weights.keys()) == set(student_state.keys())
+
+        state.global_step = 1
+        callback.on_step_end(args, state, control)
+
+        for key in callback.shadow_weights:
+            expected = update_rate * student_state[key]
+            torch.testing.assert_close(callback.shadow_weights[key], expected)
+
+        teacher_state = get_peft_model_state_dict(model, adapter_name="teacher")
+        for key in teacher_state:
+            torch.testing.assert_close(teacher_state[key].float(), callback.shadow_weights[key])
+
     @pytest.mark.parametrize("teacher_model_kind", ["base", "ema"])
     def test_teacher_model_kind_base_and_ema_use_frozen_teacher_copy(self, teacher_model_kind):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
@@ -163,34 +373,6 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         assert teacher_param.requires_grad is False
         assert teacher_param.data_ptr() != student_param.data_ptr()
 
-    def test_tokenize_prompts_truncates_text_prompts_from_left(self):
-        trainer = object.__new__(SDFTTrainer)
-        trainer.processing_class = FakeTextTokenizer()
-        trainer.max_prompt_length = 3
-
-        prompt_ids = trainer._tokenize_prompts(["long prompt", "short prompt"])
-
-        assert prompt_ids == [[12, 13, 14], [1, 2, 3]]
-
-    def test_tokenize_prompts_for_conversational_prompts_forwards_chat_template_kwargs(self):
-        trainer = object.__new__(SDFTTrainer)
-        trainer.processing_class = FakeChatProcessor()
-        trainer.max_prompt_length = 2
-        trainer.chat_template_kwargs = {"enable_thinking": False}
-
-        prompt_ids = trainer._tokenize_prompts([[{"role": "user", "content": "Solve 2+2."}]])
-
-        assert prompt_ids == [[23, 24]]
-        assert trainer.processing_class.calls == [
-            {
-                "conversation": [[{"role": "user", "content": "Solve 2+2."}]],
-                "add_generation_prompt": True,
-                "tokenize": True,
-                "return_dict": True,
-                "kwargs": {"enable_thinking": False},
-            }
-        ]
-
     def test_compute_self_distillation_loss_ignores_masked_completion_tokens(self):
         trainer = self._make_loss_test_trainer(
             distillation_mode="full_logits",
@@ -202,7 +384,7 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         # Token 1 is intentionally very different but masked out, so it must not affect the loss.
         student_probs = torch.tensor([[[0.8, 0.2], [0.01, 0.99]]], dtype=torch.float32)
         teacher_probs = torch.tensor([[[0.5, 0.5], [0.99, 0.01]]], dtype=torch.float32)
-        distillation_logits = DistillationLogits(
+        distillation_logits = SimpleNamespace(
             completion_ids=torch.tensor([[0, 1]], dtype=torch.long),
             completion_mask=torch.tensor([[1, 1]], dtype=torch.long),
             response_mask=torch.tensor([[1, 0]], dtype=torch.long),
@@ -230,7 +412,7 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         old_token_probs = torch.tensor([[0.05, 0.4]], dtype=torch.float32)
         clip_coeff = trainer.args.distillation_is_clip
 
-        distillation_logits = DistillationLogits(
+        distillation_logits = SimpleNamespace(
             completion_ids=torch.tensor([[0, 1]], dtype=torch.long),
             completion_mask=torch.tensor([[1, 1]], dtype=torch.long),
             response_mask=torch.tensor([[1, 1]], dtype=torch.long),

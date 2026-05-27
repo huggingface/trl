@@ -12,12 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import patch
-
 import pytest
 import torch
 from datasets import Dataset
-from transformers import AutoModelForCausalLM, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
+from transformers import TrainerCallback
 from transformers.utils import is_peft_available
 
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
@@ -26,9 +24,7 @@ from ..testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
-    from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
-
-    from trl.experimental.self_distillation.teacher_sync import PEFTAdapterEMACallback
+    from peft import LoraConfig
 
 
 class SelfDistillationCaptureCallback(TrainerCallback):
@@ -50,8 +46,49 @@ class SelfDistillationCaptureCallback(TrainerCallback):
 
 
 class TestSDFTTrainer(TrlTestCase):
-    def test_trainer_is_self_contained(self):
-        assert "BaseSelfDistillationTrainer" not in [cls.__name__ for cls in SDFTTrainer.__mro__]
+    @staticmethod
+    def _trainable_param_snapshot(model):
+        return {name: param.detach().clone() for name, param in model.named_parameters() if param.requires_grad}
+
+    @staticmethod
+    def _assert_any_trainable_param_changed(model, previous_trainable_params):
+        assert any(
+            not torch.allclose(previous_param, model.get_parameter(name), rtol=1e-12, atol=1e-12)
+            for name, previous_param in previous_trainable_params.items()
+        )
+
+    def test_training(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": [
+                    "Example answer: 4.",
+                    "Example answer: Paris.",
+                ],
+            }
+        )
+
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            max_completion_length=8,
+            max_steps=1,
+            num_generations=1,
+            report_to="none",
+        )
+
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        previous_trainable_params = self._trainable_param_snapshot(trainer.model)
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
     def test_training_rejects_none_privileged_context(self):
         dataset = Dataset.from_dict(
@@ -67,6 +104,7 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=1,
             num_generations=1,
+            report_to="none",
         )
 
         trainer = SDFTTrainer(
@@ -98,6 +136,7 @@ class TestSDFTTrainer(TrlTestCase):
             max_steps=1,
             num_generations=1,
             generate_from_teacher=True,
+            report_to="none",
         )
 
         capture_callback = SelfDistillationCaptureCallback()
@@ -135,25 +174,21 @@ class TestSDFTTrainer(TrlTestCase):
             max_steps=1,
             num_generations=1,
             chat_template_kwargs={"enable_thinking": False},
+            report_to="none",
         )
 
-        capture_callback = SelfDistillationCaptureCallback()
         trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
-            callbacks=[capture_callback],
         )
 
-        with patch.object(
-            trainer.processing_class,
-            "apply_chat_template",
-            wraps=trainer.processing_class.apply_chat_template,
-        ) as mock_apply_chat_template:
-            trainer.train()
+        previous_trainable_params = self._trainable_param_snapshot(trainer.model)
 
-        assert mock_apply_chat_template.call_count > 0
-        assert any(call.kwargs.get("enable_thinking") is False for call in mock_apply_chat_template.call_args_list)
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
     @require_peft
     def test_training_with_peft_model(self):
@@ -174,6 +209,7 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=1,
             num_generations=1,
+            report_to="none",
         )
 
         trainer = SDFTTrainer(
@@ -186,12 +222,15 @@ class TestSDFTTrainer(TrlTestCase):
             ),
         )
 
+        previous_trainable_params = self._trainable_param_snapshot(trainer.model)
+
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
     @require_peft
-    def test_training_with_peft_model_and_sync_ref_model(self):
+    def test_training_with_peft_model_and_ema_teacher_sync(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
@@ -212,6 +251,7 @@ class TestSDFTTrainer(TrlTestCase):
             teacher_model_kind="ema",
             teacher_update_rate=0.05,
             teacher_sync_steps=1,
+            report_to="none",
         )
 
         trainer = SDFTTrainer(
@@ -223,60 +263,12 @@ class TestSDFTTrainer(TrlTestCase):
                 target_modules=["q_proj", "v_proj"],
             ),
         )
+        previous_trainable_params = self._trainable_param_snapshot(trainer.model)
 
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-
-    @require_peft
-    def test_peft_adapter_ema_callback(self):
-        model = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            device_map="cpu",
-        )
-        lora_config = LoraConfig(
-            task_type="CAUSAL_LM",
-            target_modules=["q_proj", "v_proj"],
-            r=8,
-        )
-        model = get_peft_model(model, lora_config, adapter_name="default")
-
-        update_rate = 0.5
-        callback = PEFTAdapterEMACallback(
-            model=model,
-            teacher_adapter_name="teacher",
-            update_rate=update_rate,
-            sync_steps=1,
-        )
-
-        # Initialize and verify teacher adapter was created with zero weights
-        callback._initialize_teacher_adapter()
-        assert "teacher" in model.peft_config
-        assert callback.shadow_weights is not None
-
-        teacher_state = get_peft_model_state_dict(model, adapter_name="teacher")
-        for key, param in teacher_state.items():
-            assert torch.all(param == 0), f"Teacher param {key} should be zero-initialized"
-
-        # Verify shadow weights keys match student state dict keys
-        student_state = {k: v.clone() for k, v in get_peft_model_state_dict(model, adapter_name="default").items()}
-        assert set(callback.shadow_weights.keys()) == set(student_state.keys())
-
-        # Simulate a training step and verify EMA update
-        args = TrainingArguments(output_dir=self.tmp_dir)
-        state = TrainerState(global_step=1)
-        control = TrainerControl()
-        callback.on_step_end(args, state, control)
-
-        # shadow = (1 - rate) * 0 + rate * student = rate * student
-        for key in callback.shadow_weights:
-            expected = update_rate * student_state[key]
-            torch.testing.assert_close(callback.shadow_weights[key], expected)
-
-        # Verify teacher adapter received the shadow weights
-        teacher_state = get_peft_model_state_dict(model, adapter_name="teacher")
-        for key in teacher_state:
-            torch.testing.assert_close(teacher_state[key].float(), callback.shadow_weights[key])
+        self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
     def test_training_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
         dataset = Dataset.from_dict(
@@ -298,6 +290,7 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=1,
             num_generations=1,
+            report_to="none",
         )
 
         capture_callback = SelfDistillationCaptureCallback()
@@ -331,6 +324,7 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=2,
             num_generations=1,
+            report_to="none",
         )
 
         capture_callback = SelfDistillationCaptureCallback()

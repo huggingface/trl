@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import logging
-from types import SimpleNamespace
 
 import torch
 from datasets import Dataset, load_dataset
@@ -61,9 +60,6 @@ class SelfDistillationCaptureCallback(TrainerCallback):
 
 
 class TestSDPOTrainer(TrlTestCase):
-    def test_trainer_is_self_contained(self):
-        assert "BaseSelfDistillationTrainer" not in [cls.__name__ for cls in SDPOTrainer.__mro__]
-
     def test_training_with_positional_config_argument(self):
         dataset = Dataset.from_dict(
             {
@@ -81,6 +77,7 @@ class TestSDPOTrainer(TrlTestCase):
             max_completion_length=8,
             include_environment_feedback=True,
             max_steps=1,
+            report_to="none",
         )
 
         trainer = SDPOTrainer(
@@ -102,69 +99,6 @@ class TestSDPOTrainer(TrlTestCase):
         assert config.vllm_mode == "colocate"
         assert config.vllm_model_impl == "vllm"
 
-    def test_generate_vllm_syncs_on_step_change_and_uses_mode_specific_num_generations(self):
-        class FakeVLLMGeneration:
-            def __init__(self):
-                self.sync_weights_call_count = 0
-                self.generate_calls = []
-
-            def sync_weights(self):
-                self.sync_weights_call_count += 1
-
-            def generate(self, prompts, images, num_generations):
-                self.generate_calls.append(
-                    {
-                        "prompts": prompts,
-                        "images": images,
-                        "num_generations": num_generations,
-                    }
-                )
-                completion_ids = [[100 + index] for index in range(len(prompts))]
-                return prompts, completion_ids, None, None
-
-        trainer = object.__new__(SDPOTrainer)
-        trainer.use_vllm = True
-        trainer.max_prompt_length = 16
-        trainer.num_generations = 2
-        trainer.num_generations_eval = 3
-        trainer.model = SimpleNamespace(training=True)
-        trainer.state = SimpleNamespace(global_step=4)
-        trainer._last_loaded_step = 3
-        trainer.vllm_generation = FakeVLLMGeneration()
-
-        prompt_ids, completion_ids = trainer._generate([[11, 12], [11, 12]])
-
-        assert prompt_ids == [[11, 12], [11, 12]]
-        assert completion_ids == [[100], [101]]
-        assert trainer.vllm_generation.sync_weights_call_count == 1
-        assert trainer._last_loaded_step == 4
-        assert trainer.vllm_generation.generate_calls == [
-            {
-                "prompts": [[11, 12], [11, 12]],
-                "images": None,
-                "num_generations": 2,
-            }
-        ]
-
-        trainer.model.training = False
-        eval_prompt_ids, eval_completion_ids = trainer._generate([[21, 22], [21, 22], [21, 22]])
-
-        assert eval_prompt_ids == [[21, 22], [21, 22], [21, 22]]
-        assert eval_completion_ids == [[100], [101], [102]]
-        assert trainer.vllm_generation.sync_weights_call_count == 1
-        assert trainer.vllm_generation.generate_calls[-1] == {
-            "prompts": [[21, 22], [21, 22], [21, 22]],
-            "images": None,
-            "num_generations": 3,
-        }
-
-        trainer.model.training = True
-        trainer.state.global_step = 5
-        trainer._generate([[11, 12], [11, 12]])
-
-        assert trainer.vllm_generation.sync_weights_call_count == 2
-        assert trainer._last_loaded_step == 5
-
     def test_training(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -177,6 +111,7 @@ class TestSDPOTrainer(TrlTestCase):
             distillation_mode="topk_logits",
             distillation_topk=5,
             distillation_is_clip=None,
+            report_to="none",
         )
         trainer = SDPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -206,6 +141,7 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             distillation_is_clip=None,
+            report_to="none",
         )
 
         def zero_reward(**kwargs):
@@ -235,6 +171,7 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=2,
             max_completion_length=8,
             max_steps=1,
+            report_to="none",
         )
 
         capture_callback = SelfDistillationCaptureCallback()
@@ -266,6 +203,7 @@ class TestSDPOTrainer(TrlTestCase):
             dont_reprompt_on_self_success=False,
             distillation_is_clip=None,
             max_steps=1,
+            report_to="none",
         )
 
         def eval_rewards(**kwargs):
@@ -313,6 +251,7 @@ class TestSDPOTrainer(TrlTestCase):
             success_reward_threshold=0.5,
             dont_reprompt_on_self_success=False,
             max_steps=1,
+            report_to="none",
         )
 
         def reward_with_one_success(**kwargs):
@@ -331,6 +270,8 @@ class TestSDPOTrainer(TrlTestCase):
         trainer.train()
 
         assert capture_callback.captured_teacher_input_text is not None
+        assert "Solve f(x) = {x^2}." in capture_callback.captured_teacher_input_text
+        assert 'Feedback: use {"x": 2} as a check.' in capture_callback.captured_teacher_input_text
         assert "{{" not in capture_callback.captured_teacher_input_text
         assert "}}" not in capture_callback.captured_teacher_input_text
 
@@ -356,6 +297,7 @@ class TestSDPOTrainer(TrlTestCase):
             distillation_is_clip=None,
             success_reward_threshold=0.5,
             max_steps=1,
+            report_to="none",
         )
 
         def first_only_reward(**kwargs):
@@ -403,6 +345,7 @@ class TestSDPOTrainer(TrlTestCase):
             distillation_is_clip=None,
             include_environment_feedback=True,
             max_steps=1,
+            report_to="none",
         )
 
         def zero_reward(**kwargs):
@@ -436,6 +379,7 @@ class TestSDPOTrainer(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             diagnostics_warning_interval=2,
             max_steps=2,
+            report_to="none",
         )
 
         def zero_reward(**kwargs):
@@ -466,6 +410,7 @@ class TestSDPOTrainer(TrlTestCase):
             max_completion_length=8,
             success_reward_threshold=0.5,
             max_steps=1,
+            report_to="none",
         )
 
         def first_only_reward(**kwargs):
