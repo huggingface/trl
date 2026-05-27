@@ -321,6 +321,8 @@ glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text(encodi
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding="utf-8")
 
+idefics3_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3.jinja").read_text(encoding="utf-8")
+
 llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text(encoding="utf-8")
 
 llama3_1_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1.jinja").read_text(encoding="utf-8")
@@ -355,8 +357,6 @@ qwen3_5_nothink_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_nothink.jinja").
 qwen3_5_think_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think.jinja").read_text(encoding="utf-8")
 
 qwen3_6_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6.jinja").read_text(encoding="utf-8")
-
-idefics3_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3.jinja").read_text()
 
 
 ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizerBase, ProcessorMixin)
@@ -579,6 +579,8 @@ glm4moe_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe_training.jinja"
 
 gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text(encoding="utf-8")
 
+idefics3_training_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3_training.jinja").read_text(encoding="utf-8")
+
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
@@ -620,8 +622,6 @@ qwen3_5_think_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think_tra
 )
 
 qwen3_6_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6_training.jinja").read_text(encoding="utf-8")
-
-idefics3_training_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3_training.jinja").read_text()
 
 
 def get_training_chat_template(
@@ -722,6 +722,9 @@ def get_training_chat_template(
     if processing_class.chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
 
+    if processing_class.chat_template == idefics3_chat_template:
+        return idefics3_training_chat_template
+
     if processing_class.chat_template == llama3_chat_template:
         return llama3_training_chat_template
 
@@ -766,9 +769,6 @@ def get_training_chat_template(
 
     if processing_class.chat_template == qwen3_6_chat_template:
         return qwen3_6_training_chat_template
-
-    if processing_class.chat_template == idefics3_chat_template:
-        return idefics3_training_chat_template
 
     raise ValueError(
         "The chat template is not training-compatible (missing prefix-preservation or `{% generation %}` markers) "

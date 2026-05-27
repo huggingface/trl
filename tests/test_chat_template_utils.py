@@ -531,6 +531,7 @@ class TestIsChatTemplatePrefixPreserving:
             ),
         ),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
+        pytest.param("trl-internal-testing/tiny-Idefics3ForConditionalGeneration", id="idefics3"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
         pytest.param(
@@ -613,7 +614,6 @@ class TestIsChatTemplatePrefixPreserving:
                 ),
             ],
         ),
-        pytest.param("trl-internal-testing/tiny-Idefics3ForConditionalGeneration", id="idefics3"),
     ],
 )
 class TestGetTrainingChatTemplate:

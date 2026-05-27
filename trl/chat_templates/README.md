@@ -41,6 +41,10 @@ Original GLM-4-MoE chat template.
 
 Original GPT-OSS chat template.
 
+### `idefics3.jinja`
+
+Original Idefics3 chat template (as shipped by `HuggingFaceM4/Idefics3-8B-Llama3`). Does not support tool calling.
+
 ### `llama3.jinja`
 
 Original Llama 3 chat template.
@@ -100,10 +104,6 @@ Original Qwen3.5 chat templates. The two differ only in the default value of the
 
 Original Qwen3.6 chat template (shared across `Qwen3.6-27B`, `Qwen3.6-35B-A3B`, and their FP8 variants). Differs from `qwen3_5_think.jinja` by adding a `preserve_thinking` flag and tweaking how non-string tool-call argument values are stringified.
 
-### `idefics3.jinja`
-
-Original Idefics3 chat template (as shipped by `HuggingFaceM4/Idefics3-8B-Llama3`). Does not support tool calling.
-
 ## Training templates
 
 Patched templates that fix training-specific issues. Swapped in at init when tools are enabled (GRPO) or when `assistant_only_loss=True` (SFT).
@@ -155,6 +155,12 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched GPT-OSS template. Diff vs `gptoss.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `idefics3_training.jinja`
+
+Patched Idefics3 template. Diff vs `idefics3.jinja`:
+
+Split the assistant message into its own branch so the `{% generation %}` / `{% endgeneration %}` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
 
 ### `llama3_training.jinja`
 
@@ -256,9 +262,3 @@ Patched Qwen3.5 templates. Same diff as `qwen3_training.jinja` (require both `<t
 ### `qwen3_6_training.jinja`
 
 Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (require both `<think>` and `</think>` before parsing, drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted, wrap assistant output in `{% generation %}` / `{% endgeneration %}`), applied to the Qwen3.6 base template.
-
-### `idefics3_training.jinja`
-
-Patched Idefics3 template. Diff vs `idefics3.jinja`:
-
-Split the assistant message into its own branch so the `{% generation %}` / `{% endgeneration %}` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.

@@ -108,6 +108,12 @@ Patched GPT-OSS template. Diff vs `gptoss.jinja`:
 
 Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
+### `idefics3_training.jinja`
+
+Patched Idefics3 template. Diff vs `idefics3.jinja`:
+
+Split the assistant message into its own branch so the `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
+
 ### `llama3_training.jinja`
 
 Patched Llama 3 template. Diff vs `llama3.jinja`:
@@ -169,12 +175,6 @@ Patched Qwen3.5 templates, shared logic across both flavors (they differ only in
 ### `qwen3_6_training.jinja`
 
 Patched Qwen3.6 template. Diff vs `qwen3_6.jinja`: same set of changes as `qwen3_training.jinja` — require both `<think>` and `</think>` to be present before parsing, drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation), and wrap assistant output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
-
-### `idefics3_training.jinja`
-
-Patched Idefics3 template. Diff vs `idefics3.jinja`:
-
-Split the assistant message into its own branch so the `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
 
 ## Related utilities
 
