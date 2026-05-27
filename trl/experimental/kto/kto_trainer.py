@@ -652,8 +652,8 @@ class KTOTrainer(_BaseTrainer):
                 "completion_ids",
                 "KL_completion_ids",
                 "label",
-                "reference_logps",
-                "reference_KL_logps",
+                "ref_logps",
+                "ref_KL_logps",
             ]
 
     @contextmanager
