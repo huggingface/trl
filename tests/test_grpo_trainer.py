@@ -2994,7 +2994,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
     )
     @pytest.mark.skipif(
         not is_ampere_or_newer() and torch_device != "xpu",
-        reason="Flash attention 2 requires Ampere or newer GPU, or XPU",
+        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
     )
     @require_kernels
     @require_bitsandbytes

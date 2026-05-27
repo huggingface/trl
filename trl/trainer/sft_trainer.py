@@ -1121,7 +1121,7 @@ class SFTTrainer(_BaseTrainer):
             if not use_flash_attention:
                 logger.warning(
                     "Padding-free training is enabled, but the attention implementation is not set to a supported "
-                    "flash attention variant. Padding-free training flattens batches into a single sequence, and only "
+                    "Flash Attention variant. Padding-free training flattens batches into a single sequence, and only "
                     "the following implementations are known to reliably support this: "
                     f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to "
                     "unexpected behavior. To ensure compatibility, set `attn_implementation` in the model "
@@ -1181,7 +1181,7 @@ class SFTTrainer(_BaseTrainer):
 
         if args.packing and args.packing_strategy in {"bfd", "bfd_split"} and not use_flash_attention:
             logger.warning(
-                "You are using packing, but the attention implementation is not set to a supported flash attention "
+                "You are using packing, but the attention implementation is not set to a supported Flash Attention "
                 "variant. Packing gathers multiple samples into a single sequence, and only the following "
                 f"implementations are known to reliably support this: {', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. "
                 "Using other implementations may lead to cross-contamination between samples. To avoid this, either "
