@@ -870,36 +870,6 @@ class OnlineDPOTrainer(_BaseTrainer):
         prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
         for prefix in prefixes:
             name = name.replace(prefix, "")
-
-        qwen3_hf_to_vllm_prefix_maps = {
-            "Qwen3_5ForCausalLM": (
-                ("lm_head.", "language_model.lm_head."),
-                ("model.", "language_model.model."),
-            ),
-            "Qwen3_5ForConditionalGeneration": (
-                ("model.visual.", "visual."),
-                ("lm_head.", "language_model.lm_head."),
-                ("model.language_model.", "language_model.model."),
-            ),
-            "Qwen3VLForConditionalGeneration": (
-                ("model.visual.", "visual."),
-                ("lm_head.", "language_model.lm_head."),
-                ("model.language_model.", "language_model.model."),
-            ),
-        }
-
-        # Qwen3.5 text-only/VLM checkpoints use Hugging Face parameter prefixes that do not match the current
-        # vLLM runtime namespace, so we apply a narrow TRL-side compatibility shim during weight sync.
-        for architecture in self.model.config.architectures or []:
-            prefix_map = qwen3_hf_to_vllm_prefix_maps.get(architecture)
-            if prefix_map is None:
-                continue
-
-            for hf_prefix, vllm_prefix in prefix_map:
-                if name.startswith(hf_prefix):
-                    return name.replace(hf_prefix, vllm_prefix, 1)
-            break
-
         return name
 
     def process_vision_row(
