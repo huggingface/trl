@@ -189,7 +189,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
         key = example_keys.pop()  # take the first supported key
         maybe_messages = example[key]
         # It must be a list of messages
-        if isinstance(maybe_messages, list):
+        if isinstance(maybe_messages, list) and maybe_messages:
             maybe_message = maybe_messages[0]
             # Each message must a list of dictionaries with keys "role" and "content"
             if isinstance(maybe_message, dict) and "role" in maybe_message:
@@ -910,7 +910,7 @@ def is_conversational_from_value(example: dict[str, Any]) -> bool:
     """
     maybe_messages = example.get("conversations")
     # It must be a list of messages
-    if isinstance(maybe_messages, list):
+    if isinstance(maybe_messages, list) and maybe_messages:
         maybe_message = maybe_messages[0]
         # Each message must a list of dictionaries with keys "from" and "value"
         if isinstance(maybe_message, dict) and "from" in maybe_message and "value" in maybe_message:

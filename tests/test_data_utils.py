@@ -485,6 +485,11 @@ class TestIsConversational(TrlTestCase):
         {"prompt": "The sky is"},
         {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."},
         {"prompt": "The sky is", "completion": " blue.", "label": True},
+        {"messages": []},
+        {"prompt": []},
+        {"chosen": []},
+        {"rejected": []},
+        {"completion": []},
     ]
 
     @pytest.mark.parametrize("example", conversational_examples)
@@ -517,6 +522,10 @@ class TestIsConversationalFromValue(TrlTestCase):
 
     def test_negative_2(self):
         example = {"text": "The sky is blue."}
+        assert not is_conversational_from_value(example)
+
+    def test_empty_conversations(self):
+        example = {"conversations": []}
         assert not is_conversational_from_value(example)
 
 
