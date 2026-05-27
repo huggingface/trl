@@ -485,6 +485,11 @@ class TestIsConversational(TrlTestCase):
         {"prompt": "The sky is"},
         {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."},
         {"prompt": "The sky is", "completion": " blue.", "label": True},
+        {"messages": []},
+        {"prompt": []},
+        {"chosen": []},
+        {"rejected": []},
+        {"completion": []},
     ]
 
     @pytest.mark.parametrize("example", conversational_examples)
