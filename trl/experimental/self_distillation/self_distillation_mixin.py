@@ -102,11 +102,6 @@ class SelfDistillationMixin:
         else:
             response_mask = completion_mask
 
-        if response_mask.sum() == 0:
-            mode = "train" if model.training else "eval"
-            self._log_self_distillation_metric(mode, "distillation_loss", 0.0)
-            return torch.tensor(0.0, device=completion_ids.device, requires_grad=True)
-
         student_input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         student_attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         student_model_inputs = {
@@ -204,6 +199,11 @@ class SelfDistillationMixin:
             mode,
             "distillation_loss",
             self.accelerator.gather(mean_distill_loss).mean().item(),
+        )
+        self._log_self_distillation_metric(
+            mode,
+            "empty_target_batch",
+            float(response_mask.sum().item() == 0),
         )
 
         return loss
