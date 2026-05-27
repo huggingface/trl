@@ -50,6 +50,22 @@ def string_to_bool(v):
         )
 
 
+def _accept_none(inner: Callable[[str], Any]) -> Callable[[str], Any]:
+    """Wrap a type converter so `'none'` and `'null'` (case-insensitive) parse to Python `None`.
+
+    Used for `T | None` fields so they can be set to `None` from the CLI (argparse's `type=int` rejects `'None'`).
+    Mirrors the case-insensitive convention of [`string_to_bool`].
+    """
+
+    def parse(v: str) -> Any:
+        if v.lower() in ("none", "null"):
+            return None
+        return inner(v)
+
+    parse.__name__ = getattr(inner, "__name__", "value")  # so argparse error messages keep the inner type name
+    return parse
+
+
 def make_choice_type_function(choices: list) -> Callable[[str], Any]:
     """
     Creates a mapping function from each choices string representation to the actual value. Used to support multiple
@@ -170,6 +186,7 @@ class HfArgumentParser(ArgumentParser):
             aliases = [aliases]
 
         origin_type = getattr(field.type, "__origin__", field.type)
+        accepts_none = False
         if origin_type is Union or (hasattr(types, "UnionType") and isinstance(origin_type, types.UnionType)):
             if str not in field.type.__args__ and (
                 len(field.type.__args__) != 2 or type(None) not in field.type.__args__
@@ -189,6 +206,10 @@ class HfArgumentParser(ArgumentParser):
                     field.type.__args__[0] if isinstance(None, field.type.__args__[1]) else field.type.__args__[1]
                 )
                 origin_type = getattr(field.type, "__origin__", field.type)
+                # Enable the `'none'`/`'null'` sentinel only when the inner type can't possibly accept those as
+                # legitimate string values (i.e. anything non-str). For str-typed fields, `'none'` may be a real
+                # value — e.g. `report_to`, whose CLI string `'none'` means "no integrations" downstream.
+                accepts_none = field.type is not str
 
         # A variable to store kwargs for a boolean field, if needed
         # so that we can init a `no_*` complement argument (see below)
@@ -229,7 +250,7 @@ class HfArgumentParser(ArgumentParser):
             elif field.default is dataclasses.MISSING:
                 kwargs["required"] = True
         else:
-            kwargs["type"] = field.type
+            kwargs["type"] = _accept_none(field.type) if accepts_none else field.type
             if field.default is not dataclasses.MISSING:
                 kwargs["default"] = field.default
             elif field.default_factory is not dataclasses.MISSING:
