@@ -1138,7 +1138,7 @@ class KTOTrainer(_BaseTrainer):
         return self._compute_loss(model, inputs, return_outputs)
 
     def _get_train_sampler(self, train_dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
-        if Version(transformers.__version__) < Version("5.2.0"):
+        if self.calculate_KL and Version(transformers.__version__) < Version("5.2.0"):
             if train_dataset is None:
                 train_dataset = self.train_dataset
             if train_dataset is None or not has_length(train_dataset):
