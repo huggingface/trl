@@ -16,7 +16,6 @@ import os
 import textwrap
 from collections import defaultdict
 from collections.abc import Callable
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -662,16 +661,6 @@ class KTOTrainer(_BaseTrainer):
                 "ref_logps",
                 "ref_KL_logps",
             ]
-
-    @contextmanager
-    def null_ref_context(self):
-        """Context manager for handling null reference model (that is, peft adapter manipulation)."""
-        if is_peft_model(self.model):
-            model = self.accelerator.unwrap_model(self.model)
-            with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                yield
-        else:
-            yield
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
