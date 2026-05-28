@@ -1090,8 +1090,9 @@ class KTOTrainer(_BaseTrainer):
                 ref_KL_logps = None
         else:
             with torch.no_grad():
-                if self.ref_model is None:
-                    with self.null_ref_context():
+                if is_peft_model(self.model) and self.ref_model is None:
+                    model = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
                         ref_chosen_logps, ref_rejected_logps, _, _, ref_KL_logps, _ = self._compute_logps(
                             self.model, batch
                         )
