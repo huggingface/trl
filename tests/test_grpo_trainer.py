@@ -2294,13 +2294,17 @@ class TestGRPOTrainer(TrlTestCase):
             """Reward function that rewards longer completions."""
             return [float(len(completion[0]["content"])) for completion in completions]
 
+        # There is a bug for SDPA in torch 2.12, so we force eager attention in that case
+        model_init_kwargs = (
+            {"attn_implementation": "eager"} if Version(torch.__version__).release[:2] == (2, 12) else None
+        )
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            model_init_kwargs={"attn_implementation": "eager"}, # There is a bug for SDPA since torch 2.12
+            model_init_kwargs=model_init_kwargs,
             report_to="none",
         )
         trainer = GRPOTrainer(
