@@ -760,28 +760,24 @@ class DPOTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # Reference model
-        if ref_model is None:
-            if is_peft_model(self.model) or args.precompute_ref_log_probs:
-                # If PEFT is used, the reference model is not needed since the adapter can be disabled to revert to the
-                # initial model. If precompute_ref_log_probs is True, the reference model does not need to be kept in
-                # memory during training.
-                self.ref_model = None
-            else:
-                ref_model_init_kwargs = args.model_init_kwargs or {}
-                # Distributed training requires device_map=None ("auto" fails)
-                if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
-                    ref_model_init_kwargs["device_map"] = None
-                ref_model_path = get_config_model_id(self.model.config)
-                self.ref_model = create_model_from_path(ref_model_path, **ref_model_init_kwargs)
-        else:
-            self.ref_model = ref_model
+        # Reference model:
+        # - if not provided, create one from the model path
+        #   - unless:
+        #     - using PEFT (which recovers the reference by disabling the adapter)
+        #     - or precompute_ref_log_probs (which uses self.model as the reference before training starts)
+        if ref_model is None and not is_peft_model(self.model) and not args.precompute_ref_log_probs:
+            ref_model_init_kwargs = args.model_init_kwargs or {}
+            # Distributed training requires device_map=None ("auto" fails)
+            if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                ref_model_init_kwargs["device_map"] = None
+            ref_model_path = get_config_model_id(self.model.config)
+            ref_model = create_model_from_path(ref_model_path, **ref_model_init_kwargs)
 
         # Disable dropout in the models
         if args.disable_dropout:
             disable_dropout_in_model(model)
-            if self.ref_model is not None:
-                disable_dropout_in_model(self.ref_model)
+            if ref_model is not None:
+                disable_dropout_in_model(ref_model)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -795,13 +791,13 @@ class DPOTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
-        if self.ref_model is not None:
+        if ref_model is not None:
             if self.is_deepspeed_enabled:
-                self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+                ref_model = prepare_deepspeed(ref_model, self.accelerator)
             elif self.is_fsdp_enabled:
-                self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
+                ref_model = prepare_fsdp(ref_model, self.accelerator)
             else:
-                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+                ref_model = self.accelerator.prepare_model(ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
             if is_peft_model(self.model):
@@ -820,7 +816,13 @@ class DPOTrainer(_BaseTrainer):
                     "the reference model is periodically updated during training, making any precomputed reference "
                     "log-probs stale. Set `precompute_ref_log_probs=False` or disable `sync_ref_model`."
                 )
-            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+            self.add_callback(SyncRefModelCallback(ref_model=ref_model, accelerator=self.accelerator))
+
+        # Reference model:
+        # - Explicit ref_model
+        # - If PEFT, we don't need a separate reference model
+        # - If non-PEFT, self.model is used to precompute_ref_log_probs
+        self.ref_model = ref_model or (None if is_peft_model(self.model) else self.model)
 
         if args.precompute_ref_log_probs:
             if isinstance(self.train_dataset, IterableDataset) or isinstance(
