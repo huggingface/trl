@@ -726,7 +726,20 @@ class KTOTrainer(_BaseTrainer):
         """Computes reference log probabilities for a single padded batch."""
         with torch.no_grad():
             if self.ref_model is None:
-                with self.null_ref_context():
+                if is_peft_model(self.model):
+                    model = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                        completion_logits = self.model(
+                            inputs["completion_input_ids"],
+                            attention_mask=inputs["completion_attention_mask"],
+                        ).logits
+
+                        if self.calculate_KL:
+                            KL_logits = self.model(
+                                inputs["KL_completion_input_ids"],
+                                attention_mask=inputs["KL_completion_attention_mask"],
+                            ).logits
+                else:
                     completion_logits = self.model(
                         inputs["completion_input_ids"],
                         attention_mask=inputs["completion_attention_mask"],
