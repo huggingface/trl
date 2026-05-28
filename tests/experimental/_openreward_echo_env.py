@@ -25,9 +25,11 @@ The model is given a target string and must call `echo(text=...)` with exactly t
 from openreward.environments import (
     Environment,
     JSONObject,
+    ListToolsOutput,
     Server,
     TextBlock,
     ToolOutput,
+    ToolSpec,
     tool,
 )
 from pydantic import BaseModel
@@ -48,6 +50,12 @@ class EchoTaskSpec(BaseModel):
 
 class EchoParams(BaseModel):
     text: str
+
+
+class HintParams(BaseModel):
+    """Parameters for the optional hint tool (session-only via ``list_task_tools``)."""
+
+    pass
 
 
 class EchoEnvironment(Environment):
@@ -75,6 +83,18 @@ class EchoEnvironment(Environment):
             )
         ]
 
+    def list_task_tools(self) -> ListToolsOutput:
+        """Expose ``hint`` only on GET /task_tools (merged into ``session.list_tools()``)."""
+        return ListToolsOutput(
+            tools=[
+                ToolSpec(
+                    name="hint",
+                    description="Cheap hint for tests exercising ORS /task_tools discovery.",
+                    input_schema=HintParams.model_json_schema(),
+                )
+            ]
+        )
+
     @tool
     async def echo(self, params: EchoParams) -> ToolOutput:
         """Submit a string. Reward 1.0 + finished if it matches the target.
@@ -93,6 +113,11 @@ class EchoEnvironment(Environment):
             reward=1.0 if correct else 0.0,
             finished=correct,
         )
+
+    @tool(shared=False)
+    async def hint(self, params: HintParams) -> ToolOutput:
+        """Session-advertised helper (spec comes from ``list_task_tools``)."""
+        return ToolOutput(blocks=[TextBlock(text="try echo(text=...)")])
 
 
 if __name__ == "__main__":

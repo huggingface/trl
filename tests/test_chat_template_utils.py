@@ -161,7 +161,8 @@ class TestAddResponseSchema:
         "processor_name",
         [
             pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
-            pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
+            pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink", id="qwen35-nothink"),
+            pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35-think"),
             pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36"),
         ],
     )
@@ -227,8 +228,16 @@ class TestSupportsToolCalling:
                 ),
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
-                id="qwen35",
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                id="qwen35-nothink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+                id="qwen35-think",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
@@ -466,9 +475,28 @@ class TestIsChatTemplatePrefixPreserving:
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
+        pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl"),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
+        pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5_vl"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
+        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            id="qwen35-nothink",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+            id="qwen35-think",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
             id="qwen36",
@@ -682,7 +710,8 @@ class TestGetTrainingChatTemplate:
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink", id="qwen35-nothink"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35-think"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36"),
         pytest.param(
             "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
@@ -759,8 +788,8 @@ class TestParseResponse:
         ]
         expected = messages[-1]
         messages = prepare_multimodal_messages(messages) if self.is_vlm else messages
-        # enable_thinking=True is required here because for Qwen3.5, the thinking is disabled by default for the
-        # generation prompt.
+        # enable_thinking=True is required here because the Qwen3.5 NoThink fixture disables thinking by default
+        # for the generation prompt.
         prefix = processing_class.apply_chat_template(
             messages[:1], add_generation_prompt=True, enable_thinking=True, tokenize=True, return_dict=True
         ).input_ids
@@ -916,3 +945,31 @@ class TestParseResponse:
         }
 
         assert parsed == expected
+
+    def test_parse_response_truncated(self, model_name):
+        processing_class = self._load(model_name)
+        # Here we use 2 tool calls as it seems to be a more common source of failure when truncated.
+        # Llama 3.1 / 3.2 templates only allow a single tool call per assistant turn, so fall back to one.
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        if model_name not in (
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+        ):
+            tool_calls.append({"type": "function", "function": {"name": "addition", "arguments": {"a": 4, "b": 3}}})
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        ]
+        messages = prepare_multimodal_messages(messages) if self.is_vlm else messages
+        prefix = processing_class.apply_chat_template(
+            messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
+        ).input_ids
+        text = processing_class.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids
+        if self.is_vlm:
+            prefix = prefix[0]
+            text = text[0]
+        response = text[len(prefix) :]
+        tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
+        # Truncate the response mid-tool-call and just check that parsing doesn't crash.
+        for end in range(1, len(response)):
+            parse_response(tokenizer, response[:end])
