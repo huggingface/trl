@@ -249,7 +249,7 @@ class AsyncRolloutWorker:
         self.model_version = model_version
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
-        limit = max(100, self.max_inflight_tasks)
+            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=self.max_inflight_tasks)) as session:
         async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=limit)) as session:
             self.session = session
             logger.info(
