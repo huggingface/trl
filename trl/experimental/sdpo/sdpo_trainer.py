@@ -304,89 +304,6 @@ class SDPOTrainer(_BaseTrainer):
     ):
         if reward_funcs is None or (isinstance(reward_funcs, list) and len(reward_funcs) == 0):
             raise ValueError("`reward_funcs` is required for SDPOTrainer because SDPO must score rollouts.")
-        self._init_self_distillation_lifecycle(
-            model=model,
-            args=args,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            processing_class=processing_class,
-            callbacks=callbacks,
-            optimizers=optimizers,
-            peft_config=peft_config,
-        )
-        self.importance_sampling_level = args.importance_sampling_level
-        self.scale_rewards = args.scale_rewards
-        self.epsilon_low = args.epsilon
-        self.epsilon_high = args.epsilon_high
-        self.beta = args.beta
-
-        if not isinstance(reward_funcs, list):
-            reward_funcs = [reward_funcs]
-        self.reward_func_names = []
-        for i, reward_func in enumerate(reward_funcs):
-            if isinstance(reward_func, str):
-                reward_model_init_kwargs = args.model_init_kwargs or {}
-                if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
-                    reward_model_init_kwargs["device_map"] = None
-                reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
-                    reward_func,
-                    num_labels=1,
-                    **reward_model_init_kwargs,
-                )
-            if isinstance(reward_funcs[i], nn.Module):
-                self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
-            else:
-                self.reward_func_names.append(reward_funcs[i].__name__)
-        self.reward_funcs = reward_funcs
-
-        if args.reward_weights is not None:
-            if len(args.reward_weights) != len(self.reward_funcs):
-                raise ValueError("Number of reward weights must match number of reward functions")
-            self.reward_weights = torch.tensor(args.reward_weights, dtype=torch.float32)
-        else:
-            self.reward_weights = torch.ones(len(self.reward_funcs), dtype=torch.float32)
-
-        if reward_processing_classes is None:
-            reward_processing_classes = [None] * len(self.reward_funcs)
-        elif not isinstance(reward_processing_classes, list):
-            reward_processing_classes = [reward_processing_classes]
-        if len(reward_processing_classes) != len(self.reward_funcs):
-            raise ValueError("Number of reward processing classes must match number of reward functions")
-
-        for i, (reward_processing_class, reward_func) in enumerate(
-            zip(reward_processing_classes, self.reward_funcs, strict=True)
-        ):
-            if isinstance(reward_func, PreTrainedModel):
-                if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(get_config_model_id(reward_func.config))
-                if reward_processing_class.pad_token_id is None:
-                    reward_processing_class.pad_token = reward_processing_class.eos_token
-                reward_func.config.pad_token_id = reward_processing_class.pad_token_id
-                reward_processing_classes[i] = reward_processing_class
-        self.reward_processing_classes = reward_processing_classes
-
-        for i, reward_func in enumerate(self.reward_funcs):
-            if isinstance(reward_func, nn.Module):
-                if self.is_deepspeed_enabled:
-                    self.reward_funcs[i] = prepare_deepspeed(reward_func, self.accelerator)
-                elif self.is_fsdp_enabled:
-                    self.reward_funcs[i] = prepare_fsdp(reward_func, self.accelerator)
-                else:
-                    self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
-
-        self.teacher_context_builder = SuccessfulRolloutTeacherContextBuilder(self)
-
-    def _init_self_distillation_lifecycle(
-        self,
-        model: str | PreTrainedModel | nn.Module,
-        args: SDPOConfig | None = None,
-        train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
-        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
-        callbacks: list[TrainerCallback] | None = None,
-        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
-        peft_config: PeftConfig | None = None,
-    ):
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
 
@@ -500,6 +417,68 @@ class SDPOTrainer(_BaseTrainer):
 
         self._setup_teacher_model()
         self.model_accepts_loss_kwargs = False
+
+        self.importance_sampling_level = args.importance_sampling_level
+        self.scale_rewards = args.scale_rewards
+        self.epsilon_low = args.epsilon
+        self.epsilon_high = args.epsilon_high
+        self.beta = args.beta
+
+        if not isinstance(reward_funcs, list):
+            reward_funcs = [reward_funcs]
+        self.reward_func_names = []
+        for i, reward_func in enumerate(reward_funcs):
+            if isinstance(reward_func, str):
+                reward_model_init_kwargs = args.model_init_kwargs or {}
+                if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                    reward_model_init_kwargs["device_map"] = None
+                reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
+                    reward_func,
+                    num_labels=1,
+                    **reward_model_init_kwargs,
+                )
+            if isinstance(reward_funcs[i], nn.Module):
+                self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
+            else:
+                self.reward_func_names.append(reward_funcs[i].__name__)
+        self.reward_funcs = reward_funcs
+
+        if args.reward_weights is not None:
+            if len(args.reward_weights) != len(self.reward_funcs):
+                raise ValueError("Number of reward weights must match number of reward functions")
+            self.reward_weights = torch.tensor(args.reward_weights, dtype=torch.float32)
+        else:
+            self.reward_weights = torch.ones(len(self.reward_funcs), dtype=torch.float32)
+
+        if reward_processing_classes is None:
+            reward_processing_classes = [None] * len(self.reward_funcs)
+        elif not isinstance(reward_processing_classes, list):
+            reward_processing_classes = [reward_processing_classes]
+        if len(reward_processing_classes) != len(self.reward_funcs):
+            raise ValueError("Number of reward processing classes must match number of reward functions")
+
+        for i, (reward_processing_class, reward_func) in enumerate(
+            zip(reward_processing_classes, self.reward_funcs, strict=True)
+        ):
+            if isinstance(reward_func, PreTrainedModel):
+                if reward_processing_class is None:
+                    reward_processing_class = AutoTokenizer.from_pretrained(get_config_model_id(reward_func.config))
+                if reward_processing_class.pad_token_id is None:
+                    reward_processing_class.pad_token = reward_processing_class.eos_token
+                reward_func.config.pad_token_id = reward_processing_class.pad_token_id
+                reward_processing_classes[i] = reward_processing_class
+        self.reward_processing_classes = reward_processing_classes
+
+        for i, reward_func in enumerate(self.reward_funcs):
+            if isinstance(reward_func, nn.Module):
+                if self.is_deepspeed_enabled:
+                    self.reward_funcs[i] = prepare_deepspeed(reward_func, self.accelerator)
+                elif self.is_fsdp_enabled:
+                    self.reward_funcs[i] = prepare_fsdp(reward_func, self.accelerator)
+                else:
+                    self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
+
+        self.teacher_context_builder = SuccessfulRolloutTeacherContextBuilder(self)
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:

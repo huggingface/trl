@@ -231,10 +231,6 @@ class SDFTConfig(_BaseConfig):
         default=False,
         metadata={"help": "Whether to add a tail bucket for non-top-k probability mass."},
     )
-    distillation_weight: float = field(
-        default=1.0,
-        metadata={"help": "Weight applied to the self-distillation loss term."},
-    )
     diagnostics_warning_interval: int = field(
         default=10,
         metadata={

@@ -128,8 +128,6 @@ class DemonstrationTeacherContextBuilder:
         return self.trainer.args.teacher_prompt_template.format(prompt=prompt, privileged_context=privileged_text)
 
     def select_generation_prompts(self, prompts: list[Any], privileged_contexts: list[Any]) -> list[Any]:
-        if not self.trainer.generate_from_teacher:
-            return prompts
         return [
             self._compose_teacher_prompt(prompt, privileged_context)
             for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
@@ -202,28 +200,6 @@ class SDFTTrainer(_BaseTrainer):
         self.num_loss_tokens_to_skip = args.num_loss_tokens_to_skip
         self.teacher_context_builder = DemonstrationTeacherContextBuilder(self)
 
-        self._init_self_distillation_lifecycle(
-            model=model,
-            args=args,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            processing_class=processing_class,
-            callbacks=callbacks,
-            optimizers=optimizers,
-            peft_config=peft_config,
-        )
-
-    def _init_self_distillation_lifecycle(
-        self,
-        model: str | PreTrainedModel | nn.Module,
-        args: SDFTConfig | None = None,
-        train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
-        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
-        callbacks: list[TrainerCallback] | None = None,
-        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
-        peft_config: PeftConfig | None = None,
-    ):
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
 
