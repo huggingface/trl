@@ -1176,6 +1176,8 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
         shift_logits = outputs.logits[..., :-1, :].contiguous()
+        if not return_outputs:
+            del outputs
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()
         per_token_logps = selective_log_softmax(shift_logits, shift_labels)
@@ -1213,7 +1215,9 @@ class DPOTrainer(_BaseTrainer):
                     ref_outputs = self.ref_model(**model_kwargs)
 
             ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
+            del ref_outputs
             ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
+            del ref_shift_logits
             ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
             if self.ld_alpha is None:
                 ref_logps = ref_per_token_logps.sum(dim=1)  # sum over sequence length
@@ -1429,6 +1433,7 @@ class DPOTrainer(_BaseTrainer):
 
         # Average logits for chosen and rejected completions
         chosen_logits, rejected_logits = shift_logits.detach().chunk(2, dim=0)
+        del shift_logits
         chosen_mask, rejected_mask = shift_completion_mask.chunk(2, dim=0)
         total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
         total_chosen_tokens = chosen_mask.sum()
