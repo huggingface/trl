@@ -53,7 +53,7 @@ deepspeed = [
     "transformers!=5.1.0",  # see transformers#43780
 ]
 kernels = [
-    "kernels"
+    "kernels<0.15.1",  # see GH-5878
 ]
 liger = [
     "liger-kernel>=0.8.0"
@@ -104,7 +104,7 @@ dev = [
     # deepspeed
     "deepspeed>=0.14.4",
     # kernels
-    "kernels",
+    "kernels<0.15.1",  # see GH-5878
     # liger
     "liger-kernel>=0.8.0",
     # openreward (requires Python 3.11+)

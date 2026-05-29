@@ -708,7 +708,7 @@ class TestDPOTrainer(TrlTestCase):
     @require_kernels
     @pytest.mark.skipif(
         not is_ampere_or_newer() and torch_device != "xpu",
-        reason="Flash attention 2 requires Ampere or newer GPU, or XPU",
+        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -1179,6 +1179,17 @@ class TestDPOTrainer(TrlTestCase):
                 report_to="none",
             )
         with pytest.raises(ValueError, match="truncation_mode='keep_end' is not supported for vision-language models"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    @require_vision
+    def test_precompute_ref_log_probs_raises_for_vision(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none", precompute_ref_log_probs=True)
+        with pytest.raises(ValueError, match="precompute_ref_log_probs.*not supported for vision datasets"):
             DPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
                 args=training_args,

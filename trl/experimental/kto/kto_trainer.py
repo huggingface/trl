@@ -16,7 +16,6 @@ import os
 import textwrap
 from collections import defaultdict
 from collections.abc import Callable
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -143,10 +142,10 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                 padding_side="right",
             )
 
-        if "reference_logps" in examples[0]:
-            batch["reference_logps"] = torch.tensor([ex["reference_logps"] for ex in examples])
-        if "reference_KL_logps" in examples[0]:
-            batch["reference_KL_logps"] = torch.tensor([ex["reference_KL_logps"] for ex in examples])
+        if "ref_logps" in examples[0]:
+            batch["ref_logps"] = torch.tensor([ex["ref_logps"] for ex in examples])
+        if "ref_KL_logps" in examples[0]:
+            batch["ref_KL_logps"] = torch.tensor([ex["ref_KL_logps"] for ex in examples])
         batch["label"] = [ex["label"] for ex in examples]
         return batch
 
@@ -330,14 +329,6 @@ class KTOTrainer(_BaseTrainer):
                 max_length=args.max_length,
             )
 
-            if args.remove_unused_columns:
-                args.remove_unused_columns = False
-                # warn users
-                logger.warning(
-                    "When using DataCollatorForUnpairedPreference, you should set `remove_unused_columns=False` in your KTOConfig"
-                    " we have set it for you, but you should do it yourself in the future.",
-                )
-
             self.use_dpo_data_collator = True
         else:
             self.use_dpo_data_collator = False
@@ -351,6 +342,13 @@ class KTOTrainer(_BaseTrainer):
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         self.calculate_KL = False if self.loss_type in ["apo_zero_unpaired"] else True
+        if self.calculate_KL and args.train_sampling_strategy != "sequential":
+            raise ValueError(
+                f"Loss type `'{args.loss_type}'` estimates the KL divergence term and requires "
+                f"`train_sampling_strategy='sequential'` because the KL completion for each example is precomputed "
+                f"against its neighbors in a fixed-order batch; any other strategy breaks that pairing. "
+                f"Got `train_sampling_strategy='{args.train_sampling_strategy}'`."
+            )
         if self.calculate_KL and args.per_device_train_batch_size <= 1:
             raise ValueError(
                 "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
@@ -650,25 +648,30 @@ class KTOTrainer(_BaseTrainer):
                         )
         return dataset
 
-    @contextmanager
-    def null_ref_context(self):
-        """Context manager for handling null reference model (that is, peft adapter manipulation)."""
-        if is_peft_model(self.model):
-            model = self.accelerator.unwrap_model(self.model)
-            with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                yield
-        else:
-            yield
+    def _set_signature_columns_if_needed(self):
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
+        # and "attention_mask").
+        if self._signature_columns is None:
+            self._signature_columns = [
+                "prompt_ids",
+                "completion_ids",
+                "KL_completion_ids",
+                "label",
+                "ref_logps",
+                "ref_KL_logps",
+            ]
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
-        fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
+        # "ref_logps" is included to invalidate caches written before the key was renamed from "reference_logps"
+        fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL, "ref_logps"))
         cache_file = dataset._get_cache_file_path(fingerprint).removesuffix(".arrow") + ".npz"
         if os.path.exists(cache_file):
             loaded = np.load(cache_file)
-            reference_logps = loaded["reference_logps"]
+            ref_logps = loaded["ref_logps"]
             if self.calculate_KL:
-                reference_KL_logps = loaded["reference_KL_logps"]
+                ref_KL_logps = loaded["ref_KL_logps"]
         else:
             dataloader = DataLoader(
                 dataset,
@@ -679,36 +682,32 @@ class KTOTrainer(_BaseTrainer):
                 shuffle=False,
             )
             data_loader = self.accelerator.prepare(dataloader)
-            reference_logps = []
-            reference_KL_logps = []
+            ref_logps = []
+            ref_KL_logps = []
             for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-                reference_logp, reference_KL_logp = self.compute_ref_log_probs(padded_batch)
+                ref_logp, ref_KL_logp = self.compute_ref_log_probs(padded_batch)
                 if self.calculate_KL:
-                    reference_logp, reference_KL_logp = self.accelerator.gather_for_metrics(
-                        (reference_logp, reference_KL_logp)
-                    )
-                    reference_KL_logps.append(reference_KL_logp.cpu())
+                    ref_logp, ref_KL_logp = self.accelerator.gather_for_metrics((ref_logp, ref_KL_logp))
+                    ref_KL_logps.append(ref_KL_logp.cpu())
                 else:
-                    reference_logp = self.accelerator.gather_for_metrics(reference_logp)
-                reference_logps.append(reference_logp.cpu())
+                    ref_logp = self.accelerator.gather_for_metrics(ref_logp)
+                ref_logps.append(ref_logp.cpu())
 
             # Save the reference log probabilities to cache. We need .float() because bf16 is not supported by numpy
-            reference_logps = torch.cat(reference_logps).float().numpy()
-            save_dict = {"reference_logps": reference_logps}
+            ref_logps = torch.cat(ref_logps).float().numpy()
+            save_dict = {"ref_logps": ref_logps}
             if self.calculate_KL:
-                reference_KL_logps = torch.cat(reference_KL_logps).float().numpy()
-                save_dict["reference_KL_logps"] = reference_KL_logps
+                ref_KL_logps = torch.cat(ref_KL_logps).float().numpy()
+                save_dict["ref_KL_logps"] = ref_KL_logps
             if self.accelerator.is_main_process:
                 np.savez_compressed(cache_file, **save_dict)
             self.accelerator.wait_for_everyone()
 
         if self.calculate_KL:
-            dataset = dataset.add_column(name="reference_logps", column=reference_logps)
-            dataset = dataset.add_column(
-                name="reference_KL_logps", column=reference_KL_logps, new_fingerprint=fingerprint
-            )
+            dataset = dataset.add_column(name="ref_logps", column=ref_logps)
+            dataset = dataset.add_column(name="ref_KL_logps", column=ref_KL_logps, new_fingerprint=fingerprint)
         else:
-            dataset = dataset.add_column(name="reference_logps", column=reference_logps, new_fingerprint=fingerprint)
+            dataset = dataset.add_column(name="ref_logps", column=ref_logps, new_fingerprint=fingerprint)
 
         return dataset
 
@@ -716,7 +715,20 @@ class KTOTrainer(_BaseTrainer):
         """Computes reference log probabilities for a single padded batch."""
         with torch.no_grad():
             if self.ref_model is None:
-                with self.null_ref_context():
+                if is_peft_model(self.model):
+                    model = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                        completion_logits = self.model(
+                            inputs["completion_input_ids"],
+                            attention_mask=inputs["completion_attention_mask"],
+                        ).logits
+
+                        if self.calculate_KL:
+                            KL_logits = self.model(
+                                inputs["KL_completion_input_ids"],
+                                attention_mask=inputs["KL_completion_attention_mask"],
+                            ).logits
+                else:
                     completion_logits = self.model(
                         inputs["completion_input_ids"],
                         attention_mask=inputs["completion_attention_mask"],
@@ -842,9 +854,9 @@ class KTOTrainer(_BaseTrainer):
         policy_chosen_logps: torch.FloatTensor,
         policy_rejected_logps: torch.FloatTensor,
         policy_KL_logps: torch.FloatTensor,
-        reference_chosen_logps: torch.FloatTensor,
-        reference_rejected_logps: torch.FloatTensor,
-        reference_KL_logps: torch.FloatTensor,
+        ref_chosen_logps: torch.FloatTensor,
+        ref_rejected_logps: torch.FloatTensor,
+        ref_KL_logps: torch.FloatTensor,
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute the KTO loss for a batch of policy and reference model log probabilities.
 
@@ -854,12 +866,12 @@ class KTOTrainer(_BaseTrainer):
             policy_rejected_logps:
                 Log probabilities of the policy model for the rejected responses. Shape: (num(rejected) in batch_size,)
             policy_KL_logps: Log probabilities of the policy model for the KL responses. Shape: (batch_size,)
-            reference_chosen_logps:
+            ref_chosen_logps:
                 Log probabilities of the reference model for the chosen responses. Shape: (num(chosen) in batch_size,)
-            reference_rejected_logps:
+            ref_rejected_logps:
                 Log probabilities of the reference model for the rejected responses. Shape: (num(rejected) in
                 batch_size,)
-            reference_KL_logps: Log probabilities of the reference model for the KL responses. Shape: (batch_size,)
+            ref_KL_logps: Log probabilities of the reference model for the KL responses. Shape: (batch_size,)
 
         Returns:
             A tuple of four tensors: (losses, chosen_rewards, rejected_rewards, KL). The losses tensor contains the KTO
@@ -868,14 +880,14 @@ class KTOTrainer(_BaseTrainer):
             between the policy and reference models.
         """
         if self.calculate_KL:
-            kl = (policy_KL_logps - reference_KL_logps).mean().detach()
+            kl = (policy_KL_logps - ref_KL_logps).mean().detach()
             kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
         else:
             kl = torch.zeros(1).to(policy_chosen_logps.device)
 
         # Chosen losses
-        if policy_chosen_logps.shape[0] != 0 or reference_chosen_logps.shape[0] != 0:
-            chosen_logratios = policy_chosen_logps - reference_chosen_logps
+        if policy_chosen_logps.shape[0] != 0 or ref_chosen_logps.shape[0] != 0:
+            chosen_logratios = policy_chosen_logps - ref_chosen_logps
 
             if self.loss_type == "kto":
                 # Eqn (7) of the KTO paper (https://huggingface.co/papers/2402.01306)
@@ -893,8 +905,8 @@ class KTOTrainer(_BaseTrainer):
             chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
 
         # Rejected losses
-        if policy_rejected_logps.shape[0] != 0 or reference_rejected_logps.shape[0] != 0:
-            rejected_logratios = policy_rejected_logps - reference_rejected_logps
+        if policy_rejected_logps.shape[0] != 0 or ref_rejected_logps.shape[0] != 0:
+            rejected_logratios = policy_rejected_logps - ref_rejected_logps
 
             if self.loss_type == "kto":
                 rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
@@ -947,9 +959,9 @@ class KTOTrainer(_BaseTrainer):
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
         policy_KL_logps = self._compute_kl_logps(model, batch)
-        reference_KL_logps = self._compute_kl_logps(self.ref_model, batch)
+        ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
         if self.calculate_KL:
-            kl = (policy_KL_logps - reference_KL_logps).mean().detach()
+            kl = (policy_KL_logps - ref_KL_logps).mean().detach()
             kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
         else:
             kl = torch.zeros(1).to(self.accelerator.device)
@@ -1053,37 +1065,38 @@ class KTOTrainer(_BaseTrainer):
 
         if self.precompute_ref_logps:
             # Convert Python lists to tensor indices for efficient CUDA operations
-            device = batch["reference_logps"].device
+            device = batch["ref_logps"].device
             labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
             chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
             rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
 
             # Use index_select for efficient CUDA operations
-            reference_chosen_logps = batch["reference_logps"].index_select(0, chosen_idx)
-            reference_rejected_logps = batch["reference_logps"].index_select(0, rejected_idx)
+            ref_chosen_logps = batch["ref_logps"].index_select(0, chosen_idx)
+            ref_rejected_logps = batch["ref_logps"].index_select(0, rejected_idx)
             if self.calculate_KL:
-                reference_KL_logps = batch["reference_KL_logps"]
+                ref_KL_logps = batch["ref_KL_logps"]
             else:
-                reference_KL_logps = None
+                ref_KL_logps = None
         else:
             with torch.no_grad():
-                if self.ref_model is None:
-                    with self.null_ref_context():
-                        reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = (
-                            self._compute_logps(self.model, batch)
+                if is_peft_model(self.model) and self.ref_model is None:
+                    model = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                        ref_chosen_logps, ref_rejected_logps, _, _, ref_KL_logps, _ = self._compute_logps(
+                            self.model, batch
                         )
                 else:
-                    reference_chosen_logps, reference_rejected_logps, _, _, reference_KL_logps, _ = (
-                        self._compute_logps(self.ref_model, batch)
+                    ref_chosen_logps, ref_rejected_logps, _, _, ref_KL_logps, _ = self._compute_logps(
+                        self.ref_model, batch
                     )
 
         losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
             policy_chosen_logps,
             policy_rejected_logps,
             policy_KL_logps,
-            reference_chosen_logps,
-            reference_rejected_logps,
-            reference_KL_logps,
+            ref_chosen_logps,
+            ref_rejected_logps,
+            ref_KL_logps,
         )
 
         self._metrics[mode]["kl"].append(kl.item())
@@ -1124,12 +1137,14 @@ class KTOTrainer(_BaseTrainer):
             return self._compute_loss_liger(model, inputs, return_outputs)
         return self._compute_loss(model, inputs, return_outputs)
 
-    def _get_train_sampler(self, dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
-        if dataset is None:
-            dataset = self.train_dataset
-        if dataset is None or not has_length(dataset):
-            return None
-        return SequentialSampler(dataset)
+    def _get_train_sampler(self, train_dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
+        if self.calculate_KL and Version(transformers.__version__) < Version("5.2.0"):
+            if train_dataset is None:
+                train_dataset = self.train_dataset
+            if train_dataset is None or not has_length(train_dataset):
+                return None
+            return SequentialSampler(train_dataset)
+        return super()._get_train_sampler(train_dataset)
 
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
     # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
