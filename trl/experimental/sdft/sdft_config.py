@@ -26,7 +26,7 @@ class SDFTConfig(_BaseConfig):
     Configuration class for [`SDFTTrainer`]..
 
     Parameters:
-        disable_dropout (`bool`, *optional*, defaults to `True`):
+        disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the student and teacher models.
         teacher_model_kind (`str`, *optional*, defaults to `"base"`):
             Semantic teacher choice for SDFT. `base` uses the initial student, `live` uses the current student, and
@@ -52,7 +52,7 @@ class SDFTConfig(_BaseConfig):
         metadata={"help": "Keyword arguments for model initialization when `model` is passed as a string."},
     )
     disable_dropout: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether to disable dropout in the student and teacher models."},
     )
     remove_unused_columns: bool = field(
