@@ -631,23 +631,7 @@ class SDFTTrainer(_BaseTrainer):
         device = self.accelerator.device
 
         mode = "train" if self.model.training else "eval"
-        agg_completion_lengths = self.accelerator.gather(
-            torch.tensor([len(ids) for ids in completion_ids_list], device=device)
-        )
-        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
-        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
-        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
-
-        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
-        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
-        agg_is_truncated = self.accelerator.gather(is_truncated)
-        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
-        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
-        if len(term_completion_lengths) == 0:
-            term_completion_lengths = torch.zeros(1, device=device)
-        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
-        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
-        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
+        self._record_completion_metrics(mode, completion_ids_list)
 
         prompt_ids = [torch.tensor(ids) for ids in student_prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
@@ -922,3 +906,23 @@ class SDFTTrainer(_BaseTrainer):
         logs = {**logs, **metrics}
         super().log(logs, start_time)
         self._metrics[mode].clear()
+
+    def _record_completion_metrics(self, mode: str, completion_ids_list: list[list[int]]) -> None:
+        device = self.accelerator.device
+        agg_completion_lengths = self.accelerator.gather(
+            torch.tensor([len(ids) for ids in completion_ids_list], device=device)
+        )
+        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
+
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+        agg_is_truncated = self.accelerator.gather(is_truncated)
+        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
+        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
+        if len(term_completion_lengths) == 0:
+            term_completion_lengths = torch.zeros(1, device=device)
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())

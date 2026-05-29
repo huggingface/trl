@@ -732,30 +732,13 @@ class SDPOTrainer(_BaseTrainer):
             std_rewards = group_std_rewards.repeat_interleave(num_generations, dim=0)
         advantages = (rewards - mean_grouped_rewards) / (std_rewards + 1e-4)
         self._record_reward_diagnostics(mode, rewards, rewards_per_func, group_std_rewards)
+        self._record_completion_metrics(mode, completion_ids_list)
 
         local_batch_size = batch["completion_ids"].size(0)
         process_start = self.accelerator.process_index * local_batch_size
         process_slice = slice(process_start, process_start + local_batch_size)
         local_rewards = rewards[process_slice]
         local_advantages = advantages[process_slice]
-
-        agg_completion_lengths = self.accelerator.gather(
-            torch.tensor([len(ids) for ids in completion_ids_list], device=device)
-        )
-        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
-        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
-        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
-
-        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
-        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
-        agg_is_truncated = self.accelerator.gather(is_truncated)
-        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
-        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
-        if len(term_completion_lengths) == 0:
-            term_completion_lengths = torch.zeros(1, device=device)
-        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
-        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
-        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
         batch["rewards"] = local_rewards
         batch["advantages"] = local_advantages
@@ -766,10 +749,7 @@ class SDPOTrainer(_BaseTrainer):
             feedbacks=privileged_contexts,
         )
 
-        mode = "train" if self.model.training else "eval"
-        for key, value in self.teacher_context_builder.last_metrics.items():
-            self._metrics[mode][key].append(value)
-        self._warn_on_inactive_self_distillation(mode)
+        self._record_teacher_context_metrics(mode)
 
         self._dispatch_self_distillation_callback(
             "on_teacher_context_built",
@@ -1270,6 +1250,26 @@ class SDPOTrainer(_BaseTrainer):
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
+    def _record_completion_metrics(self, mode: str, completion_ids_list: list[list[int]]) -> None:
+        device = self.accelerator.device
+        agg_completion_lengths = self.accelerator.gather(
+            torch.tensor([len(ids) for ids in completion_ids_list], device=device)
+        )
+        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
+
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+        agg_is_truncated = self.accelerator.gather(is_truncated)
+        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
+        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
+        if len(term_completion_lengths) == 0:
+            term_completion_lengths = torch.zeros(1, device=device)
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
+
     def _record_reward_diagnostics(
         self,
         mode: str,
@@ -1322,6 +1322,11 @@ class SDPOTrainer(_BaseTrainer):
             )
         else:
             self._diagnostic_counters[mode]["flat_rewards"] = 0
+
+    def _record_teacher_context_metrics(self, mode: str) -> None:
+        for key, value in self.teacher_context_builder.last_metrics.items():
+            self._metrics[mode][key].append(value)
+        self._warn_on_inactive_self_distillation(mode)
 
     def _warn_on_inactive_self_distillation(self, mode: str) -> None:
         metrics = self.teacher_context_builder.last_metrics
