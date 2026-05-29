@@ -140,13 +140,8 @@ def pad_byte_offsets(offsets: list[tuple[int, int]], target_length: int, padding
 
 
 def piece_byte_len(piece: str) -> int:
-    """UTF-8 byte length of a single token's piece string.
-
-    Works for ByteLevel BPE (each piece char maps to one source byte), SentencePiece byte-fallback (``<0xXX>``
-    represents one byte), and the bare SentencePiece word-start marker ``\u2581``. Used both to disambiguate
-    overlapping char-derived spans (off-policy) and to derive completion-relative offsets directly from generated token
-    ids (on-policy), so both sides share one byte coordinate system without any decode-then-re-encode round-trip.
-    """
+    """UTF-8 byte length of a token's piece: handles ByteLevel BPE (one char per source byte),
+    SentencePiece byte-fallback (``<0xXX>``), and the bare word-start marker ``\u2581``."""
     if piece == "\u2581":
         return 0
     if len(piece) == 6 and piece.startswith("<0x") and piece.endswith(">"):
@@ -333,14 +328,12 @@ class DataCollatorForChatML:
                 attention_mask.append(example.get("attention_mask", [1] * len(sample_ids)))
                 completion_mask = example.get("completion_mask")
                 if completion_mask is not None:
-                    # Boundary tracked at tokenize time: the prompt is the leading non-completion tokens
-                    # of the sequence itself — no re-tokenization, so it stays correct after the sequence
-                    # was truncated keeping the completion end.
+                    # Use the tracked boundary directly: no re-tokenization, survives truncation.
                     prompt_len = completion_mask.index(1) if 1 in completion_mask else len(sample_ids)
                     current_prompt_ids = sample_ids[:prompt_len]
                 else:
-                    # No tracked boundary: recover the prompt by tokenizing its text. Avoid `truncation=True`
-                    # here: it persists on the backend used by `encode_with_byte_offsets`.
+                    # No tracked boundary: tokenize the prompt and cap with a slice (avoid `truncation=True`,
+                    # which would persist on the shared backend used by `encode_with_byte_offsets`).
                     tokenized_prompt = self.tokenizer(
                         formatted_prompt,
                         padding=False,
