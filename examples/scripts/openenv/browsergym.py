@@ -231,7 +231,7 @@ def main() -> None:
 
         def _do_action(self, action_str: str) -> list:
             if self.done:
-                return "Episode is done. No further actions needed."
+                return [{"type": "text", "text": "Episode is done. No further actions needed."}]
 
             self._step_count += 1
             result = self.client.step(BrowserGymAction(action_str=action_str))
