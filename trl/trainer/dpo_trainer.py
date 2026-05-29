@@ -391,6 +391,19 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
             if "mm_token_type_ids" in processed_prompts:
                 mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
 
+            # Truncation safety (Qwen-style models with image_grid_thw only): if truncation
+            # removed image tokens, drop ALL images to avoid pixel_values/token mismatch.
+            # Consistent with the same fallback in GRPOTrainer.
+            image_grid_thw = processed_prompts.get("image_grid_thw")
+            if image_grid_thw is not None and "mm_token_type_ids" in processed_prompts:
+                merge_length = self.processor.image_processor.merge_size ** 2
+                expected_tokens = image_grid_thw.prod(-1).sum().item() // merge_length
+                actual_tokens = (mm_token_type_ids == 1).sum().item()
+                if actual_tokens != expected_tokens:
+                    processed_prompts.pop("pixel_values", None)
+                    processed_prompts.pop("image_grid_thw", None)
+                    mm_token_type_ids = torch.zeros_like(mm_token_type_ids)
+
         # Build the output dictionary
         output = processed_prompts  # we take processed_prompts because it contains the images
         output["input_ids"] = input_ids

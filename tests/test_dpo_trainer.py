@@ -164,6 +164,39 @@ class TestDataCollatorForVisionPreference(TrlTestCase):
             f"input_ids shape {output['input_ids'].shape}"
         )
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.3.0"),
+        reason="mm_token_type_ids are returned by default since transformers-5.3.0 (see transformers#43972)",
+    )
+    @require_vision
+    def test_truncation_drops_images_on_mismatch(self):
+        # Regression test: when max_length truncates image tokens, pixel_values must be dropped to
+        # avoid "Image features and image tokens do not match" errors in the model forward.
+        from PIL import Image
+        from transformers import AutoProcessor
+
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration")
+        image = Image.new("RGB", (16, 16))
+        examples = [
+            {
+                "images": [image],
+                "prompt": [{"role": "user", "content": "What is this?"}],
+                "chosen": [{"role": "assistant", "content": "A red square."}],
+                "rejected": [{"role": "assistant", "content": "A blue circle."}],
+            }
+        ]
+
+        # Get natural length, then truncate aggressively to cut image tokens
+        full_length = DataCollatorForVisionPreference(processor)(examples)["input_ids"].shape[1]
+        output = DataCollatorForVisionPreference(processor, max_length=full_length // 2)(examples)
+
+        assert output["input_ids"].shape[1] == full_length // 2
+        # Images dropped → mm_token_type_ids all zeros; or images kept → grid present
+        if "pixel_values" not in output:
+            assert (output["mm_token_type_ids"] == 0).all()
+        else:
+            assert "image_grid_thw" in output
+
 
 class TestDPOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
