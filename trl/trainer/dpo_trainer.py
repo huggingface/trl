@@ -637,6 +637,13 @@ class DPOTrainer(_BaseTrainer):
                 "drop them, causing pixel_values to be forwarded to the model with no corresponding visual "
                 "tokens in input_ids. Use truncation_mode='keep_start' (the default) or set max_length=None."
             )
+        if self._is_vision_dataset and args.precompute_ref_log_probs:
+            raise ValueError(
+                "`precompute_ref_log_probs=True` is not supported for vision datasets. For vision-language "
+                "models, all data processing is performed on the fly rather than upfront, and running a full "
+                "forward pass of the reference model over the entire dataset is not supported for large "
+                "multimodal models. Set `precompute_ref_log_probs=False`."
+            )
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
@@ -1487,12 +1494,10 @@ class DPOTrainer(_BaseTrainer):
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
-
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
-
         logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()

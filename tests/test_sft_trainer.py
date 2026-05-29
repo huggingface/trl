@@ -1087,7 +1087,7 @@ class TestSFTTrainer(TrlTestCase):
     @require_kernels
     @pytest.mark.skipif(
         not is_ampere_or_newer() and torch_device != "xpu",
-        reason="Flash attention 2 requires Ampere or newer GPU, or XPU",
+        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
