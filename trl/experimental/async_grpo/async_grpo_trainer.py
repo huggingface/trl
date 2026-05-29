@@ -303,7 +303,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = AutoModelForCausalLM.from_pretrained(
-            model, device_map=None, dtype=torch.float32, attn_implementation="kernels-community/flash-attn2"
+            model, device_map=None, dtype=torch.float32, attn_implementation="kernels-community/flash-attn3"
         )
 
         if self.args.use_liger_kernel:
