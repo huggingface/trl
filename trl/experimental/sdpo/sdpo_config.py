@@ -45,7 +45,7 @@ class SDPOConfig(_BaseConfig):
 
         sdpo_policy_loss_mode (`str`, *optional*, defaults to `"distillation_only"`):
             How SDPO combines the online policy loss and self-distillation loss. Supported: `distillation_only`,
-            `policy_only`, `hybrid`.
+            `hybrid`.
         distillation_alpha (`float`, *optional*, defaults to `1.0`):
             Divergence interpolation coefficient. Sampled-token SDPO requires the official reverse-KL setting
             `distillation_alpha=1.0`.
@@ -283,7 +283,7 @@ class SDPOConfig(_BaseConfig):
     )
     sdpo_policy_loss_mode: str = field(
         default="distillation_only",
-        metadata={"help": "SDPO policy loss mode. Supported: `distillation_only`, `policy_only`, `hybrid`."},
+        metadata={"help": "SDPO policy loss mode. Supported: `distillation_only`, `hybrid`."},
     )
     teacher_model_kind: str = field(
         default="ema",
@@ -424,8 +424,8 @@ class SDPOConfig(_BaseConfig):
         if self.epsilon_high is None:
             self.epsilon_high = self.epsilon
 
-        if self.sdpo_policy_loss_mode not in {"distillation_only", "policy_only", "hybrid"}:
-            raise ValueError("sdpo_policy_loss_mode must be one of: 'distillation_only', 'policy_only', 'hybrid'")
+        if self.sdpo_policy_loss_mode not in {"distillation_only", "hybrid"}:
+            raise ValueError("sdpo_policy_loss_mode must be one of: 'distillation_only', 'hybrid'")
         if self.sdpo_policy_loss_mode == "distillation_only" and self.distillation_weight <= 0:
             raise ValueError("distillation_only mode requires `distillation_weight > 0`.")
         if self.sdpo_policy_loss_mode == "hybrid" and self.distillation_weight <= 0:

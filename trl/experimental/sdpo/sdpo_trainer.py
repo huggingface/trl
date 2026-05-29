@@ -1241,18 +1241,8 @@ class SDPOTrainer(_BaseTrainer):
         if self.args.sdpo_policy_loss_mode == "distillation_only":
             distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
             return self._compute_weighted_self_distillation_loss(model, inputs, distillation_logits)
-        if self.args.sdpo_policy_loss_mode == "policy_only":
-            student_input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
-            student_attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
-            student_logits = self._forward_logits(
-                model=model,
-                input_ids=student_input_ids,
-                attention_mask=student_attention_mask,
-                logits_to_keep=inputs["completion_ids"].size(1),
-            )
-            return self._compute_policy_loss(inputs, student_logits)
 
         raise ValueError(
             "Unsupported `sdpo_policy_loss_mode`: "
-            f"{self.args.sdpo_policy_loss_mode!r}. Expected one of: 'hybrid', 'distillation_only', 'policy_only'."
+            f"{self.args.sdpo_policy_loss_mode!r}. Expected one of: 'hybrid', 'distillation_only'."
         )

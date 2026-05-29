@@ -10,7 +10,7 @@ SDPO targets reinforcement learning with verifiable rewards (RLVR), where each a
 
 ## Loss modes and the teacher
 
-`sdpo_policy_loss_mode` controls how the two signals combine: `"distillation_only"` (the default) trains purely on the self-distillation loss, `"policy_only"` falls back to the standard GRPO-style policy gradient, and `"hybrid"` sums both. The distillation objective itself is set by `distillation_mode` — `"sampled_token"` (the default) uses a token-level reverse KL and requires `distillation_alpha=1.0`, while `"full_logits"` and `"topk_logits"` distill over the full or top-`distillation_topk` vocabulary.
+`sdpo_policy_loss_mode` controls how the two signals combine: `"distillation_only"` (the default) trains purely on the self-distillation loss, and `"hybrid"` sums both. The distillation objective itself is set by `distillation_mode` — `"sampled_token"` (the default) uses a token-level reverse KL and requires `distillation_alpha=1.0`, while `"full_logits"` and `"topk_logits"` distill over the full or top-`distillation_topk` vocabulary.
 
 `teacher_model_kind` chooses the teacher weights: `"ema"` (the default) tracks the student with an exponential moving average synced every `teacher_sync_steps` steps at rate `teacher_update_rate`, `"live"` reuses the current student directly, and `"base"` freezes the initial weights. Reprompting is governed by `use_successful_as_teacher`, `success_reward_threshold`, `dont_reprompt_on_self_success`, and the `reprompt_template` / `solution_template` / `feedback_template` strings. Generation runs through transformers by default, or vLLM (colocate or server mode) when `use_vllm=True`.
 
