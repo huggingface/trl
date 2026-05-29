@@ -947,6 +947,139 @@ class SDPOTrainer(_BaseTrainer):
 
         return old_per_token_logps
 
+    def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
+        device = self.accelerator.device
+        if len(self.reward_funcs) == 0:
+            return torch.zeros((len(prompts), 0), device=device)
+
+        rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
+        keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
+        reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
+        reward_kwargs["trainer_state"] = self.state
+
+        for i, (reward_func, reward_processing_class) in enumerate(
+            zip(self.reward_funcs, self.reward_processing_classes, strict=True)
+        ):
+            if isinstance(reward_func, nn.Module):
+                if is_conversational(inputs[0]):
+                    messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
+                    texts = [
+                        apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
+                        for x in messages
+                    ]
+                else:
+                    texts = [p + c for p, c in zip(prompts, completions, strict=True)]
+                reward_inputs = reward_processing_class(
+                    text=texts,
+                    return_tensors="pt",
+                    padding=True,
+                    padding_side="right",
+                    add_special_tokens=False,
+                )
+                reward_inputs = _BaseTrainer._prepare_inputs(self, reward_inputs)
+                with torch.inference_mode():
+                    rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]
+            else:
+                output_reward_func = reward_func(
+                    prompts=prompts,
+                    completions=completions,
+                    completion_ids=completion_ids_list,
+                    **reward_kwargs,
+                )
+                output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
+                rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+
+        return self.accelerator.gather(rewards_per_func)
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        if return_outputs:
+            raise ValueError("The SDPOTrainer does not support returning outputs")
+
+        if self.args.sdpo_policy_loss_mode == "hybrid":
+            return self._compute_hybrid_loss(model, inputs)
+        if self.args.sdpo_policy_loss_mode == "distillation_only":
+            distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
+            return self._compute_weighted_self_distillation_loss(model, inputs, distillation_logits)
+        if self.args.sdpo_policy_loss_mode == "policy_only":
+            student_input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
+            student_attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
+            student_logits = self._forward_logits(
+                model=model,
+                input_ids=student_input_ids,
+                attention_mask=student_attention_mask,
+                logits_to_keep=inputs["completion_ids"].size(1),
+            )
+            return self._compute_policy_loss(inputs, student_logits)
+
+        raise ValueError(
+            "Unsupported `sdpo_policy_loss_mode`: "
+            f"{self.args.sdpo_policy_loss_mode!r}. Expected one of: 'hybrid', 'distillation_only', 'policy_only'."
+        )
+
+    def _compute_hybrid_loss(self, model, inputs) -> torch.Tensor:
+        distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
+        policy_loss = self._compute_policy_loss(inputs, distillation_logits.student_logits)
+        weighted_distillation_loss = self._compute_weighted_self_distillation_loss(
+            model,
+            inputs,
+            distillation_logits,
+        )
+        return policy_loss + weighted_distillation_loss
+
+    def _compute_weighted_self_distillation_loss(
+        self,
+        model,
+        inputs,
+        distillation_logits: DistillationLogits,
+    ) -> torch.Tensor:
+        accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
+        distillation_loss = (
+            self._compute_self_distillation_loss(
+                model,
+                inputs,
+                distillation_logits,
+            )
+            / accumulation_scale
+        )
+        return self.args.distillation_weight * distillation_loss
+
+    def _compute_policy_loss(
+        self,
+        inputs,
+        student_logits,
+    ) -> torch.Tensor:
+        completion_ids = inputs["completion_ids"]
+        completion_mask = inputs["completion_mask"]
+        per_token_logps = select_token_log_probs(student_logits, completion_ids)
+        old_per_token_logps = inputs.get("old_per_token_logps")
+        old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
+        advantages = inputs["advantages"]
+        if advantages.dim() == 1:
+            advantages = advantages.unsqueeze(1)
+        log_ratio = per_token_logps - old_per_token_logps
+        if self.importance_sampling_level == "sequence":
+            log_ratio = (log_ratio * completion_mask).sum(-1, keepdim=True) / completion_mask.sum(
+                -1, keepdim=True
+            ).clamp(min=1.0)
+        coef_1 = torch.exp(log_ratio)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        per_token_loss = -torch.min(coef_1 * advantages, coef_2 * advantages)
+
+        loss = aggregate_loss(
+            per_token_loss,
+            completion_mask,
+            loss_type=self.loss_type,
+            max_completion_length=self.max_completion_length,
+        )
+
+        mode = "train" if self.model.training else "eval"
+        self._metrics[mode]["self_distillation/policy_loss"].append(
+            self.accelerator.gather(loss.detach()).mean().item()
+        )
+
+        accumulation_scale = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+        return loss / accumulation_scale
+
     def _compute_self_distillation_loss(
         self,
         model,
@@ -1137,83 +1270,6 @@ class SDPOTrainer(_BaseTrainer):
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
-    def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
-        device = self.accelerator.device
-        if len(self.reward_funcs) == 0:
-            return torch.zeros((len(prompts), 0), device=device)
-
-        rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
-        keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
-        reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
-        reward_kwargs["trainer_state"] = self.state
-
-        for i, (reward_func, reward_processing_class) in enumerate(
-            zip(self.reward_funcs, self.reward_processing_classes, strict=True)
-        ):
-            if isinstance(reward_func, nn.Module):
-                if is_conversational(inputs[0]):
-                    messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
-                    texts = [
-                        apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
-                        for x in messages
-                    ]
-                else:
-                    texts = [p + c for p, c in zip(prompts, completions, strict=True)]
-                reward_inputs = reward_processing_class(
-                    text=texts,
-                    return_tensors="pt",
-                    padding=True,
-                    padding_side="right",
-                    add_special_tokens=False,
-                )
-                reward_inputs = _BaseTrainer._prepare_inputs(self, reward_inputs)
-                with torch.inference_mode():
-                    rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]
-            else:
-                output_reward_func = reward_func(
-                    prompts=prompts,
-                    completions=completions,
-                    completion_ids=completion_ids_list,
-                    **reward_kwargs,
-                )
-                output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
-                rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
-
-        return self.accelerator.gather(rewards_per_func)
-
-    def _warn_on_inactive_self_distillation(self, mode: str) -> None:
-        metrics = self.teacher_context_builder.last_metrics
-        tolerance = self.args.diagnostics_flat_tolerance
-
-        reprompt_fraction = metrics.get("self_distillation/reprompt_sample_fraction", 0.0)
-        success_fraction = metrics.get("self_distillation/success_group_fraction", 0.0)
-
-        if reprompt_fraction <= tolerance:
-            self._warn_on_degenerate_diagnostics(
-                mode=mode,
-                counter_key="inactive_self_distillation",
-                message=(
-                    "SDPO self-distillation is inactive because no reprompted samples were constructed. "
-                    "This usually means no rollout exceeded `success_reward_threshold` and no usable privileged "
-                    "feedback was available."
-                ),
-            )
-        else:
-            self._diagnostic_counters[mode]["inactive_self_distillation"] = 0
-
-        if success_fraction <= tolerance:
-            self._warn_on_degenerate_diagnostics(
-                mode=mode,
-                counter_key="no_successful_rollouts",
-                message=(
-                    "SDPO did not find any successful rollouts in the current generation groups. "
-                    "If this persists, reduce task difficulty, adjust reward shaping, or lower "
-                    "`success_reward_threshold`."
-                ),
-            )
-        else:
-            self._diagnostic_counters[mode]["no_successful_rollouts"] = 0
-
     def _record_reward_diagnostics(
         self,
         mode: str,
@@ -1267,6 +1323,39 @@ class SDPOTrainer(_BaseTrainer):
         else:
             self._diagnostic_counters[mode]["flat_rewards"] = 0
 
+    def _warn_on_inactive_self_distillation(self, mode: str) -> None:
+        metrics = self.teacher_context_builder.last_metrics
+        tolerance = self.args.diagnostics_flat_tolerance
+
+        reprompt_fraction = metrics.get("self_distillation/reprompt_sample_fraction", 0.0)
+        success_fraction = metrics.get("self_distillation/success_group_fraction", 0.0)
+
+        if reprompt_fraction <= tolerance:
+            self._warn_on_degenerate_diagnostics(
+                mode=mode,
+                counter_key="inactive_self_distillation",
+                message=(
+                    "SDPO self-distillation is inactive because no reprompted samples were constructed. "
+                    "This usually means no rollout exceeded `success_reward_threshold` and no usable privileged "
+                    "feedback was available."
+                ),
+            )
+        else:
+            self._diagnostic_counters[mode]["inactive_self_distillation"] = 0
+
+        if success_fraction <= tolerance:
+            self._warn_on_degenerate_diagnostics(
+                mode=mode,
+                counter_key="no_successful_rollouts",
+                message=(
+                    "SDPO did not find any successful rollouts in the current generation groups. "
+                    "If this persists, reduce task difficulty, adjust reward shaping, or lower "
+                    "`success_reward_threshold`."
+                ),
+            )
+        else:
+            self._diagnostic_counters[mode]["no_successful_rollouts"] = 0
+
     def _warn_on_degenerate_diagnostics(self, mode: str, counter_key: str, message: str) -> None:
         interval = self.args.diagnostics_warning_interval
         if interval == 0:
@@ -1276,92 +1365,3 @@ class SDPOTrainer(_BaseTrainer):
         count = self._diagnostic_counters[mode][counter_key]
         if count == 1 or count % interval == 0:
             logger.warning("%s Consecutive degenerate steps: %s.", message, count)
-
-    def _compute_policy_loss(
-        self,
-        inputs,
-        student_logits,
-    ) -> torch.Tensor:
-        completion_ids = inputs["completion_ids"]
-        completion_mask = inputs["completion_mask"]
-        per_token_logps = select_token_log_probs(student_logits, completion_ids)
-        old_per_token_logps = inputs.get("old_per_token_logps")
-        old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
-        advantages = inputs["advantages"]
-        if advantages.dim() == 1:
-            advantages = advantages.unsqueeze(1)
-        log_ratio = per_token_logps - old_per_token_logps
-        if self.importance_sampling_level == "sequence":
-            log_ratio = (log_ratio * completion_mask).sum(-1, keepdim=True) / completion_mask.sum(
-                -1, keepdim=True
-            ).clamp(min=1.0)
-        coef_1 = torch.exp(log_ratio)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss = -torch.min(coef_1 * advantages, coef_2 * advantages)
-
-        loss = aggregate_loss(
-            per_token_loss,
-            completion_mask,
-            loss_type=self.loss_type,
-            max_completion_length=self.max_completion_length,
-        )
-
-        mode = "train" if self.model.training else "eval"
-        self._metrics[mode]["self_distillation/policy_loss"].append(
-            self.accelerator.gather(loss.detach()).mean().item()
-        )
-
-        accumulation_scale = self.current_gradient_accumulation_steps if mode == "train" else 1.0
-        return loss / accumulation_scale
-
-    def _compute_weighted_self_distillation_loss(
-        self,
-        model,
-        inputs,
-        distillation_logits: DistillationLogits,
-    ) -> torch.Tensor:
-        accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
-        distillation_loss = (
-            self._compute_self_distillation_loss(
-                model,
-                inputs,
-                distillation_logits,
-            )
-            / accumulation_scale
-        )
-        return self.args.distillation_weight * distillation_loss
-
-    def _compute_hybrid_loss(self, model, inputs) -> torch.Tensor:
-        distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
-        policy_loss = self._compute_policy_loss(inputs, distillation_logits.student_logits)
-        weighted_distillation_loss = self._compute_weighted_self_distillation_loss(
-            model,
-            inputs,
-            distillation_logits,
-        )
-        return policy_loss + weighted_distillation_loss
-
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if return_outputs:
-            raise ValueError("The SDPOTrainer does not support returning outputs")
-
-        if self.args.sdpo_policy_loss_mode == "hybrid":
-            return self._compute_hybrid_loss(model, inputs)
-        if self.args.sdpo_policy_loss_mode == "distillation_only":
-            distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
-            return self._compute_weighted_self_distillation_loss(model, inputs, distillation_logits)
-        if self.args.sdpo_policy_loss_mode == "policy_only":
-            student_input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
-            student_attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
-            student_logits = self._forward_logits(
-                model=model,
-                input_ids=student_input_ids,
-                attention_mask=student_attention_mask,
-                logits_to_keep=inputs["completion_ids"].size(1),
-            )
-            return self._compute_policy_loss(inputs, student_logits)
-
-        raise ValueError(
-            "Unsupported `sdpo_policy_loss_mode`: "
-            f"{self.args.sdpo_policy_loss_mode!r}. Expected one of: 'hybrid', 'distillation_only', 'policy_only'."
-        )

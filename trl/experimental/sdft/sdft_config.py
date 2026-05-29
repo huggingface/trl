@@ -223,18 +223,6 @@ class SDFTConfig(_BaseConfig):
         default=False,
         metadata={"help": "Whether to add a tail bucket for non-top-k probability mass."},
     )
-    diagnostics_warning_interval: int = field(
-        default=10,
-        metadata={
-            "help": "Emit repeated trainer diagnostics every N consecutive degenerate steps. Set to 0 to disable."
-        },
-    )
-    diagnostics_flat_tolerance: float = field(
-        default=1e-8,
-        metadata={
-            "help": "Tolerance used to decide whether reward variance or reprompt activity is effectively zero."
-        },
-    )
     generate_from_teacher: bool = field(
         default=False,
         metadata={"help": "Whether on-policy generation should use the teacher-conditioned prompt."},

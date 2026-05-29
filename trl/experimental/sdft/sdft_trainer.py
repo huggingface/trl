@@ -629,6 +629,26 @@ class SDFTTrainer(_BaseTrainer):
 
         _, completion_ids_list = self._generate(generation_prompt_ids_list)
         device = self.accelerator.device
+
+        mode = "train" if self.model.training else "eval"
+        agg_completion_lengths = self.accelerator.gather(
+            torch.tensor([len(ids) for ids in completion_ids_list], device=device)
+        )
+        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
+
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+        agg_is_truncated = self.accelerator.gather(is_truncated)
+        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
+        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
+        if len(term_completion_lengths) == 0:
+            term_completion_lengths = torch.zeros(1, device=device)
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
+
         prompt_ids = [torch.tensor(ids) for ids in student_prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
         prompt_ids = pad(prompt_ids, padding_value=self._tokenizer.pad_token_id, padding_side="left").to(device=device)
@@ -654,9 +674,6 @@ class SDFTTrainer(_BaseTrainer):
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
-            "raw_completion_lengths": torch.tensor(
-                [len(ids) for ids in completion_ids_list], device=device, dtype=torch.long
-            ),
         }
         if old_per_token_logps is not None:
             batch["old_per_token_logps"] = old_per_token_logps
@@ -703,6 +720,15 @@ class SDFTTrainer(_BaseTrainer):
 
         return old_per_token_logps
 
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        if return_outputs:
+            raise ValueError("The SDFTTrainer does not support returning outputs")
+
+        distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
+        loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
+        accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
+        return loss / accumulation_scale
+
     def _compute_self_distillation_loss(
         self,
         model,
@@ -722,7 +748,11 @@ class SDFTTrainer(_BaseTrainer):
         importance-sampling ratio between the current student and the student at rollout time.
         """
         if distillation_logits.loss_mask.sum() == 0:
-            mode = "train" if model.training else "eval"
+            logger.warning(
+                "SDFT distillation loss mask is empty: no completion tokens contribute to the loss. This is usually"
+                "indicative of empty completions or `num_loss_tokens_to_skip` being greater than completion length"
+            )
+            mode = "train" if self.model.training else "eval"
             self._log_self_distillation_metric(mode, 0.0)
             # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
             return distillation_logits.student_logits.sum() * 0.0
@@ -892,12 +922,3 @@ class SDFTTrainer(_BaseTrainer):
         logs = {**logs, **metrics}
         super().log(logs, start_time)
         self._metrics[mode].clear()
-
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if return_outputs:
-            raise ValueError("The SDFTTrainer does not support returning outputs")
-
-        distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
-        loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
-        accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
-        return loss / accumulation_scale
