@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +26,7 @@ from trl.experimental.utils import (
     DataCollatorForChatML,
     encode_with_byte_offsets,
     pad_byte_offsets,
+    piece_byte_len,
 )
 
 
@@ -298,28 +300,18 @@ def encode_prompt_completion(tokenizer, prompt, completion):
     return input_ids, labels, byte_offsets
 
 
-def test_chatml_collator_uses_original_prompt_text_for_tokenized_rows(llama_tokenizer):
-    collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=64)
-    prompt = "Question:"
-    completion = " hello"
-    input_ids, labels, byte_offsets = encode_prompt_completion(llama_tokenizer, prompt, completion)
-
-    batch = collator(
-        [
-            {
-                "input_ids": input_ids,
-                "attention_mask": [1] * len(input_ids),
-                "original_prompt_text": prompt,
-                "byte_offsets": byte_offsets,
-            }
-        ]
-    )
-
-    assert torch.equal(batch["labels"][0, -len(labels) :], torch.tensor(labels, dtype=torch.long))
-    [(long_ids, _)] = encode_with_byte_offsets(
-        llama_tokenizer.backend_tokenizer, [" ".join(["token"] * (len(input_ids) + 1))], add_special_tokens=False
-    )
-    assert len(long_ids) > len(input_ids)
+@pytest.mark.parametrize(
+    "piece,expected",
+    [
+        ("▁", 1),  # standalone SentencePiece word marker → leading space byte
+        ("<0x41>", 1),  # SentencePiece byte-fallback → one byte
+        ("hello", 5),  # ASCII piece → 5 bytes
+        ("Ġhello", 6),  # ByteLevel BPE "Ġhello" (Ġ maps to byte 0x20) → 6 source bytes
+    ],
+)
+def test_piece_byte_len(piece, expected):
+    """Pin the byte-length-per-piece convention used by both off-policy disambiguation and on-policy offsets."""
+    assert piece_byte_len(piece) == expected
 
 
 def pad_tokens(ids, pad_id, target_length):
@@ -761,6 +753,13 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenize
 
     assert len(row["input_ids"]) == max_length  # truncated, not dropped
     assert 1 in row["completion_mask"]  # completion survived front-truncation
+
+    # original_prompt_text / original_completion_text must reflect the truncated ids the student kept,
+    # not the pre-truncation strings (otherwise the teacher would re-encode a longer prompt context).
+    completion_start = row["completion_mask"].index(1)
+    decode = partial(llama_tokenizer.decode, skip_special_tokens=False, clean_up_tokenization_spaces=False)
+    assert row["original_prompt_text"] == decode(row["input_ids"][:completion_start])
+    assert row["original_completion_text"] == decode(row["input_ids"][completion_start:])
 
     collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=max_length)
     batch = collator([row])

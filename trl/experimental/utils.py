@@ -141,9 +141,9 @@ def pad_byte_offsets(offsets: list[tuple[int, int]], target_length: int, padding
 
 def piece_byte_len(piece: str) -> int:
     """UTF-8 byte length of a token's piece: handles ByteLevel BPE (one char per source byte),
-    SentencePiece byte-fallback (``<0xXX>``), and the bare word-start marker ``\u2581``."""
+    SentencePiece byte-fallback (``<0xXX>``), and the bare word-start marker ``\u2581`` (decodes to a space)."""
     if piece == "\u2581":
-        return 0
+        return 1
     if len(piece) == 6 and piece.startswith("<0x") and piece.endswith(">"):
         return 1
     return len(piece)

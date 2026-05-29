@@ -1503,6 +1503,12 @@ class GOLDTrainer(SFTTrainer):
                     input_ids = input_ids[drop:]
                     byte_offsets = byte_offsets[drop:]
                     completion_start = max(0, completion_start - drop)
+                    # Resync the strings the teacher will re-encode with the ids the student kept.
+                    decode = partial(
+                        processing_class.decode, skip_special_tokens=False, clean_up_tokenization_spaces=False
+                    )
+                    result["original_prompt_text"] = decode(input_ids[:completion_start])
+                    result["original_completion_text"] = decode(input_ids[completion_start:])
 
                 result["input_ids"] = input_ids
                 result["attention_mask"] = [1] * len(input_ids)
