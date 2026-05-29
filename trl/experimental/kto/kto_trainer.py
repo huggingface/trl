@@ -16,7 +16,6 @@ import os
 import textwrap
 from collections import defaultdict
 from collections.abc import Callable
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -663,16 +662,6 @@ class KTOTrainer(_BaseTrainer):
                 "ref_KL_logps",
             ]
 
-    @contextmanager
-    def null_ref_context(self):
-        """Context manager for handling null reference model (that is, peft adapter manipulation)."""
-        if is_peft_model(self.model):
-            model = self.accelerator.unwrap_model(self.model)
-            with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                yield
-        else:
-            yield
-
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
         # "ref_logps" is included to invalidate caches written before the key was renamed from "reference_logps"
@@ -726,7 +715,20 @@ class KTOTrainer(_BaseTrainer):
         """Computes reference log probabilities for a single padded batch."""
         with torch.no_grad():
             if self.ref_model is None:
-                with self.null_ref_context():
+                if is_peft_model(self.model):
+                    model = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                        completion_logits = self.model(
+                            inputs["completion_input_ids"],
+                            attention_mask=inputs["completion_attention_mask"],
+                        ).logits
+
+                        if self.calculate_KL:
+                            KL_logits = self.model(
+                                inputs["KL_completion_input_ids"],
+                                attention_mask=inputs["KL_completion_attention_mask"],
+                            ).logits
+                else:
                     completion_logits = self.model(
                         inputs["completion_input_ids"],
                         attention_mask=inputs["completion_attention_mask"],
@@ -1077,8 +1079,9 @@ class KTOTrainer(_BaseTrainer):
                 ref_KL_logps = None
         else:
             with torch.no_grad():
-                if self.ref_model is None:
-                    with self.null_ref_context():
+                if is_peft_model(self.model) and self.ref_model is None:
+                    model = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
                         ref_chosen_logps, ref_rejected_logps, _, _, ref_KL_logps, _ = self._compute_logps(
                             self.model, batch
                         )
