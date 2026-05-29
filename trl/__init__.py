@@ -29,7 +29,6 @@ _import_structure = {
     "chat_template_utils": [
         "add_response_schema",
         "clone_chat_template",
-        "functiongemma_schema",
         "get_training_chat_template",
         "supports_tool_calling",
     ],
@@ -78,7 +77,6 @@ if TYPE_CHECKING:
     from .chat_template_utils import (
         add_response_schema,
         clone_chat_template,
-        functiongemma_schema,
         get_training_chat_template,
         supports_tool_calling,
     )

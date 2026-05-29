@@ -17,7 +17,7 @@
 #     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
-#     "openenv-browsergym @ git+https://huggingface.co/spaces/sergiopaniego/browsergym_env",
+#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
 # ]
 # ///
 
@@ -32,7 +32,7 @@ The environment runs on a Hugging Face Space by default.
 Setup:
 
 ```sh
-uv pip install git+https://huggingface.co/spaces/sergiopaniego/browsergym_env
+uv pip install git+https://huggingface.co/spaces/openenv/browsergym_env
 ```
 
 Setup (for development, clone the repo):

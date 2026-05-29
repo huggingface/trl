@@ -17,7 +17,7 @@
 #     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
-#     "openenv-browsergym @ git+https://huggingface.co/spaces/sergiopaniego/browsergym_env",
+#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
 # ]
 # ///
 
@@ -30,7 +30,7 @@ to see the page visually after each action.
 
 Setup:
 ```sh
-pip install "openenv-browsergym @ git+https://huggingface.co/spaces/sergiopaniego/browsergym_env"
+pip install "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env"
 ```
 
 Usage:

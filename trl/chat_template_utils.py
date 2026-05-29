@@ -310,8 +310,6 @@ qwen3_5_schema = {
 functiongemma_chat_template = (_CHAT_TEMPLATES_DIR / "functiongemma.jinja").read_text(encoding="utf-8")
 
 functiongemma_schema = {
-    # FunctionGemma tool-call format: <start_function_call>call:name{key:<escape>value<escape>}<end_function_call>
-    # Both "system" and "developer" as first message role are rendered identically by the template.
     "x-regex": r"^(?P<content>(?:(?!<start_function_call>)[\s\S])*?)(?P<tool_calls>(?:<start_function_call>[\s\S]+?<end_function_call>\s*)+)?$",
     "type": "object",
     "properties": {

@@ -26,7 +26,7 @@ pip install "openenv-textarena @ git+https://huggingface.co/spaces/openenv/wordl
 pip install "openenv-openspiel-env @ git+https://huggingface.co/spaces/openenv/openspiel_env"
 
 # BrowserGym environment
-pip install "openenv-browsergym @ git+https://huggingface.co/spaces/sergiopaniego/browsergym_env"
+pip install "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env"
 ```
 
 This installs the **environment client** (e.g., `EchoEnv`) that communicates with the remote environment server via WebSocket, along with the action/observation models and all required dependencies (including `openenv-core`).
@@ -571,7 +571,7 @@ To create your own environment, check out the guide on [Building Your Own Enviro
 `rollout_func` is an experimental API that predates `environment_factory`. It is no longer recommended and will be removed in a future version. If you have existing scripts that use `rollout_func`, migrate them to `environment_factory`.
 
 > [!WARNING]
-> `rollout_func` emits a deprecation warning at runtime and may be removed without prior notice. Do not use it for new projects.
+> `rollout_func` emits an experimental-feature warning at runtime and may be removed without prior notice. Do not use it for new projects.
 
 ## Server concurrency
 
