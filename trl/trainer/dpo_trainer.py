@@ -1008,7 +1008,7 @@ class DPOTrainer(_BaseTrainer):
                 ]
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
-        model_hash = hash_module(self.ref_model or self.model)
+        model_hash = hash_module(self.ref_model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash))
         cache_file = dataset._get_cache_file_path(fingerprint).removesuffix(".arrow") + ".npz"
         if os.path.exists(cache_file):
