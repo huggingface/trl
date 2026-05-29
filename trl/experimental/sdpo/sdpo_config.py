@@ -430,6 +430,6 @@ class SDPOConfig(_BaseConfig):
             raise ValueError("max_reprompt_len must be positive")
         if self.distillation_mode == "sampled_token" and self.distillation_alpha != 1.0:
             raise ValueError(
-                "SDPO sampled-token distillation requires `distillation_alpha=1.0`. "
+                "sampled-token distillation requires `distillation_alpha=1.0`. "
                 "Set `distillation_mode='full_logits'` or `distillation_mode='topk_logits'` to use other divergence settings."
             )

@@ -283,7 +283,7 @@ class SDFTConfig(_BaseConfig):
             raise ValueError("`distillation_topk` is only valid when `distillation_mode='topk_logits'`.")
         if self.distillation_mode == "sampled_token" and self.distillation_alpha != 1.0:
             raise ValueError(
-                "SDPO sampled-token distillation requires `distillation_alpha=1.0`. "
+                "sampled-token distillation requires `distillation_alpha=1.0`. "
                 "Set `distillation_mode='full_logits'` or `distillation_mode='topk_logits'` to use other divergence settings."
             )
         if self.distillation_is_clip is not None and self.distillation_is_clip <= 0:

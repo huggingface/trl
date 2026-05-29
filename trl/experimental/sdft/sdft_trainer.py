@@ -276,10 +276,6 @@ class SDFTTrainer(_BaseTrainer):
         self._step = 0
         self._buffered_inputs = None
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self._diagnostic_counters = {
-            "train": defaultdict(int),
-            "eval": defaultdict(int),
-        }
 
         super().__init__(
             model=model,
