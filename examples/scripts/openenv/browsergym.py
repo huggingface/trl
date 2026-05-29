@@ -17,7 +17,7 @@
 #     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
-#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
+#     "openenv-browsergym @ git+https://huggingface.co/spaces/sergiopaniego/browsergym_env",
 # ]
 # ///
 
@@ -30,7 +30,7 @@ to see the page visually after each action.
 
 Setup:
 ```sh
-pip install "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env"
+pip install "openenv-browsergym @ git+https://huggingface.co/spaces/sergiopaniego/browsergym_env"
 ```
 
 Usage:
@@ -129,7 +129,7 @@ def main() -> None:
 
     class BrowserGymVLMEnv:
         def __init__(self):
-            self.client = BrowserGymEnv(base_url=space_url)
+            self.client = BrowserGymEnv(base_url=space_url).sync()
             self.reward = 0.0
             self.done = False
             self._step_count = 0

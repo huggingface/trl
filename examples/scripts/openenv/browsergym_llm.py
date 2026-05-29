@@ -17,7 +17,7 @@
 #     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
-#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
+#     "openenv-browsergym @ git+https://huggingface.co/spaces/sergiopaniego/browsergym_env",
 # ]
 # ///
 
@@ -29,13 +29,13 @@ tree text from BrowserGym, making it memory-efficient.
 
 The environment runs on a Hugging Face Space by default.
 
-Setup (Option A - Install from HF Space, recommended):
+Setup:
 
 ```sh
-uv pip install git+https://huggingface.co/spaces/openenv/browsergym_env
+uv pip install git+https://huggingface.co/spaces/sergiopaniego/browsergym_env
 ```
 
-Setup (Option B - Clone OpenEnv repo, for development):
+Setup (for development, clone the repo):
 
 ```sh
 git clone https://github.com/meta-pytorch/OpenEnv.git
@@ -285,7 +285,7 @@ def main() -> None:
 
     class BrowserGymLLMEnv:
         def __init__(self):
-            self.client = BrowserGymEnv(base_url=space_url)
+            self.client = BrowserGymEnv(base_url=space_url).sync()
             self.reward = 0.0
             self._done = False
             self._step_count = 0
