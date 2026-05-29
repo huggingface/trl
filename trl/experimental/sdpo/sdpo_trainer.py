@@ -640,7 +640,7 @@ class SDPOTrainer(_BaseTrainer):
         return self._prepare_training_batch(generation_batch)
 
     def _prepare_training_batch(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
-        """Sample student rollouts and build the final `TrainingBatch`."""
+        """Sample student rollouts, calculate advantage and construct teacher prompts"""
         batch = self.sample_rollouts(inputs)
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
@@ -763,6 +763,7 @@ class SDPOTrainer(_BaseTrainer):
         return prompt_ids
 
     def sample_rollouts(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
+        """Generate completions for a batch of prompts and assemble the training batch."""
         prompts = [example["prompt"] for example in inputs]
         prompt_ids = self._tokenize_prompts(prompts)
         self._dispatch_self_distillation_callback(
@@ -932,9 +933,14 @@ class SDPOTrainer(_BaseTrainer):
         teacher_model,
         inputs: TrainingBatch,
     ) -> DistillationLogits:
-        """Run student and teacher forwards on their respective inputs and pack aligned logits into a `DistillationLogits`.
+        """Compute the per-token logits of the student and teacher over the completion tokens.
 
-        The teacher forward runs under the teacher context resolved by `_get_teacher_context_for_self_distillation`.
+        The student is forwarded on its own input (original prompt plus the sampled completion) while the teacher is
+        forwarded on its input (prompt, privileged context, and the same completion). Both sets of logits are aligned
+        to the completion tokens so they can be compared position-by-position in the distillation loss.
+
+        The teacher forward runs under `torch.no_grad()` and the context resolved by
+        `_get_teacher_context_for_self_distillation`, which routes it to the correct weights.
         """
         prompt_ids = inputs["prompt_ids"]
         prompt_mask = inputs["prompt_mask"]
