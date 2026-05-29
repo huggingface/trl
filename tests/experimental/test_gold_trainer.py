@@ -254,7 +254,7 @@ def build_config(**overrides):
 
 @pytest.fixture(scope="session")
 def llama_tokenizer():
-    tokenizer = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+    tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
@@ -303,14 +303,12 @@ def encode_prompt_completion(tokenizer, prompt, completion):
 @pytest.mark.parametrize(
     "piece,expected",
     [
-        ("▁", 1),  # standalone SentencePiece word marker → leading space byte
-        ("<0x41>", 1),  # SentencePiece byte-fallback → one byte
         ("hello", 5),  # ASCII piece → 5 bytes
-        ("Ġhello", 6),  # ByteLevel BPE "Ġhello" (Ġ maps to byte 0x20) → 6 source bytes
+        ("Ġhello", 6),  # ByteLevel " hello" (Ġ maps to byte 0x20) → 6 source bytes
     ],
 )
 def test_piece_byte_len(piece, expected):
-    """Pin the byte-length-per-piece convention used by both off-policy disambiguation and on-policy offsets."""
+    """Pin the ByteLevel BPE convention: one piece char per source byte."""
     assert piece_byte_len(piece) == expected
 
 
@@ -999,8 +997,13 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     assert torch.all(new_labels[0, :padded_prompt_len] == -100)
     assert torch.equal(new_labels[0, padded_prompt_len:], torch.tensor(completion_ids, dtype=torch.long))
 
-    assert prompt_texts[0] == llama_tokenizer.decode(prompt_ids, skip_special_tokens=False)
-    assert completion_texts[0] == llama_tokenizer.decode(completion_ids, skip_special_tokens=False)
+    unpadded_prompt_ids = prompt_tensor[0][prompt_mask[0].bool()].tolist()
+    assert prompt_texts[0] == llama_tokenizer.decode(
+        unpadded_prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+    )
+    assert completion_texts[0] == llama_tokenizer.decode(
+        completion_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+    )
 
 
 @pytest.mark.slow

@@ -139,13 +139,17 @@ def pad_byte_offsets(offsets: list[tuple[int, int]], target_length: int, padding
     return torch.cat([pad_block, offs], dim=0) if padding_side == "left" else torch.cat([offs, pad_block], dim=0)
 
 
+def is_byte_level_tokenizer(backend) -> bool:
+    """Whether ``backend`` is a ByteLevel BPE tokenizer (Llama-3 family, SmolLM, Qwen, \u2026) \u2014 its pieces are in
+    byte\u2192unicode space, one char per source byte. Detected via the pre-tokenizer / decoder repr."""
+    return "ByteLevel" in repr(backend.pre_tokenizer) or "ByteLevel" in repr(backend.decoder)
+
+
 def piece_byte_len(piece: str) -> int:
-    """UTF-8 byte length of a token's piece: handles ByteLevel BPE (one char per source byte),
-    SentencePiece byte-fallback (``<0xXX>``), and the bare word-start marker ``\u2581`` (decodes to a space)."""
-    if piece == "\u2581":
-        return 1
-    if len(piece) == 6 and piece.startswith("<0x") and piece.endswith(">"):
-        return 1
+    """UTF-8 byte length of a ByteLevel BPE token piece \u2014 each char maps 1:1 to one source byte.
+
+    Cross-tokenizer ULD targets ByteLevel BPE pairs (Llama-3, Qwen, SmolLM, Phi, Mistral v0.3+, \u2026); SentencePiece
+    students are out of scope here and would need the loss-level projection from X-Token to align."""
     return len(piece)
 
 
@@ -238,6 +242,11 @@ def encode_with_byte_offsets(backend, texts: list[str], add_special_tokens: bool
 
     Byte offsets are derived from the fast tokenizer's character offsets via an O(N) char-to-byte cumulative table.
     Overlapping spans from byte-level and byte-fallback tokens are split across their byte pieces."""
+    if not is_byte_level_tokenizer(backend):
+        raise NotImplementedError(
+            "Cross-tokenizer ULD currently supports only ByteLevel BPE tokenizers "
+            "(Llama-3, Qwen, SmolLM, Phi, Mistral v0.3+, …). The given tokenizer is not ByteLevel."
+        )
     encs = backend.encode_batch(texts, add_special_tokens=add_special_tokens)
     out = []
     for text, enc in zip(texts, encs, strict=True):
