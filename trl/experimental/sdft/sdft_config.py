@@ -23,33 +23,162 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class SDFTConfig(_BaseConfig):
     r"""
-    Configuration class for [`SDFTTrainer`]..
+    Configuration class for the [`SDFTTrainer`].
 
     Parameters:
-        disable_dropout (`bool`, *optional*, defaults to `False`):
-            Whether to disable dropout in the student and teacher models.
-        teacher_model_kind (`str`, *optional*, defaults to `"base"`):
-            Semantic teacher choice for SDFT. `base` uses the initial student, `live` uses the current student, and
-            `ema` uses an exponentially averaged teacher.
+        > Parameters that control the SDFT loss
+
         distillation_alpha (`float`, *optional*, defaults to `0.5`):
             Divergence interpolation coefficient for SDFT top-k logit distillation.
         distillation_mode (`Literal["sampled_token", "full_logits", "topk_logits"]`, *optional*, defaults to `"topk_logits"`):
-            Distillation objective mode. SDFT defaults to the previous effective top-k logit objective.
-        distillation_topk (`int` or `None`, *optional*, defaults to `100`):
+            Distillation objective mode. SDFT defaults to top-k logit distillation.
+        distillation_topk (`int`, *optional*, defaults to `100`):
             Number of top tokens used by the default SDFT top-k logit objective.
+        distillation_is_clip (`float`, *optional*, defaults to `2.0`):
+            Clipping coefficient for importance sampling in self-distillation. `None` disables clipping.
+        distillation_add_tail (`bool`, *optional*, defaults to `False`):
+            Whether to add a tail bucket for non-top-k probability mass.
+        num_loss_tokens_to_skip (`int`, *optional*, defaults to `0`):
+            Number of initial completion tokens to exclude from the distillation loss.
+
+        > Parameters that control the teacher
+
+        teacher_model_kind (`str`, *optional*, defaults to `"base"`):
+            Semantic teacher choice for SDFT. `base` uses the initial student, `live` uses the current student, and
+            `ema` uses an exponentially averaged teacher.
+        teacher_update_rate (`float`, *optional*, defaults to `0.05`):
+            EMA update rate used when `teacher_model_kind="ema"`. A value of `1.0` reduces the update to a hard
+            overwrite, periodically resyncing the teacher to the current student weights.
+        teacher_sync_steps (`int`, *optional*, defaults to `1`):
+            Number of optimizer steps between teacher updates.
+
+        > Parameters that control teacher-conditioned generation
+
         generate_from_teacher (`bool`, *optional*, defaults to `False`):
             Whether on-policy generation should use the teacher-conditioned prompt instead of the student prompt.
         teacher_prompt_template (`str`, *optional*, defaults to `"{prompt}\n\n{privileged_context}"`):
             Template used to combine the student prompt and privileged context into the teacher prompt.
-        num_loss_tokens_to_skip (`int`, *optional*, defaults to `0`):
-            Number of initial completion tokens to exclude from the distillation loss.
+
+        > Parameters that control the model
+
+        model_init_kwargs (`dict[str, Any]`, *optional*):
+            Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument
+            of the `SDFTTrainer` is provided as a string.
+        disable_dropout (`bool`, *optional*, defaults to `False`):
+            Whether to disable dropout in the student and teacher models.
+
+        > Parameters that control data preprocessing
+
+        remove_unused_columns (`bool`, *optional*, defaults to `False`):
+            Whether to only keep the columns required by the trainer in the dataset. Keep this to `False` if you
+            provide extra columns (such as `privileged_context`) that the trainer needs.
+        max_prompt_length (`int`, *optional*, defaults to `512`):
+            Maximum prompt length. Longer prompts are truncated from the left.
+        shuffle_dataset (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the training dataset.
+
+        > Parameters that control generation
+
+        num_generations (`int`, *optional*, defaults to `8`):
+            Number of generations to sample. The effective batch size (num_processes * per_device_batch_size *
+            gradient_accumulation_steps) must be evenly divisible by this value.
+        num_generations_eval (`int`, *optional*):
+            Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
+            save computation. If `None`, uses the value of `num_generations`.
+        max_completion_length (`int`, *optional*, defaults to `256`):
+            Maximum length of the generated completion.
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature for sampling. The higher the temperature, the more random the completions.
+        top_p (`float`, *optional*, defaults to `1.0`):
+            Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1.0
+            to consider all tokens.
+        top_k (`int`, *optional*, defaults to `0`):
+            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, top-k-filtering is
+            disabled and all tokens are considered.
+        min_p (`float`, *optional*):
+            Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
+            value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range.
+        repetition_penalty (`float`, *optional*, defaults to `1.0`):
+            Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
+            Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model to repeat
+            tokens.
+        cache_implementation (`str`, *optional*):
+            Implementation of the cache method for faster generation when use_vllm is set to False.
+        generation_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if
+            using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
+            as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
+            parameters (like `min_p`, `top_p`, etc.), they will override them.
+        chat_template_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
+        ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
+            This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
+            improving generation speed. However, disabling this option allows training models that exceed the VRAM
+            capacity of a single GPU, albeit at the cost of slower generation. Disabling this option is not compatible
+            with vLLM generation.
+
+        > Parameters that control generation acceleration powered by vLLM
+
+        use_vllm (`bool`, *optional*, defaults to `False`):
+            Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
+            instead of the default model.generate(). Requires `vllm` to be installed.
+        vllm_mode (`str`, *optional*, defaults to `"colocate"`):
+            Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or
+            `'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a
+            TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same process
+            and share the training GPUs. This avoids the need for a separate server but may cause resource contention
+            with training.
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: Use the
+            `transformers` backend for model implementation. `vllm`: Use the `vllm` library for model implementation.
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
+            waking the engine adds host–device transfer latency.
+        vllm_server_base_url (`str`, *optional*):
+            Base URL for the vLLM server (e.g., 'http://localhost:8000'). If provided, `vllm_server_host` and
+            `vllm_server_port` are ignored.
+        vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+            Host of the vLLM server to connect to. Ignored if vllm_server_base_url is provided.
+        vllm_server_port (`int`, *optional*, defaults to `8000`):
+            Port of the vLLM server to connect to. Ignored if vllm_server_base_url is provided.
+        vllm_group_port (`int`, *optional*, defaults to `51216`):
+            Port number for the weight update group. This is used to communicate with the vLLM server. Unless the port
+            is occupied, there is no need to change it.
+        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
+            Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
+            timeout, a `ConnectionError` is raised.
+        vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
+            Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
+            `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when
+            launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
+        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.3`):
+            Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set to
+            `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when
+            launching the vLLM server via the `--vllm_gpu_memory_utilization` flag.
+        vllm_max_model_length (`int`, *optional*):
+            Context window for vLLM. Set it to at least the maximum prompt length in the dataset plus
+            `max_completion_length`; if omitted, it is inferred from the model config.
+
+        > Parameters that control the training
+
+        loss_type (`str`, *optional*, defaults to `"grpo"`):
+            Policy loss aggregation. Supported: `grpo`, `bnpo`, `dr_grpo`, `dapo`.
+        num_iterations (`int`, *optional*, defaults to `1`):
+            Number of iterations per batch (denoted as μ in the algorithm).
+        generation_batch_size (`int`, *optional*):
+            Batch size to use for generation. If `None`, it defaults to the effective training batch size:
+            `per_device_train_batch_size * num_processes * steps_per_generation`.
+        steps_per_generation (`int`, *optional*):
+            Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     model_init_kwargs: dict[str, Any] | None = field(
         default=None,
-        metadata={"help": "Keyword arguments for model initialization when `model` is passed as a string."},
+        metadata={
+            "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the `SDFTTrainer` is provided as a string."
+        },
     )
     disable_dropout: bool = field(
         default=False,
@@ -57,7 +186,9 @@ class SDFTConfig(_BaseConfig):
     )
     remove_unused_columns: bool = field(
         default=False,
-        metadata={"help": "Whether to drop dataset columns unused by the trainer."},
+        metadata={
+            "help": "Whether to only keep the columns required by the trainer in the dataset. Keep this to `False` if you provide extra columns (such as `privileged_context`) that the trainer needs."
+        },
     )
     max_prompt_length: int | None = field(
         default=512,
@@ -65,19 +196,25 @@ class SDFTConfig(_BaseConfig):
     )
     num_generations: int = field(
         default=8,
-        metadata={"help": "Number of sampled generations per prompt."},
+        metadata={
+            "help": "Number of generations to sample. The effective batch size (num_processes * per_device_batch_size * gradient_accumulation_steps) must be evenly divisible by this value."
+        },
     )
     num_generations_eval: int | None = field(
         default=None,
-        metadata={"help": "Number of sampled generations per prompt during evaluation."},
+        metadata={
+            "help": "Number of generations to sample during evaluation. This allows using fewer generations during evaluation to save computation. If `None`, uses the value of `num_generations`."
+        },
     )
     max_completion_length: int | None = field(
         default=256,
-        metadata={"help": "Maximum generated completion length."},
+        metadata={"help": "Maximum length of the generated completion."},
     )
     ds3_gather_for_generation: bool = field(
         default=True,
-        metadata={"help": "Whether to gather ZeRO-3 weights for generation."},
+        metadata={
+            "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation, improving generation speed. However, disabling this option allows training models that exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation. Disabling this option is not compatible with vLLM generation."
+        },
     )
     shuffle_dataset: bool = field(
         default=True,
@@ -85,99 +222,129 @@ class SDFTConfig(_BaseConfig):
     )
     generation_batch_size: int | None = field(
         default=None,
-        metadata={"help": "Global batch size used for generation. Mutually exclusive with `steps_per_generation`."},
+        metadata={
+            "help": "Batch size to use for generation. If `None`, it defaults to the effective training batch size: `per_device_train_batch_size * num_processes * steps_per_generation`."
+        },
     )
     steps_per_generation: int | None = field(
         default=None,
-        metadata={
-            "help": "Number of optimizer steps that reuse one generated batch. Mutually exclusive with `generation_batch_size`."
-        },
+        metadata={"help": "Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`."},
     )
     temperature: float = field(
         default=1.0,
-        metadata={"help": "Sampling temperature."},
+        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
     )
     top_p: float = field(
         default=1.0,
-        metadata={"help": "Top-p sampling parameter."},
+        metadata={
+            "help": "Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1.0 to consider all tokens."
+        },
     )
     top_k: int = field(
         default=0,
-        metadata={"help": "Top-k sampling parameter. `0` disables top-k filtering."},
+        metadata={
+            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, top-k-filtering is disabled and all tokens are considered."
+        },
     )
     min_p: float | None = field(
         default=None,
-        metadata={"help": "Minimum token probability for sampling."},
+        metadata={
+            "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
+        },
     )
     generation_kwargs: dict[str, Any] | None = field(
         default=None,
-        metadata={"help": "Extra generation kwargs passed to `GenerationConfig`."},
+        metadata={
+            "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
+        },
     )
     chat_template_kwargs: dict[str, Any] | None = field(
         default=None,
-        metadata={"help": "Extra kwargs forwarded to chat template application."},
+        metadata={
+            "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating completions."
+        },
     )
     repetition_penalty: float = field(
         default=1.0,
-        metadata={"help": "Repetition penalty used during generation."},
+        metadata={
+            "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model to repeat tokens."
+        },
     )
     cache_implementation: str | None = field(
         default=None,
-        metadata={"help": "Cache implementation used by transformers generation."},
+        metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
     )
     use_vllm: bool = field(
         default=False,
-        metadata={"help": "Whether to use vLLM for generation."},
+        metadata={
+            "help": "Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation instead of the default model.generate(). Requires `vllm` to be installed."
+        },
     )
     vllm_mode: str = field(
         default="colocate",
-        metadata={"help": "vLLM mode: 'colocate' (shared GPU) or 'server' (separate vLLM server)."},
+        metadata={
+            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or `'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same process and share the training GPUs. This avoids the need for a separate server but may cause resource contention with training."
+        },
     )
     vllm_model_impl: str = field(
         default="vllm",
-        metadata={"help": "Model implementation for vLLM: 'vllm' or 'transformers'."},
+        metadata={
+            "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for model implementation."
+        },
     )
     vllm_enable_sleep_mode: bool = field(
         default=False,
-        metadata={"help": "Whether to enable sleep mode for colocated vLLM engine."},
+        metadata={
+            "help": "Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but waking the engine adds host–device transfer latency."
+        },
     )
     vllm_server_base_url: str | None = field(
         default=None,
         metadata={
-            "help": "Base URL for the vLLM server. If provided, vllm_server_host and vllm_server_port are ignored."
+            "help": "Base URL for the vLLM server (e.g., 'http://localhost:8000'). If provided, `vllm_server_host` and `vllm_server_port` are ignored."
         },
     )
     vllm_server_host: str = field(
         default="0.0.0.0",
-        metadata={"help": "Host of the vLLM server (server mode only)."},
+        metadata={"help": "Host of the vLLM server to connect to. Ignored if vllm_server_base_url is provided."},
     )
     vllm_server_port: int = field(
         default=8000,
-        metadata={"help": "Port of the vLLM server (server mode only)."},
+        metadata={"help": "Port of the vLLM server to connect to. Ignored if vllm_server_base_url is provided."},
     )
     vllm_group_port: int = field(
         default=51216,
-        metadata={"help": "Port for the weight update group (server mode only)."},
+        metadata={
+            "help": "Port number for the weight update group. This is used to communicate with the vLLM server. Unless the port is occupied, there is no need to change it."
+        },
     )
     vllm_server_timeout: float = field(
         default=240.0,
-        metadata={"help": "Timeout in seconds to wait for the vLLM server."},
+        metadata={
+            "help": "Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the timeout, a `ConnectionError` is raised."
+        },
     )
     vllm_tensor_parallel_size: int = field(
         default=1,
-        metadata={"help": "Tensor parallel size for colocated vLLM."},
+        metadata={
+            "help": "Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when launching the vLLM server via the `--vllm_tensor_parallel_size` flag."
+        },
     )
     vllm_gpu_memory_utilization: float = field(
         default=0.3,
-        metadata={"help": "GPU memory utilization ratio for colocated vLLM."},
+        metadata={
+            "help": "Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when launching the vLLM server via the `--vllm_gpu_memory_utilization` flag."
+        },
     )
     vllm_max_model_length: int | None = field(
         default=None,
-        metadata={"help": "Model context length for vLLM. Inferred from model config if not set."},
+        metadata={
+            "help": "Context window for vLLM. Set it to at least the maximum prompt length in the dataset plus `max_completion_length`; if omitted, it is inferred from the model config."
+        },
     )
     num_iterations: int = field(
         default=1,
-        metadata={"help": "Number of optimization iterations per generated batch."},
+        metadata={"help": "Number of iterations per batch (denoted as μ in the algorithm)."},
     )
     loss_type: str = field(
         default="grpo",
@@ -225,7 +392,9 @@ class SDFTConfig(_BaseConfig):
     )
     generate_from_teacher: bool = field(
         default=False,
-        metadata={"help": "Whether on-policy generation should use the teacher-conditioned prompt."},
+        metadata={
+            "help": "Whether on-policy generation should use the teacher-conditioned prompt instead of the student prompt."
+        },
     )
     teacher_prompt_template: str = field(
         default="{prompt}\n\n{privileged_context}",

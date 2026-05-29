@@ -239,8 +239,6 @@ class SDPOConfig(_BaseConfig):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the DAPO paper, this is a good
             practice for training stability.
-        top_entropy_quantile (`float`, *optional*, defaults to `1.0`):
-            Reserved for entropy-based token filtering.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
