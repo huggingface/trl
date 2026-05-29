@@ -23,7 +23,7 @@ from transformers import AutoTokenizer
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
 
-from ..testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase, require_peft
 
 
 def dummy_reward_func(completions, **kwargs):
@@ -158,3 +158,110 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_train_peft_config(self):
+        from peft import LoraConfig
+
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+        )
+
+        # Verify the model is a PEFT model
+        from accelerate.utils import is_peft_model
+
+        assert is_peft_model(trainer.model)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        from transformers import AutoModelForCausalLM
+
+        base_model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in base_model.named_parameters()]
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_peft_weight_metadata_excludes_adapters(self):
+        from peft import LoraConfig
+
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+        )
+
+        # Use a capturing worker to inspect weight metadata
+        import trl.experimental.async_grpo.async_grpo_trainer as async_grpo_trainer_module
+
+        captured_kwargs = {}
+
+        class _CapturingRolloutWorker:
+            def __init__(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                self.rollout_buffer = queue.Queue()
+
+            def start(self):
+                pass
+
+            def stop(self):
+                pass
+
+            def pause(self):
+                pass
+
+            def resume(self):
+                pass
+
+            def send_weights(self, iterator):
+                pass
+
+            def update_model_version(self, version):
+                pass
+
+            def check_health(self, stale_after_s):
+                pass
+
+        from unittest.mock import patch
+
+        with patch.object(async_grpo_trainer_module, "AsyncRolloutWorker", _CapturingRolloutWorker):
+            AsyncGRPOTrainer(
+                model=model_id,
+                reward_funcs=dummy_reward_func,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+                processing_class=AutoTokenizer.from_pretrained(model_id),
+            )
+
+        # Weight names should not contain lora-specific names
+        weight_names = captured_kwargs["weight_names"]
+        for name in weight_names:
+            assert "lora" not in name, f"Adapter weight {name} leaked into weight metadata"
