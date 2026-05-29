@@ -195,14 +195,14 @@ class SDFTConfig(_BaseConfig):
         },
     )
     teacher_update_rate: float = field(
-        default=0.6,
+        default=0.05,
         metadata={
             "help": 'EMA update rate used when `teacher_model_kind="ema"`. A value of `1.0` reduces the update '
             "to a hard overwrite, periodically resyncing the teacher to the current student weights."
         },
     )
     teacher_sync_steps: int = field(
-        default=512,
+        default=1,
         metadata={"help": "Number of optimizer steps between teacher updates."},
     )
     top_entropy_quantile: float = field(

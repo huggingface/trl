@@ -86,7 +86,7 @@ python trl/experimental/sdft/sdft.py \
     --generate_from_teacher \
     --teacher_model_kind ema \
     --teacher_sync_steps 1 \
-    --teacher_update_rate 0.01 \
+    --teacher_update_rate 0.05 \
     --eval_strategy steps \
     --eval_steps 50 \
     --report_to wandb
