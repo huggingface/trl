@@ -283,8 +283,6 @@ class SDFTConfig(_BaseConfig):
             raise ValueError("`distillation_topk` is only valid when `distillation_mode='topk_logits'`.")
         if self.distillation_is_clip is not None and self.distillation_is_clip <= 0:
             raise ValueError("distillation_is_clip must be positive when provided")
-        if self.distillation_weight < 0:
-            raise ValueError("distillation_weight must be non-negative")
         if self.diagnostics_warning_interval < 0:
             raise ValueError("diagnostics_warning_interval must be non-negative")
         if self.diagnostics_flat_tolerance < 0:
