@@ -820,9 +820,10 @@ class DPOTrainer(_BaseTrainer):
 
         # Reference model:
         # - Explicit ref_model
-        # - If PEFT, we don't need a separate reference model
-        # - If non-PEFT, self.model is used to precompute_ref_log_probs
-        self.ref_model = ref_model or (None if is_peft_model(self.model) else self.model)
+        # - Or self.model
+        #   - If PEFT, we trigger adapter switching on self.model for the reference forward passes
+        #   - If non-PEFT, self.model is used to precompute_ref_log_probs because no training step has run yet
+        self.ref_model = ref_model or self.model
 
         if args.precompute_ref_log_probs:
             if isinstance(self.train_dataset, IterableDataset) or isinstance(
