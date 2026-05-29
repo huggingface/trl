@@ -1,19 +1,18 @@
 # SDFT
 
-Self-Distilled Fine-Tuning (SDFT) is described in [Self-Training with On-Policy Self-Distillation for Language Model Alignment](https://huggingface.co/papers/2601.19897).
+Self-Distilled Fine-Tuning (SDFT) is described in the paper [Self-Distillation Enables Continual Learning](https://huggingface.co/papers/2601.19897) by Idan Shenfeld, Mehul Damani, Jonas Hübotter, and Pulkit Agrawal.
 
-The TRL implementation adapts SDFT to the experimental trainer API while reusing the shared self-distillation infrastructure also used by SDPO.
+> Continual learning, enabling models to acquire new skills and knowledge without degrading existing capabilities, remains a fundamental challenge for foundation models. While on-policy reinforcement learning can reduce forgetting, it requires explicit reward functions that are often unavailable. Learning from expert demonstrations, the primary alternative, is dominated by supervised fine-tuning (SFT), which is inherently off-policy. We introduce Self-Distillation Fine-Tuning (SDFT), a simple method that enables on-policy learning directly from demonstrations. SDFT leverages in-context learning by using a demonstration-conditioned model as its own teacher, generating on-policy training signals that preserve prior capabilities while acquiring new skills. Across skill learning and knowledge acquisition tasks, SDFT consistently outperforms SFT, achieving higher new-task accuracy while substantially reducing catastrophic forgetting. In sequential learning experiments, SDFT enables a single model to accumulate multiple skills over time without performance regression, establishing on-policy distillation as a practical path to continual learning from demonstrations.
 
-In the current TRL implementation:
+## How it works
 
-- the teacher is the model itself (base weights with adapter disabled for PEFT, or the same model under `no_grad` for non-PEFT); use `sync_ref_model=True` for an EMA teacher
-- the dataset must provide both `prompt` and `privileged_context`
-- `privileged_context` contains only the extra teacher-only information; the trainer combines it with `prompt` to build the teacher prompt
-- `teacher_prompt_template` controls how `prompt` and `privileged_context` are combined into the teacher prompt
-- on-policy generation can use either the student prompt or the teacher-conditioned prompt via `generate_from_teacher`
-- `num_loss_tokens_to_skip` can exclude initial completion tokens from the distillation loss
-- SDFT currently supports text-only training and does not support `use_vllm=True`
-- the shared dataset contract is `prompt` plus `privileged_context`
+Plain supervised fine-tuning trains on the demonstration text off-policy, which tends to overwrite prior capabilities. SDFT learns on-policy instead: the student generates from the plain `prompt`, a teacher — the same model shown the `prompt` plus the example's `privileged_context` — re-scores those tokens, and its demonstration-conditioned distribution is distilled back into the student. Teacher and student are one network differing only in what they see, creating a *self*-distillation loop.
+
+## Choosing the teacher
+
+`teacher_model_kind` selects which copy of the model acts as teacher. `"base"` (the default) freezes the initial weights as a fixed reference, matching the paper; `"live"` reuses the current student for a zero-lag self-teacher; `"ema"` maintains an exponential moving average, resynced every `teacher_sync_steps` steps at rate `teacher_update_rate`. Under PEFT, `"base"` is obtained by disabling the adapter during the teacher forward to recover the base weights, and `"ema"` with pure-LoRA training holds the moving average in a dedicated `"teacher"` adapter instead of a second model copy.
+
+By default the student generates from the plain prompt; set `generate_from_teacher=True` to sample from the demonstration-conditioned prompt instead, trading on-policy fidelity for higher-quality rollouts. The distillation objective is set by `distillation_mode` (`"topk_logits"` by default, with `"full_logits"` and `"sampled_token"` alternatives), `distillation_alpha`, and `distillation_topk`; `num_loss_tokens_to_skip` drops leading completion tokens from the loss. Training is text-only; generation runs through transformers by default, or vLLM (colocate or server mode) when `use_vllm=True`.
 
 ## Usage
 
@@ -85,13 +84,15 @@ python trl/experimental/sdft/sdft.py \
     --max_prompt_length 1024 \
     --max_completion_length 512 \
     --generate_from_teacher \
-    --sync_ref_model \
-    --ref_model_sync_steps 1 \
-    --ref_model_mixup_alpha 0.01 \
+    --teacher_model_kind ema \
+    --teacher_sync_steps 1 \
+    --teacher_update_rate 0.01 \
     --eval_strategy steps \
     --eval_steps 50 \
     --report_to wandb
 ```
+
+The original implementation is available at [idanshen/Self-Distillation](https://github.com/idanshen/Self-Distillation).
 
 ## SDFTConfig
 

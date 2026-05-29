@@ -168,12 +168,12 @@ class SDFTTrainer(_BaseTrainer):
     config_cls = SDFTConfig
     # docstyle-ignore
     _paper = {
-        "title": "Self-Training with On-Policy Self-Distillation for Language Model Alignment",
+        "title": "Self-Distillation Enables Continual Learning",
         "id": "2601.19897",
         "citation": textwrap.dedent("""\
-            @article{hubotter2026selftraining,
-                title        = {{Self-Training with On-Policy Self-Distillation for Language Model Alignment}},
-                author       = {Jonas H\\"ubotter and Frederike L\\"ubeck and Lejs Behric and Anton Baumann and Marco Bagatella and Daniel Marta and Ido Hakimi and Idan Shenfeld and Thomas Kleine Buening and Carlos Guestrin and Andreas Krause},
+            @article{shenfeld2026selfdistillation,
+                title        = {{Self-Distillation Enables Continual Learning}},
+                author       = {Idan Shenfeld and Mehul Damani and Jonas H\\"ubotter and Pulkit Agrawal},
                 year         = 2026,
                 eprint       = {arXiv:2601.19897}
             }"""),

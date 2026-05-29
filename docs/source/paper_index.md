@@ -1704,7 +1704,7 @@ training_args = SDPOConfig(
     distillation_weight=1.0,               # Weight for self-distillation loss
     sdpo_policy_loss_mode="distillation_only",
     use_successful_as_teacher=True,        # Use successful rollouts as teacher
-    teacher_regularization="ema",          # Supported: "ema", "none"
+    teacher_model_kind="ema",              # Supported: "base", "live", "ema"
     teacher_update_rate=0.05,              # EMA update rate
     include_environment_feedback=False,    # Use dataset privileged_context when available
 )
@@ -1725,12 +1725,11 @@ Expected dataset columns:
 
 For more details, see the [SDPO Trainer documentation](sdpo_trainer).
 
-### Self-Training with On-Policy Self-Distillation for Language Model Alignment
+### Self-Distillation Enables Continual Learning
 
 **📜 Paper**: https://huggingface.co/papers/2601.19897
 
-Self-Distilled Fine-Tuning (SDFT) performs on-policy self-distillation by generating completions during training, then distilling an explicit teacher-conditioned view of those same completions back into the student. In TRL, SDFT uses a shared self-distillation core with SDPO where the teacher is the model itself (base weights with adapter disabled for PEFT, or the same model under `no_grad` for non-PEFT).
-The teacher prompt is composed internally from the student `prompt` plus the dataset `privileged_context`.
+Self-Distilled Fine-Tuning (SDFT) performs on-policy self-distillation by generating completions during training, then distilling an explicit teacher-conditioned view of those same completions back into the student. The teacher is selected by `teacher_model_kind`: `"base"` (the initial student), `"live"` (the current student), or `"ema"` (an exponentially averaged teacher). The teacher prompt is composed internally from the student `prompt` plus the dataset `privileged_context`.
 
 ```python
 from datasets import Dataset

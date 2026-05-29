@@ -4,17 +4,15 @@ Self-Distillation Policy Optimization (SDPO) was introduced in [Reinforcement Le
 
 > Large language models are increasingly post-trained with reinforcement learning in verifiable domains such as code and math. Yet, current methods for reinforcement learning with verifiable rewards (RLVR) learn only from a scalar outcome reward per attempt, creating a severe credit-assignment bottleneck. Many verifiable environments actually provide rich textual feedback, such as runtime errors or judge evaluations, that explain why an attempt failed. We formalize this setting as reinforcement learning with rich feedback and introduce Self-Distillation Policy Optimization (SDPO), which converts tokenized feedback into a dense learning signal without any external teacher or explicit reward model. SDPO treats the current model conditioned on feedback as a self-teacher and distills its feedback-informed next-token predictions back into the policy. In this way, SDPO leverages the model's ability to retrospectively identify its own mistakes in-context. Across scientific reasoning, tool use, and competitive programming on LiveCodeBench v6, SDPO improves sample efficiency and final accuracy over strong RLVR baselines. Notably, SDPO also outperforms baselines in standard RLVR environments that only return scalar feedback by using successful rollouts as implicit feedback for failed attempts. Finally, applying SDPO to individual questions at test time accelerates discovery on difficult binary-reward tasks, achieving the same discovery probability as best-of-k sampling or multi-turn conversations with 3x fewer attempts.
 
-The SDPO trainer is built on TRL's experimental shared self-distillation stack. It keeps the online rollout-and-reward training flow, then builds a teacher-conditioned view of the same completions from successful rollouts and optional environment feedback.
+## How it works
 
-In the current TRL implementation:
+SDPO targets reinforcement learning with verifiable rewards (RLVR), where each attempt yields only a sparse scalar reward. It turns that into a dense, token-level signal: for each prompt the policy samples `num_generations` completions scored by `reward_funcs`, a successful rollout (plus optional `privileged_context` feedback) becomes a teacher reprompt, and the teacher's feedback-informed distribution over a completion is distilled back into the policy. Teacher and student are the same network, so no external teacher or reward model is needed beyond the verifier.
 
-- the default SDPO policy loss mode is `distillation_only`
-- `hybrid` mode is also available to combine the base policy loss with the self-distillation loss
-- supported teacher regularization modes are `ema` and `none`
-- `distillation_mode` selects between `sampled_token`, `full_logits`, and `topk_logits`
-- `distillation_topk` is only valid when `distillation_mode="topk_logits"`
-- when `distillation_mode="sampled_token"`, SDPO uses token-level reverse KL and requires `distillation_alpha=1.0`
-- environment feedback can be injected into teacher reprompts when the dataset exposes a `privileged_context` column
+## Loss modes and the teacher
+
+`sdpo_policy_loss_mode` controls how the two signals combine: `"distillation_only"` (the default) trains purely on the self-distillation loss, `"policy_only"` falls back to the standard GRPO-style policy gradient, and `"hybrid"` sums both. The distillation objective itself is set by `distillation_mode` — `"sampled_token"` (the default) uses a token-level reverse KL and requires `distillation_alpha=1.0`, while `"full_logits"` and `"topk_logits"` distill over the full or top-`distillation_topk` vocabulary.
+
+`teacher_model_kind` chooses the teacher weights: `"ema"` (the default) tracks the student with an exponential moving average synced every `teacher_sync_steps` steps at rate `teacher_update_rate`, `"live"` reuses the current student directly, and `"base"` freezes the initial weights. Reprompting is governed by `use_successful_as_teacher`, `success_reward_threshold`, `dont_reprompt_on_self_success`, and the `reprompt_template` / `solution_template` / `feedback_template` strings. Generation runs through transformers by default, or vLLM (colocate or server mode) when `use_vllm=True`.
 
 ## Expected dataset columns
 
