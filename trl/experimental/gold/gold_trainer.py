@@ -1052,7 +1052,7 @@ class GOLDTrainer(SFTTrainer):
         Derived from the sampled ids via ``piece_byte_len`` (no decode→re-encode round-trip).
         """
         if not (
-            getattr(self, "use_uld_loss", False)
+            self.use_uld_loss
             and self.teacher_tokenizer is not None
             and self.uld_loss_fn is not None
             and self.uld_loss_fn.use_extended_uld
