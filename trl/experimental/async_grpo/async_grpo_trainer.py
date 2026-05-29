@@ -27,7 +27,7 @@ from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
+from transformers import AutoProcessor, PreTrainedTokenizerBase, ProcessorMixin, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
 
 from trl.trainer.base_trainer import _BaseTrainer
@@ -231,9 +231,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to `"left"`. If `None`, the
-            processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`]. A
+            processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
             `tokenizer.eos_token` will be used as the default.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
@@ -284,7 +284,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         reward_funcs: RewardFunc | list[RewardFunc],
         args: AsyncGRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        processing_class: PreTrainedTokenizerBase | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         tools: list[Callable] | None = None,
@@ -312,9 +312,20 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name)
-        if processing_class.pad_token is None:
-            processing_class.pad_token = processing_class.eos_token
+            processing_class = AutoProcessor.from_pretrained(
+                model_name, truncation_side="left", padding_side="left"
+            )
+
+        # Handle pad token for processors or tokenizers
+        if isinstance(processing_class, ProcessorMixin):
+            tokenizer = processing_class.tokenizer
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            tokenizer = processing_class
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -325,7 +336,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             model=model,
             args=self.args,
             train_dataset=train_dataset,
-            processing_class=processing_class,
+            processing_class=tokenizer,
             callbacks=callbacks,
             optimizers=optimizers,
             compute_loss_func="non-None value to disable scaling",
@@ -381,7 +392,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     model_name=model_name,
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
-                    processing_class=processing_class,
+                    processing_class=tokenizer,
                     tools=tools,
                     environment_factory=environment_factory,
                     num_generations=self.args.num_generations,

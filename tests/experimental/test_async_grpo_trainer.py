@@ -18,7 +18,7 @@ import queue
 import numpy as np
 import torch
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
@@ -158,3 +158,46 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_processor_mixin_handling(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        # Load a processor (which wraps a tokenizer) — AutoProcessor returns a tokenizer for text-only models
+        processor = AutoProcessor.from_pretrained(model_id)
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=processor,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=8),
+        )
+
+        # The trainer's processing_class should be a tokenizer (extracted from processor or used directly)
+        assert isinstance(trainer.processing_class, PreTrainedTokenizerBase)
+
+    def test_auto_processor_when_none(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+        )
+        # Don't pass processing_class — it should auto-load via AutoProcessor
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=8),
+        )
+
+        assert isinstance(trainer.processing_class, PreTrainedTokenizerBase)
+        assert trainer.processing_class.pad_token is not None
