@@ -1232,7 +1232,22 @@ class RLOOTrainer(_BaseTrainer):
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
-                if self.ref_model is not None:
+                if is_peft_model(self.ref_model):
+                    # When training a PEFT adapter, how we obtain the reference depends on the setup:
+                    # - New adapter: disabling adapters yields the base model.
+                    # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
+                    model = self.accelerator.unwrap_model(self.ref_model)
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                            self.ref_model,
+                            prompt_completion_ids,
+                            attention_mask,
+                            logits_to_keep,
+                            batch_size=batch_size,
+                            num_images=num_images,
+                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
+                        )
+                else:
                     ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                         self.ref_model,
                         prompt_completion_ids,
@@ -1242,21 +1257,6 @@ class RLOOTrainer(_BaseTrainer):
                         num_images=num_images,
                         **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
                     )
-                else:
-                    # When training a PEFT adapter, how we obtain the reference depends on the setup:
-                    # - New adapter: disabling adapters yields the base model.
-                    # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
-                    model = self.accelerator.unwrap_model(self.model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
-                            self.model,
-                            prompt_completion_ids,
-                            attention_mask,
-                            logits_to_keep,
-                            batch_size=batch_size,
-                            num_images=num_images,
-                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
-                        )
             else:
                 ref_per_token_logps = None
 
