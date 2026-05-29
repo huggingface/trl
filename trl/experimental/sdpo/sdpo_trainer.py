@@ -27,6 +27,7 @@ import torch
 from accelerate.utils import gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForSequenceClassification,
@@ -855,6 +856,7 @@ class SDPOTrainer(_BaseTrainer):
                 generation_kwargs=self.generation_kwargs,
             ) as unwrapped_model,
             torch.no_grad(),
+            FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
         ):
             prompt_completion_ids = unwrapped_model.generate(
                 **generate_inputs, generation_config=self.generation_config

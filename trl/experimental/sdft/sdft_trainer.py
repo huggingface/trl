@@ -29,6 +29,7 @@ from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
@@ -591,6 +592,7 @@ class SDFTTrainer(_BaseTrainer):
                 generation_kwargs=self.generation_kwargs,
             ) as unwrapped_model,
             torch.no_grad(),
+            FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
         ):
             prompt_completion_ids = unwrapped_model.generate(
                 **generate_inputs, generation_config=self.generation_config
