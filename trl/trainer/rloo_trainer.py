@@ -454,7 +454,7 @@ class RLOOTrainer(_BaseTrainer):
         )
 
         self.beta = args.beta
-        # Reference model
+        # Reference model: create one from the model path unless:
         # - beta is 0.0, the reference model is not needed
         # - or model is PEFT, which recovers the reference by disabling the adapter
         ref_model = None
