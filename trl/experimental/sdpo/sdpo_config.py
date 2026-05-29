@@ -380,10 +380,6 @@ class SDPOConfig(_BaseConfig):
             raise ValueError("distillation_is_clip must be positive when provided")
         if self.distillation_weight < 0:
             raise ValueError("distillation_weight must be non-negative")
-        if self.diagnostics_warning_interval < 0:
-            raise ValueError("diagnostics_warning_interval must be non-negative")
-        if self.diagnostics_flat_tolerance < 0:
-            raise ValueError("diagnostics_flat_tolerance must be non-negative")
 
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
