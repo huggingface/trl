@@ -45,7 +45,7 @@ class SDPOConfig(_BaseConfig):
 
         sdpo_policy_loss_mode (`str`, *optional*, defaults to `"distillation_only"`):
             How SDPO combines the online policy loss and self-distillation loss. Supported: `distillation_only`,
-            `hybrid`.
+            `policy_only`, `hybrid`.
         distillation_alpha (`float`, *optional*, defaults to `1.0`):
             Divergence interpolation coefficient. Sampled-token SDPO requires the official reverse-KL setting
             `distillation_alpha=1.0`.
@@ -283,7 +283,7 @@ class SDPOConfig(_BaseConfig):
     )
     sdpo_policy_loss_mode: str = field(
         default="distillation_only",
-        metadata={"help": "SDPO policy loss mode. Supported: `distillation_only`, `hybrid`."},
+        metadata={"help": "SDPO policy loss mode. Supported: `distillation_only`, `policy_only`, `hybrid`."},
     )
     teacher_model_kind: str = field(
         default="ema",
