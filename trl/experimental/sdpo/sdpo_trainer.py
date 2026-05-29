@@ -975,53 +975,13 @@ class SDPOTrainer(_BaseTrainer):
         if return_outputs:
             raise ValueError("The SDPOTrainer does not support returning outputs")
 
-        if self.args.sdpo_policy_loss_mode == "hybrid":
-            return self._compute_hybrid_loss(model, inputs)
-        if self.args.sdpo_policy_loss_mode == "distillation_only":
-            distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
-            return self._compute_weighted_self_distillation_loss(model, inputs, distillation_logits)
-        if self.args.sdpo_policy_loss_mode == "policy_only":
-            student_input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
-            student_attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
-            student_logits = self._forward_logits(
-                model=model,
-                input_ids=student_input_ids,
-                attention_mask=student_attention_mask,
-                logits_to_keep=inputs["completion_ids"].size(1),
-            )
-            return self._compute_policy_loss(inputs, student_logits)
-
-        raise ValueError(
-            "Unsupported `sdpo_policy_loss_mode`: "
-            f"{self.args.sdpo_policy_loss_mode!r}. Expected one of: 'hybrid', 'distillation_only', 'policy_only'."
-        )
-
-    def _compute_hybrid_loss(self, model, inputs) -> torch.Tensor:
         distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
         policy_loss = self._compute_policy_loss(inputs, distillation_logits.student_logits)
-        weighted_distillation_loss = self._compute_weighted_self_distillation_loss(
-            model,
-            inputs,
-            distillation_logits,
-        )
-        return policy_loss + weighted_distillation_loss
+        distillation_loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
+        loss = (1 - self.args.distillation_weight) * policy_loss + self.args.distillation_weight * distillation_loss
 
-    def _compute_weighted_self_distillation_loss(
-        self,
-        model,
-        inputs,
-        distillation_logits: DistillationLogits,
-    ) -> torch.Tensor:
         accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
-        distillation_loss = (
-            self._compute_self_distillation_loss(
-                model,
-                inputs,
-                distillation_logits,
-            )
-            / accumulation_scale
-        )
-        return self.args.distillation_weight * distillation_loss
+        return loss / accumulation_scale
 
     def _compute_policy_loss(
         self,
@@ -1057,8 +1017,7 @@ class SDPOTrainer(_BaseTrainer):
             self.accelerator.gather(loss.detach()).mean().item()
         )
 
-        accumulation_scale = self.current_gradient_accumulation_steps if mode == "train" else 1.0
-        return loss / accumulation_scale
+        return loss
 
     def _compute_self_distillation_loss(
         self,

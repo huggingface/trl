@@ -55,10 +55,11 @@ class SDPOConfig(_BaseConfig):
 
         > Parameters that control the SDPO loss
 
-        sdpo_policy_loss_mode (`str`, *optional*, defaults to `"distillation_only"`):
-            SDPO policy loss mode. Supported: `distillation_only`, `policy_only`, `hybrid`.
         distillation_weight (`float`, *optional*, defaults to `1.0`):
-            Weight applied to the self-distillation loss term.
+            Convex combination weight between the policy and self-distillation objectives. The loss is `(1 -
+            distillation_weight) * policy_loss + distillation_weight * distillation_loss`. Must be in `[0, 1]`. `1.0`
+            (default) trains purely on self-distillation, `0.0` falls back to the standard GRPO-style policy gradient,
+            and intermediate values blend both.
         distillation_alpha (`float`, *optional*, defaults to `1.0`):
             Divergence interpolation coefficient. Sampled-token SDPO requires the official reverse-KL setting
             `distillation_alpha=1.0`.
@@ -500,11 +501,12 @@ class SDPOConfig(_BaseConfig):
     )
     distillation_weight: float = field(
         default=1.0,
-        metadata={"help": "Weight applied to the self-distillation loss term."},
-    )
-    sdpo_policy_loss_mode: str = field(
-        default="distillation_only",
-        metadata={"help": "SDPO policy loss mode. Supported: `distillation_only`, `policy_only`, `hybrid`."},
+        metadata={
+            "help": "Convex combination weight between the policy and self-distillation objectives. The loss is "
+            "`(1 - distillation_weight) * policy_loss + distillation_weight * distillation_loss`. Must be in `[0, 1]`. "
+            "`1.0` (default) trains purely on self-distillation, `0.0` falls back to the standard GRPO-style policy "
+            "gradient, and intermediate values blend both."
+        },
     )
     teacher_model_kind: str = field(
         default="ema",
@@ -572,6 +574,9 @@ class SDPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        if not 0.0 <= self.distillation_weight <= 1.0:
+            raise ValueError("distillation_weight must be in [0, 1]")
+
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
             self.steps_per_generation = self.gradient_accumulation_steps
