@@ -550,6 +550,11 @@ class DPOTrainer(_BaseTrainer):
                 "`model` and `ref_model` cannot be the same object. In most cases you should omit `ref_model` and "
                 "we'll initialize it to a copy of `model` for you."
             )
+        if ref_model is not None and is_peft_model(ref_model):
+            raise ValueError(
+                "`ref_model` cannot be a `PeftModel`. If you want to use a `PeftModel` as the reference model, please "
+                "pass it as `model` and set `ref_model=None`."
+            )
 
         # Processing class
         if processing_class is None:
