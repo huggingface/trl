@@ -78,6 +78,24 @@ class TestKTOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            KTOTrainer(
+                model=model_id,
+                args=KTOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = KTOTrainer(
+            model=model_id,
+            args=KTOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     def test_kto_trainer_with_ref_model_is_model(self):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,

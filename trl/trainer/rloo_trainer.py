@@ -243,6 +243,7 @@ class RLOOTrainer(_BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
@@ -262,7 +263,10 @@ class RLOOTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), truncation_side="left", padding_side="left"
+                get_config_model_id(model.config),
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
             )
 
         # Handle pad token for processors or tokenizers
@@ -332,6 +336,7 @@ class RLOOTrainer(_BaseTrainer):
                 # Distributed training requires device_map=None ("auto" fails)
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     model_init_kwargs["device_map"] = None
+                model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
@@ -377,7 +382,9 @@ class RLOOTrainer(_BaseTrainer):
         ):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(get_config_model_id(reward_func.config))
+                    reward_processing_class = AutoTokenizer.from_pretrained(
+                        get_config_model_id(reward_func.config), trust_remote_code=args.trust_remote_code
+                    )
                 if reward_processing_class.pad_token_id is None:
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
@@ -468,6 +475,7 @@ class RLOOTrainer(_BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
         # Disable dropout in the models

@@ -34,6 +34,10 @@ class SelfDistillationConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments used when the `model` argument is passed as a string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
+            Also applied to reward-model and reward-tokenizer loads.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum prompt length. Longer prompts are truncated from the left.
         num_generations (`int`, *optional*, defaults to `8`):
@@ -79,6 +83,14 @@ class SelfDistillationConfig(_BaseConfig):
     model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={"help": "Keyword arguments for model initialization when `model` is passed as a string."},
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`. Also applied to "
+            "reward-model and reward-tokenizer loads."
+        },
     )
     disable_dropout: bool = field(
         default=False,

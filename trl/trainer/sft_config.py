@@ -41,6 +41,10 @@ class SFTConfig(_BaseConfig):
             argument of the [`SFTTrainer`] is provided as a string. If you're training a MoE architecture and want to
             include the load balancing/auxiliary loss as a part of the final loss, remember to set
             `output_router_logits=True` in this dictionary.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
+            [`~transformers.AutoProcessor.from_pretrained`].
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
@@ -147,6 +151,13 @@ class SFTConfig(_BaseConfig):
             "the `SFTTrainer` is provided as a string. If you're training a MoE architecture and want to include the "
             "load balancing/auxiliary loss as a part of the final loss, remember to set `output_router_logits=True` "
             "in this dictionary."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
         },
     )
     chat_template_path: str | None = field(

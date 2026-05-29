@@ -122,6 +122,7 @@ class SSDTrainer(_BaseTrainer):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
             logger.warning(
@@ -157,7 +158,10 @@ class SSDTrainer(_BaseTrainer):
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), truncation_side="left", padding_side="left"
+                get_config_model_id(model.config),
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
             )
 
         if isinstance(processing_class, ProcessorMixin):

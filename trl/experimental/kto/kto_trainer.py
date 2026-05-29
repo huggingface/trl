@@ -251,6 +251,7 @@ class KTOTrainer(_BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
@@ -266,7 +267,9 @@ class KTOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
+            processing_class = AutoProcessor.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            )
         if isinstance(processing_class, ProcessorMixin):
             self._tokenizer = processing_class.tokenizer
         elif isinstance(processing_class, PreTrainedTokenizerBase):
@@ -404,6 +407,7 @@ class KTOTrainer(_BaseTrainer):
                 # Distributed training requires device_map=None ("auto" fails)
                 if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     ref_model_init_kwargs["device_map"] = None
+                ref_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
                 ref_model_path = get_config_model_id(self.model.config)
                 self.ref_model = create_model_from_path(ref_model_path, **ref_model_init_kwargs)
         else:
