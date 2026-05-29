@@ -210,6 +210,8 @@ def build_teacher_inputs_from_texts(
 
         labels = seq_tensor.clone()
         labels[: len(prompt_ids)] = -100
+        if eos_token_id is not None:
+            labels[-1] = -100  # synthetic EOS is a sequence-end marker, not an alignment target
         if pad_token_id is not None:
             labels[labels == pad_token_id] = -100
         labels_list.append(labels)

@@ -339,6 +339,7 @@ def test_process_completions_to_buffer_left_pads_prompt_ids():
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
     trainer.processing_class = RecordingTokenizer()
     trainer.args = SimpleNamespace(max_length=None)
+    trainer.use_uld_loss = False
     trainer._buffered_inputs = [None]
     trainer._buffered_text_logs = [None]
 
@@ -489,6 +490,7 @@ def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens()
     trainer.processing_class = RecordingTokenizer()
     trainer.args = SimpleNamespace(max_length=None, report_to=[])
     trainer.use_vllm = True
+    trainer.use_uld_loss = False
     trainer.vllm_generation = RecordingVLLMGeneration()
     trainer.vllm_sync_frequency = 1
     trainer._last_vllm_sync_step = -1
@@ -806,6 +808,15 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         completion_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
     )
     assert decoded_completion == row["original_completion_text"]
+
+
+def test_teacher_inputs_mask_synthetic_eos_when_pad_differs(qwen_tokenizer):
+    """The appended EOS is a sequence-end marker, not an alignment target. Its label must always be -100, even when
+    `pad_token_id != eos_token_id` (Qwen, Llama-3, …) — otherwise the alignment walker pairs the teacher's zero-width
+    EOS with an empty student group and the merged distribution comes back as zeros, inflating the loss."""
+    assert qwen_tokenizer.pad_token_id != qwen_tokenizer.eos_token_id  # condition the bug needs to surface
+    _, teacher_labels, _, _ = build_teacher_inputs_from_texts(qwen_tokenizer, ["Question: 2 + 2 = "], ["4"])
+    assert teacher_labels[0, -1].item() == -100
 
 
 def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
