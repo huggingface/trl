@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from trl.trainer.base_config import _BaseConfig
 
@@ -28,6 +29,12 @@ class AsyncGRPOConfig(_BaseConfig):
     in this class may differ from those in [`~transformers.TrainingArguments`].
 
     Parameters:
+        > Parameters that control the model
+
+        model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
+            Keyword arguments for `from_pretrained`, used when the `model` argument of the [`AsyncGRPOTrainer`] is
+            provided as a string.
+
         > Parameters that control generation
 
         num_generations (`int`, *optional*, defaults to `8`):
@@ -92,6 +99,8 @@ class AsyncGRPOConfig(_BaseConfig):
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
 
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
         default=1e-6,
@@ -102,6 +111,15 @@ class AsyncGRPOConfig(_BaseConfig):
         metadata={
             "help": "Log every X update steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
             "will be interpreted as ratio of total training steps."
+        },
+    )
+
+    # Parameters that control the model
+    model_init_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `from_pretrained`, used when the `model` argument of the "
+            "`AsyncGRPOTrainer` is provided as a string."
         },
     )
 

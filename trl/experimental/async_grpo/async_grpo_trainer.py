@@ -27,11 +27,11 @@ from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
+from transformers import AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
 
 from trl.trainer.base_trainer import _BaseTrainer
-from trl.trainer.utils import pad, patch_chunked_lm_head
+from trl.trainer.utils import create_model_from_path, pad, patch_chunked_lm_head
 
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
@@ -300,7 +300,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Model
         model_name = model
-        model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.float32)
+        model_init_kwargs = self.args.model_init_kwargs or {}
+        # FSDP2 requires device_map=None ("auto" fails)
+        model_init_kwargs["device_map"] = None
+        model = create_model_from_path(model, **model_init_kwargs)
 
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
