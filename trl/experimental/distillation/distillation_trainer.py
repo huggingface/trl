@@ -1032,12 +1032,11 @@ class DistillationTrainer(_BaseTrainer):
             jsd = jsd[mask]
 
         if reduction == "batchmean":
-            if labels is not None:
-                num_tokens = mask.sum()
-                if num_tokens == 0:
-                    return jsd.sum() * 0.0  # no completion tokens — return zero-grad scalar
-                return jsd.sum() / num_tokens
-            return jsd.sum() / jsd.size(0)
+            # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
+            # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
+            # so 0/1 == 0 with a valid grad path.
+            denom = mask.sum().clamp_min(1) if labels is not None else max(jsd.size(0), 1)
+            return jsd.sum() / denom
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":

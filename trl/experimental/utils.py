@@ -334,10 +334,14 @@ class DataCollatorForChatML:
                     sample_offs = full_offs
                     current_prompt_len = completion_start_idx_full
 
-                # Make completion-relative: prompt positions zeroed, completion offsets shifted.
-                completion_offs = [
-                    (s - prompt_byte_len, e - prompt_byte_len) for s, e in sample_offs[current_prompt_len:]
-                ]
+                # Make completion-relative: prompt positions zeroed, completion offsets shifted. If truncation
+                # ate into the completion (no prompt tokens kept and the first kept token is mid-completion),
+                # rebase to byte 0 of the kept completion so teacher/student share the same coordinate system.
+                kept_completion_offs = sample_offs[current_prompt_len:]
+                base = (
+                    kept_completion_offs[0][0] if kept_completion_offs and current_prompt_len == 0 else prompt_byte_len
+                )
+                completion_offs = [(s - base, e - base) for s, e in kept_completion_offs]
                 sample_offs = [(0, 0)] * current_prompt_len + completion_offs
 
                 input_ids.append(sample_ids)
