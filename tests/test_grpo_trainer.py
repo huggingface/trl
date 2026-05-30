@@ -1195,10 +1195,10 @@ class TestGRPOTrainer(TrlTestCase):
         """DAPO/CISPO/VESPO must normalize by num_items_in_batch / num_processes (the total
         active tokens across the whole generation batch) rather than the current micro-batch.
 
-        This requires ``compute_liger_loss`` to (1) forward ``num_items_in_batch`` to the Liger
-        loss and (2) NOT re-divide the returned loss by ``gradient_accumulation_steps`` for these
-        loss types, matching the non-Liger ``_compute_loss`` path. Regression test for the
-        Liger/non-Liger GRPO normalizer mismatch (linkedin/Liger-Kernel#1082).
+        This requires ``compute_liger_loss`` to (1) forward ``num_items_in_batch`` to the Liger loss and (2) NOT
+        re-divide the returned loss by ``gradient_accumulation_steps`` for these loss types, matching the non-Liger
+        ``_compute_loss`` path. Regression test for the Liger/non-Liger GRPO normalizer mismatch
+        (linkedin/Liger-Kernel#1082).
         """
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
