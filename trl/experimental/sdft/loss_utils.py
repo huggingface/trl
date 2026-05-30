@@ -41,13 +41,6 @@ def compute_divergence(
     return kl.sum(-1)
 
 
-def add_tail(log_probs: torch.Tensor) -> torch.Tensor:
-    log_s = torch.logsumexp(log_probs, dim=-1, keepdim=True)
-    log_s = torch.clamp(log_s, max=-1e-7)
-    tail_log = torch.log(-torch.expm1(log_s))
-    return torch.cat([log_probs, tail_log], dim=-1)
-
-
 def apply_importance_sampling_clipping(
     per_token_loss: torch.Tensor,
     student_log_probs: torch.Tensor,
@@ -91,6 +84,18 @@ def aggregate_loss(
     raise ValueError(f"Unsupported loss_type: {loss_type}")
 
 
+def add_tail_bucket(log_probs: torch.Tensor) -> torch.Tensor:
+    """Append a bucket holding the leftover probability mass to a top-k log-prob support.
+
+    `log_probs` are true log-probabilities over a top-k subset, so they sum to the captured mass `P_topk <= 1`. This
+    appends one extra category equal to the tail mass `1 - P_topk`, yielding a distribution that sums to exactly 1.
+    """
+    log_s = torch.logsumexp(log_probs, dim=-1, keepdim=True)
+    log_s = torch.clamp(log_s, max=-1e-7)
+    tail_log = torch.log(-torch.expm1(log_s))
+    return torch.cat([log_probs, tail_log], dim=-1)
+
+
 def compute_topk_self_distillation_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
@@ -112,10 +117,13 @@ def compute_topk_self_distillation_loss(
     topk_teacher_logits = torch.gather(teacher_logits, dim=-1, index=topk_indices)
     topk_teacher_log_probs = topk_teacher_logits - teacher_logsumexp
 
+    # Top-k log-probs sum to the captured mass P_topk <= 1; the rest (1 - P_topk) is the "tail".
     if distillation_add_tail:
-        topk_student_log_probs = add_tail(topk_student_log_probs)
-        topk_teacher_log_probs = add_tail(topk_teacher_log_probs)
+        # Lump the tail into one bucket so the divergence approximates the full-vocab divergence.
+        topk_student_log_probs = add_tail_bucket(topk_student_log_probs)
+        topk_teacher_log_probs = add_tail_bucket(topk_teacher_log_probs)
     else:
+        # Drop the tail and renormalize the top-k to sum to 1: divergence over the top-k conditional only.
         topk_student_log_probs = topk_student_log_probs - torch.logsumexp(topk_student_log_probs, dim=-1, keepdim=True)
         topk_teacher_log_probs = topk_teacher_log_probs - torch.logsumexp(topk_teacher_log_probs, dim=-1, keepdim=True)
 
