@@ -26,7 +26,6 @@ from trl.experimental.utils import (
     DataCollatorForChatML,
     encode_with_byte_offsets,
     pad_byte_offsets,
-    piece_byte_len,
 )
 
 
@@ -298,18 +297,6 @@ def encode_prompt_completion(tokenizer, prompt, completion):
     labels = [-100] * len(prompt_ids) + completion_ids
     byte_offsets = [(0, 0)] * len(prompt_ids) + completion_offsets
     return input_ids, labels, byte_offsets
-
-
-@pytest.mark.parametrize(
-    "piece,expected",
-    [
-        ("hello", 5),  # ASCII piece → 5 bytes
-        ("Ġhello", 6),  # ByteLevel " hello" (Ġ maps to byte 0x20) → 6 source bytes
-    ],
-)
-def test_piece_byte_len(piece, expected):
-    """Pin the ByteLevel BPE convention: one piece char per source byte."""
-    assert piece_byte_len(piece) == expected
 
 
 def pad_tokens(ids, pad_id, target_length):
@@ -769,6 +756,36 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenize
     supervised = [label for label in batch["labels"][0].tolist() if label != -100]
     assert supervised == completion_ids
     assert assistant in llama_tokenizer.decode(completion_ids)
+
+
+def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_completion(llama_tokenizer):
+    """When truncation drops the front of the completion (``drop > completion_start``), the kept byte_offsets
+    reference bytes in the original completion text — but ``original_completion_text`` is decoded fresh from the kept
+    ids and starts at byte 0. The kept offsets must be rebased so they match the teacher's re-encoding."""
+    short_prompt = "Q:"
+    long_completion = "word " * 300  # completion alone overflows max_length
+    dataset = Dataset.from_dict({"prompt": [short_prompt], "completion": [long_completion]})
+
+    max_length = 32
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=max_length,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    prepared = trainer._prepare_dataset_with_original_text(
+        dataset, llama_tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
+    )
+    row = prepared[0]
+
+    assert len(row["input_ids"]) == max_length
+    # Prompt is so short that truncation ate into the completion: no prompt tokens survive.
+    assert row["completion_mask"] == [1] * max_length
+
+    # First kept completion token must start at byte 0 of the new (truncated) original_completion_text.
+    assert tuple(row["byte_offsets"][0]) == (0, len(b"word "))
 
 
 def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):

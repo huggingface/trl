@@ -1509,6 +1509,14 @@ class GOLDTrainer(SFTTrainer):
                     input_ids = input_ids[drop:]
                     byte_offsets = byte_offsets[drop:]
                     completion_start = max(0, completion_start - drop)
+                    # If truncation ate into the completion, rebase the kept completion offsets so they're
+                    # relative to the new (truncated) `original_completion_text` the teacher will re-encode.
+                    if completion_start < len(byte_offsets):
+                        base = byte_offsets[completion_start][0]
+                        if base > 0:
+                            byte_offsets = byte_offsets[:completion_start] + [
+                                (s - base, e - base) for s, e in byte_offsets[completion_start:]
+                            ]
                     # Resync the strings the teacher will re-encode with the ids the student kept.
                     decode = partial(
                         processing_class.decode, skip_special_tokens=False, clean_up_tokenization_spaces=False
