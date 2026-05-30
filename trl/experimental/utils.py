@@ -299,14 +299,27 @@ class DataCollatorForChatML:
                 formatted_message = self.tokenizer.apply_chat_template(
                     message, add_generation_prompt=False, tokenize=False
                 )
-                [(message_input_ids_full, full_offs)] = encode_with_byte_offsets(
-                    self.tokenizer.backend_tokenizer, [formatted_message], add_special_tokens=False
-                )
-                prompt_byte_len = len(formatted_prompt.encode("utf-8"))
-                completion_start_idx_full = next(
-                    (idx for idx, (start, _) in enumerate(full_offs) if start >= prompt_byte_len),
-                    len(message_input_ids_full),
-                )
+                if is_byte_level_tokenizer(self.tokenizer.backend_tokenizer):
+                    [(message_input_ids_full, full_offs)] = encode_with_byte_offsets(
+                        self.tokenizer.backend_tokenizer, [formatted_message], add_special_tokens=False
+                    )
+                    prompt_byte_len = len(formatted_prompt.encode("utf-8"))
+                    completion_start_idx_full = next(
+                        (idx for idx, (start, _) in enumerate(full_offs) if start >= prompt_byte_len),
+                        len(message_input_ids_full),
+                    )
+                else:
+                    # Non-ByteLevel tokenizer: byte offsets are unnecessary (cross-tokenizer ULD requires ByteLevel
+                    # anyway). Fall back to plain tokenization so GKD / non-ULD trainers with SentencePiece or
+                    # Unigram tokenizers still work through this collator.
+                    message_input_ids_full = self.tokenizer(
+                        formatted_message, add_special_tokens=False, return_tensors=None
+                    )["input_ids"]
+                    completion_start_idx_full = len(
+                        self.tokenizer(formatted_prompt, add_special_tokens=False, return_tensors=None)["input_ids"]
+                    )
+                    full_offs = [(0, 0)] * len(message_input_ids_full)
+                    prompt_byte_len = 0
 
                 # Keep the last max_length tokens — drops oldest prompt context first,
                 # never drops from the END (the model's recent context).
