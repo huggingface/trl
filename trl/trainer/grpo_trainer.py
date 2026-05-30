@@ -14,7 +14,6 @@
 
 import asyncio
 import atexit
-import contextlib
 import copy
 import importlib.resources as pkg_resources
 import inspect
@@ -129,22 +128,6 @@ class _SupportsReset(Protocol):
 
 
 EnvironmentFactory = Callable[[], _SupportsReset]
-
-
-def _maybe_gather_lm_head_ctx(w, b):
-    # Allgather ZeRO-3 partitioned `lm_head` weight/bias for the chunked matmul. No-op if not ZeRO-3, or if the
-    # param is already gathered (tied embeddings: `embed_tokens` shares the weight and keeps it `AVAILABLE`, so
-    # partitioning on our exit would collide with its active-submodule tracking).
-    params = [w] if b is None else [w, b]
-    if not any(hasattr(p, "ds_id") for p in params):
-        return contextlib.nullcontext()
-    from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
-
-    if all(p.ds_status == ZeroParamStatus.AVAILABLE for p in params):
-        return contextlib.nullcontext()
-    import deepspeed
-
-    return deepspeed.zero.GatheredParameters(params)
 
 
 class GRPOTrainer(_BaseTrainer):
@@ -2342,13 +2325,23 @@ class GRPOTrainer(_BaseTrainer):
 
         # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
         loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
-        # Compute loss and metrics using liger grpo loss. Liger reads `lm_head.weight`/`bias` directly (not through
-        # `model.forward()`), so under DeepSpeed ZeRO-3 the gather hooks never fire and the partitioned shards stay
-        # empty, yielding a size mismatch in the fused matmul. Gather them for the call; the grad w.r.t. the weight is
-        # computed eagerly during this forward, so the gathered weight is only needed here, not in the backward.
         lm_head_weight = unwrapped_model.lm_head.weight
         lm_head_bias = unwrapped_model.lm_head.bias
-        with _maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires
+        # and the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
+        # computed during this forward, so it isn't needed in the backward). Skip it when already gathered: with tied
+        # embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning on exit breaks its tracking.
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        gather_ctx = nullcontext()
+        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+            from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+
+            params = [lm_head_weight] if lm_head_bias is None else [lm_head_weight, lm_head_bias]
+            if any(p.ds_status != ZeroParamStatus.AVAILABLE for p in params):
+                import deepspeed
+
+                gather_ctx = deepspeed.zero.GatheredParameters(params)
+        with gather_ctx:
             loss, metrics = self.liger_grpo_loss(
                 _input=last_hidden_state,
                 lin_weight=lm_head_weight,

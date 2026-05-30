@@ -21,7 +21,7 @@ import torch
 import transformers
 from packaging.version import Version
 
-from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_multi_accelerator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -302,6 +302,7 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
+    @require_liger_kernel
     @pytest.mark.parametrize(
         "config",
         [
@@ -325,8 +326,6 @@ class TestDistributed(TrlTestCase):
         ],
     )
     def test_grpo_liger(self, config, get_config_path):
-        # `use_liger_kernel` makes GRPO read `lm_head.weight` outside `model.forward()`; under ZeRO-3 the weight is
-        # partitioned, so without an explicit allgather the fused matmul sees an empty shard (see #3368).
         # fmt: off
         run_command(
             [
