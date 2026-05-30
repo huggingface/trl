@@ -210,8 +210,6 @@ def build_teacher_inputs_from_texts(
 
         labels = seq_tensor.clone()
         labels[: len(prompt_ids)] = -100
-        if eos_token_id is not None:
-            labels[-1] = -100  # synthetic EOS is a sequence-end marker, not an alignment target
         if pad_token_id is not None:
             labels[labels == pad_token_id] = -100
         labels_list.append(labels)
@@ -432,6 +430,12 @@ class ULDLoss(nn.Module):
                 s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
                 t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
                 student_groups, teacher_groups = self._align_by_byte_offsets(s_answer, t_answer)
+                # Drop degenerate pairs where either side is empty — e.g. teacher's trailing zero-width EOS at
+                # ``(content_len, content_len)`` paired with an empty student group merges to a zero distribution
+                # and inflates the loss (only reachable when ``skip_teacher_eos=False``).
+                paired = [(sg, tg) for sg, tg in zip(student_groups, teacher_groups, strict=False) if sg and tg]
+                student_groups = [sg for sg, _ in paired]
+                teacher_groups = [tg for _, tg in paired]
                 student_aligned = self._merge_probabilities_with_alignment_groups(
                     student_probs, student_groups, student_token_ids
                 )

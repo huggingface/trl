@@ -808,15 +808,6 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
     assert decoded_completion == row["original_completion_text"]
 
 
-def test_teacher_inputs_mask_synthetic_eos_when_pad_differs(qwen_tokenizer):
-    """The appended EOS is a sequence-end marker, not an alignment target. Its label must always be -100, even when
-    `pad_token_id != eos_token_id` (Qwen, Llama-3, …) — otherwise the alignment walker pairs the teacher's zero-width
-    EOS with an empty student group and the merged distribution comes back as zeros, inflating the loss."""
-    assert qwen_tokenizer.pad_token_id != qwen_tokenizer.eos_token_id  # condition the bug needs to surface
-    _, teacher_labels, _, _ = build_teacher_inputs_from_texts(qwen_tokenizer, ["Question: 2 + 2 = "], ["4"])
-    assert teacher_labels[0, -1].item() == -100
-
-
 def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
     config = build_config()
     loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
