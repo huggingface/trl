@@ -1252,9 +1252,11 @@ class GOLDTrainer(SFTTrainer):
             prompt_attention_mask = pad(prompt_attention_masks, padding_side="left", padding_value=0)
 
             # Decode the truncated prompt so the teacher conditions on the same context the student saw.
+            # `clean_up_tokenization_spaces=False` matches the completion decode below so byte counts stay aligned.
             prompt_txts_with_special = self.processing_class.batch_decode(
                 [ids.tolist() for ids in truncated_prompt_ids],
                 skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
             )
 
             completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids_for_slice]
