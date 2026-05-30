@@ -133,18 +133,18 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
 
     def test_aggregate_loss_masks_response_tokens(self):
         per_token_loss = torch.tensor([[1.0, 100.0], [3.0, 5.0]])
-        response_mask = torch.tensor([[1.0, 0.0], [1.0, 1.0]])
+        loss_mask = torch.tensor([[1.0, 0.0], [1.0, 1.0]])
 
-        loss = aggregate_loss(per_token_loss, response_mask, loss_type="dapo", max_completion_length=2)
+        loss = aggregate_loss(per_token_loss, loss_mask, loss_type="dapo", max_completion_length=2)
 
         torch.testing.assert_close(loss, torch.tensor(3.0))
 
     def test_aggregate_loss_rejects_unsupported_loss_modes(self):
         per_token_loss = torch.tensor([[1.0]])
-        response_mask = torch.tensor([[1.0]])
+        loss_mask = torch.tensor([[1.0]])
 
         with pytest.raises(ValueError, match="Unsupported loss_type: luspo"):
-            aggregate_loss(per_token_loss, response_mask, loss_type="luspo", max_completion_length=1)
+            aggregate_loss(per_token_loss, loss_mask, loss_type="luspo", max_completion_length=1)
 
     def test_importance_sampling_clipping_caps_token_ratio(self):
         per_token_loss = torch.tensor([[1.0, 2.0]])
@@ -304,7 +304,7 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         distillation_logits = SimpleNamespace(
             completion_ids=torch.tensor([[0, 1]], dtype=torch.long),
             completion_mask=torch.tensor([[1, 1]], dtype=torch.long),
-            response_mask=torch.tensor([[1, 0]], dtype=torch.long),
+            loss_mask=torch.tensor([[1, 0]], dtype=torch.long),
             student_logits=student_probs.log(),
             teacher_logits=teacher_probs.log(),
         )
@@ -332,7 +332,7 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         distillation_logits = SimpleNamespace(
             completion_ids=torch.tensor([[0, 1]], dtype=torch.long),
             completion_mask=torch.tensor([[1, 1]], dtype=torch.long),
-            response_mask=torch.tensor([[1, 1]], dtype=torch.long),
+            loss_mask=torch.tensor([[1, 1]], dtype=torch.long),
             student_logits=torch.log(torch.tensor([[[0.2, 0.8], [0.6, 0.4]]], dtype=torch.float32)),
             teacher_logits=torch.log(torch.tensor([[[0.5, 0.5], [0.5, 0.5]]], dtype=torch.float32)),
         )

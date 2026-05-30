@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import annotations
-
 import copy
 import inspect
 import textwrap
@@ -52,6 +50,7 @@ from ...trainer.utils import (
     get_config_model_id,
     identity,
     pad,
+    selective_log_softmax,
     split_tensor_dict,
     use_adapter,
 )
@@ -62,7 +61,6 @@ from .loss_utils import (
     compute_full_logit_self_distillation_loss,
     compute_sampled_token_self_distillation_loss,
     compute_topk_self_distillation_loss,
-    select_token_log_probs,
 )
 from .sdft_config import SDFTConfig
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
@@ -700,7 +698,7 @@ class SDFTTrainer(_BaseTrainer):
                     attention_mask,
                     logits_to_keep,
                 )
-                old_per_token_logps = select_token_log_probs(logits, completion_ids)
+                old_per_token_logps = selective_log_softmax(logits, completion_ids)
 
         return old_per_token_logps
 
@@ -772,7 +770,7 @@ class SDFTTrainer(_BaseTrainer):
 
         old_per_token_logps = inputs.get("old_per_token_logps")
         if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
-            student_per_token_logps = select_token_log_probs(
+            student_per_token_logps = selective_log_softmax(
                 distillation_logits.student_logits,
                 distillation_logits.completion_ids,
             )

@@ -14,19 +14,10 @@
 
 """Pure helper functions for self-distillation loss computation."""
 
-from __future__ import annotations
-
 import torch
 import torch.nn.functional as F
 
-
-def select_token_log_probs(
-    logits: torch.Tensor,
-    token_ids: torch.Tensor,
-) -> torch.Tensor:
-    logsumexp = torch.logsumexp(logits, dim=-1, keepdim=True)
-    indices = token_ids.unsqueeze(-1)
-    return (torch.gather(logits, dim=-1, index=indices) - logsumexp).squeeze(-1)
+from ...trainer.utils import selective_log_softmax
 
 
 def compute_divergence(
@@ -57,18 +48,6 @@ def add_tail(log_probs: torch.Tensor) -> torch.Tensor:
     return torch.cat([log_probs, tail_log], dim=-1)
 
 
-def renorm_topk_log_probs(log_probs: torch.Tensor) -> torch.Tensor:
-    return log_probs - torch.logsumexp(log_probs, dim=-1, keepdim=True)
-
-
-def compute_token_level_distillation_loss(
-    student_log_probs: torch.Tensor,
-    teacher_log_probs: torch.Tensor,
-) -> torch.Tensor:
-    log_ratio = student_log_probs - teacher_log_probs
-    return log_ratio.detach() * student_log_probs
-
-
 def apply_importance_sampling_clipping(
     per_token_loss: torch.Tensor,
     student_log_probs: torch.Tensor,
@@ -83,7 +62,7 @@ def apply_importance_sampling_clipping(
 
 def aggregate_loss(
     per_token_loss: torch.Tensor,
-    response_mask: torch.Tensor,
+    loss_mask: torch.Tensor,
     *,
     loss_type: str,
     max_completion_length: int,
@@ -93,7 +72,7 @@ def aggregate_loss(
     Args:
         per_token_loss:
             Per-token loss values of shape `(batch_size, seq_len)`.
-        response_mask:
+        loss_mask:
             Mask selecting which completion-token positions contribute to the loss.
         loss_type:
             Reduction mode. Uses the same loss-type conventions as the GRPO-family trainers.
@@ -101,14 +80,14 @@ def aggregate_loss(
             Used by the `dr_grpo` reduction, which normalizes by a fixed completion budget.
     """
     if loss_type == "grpo":
-        loss = (per_token_loss * response_mask).sum(-1) / response_mask.sum(-1).clamp(min=1.0)
+        loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
         return loss.mean()
     if loss_type == "bnpo":
-        return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
+        return (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
     if loss_type == "dr_grpo":
-        return (per_token_loss * response_mask).sum() / (per_token_loss.size(0) * max_completion_length)
+        return (per_token_loss * loss_mask).sum() / (per_token_loss.size(0) * max_completion_length)
     if loss_type == "dapo":
-        return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
+        return (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
     raise ValueError(f"Unsupported loss_type: {loss_type}")
 
 
@@ -137,8 +116,8 @@ def compute_topk_self_distillation_loss(
         topk_student_log_probs = add_tail(topk_student_log_probs)
         topk_teacher_log_probs = add_tail(topk_teacher_log_probs)
     else:
-        topk_student_log_probs = renorm_topk_log_probs(topk_student_log_probs)
-        topk_teacher_log_probs = renorm_topk_log_probs(topk_teacher_log_probs)
+        topk_student_log_probs = topk_student_log_probs - torch.logsumexp(topk_student_log_probs, dim=-1, keepdim=True)
+        topk_teacher_log_probs = topk_teacher_log_probs - torch.logsumexp(topk_teacher_log_probs, dim=-1, keepdim=True)
 
     return compute_divergence(topk_student_log_probs, topk_teacher_log_probs, distillation_alpha)
 
@@ -173,6 +152,7 @@ def compute_sampled_token_self_distillation_loss(
             f"`distillation_mode='sampled_token'`, got alpha={distillation_alpha}"
         )
 
-    student_per_token_logps = select_token_log_probs(student_logits, completion_ids)
-    teacher_per_token_logps = select_token_log_probs(teacher_logits, completion_ids)
-    return compute_token_level_distillation_loss(student_per_token_logps, teacher_per_token_logps)
+    student_per_token_logps = selective_log_softmax(student_logits, completion_ids)
+    teacher_per_token_logps = selective_log_softmax(teacher_logits, completion_ids)
+    log_ratio = student_per_token_logps - teacher_per_token_logps
+    return log_ratio.detach() * student_per_token_logps

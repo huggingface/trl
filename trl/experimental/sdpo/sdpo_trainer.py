@@ -52,6 +52,7 @@ from ...trainer.utils import (
     get_config_model_id,
     identity,
     pad,
+    selective_log_softmax,
     split_tensor_dict,
     use_adapter,
 )
@@ -62,7 +63,6 @@ from .loss_utils import (
     compute_full_logit_self_distillation_loss,
     compute_sampled_token_self_distillation_loss,
     compute_topk_self_distillation_loss,
-    select_token_log_probs,
 )
 from .sdpo_config import SDPOConfig
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
@@ -84,7 +84,7 @@ class DistillationLogits:
 
     completion_ids: torch.Tensor
     completion_mask: torch.Tensor
-    response_mask: torch.Tensor
+    loss_mask: torch.Tensor
     student_logits: torch.Tensor
     teacher_logits: torch.Tensor
 
@@ -923,7 +923,7 @@ class SDPOTrainer(_BaseTrainer):
                     attention_mask,
                     logits_to_keep,
                 )
-                old_per_token_logps = select_token_log_probs(logits, completion_ids)
+                old_per_token_logps = selective_log_softmax(logits, completion_ids)
 
         return old_per_token_logps
 
@@ -990,7 +990,7 @@ class SDPOTrainer(_BaseTrainer):
     ) -> torch.Tensor:
         completion_ids = inputs["completion_ids"]
         completion_mask = inputs["completion_mask"]
-        per_token_logps = select_token_log_probs(student_logits, completion_ids)
+        per_token_logps = selective_log_softmax(student_logits, completion_ids)
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
         advantages = inputs["advantages"]
@@ -1037,7 +1037,7 @@ class SDPOTrainer(_BaseTrainer):
         When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a clipped
         importance-sampling ratio between the current student and the student at rollout time.
         """
-        if distillation_logits.response_mask.sum() == 0:
+        if distillation_logits.loss_mask.sum() == 0:
             mode = "train" if model.training else "eval"
             self._log_self_distillation_metric(mode, 0.0)
             # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
@@ -1074,7 +1074,7 @@ class SDPOTrainer(_BaseTrainer):
 
         old_per_token_logps = inputs.get("old_per_token_logps")
         if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
-            student_per_token_logps = select_token_log_probs(
+            student_per_token_logps = selective_log_softmax(
                 distillation_logits.student_logits,
                 distillation_logits.completion_ids,
             )
@@ -1087,15 +1087,15 @@ class SDPOTrainer(_BaseTrainer):
 
         loss = aggregate_loss(
             per_token_loss,
-            distillation_logits.response_mask,
+            distillation_logits.loss_mask,
             loss_type=self.loss_type,
             max_completion_length=self.max_completion_length,
         )
 
         mode = "train" if model.training else "eval"
         mean_distill_loss = (
-            per_token_loss * distillation_logits.response_mask
-        ).sum() / distillation_logits.response_mask.sum().clamp(min=1.0)
+            per_token_loss * distillation_logits.loss_mask
+        ).sum() / distillation_logits.loss_mask.sum().clamp(min=1.0)
         self._log_self_distillation_metric(
             mode,
             self.accelerator.gather(mean_distill_loss).mean().item(),
@@ -1125,9 +1125,9 @@ class SDPOTrainer(_BaseTrainer):
 
         self_distillation_mask = inputs.get("self_distillation_mask")
         if self_distillation_mask is None:
-            response_mask = completion_mask
+            loss_mask = completion_mask
         else:
-            response_mask = completion_mask * self_distillation_mask.unsqueeze(1)
+            loss_mask = completion_mask * self_distillation_mask.unsqueeze(1)
         student_input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         student_attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         student_logits = self._forward_logits(
@@ -1148,7 +1148,7 @@ class SDPOTrainer(_BaseTrainer):
         return DistillationLogits(
             completion_ids=completion_ids,
             completion_mask=completion_mask,
-            response_mask=response_mask,
+            loss_mask=loss_mask,
             student_logits=student_logits,
             teacher_logits=teacher_logits,
         )
