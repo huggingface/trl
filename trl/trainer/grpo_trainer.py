@@ -2340,7 +2340,7 @@ class GRPOTrainer(_BaseTrainer):
             if any(p.ds_status != ZeroParamStatus.AVAILABLE for p in params):
                 import deepspeed
 
-                gather_ctx = deepspeed.zero.GatheredParameters(params)
+                gather_ctx = deepspeed.zero.GatheredParameters(params, modifier_rank=None)
         with gather_ctx:
             loss, metrics = self.liger_grpo_loss(
                 _input=last_hidden_state,
