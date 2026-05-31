@@ -37,6 +37,33 @@ from trl.experimental.ppo import PPOConfig, PPOTrainer
 
 
 """
+# This script runs the PPO stage of the TL;DR recipe and expects an SFT checkpoint (--sft_model_path)
+# and a reward-model checkpoint (--reward_model_path). The PPO commands below default to the published
+# cleanrl/* checkpoints, so you can run them as-is. To produce your own pair from the base model first
+# train an SFT model, then train a reward model on top of it, and pass both via --sft_model_path /
+# --reward_model_path:
+#
+# Step 1 - SFT:
+# python trl/scripts/sft.py \
+#     --model_name_or_path EleutherAI/pythia-1b-deduped \
+#     --dataset_name trl-lib/tldr \
+#     --learning_rate 2.0e-5 \
+#     --num_train_epochs 1 \
+#     --packing \
+#     --per_device_train_batch_size 2 \
+#     --gradient_accumulation_steps 8 \
+#     --output_dir pythia-1b-deduped-tldr-sft
+#
+# Step 2 - Reward model:
+# python examples/scripts/reward_modeling.py \
+#     --model_name_or_path pythia-1b-deduped-tldr-sft \
+#     --dataset_name trl-lib/tldr-preference \
+#     --learning_rate 1.0e-5 \
+#     --num_train_epochs 1 \
+#     --per_device_train_batch_size 8 \
+#     --output_dir pythia-1b-deduped-tldr-rm
+#
+# Step 3 - PPO (single GPU):
 python examples/scripts/ppo/ppo_tldr.py \
     --dataset_name trl-lib/tldr \
     --dataset_test_split validation \
@@ -53,6 +80,7 @@ python examples/scripts/ppo/ppo_tldr.py \
     --eval_strategy steps \
     --eval_steps 100
 
+# Step 3 - PPO (multi-GPU, DeepSpeed ZeRO-2):
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/ppo/ppo_tldr.py \
     --dataset_name trl-lib/tldr \
