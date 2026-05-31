@@ -29,13 +29,13 @@ tree text from BrowserGym, making it memory-efficient.
 
 The environment runs on a Hugging Face Space by default.
 
-Setup (Option A - Install from HF Space, recommended):
+Setup:
 
 ```sh
 uv pip install git+https://huggingface.co/spaces/openenv/browsergym_env
 ```
 
-Setup (Option B - Clone OpenEnv repo, for development):
+Setup (for development, clone the repo):
 
 ```sh
 git clone https://github.com/meta-pytorch/OpenEnv.git
@@ -152,7 +152,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gradient-accumulation-steps",
         type=int,
-        default=32,
+        default=1,
         help="Gradient accumulation steps for GRPO training.",
     )
     parser.add_argument(
@@ -285,7 +285,7 @@ def main() -> None:
 
     class BrowserGymLLMEnv:
         def __init__(self):
-            self.client = BrowserGymEnv(base_url=space_url)
+            self.client = BrowserGymEnv(base_url=space_url).sync()
             self.reward = 0.0
             self._done = False
             self._step_count = 0
@@ -296,14 +296,19 @@ def main() -> None:
             openenv-core<=0.2.1 does not pass max_size to ws_connect, so the websockets library
             defaults to 1MB. We force a connection and patch it to 100MB before any messages are sent.
             """
+            import websockets
+
             self.client.connect()
             ws = self.client._ws
-            if ws is not None and hasattr(ws, "protocol"):
+            if ws is not None and ws.protocol is not None:
                 proto = ws.protocol
-                # websockets <16: max_size; websockets >=16: max_message_size
-                attr = "max_size" if hasattr(proto, "max_size") else "max_message_size"
-                if getattr(proto, attr) == 2**20:
-                    setattr(proto, attr, 100 * 1024 * 1024)
+                # websockets renamed max_size to max_message_size in version 16
+                if int(websockets.__version__.split(".")[0]) >= 16:
+                    if proto.max_message_size == 2**20:
+                        proto.max_message_size = 100 * 1024 * 1024
+                else:
+                    if proto.max_size == 2**20:
+                        proto.max_size = 100 * 1024 * 1024
 
         def reset(self, **kwargs) -> str:
             self.reward = 0.0
@@ -369,7 +374,7 @@ def main() -> None:
 
         def _do_action(self, action_str: str) -> str:
             if self._done:
-                raise ValueError("Episode is done.")
+                return "Episode is done. No further actions needed."
 
             self._step_count += 1
             result = self.client.step(BrowserGymAction(action_str=action_str))

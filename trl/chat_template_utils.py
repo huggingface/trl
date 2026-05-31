@@ -307,6 +307,40 @@ qwen3_5_schema = {
 }
 
 
+functiongemma_chat_template = (_CHAT_TEMPLATES_DIR / "functiongemma.jinja").read_text(encoding="utf-8")
+
+functiongemma_schema = {
+    "x-regex": r"^(?P<content>(?:(?!<start_function_call>)[\s\S])*?)(?P<tool_calls>(?:<start_function_call>[\s\S]+?<end_function_call>\s*)+)?$",
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "tool_calls": {
+            "type": "array",
+            "x-regex-iterator": r"<start_function_call>(call:\w+\{[\s\S]*?\})<end_function_call>",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "x-regex": r"call:(?P<name>\w+)\{(?P<arguments>[\s\S]*?)\}$",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "arguments": {
+                                "type": "object",
+                                "x-regex-key-value": r"(?P<key>\w+):<escape>(?P<value>[^<]*)<escape>",
+                                "default": {},
+                                "additionalProperties": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
 cohere_chat_template = (_CHAT_TEMPLATES_DIR / "cohere.jinja").read_text(encoding="utf-8")
 
 cohere2_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2.jinja").read_text(encoding="utf-8")
@@ -392,7 +426,9 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
-    if chat_template == glm4moe_chat_template:
+    if chat_template == functiongemma_chat_template:
+        tokenizer.response_schema = functiongemma_schema
+    elif chat_template == glm4moe_chat_template:
         tokenizer.response_schema = glm4moe_schema
     elif chat_template == gptoss_chat_template:
         tokenizer.response_schema = gptoss_schema
