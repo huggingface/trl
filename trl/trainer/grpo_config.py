@@ -98,6 +98,9 @@ class GRPOConfig(_BaseConfig):
             with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
         chat_template_kwargs (`dict[str, Any]`, *optional*):
             Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
+        response_schema (`dict[str, Any]` or `str`, *optional*):
+            Explicit response schema to set on the tokenizer when tools are enabled. This bypasses chat-template
+            identity matching and is useful for forked templates that still follow a supported response format.
         repetition_penalty (`float`, *optional*, defaults to `1.0`):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
@@ -346,7 +349,7 @@ class GRPOConfig(_BaseConfig):
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "response_schema"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -476,6 +479,14 @@ class GRPOConfig(_BaseConfig):
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
             "completions."
+        },
+    )
+    response_schema: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Explicit response schema to set on the tokenizer when tools are enabled. This bypasses "
+            "chat-template identity matching and is useful for forked templates that still follow a supported "
+            "response format."
         },
     )
     repetition_penalty: float = field(

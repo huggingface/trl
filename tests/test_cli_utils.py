@@ -19,7 +19,7 @@ from unittest.mock import mock_open, patch
 import pytest
 from datasets import DatasetDict, load_dataset
 
-from trl import DatasetMixtureConfig, TrlParser, get_dataset
+from trl import DatasetMixtureConfig, GRPOConfig, TrlParser, get_dataset
 from trl.scripts.utils import DatasetConfig
 
 from .testing_utils import TrlTestCase
@@ -120,6 +120,28 @@ class TestTrlParser(TrlTestCase):
         assert isinstance(result_args[0], MyDataclass)
         assert result_args[0].arg1 == 2
         assert result_args[0].arg2 == "value"
+
+    def test_grpo_config_parses_response_schema_from_cli(self):
+        parser = TrlParser(dataclass_types=[GRPOConfig])
+        response_schema = '{"type": "json_schema", "json_schema": {"name": "response", "schema": {"type": "object"}}}'
+
+        (args,) = parser.parse_args_and_config(
+            [
+                "--output_dir",
+                self.tmp_dir,
+                "--report_to",
+                "none",
+                "--bf16",
+                "False",
+                "--response_schema",
+                response_schema,
+            ]
+        )
+
+        assert args.response_schema == {
+            "type": "json_schema",
+            "json_schema": {"name": "response", "schema": {"type": "object"}},
+        }
 
     def test_set_defaults_with_config(self):
         """Test set_defaults_with_config updates the defaults."""
