@@ -1406,7 +1406,7 @@ training_args = CPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2501.03884
 
-AlphaPO is a new Direct Alignment Algorithms (DAAs) method that leverages an alpha-parameter to help change the shape of the reward function beyond the standard log reward. AlphaPO helps maintain fine-grained control over likelihood displacement and over-optimization. To reproduce the paper's setting, use this configuration:
+AlphaPO is a new Direct Alignment Algorithms (DAAs) method that leverages an `alpha` parameter to reshape the reward function beyond the standard log reward, helping maintain fine-grained control over likelihood displacement and over-optimization. `loss_type="alphapo"` is syntactic sugar that automatically remaps to `loss_type="simpo"` with `cpo_alpha=0.0`. To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl.experimental.cpo import CPOConfig
@@ -1418,7 +1418,6 @@ training_args = CPOConfig(
     beta=2.5,
     simpo_gamma=0.1,
     learning_rate=7e-7,
-    ...
 )
 ```
 
