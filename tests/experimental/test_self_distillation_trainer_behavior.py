@@ -23,7 +23,7 @@ from transformers import AutoModelForCausalLM, TrainerControl, TrainerState, Tra
 from transformers.utils import is_peft_available
 
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
-from trl.experimental.self_distillation.loss_utils import (
+from trl.experimental.sdft.loss_utils import (
     aggregate_loss,
     apply_importance_sampling_clipping,
     compute_full_logit_self_distillation_loss,
@@ -37,7 +37,7 @@ from ..testing_utils import TrlTestCase
 if is_peft_available():
     from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
 
-    from trl.experimental.self_distillation.teacher_sync import PEFTAdapterEMACallback
+    from trl.experimental.sdft.teacher_sync import PEFTAdapterEMACallback
 
 
 class TestSelfDistillationTrainerBehavior(TrlTestCase):

@@ -32,6 +32,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
+    GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
@@ -41,7 +42,7 @@ from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available
 
 from ...data_utils import is_conversational
-from ...models import prepare_deepspeed, prepare_fsdp
+from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     RepeatSampler,
@@ -53,8 +54,8 @@ from ...trainer.utils import (
     split_tensor_dict,
     use_adapter,
 )
-from ..self_distillation.generation import Generation
-from ..self_distillation.loss_utils import (
+from ..utils import prepare_peft_model
+from .loss_utils import (
     aggregate_loss,
     apply_importance_sampling_clipping,
     compute_full_logit_self_distillation_loss,
@@ -62,10 +63,8 @@ from ..self_distillation.loss_utils import (
     compute_topk_self_distillation_loss,
     select_token_log_probs,
 )
-from ..self_distillation.prompt_utils import extract_last_user_text
-from ..self_distillation.teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
-from ..utils import prepare_peft_model
 from .sdft_config import SDFTConfig
+from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 
 
 if is_peft_available():
@@ -87,6 +86,21 @@ class DistillationLogits:
     response_mask: torch.Tensor
     student_logits: torch.Tensor
     teacher_logits: torch.Tensor
+
+
+def _extract_last_user_text(messages: list[dict[str, Any]]) -> str:
+    """Extract the text content from the last user message in a conversational prompt."""
+    last_message = messages[-1]
+    if last_message.get("role") != "user":
+        raise ValueError(
+            f"Self-distillation teacher prompt construction expects the conversation to end with a user turn, "
+            f"but the last message has role '{last_message.get('role')}'. "
+            f"Prompts ending with assistant prefills or tool turns are not supported."
+        )
+    content = last_message.get("content", "")
+    if isinstance(content, list):
+        return " ".join(part.get("text", "") for part in content if part.get("type") == "text")
+    return content
 
 
 class DemonstrationTeacherContextBuilder:
@@ -119,7 +133,7 @@ class DemonstrationTeacherContextBuilder:
         privileged_text = self._stringify_privileged_context(privileged_context)
         if isinstance(prompt, list):
             system_messages = prompt[:-1]
-            prompt_text = extract_last_user_text(prompt)
+            prompt_text = _extract_last_user_text(prompt)
             teacher_text = self.trainer.args.teacher_prompt_template.format(
                 prompt=prompt_text,
                 privileged_context=privileged_text,
@@ -271,10 +285,31 @@ class SDFTTrainer(_BaseTrainer):
         self.loss_type = args.loss_type
         self.temperature = args.temperature
         self.generate_from_teacher = args.generate_from_teacher
+        self.use_vllm = args.use_vllm
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self._step = 0
         self._buffered_inputs = None
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+
+        self.generation_kwargs = {
+            "max_new_tokens": self.max_completion_length,
+            "do_sample": True,
+            "pad_token_id": self._tokenizer.pad_token_id,
+            "bos_token_id": self._tokenizer.bos_token_id,
+            "eos_token_id": self._tokenizer.eos_token_id,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "top_k": args.top_k,
+            "min_p": args.min_p,
+            "repetition_penalty": args.repetition_penalty,
+            "cache_implementation": args.cache_implementation,
+        }
+        if args.generation_kwargs is not None:
+            self.generation_kwargs.update(args.generation_kwargs)
+        self.generation_config = GenerationConfig(**self.generation_kwargs, disable_compile=True)
+
+        if hasattr(model, "warnings_issued"):
+            model.warnings_issued["estimate_tokens"] = True
 
         super().__init__(
             model=model,
@@ -288,18 +323,38 @@ class SDFTTrainer(_BaseTrainer):
             compute_loss_func="non-None value to disable scaling",
         )
 
-        self.generation_engine = Generation(
-            model=self.model,
-            model_wrapped=self.model_wrapped,
-            args=args,
-            accelerator=self.accelerator,
-            processing_class=self.processing_class,
-            tokenizer=self._tokenizer,
-            is_fsdp_enabled=self.is_fsdp_enabled,
-            max_completion_length=self.max_completion_length,
-            temperature=self.temperature,
-        )
-        self._last_loaded_step = -1 if args.use_vllm else 0
+        self._last_loaded_step = -1 if self.use_vllm else 0
+        if self.use_vllm:
+            from ...generation.vllm_generation import VLLMGeneration
+
+            self.vllm_generation = VLLMGeneration(
+                model=self.model,
+                accelerator=self.accelerator,
+                is_fsdp_enabled=self.is_fsdp_enabled,
+                processing_class=self.processing_class,
+                mode=args.vllm_mode,
+                server_base_url=args.vllm_server_base_url,
+                server_host=args.vllm_server_host,
+                server_port=args.vllm_server_port,
+                group_port=args.vllm_group_port,
+                server_timeout=args.vllm_server_timeout,
+                tensor_parallel_size=args.vllm_tensor_parallel_size,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                max_model_length=args.vllm_max_model_length,
+                max_num_seqs=args.per_device_train_batch_size
+                * args.vllm_tensor_parallel_size
+                * args.steps_per_generation,
+                enable_sleep_mode=args.vllm_enable_sleep_mode,
+                model_impl=args.vllm_model_impl,
+                repetition_penalty=args.repetition_penalty,
+                temperature=self.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                min_p=args.min_p,
+                max_completion_length=self.max_completion_length,
+                logprobs=None,
+                generation_kwargs=args.generation_kwargs,
+            )
 
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
@@ -498,6 +553,61 @@ class SDFTTrainer(_BaseTrainer):
         )
         return batch
 
+    def _generate(self, prompt_ids: list[list[int]]) -> tuple[list[list[int]], list[list[int]]]:
+        if self.use_vllm:
+            return self._generate_vllm(prompt_ids)
+        return self._generate_transformers(prompt_ids)
+
+    def _generate_vllm(self, prompt_ids: list[list[int]]) -> tuple[list[list[int]], list[list[int]]]:
+        if self.state.global_step != self._last_loaded_step:
+            self.vllm_generation.sync_weights()
+            self._last_loaded_step = self.state.global_step
+
+        mode = "train" if self.model.training else "eval"
+        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+        prompt_ids_out, completion_ids_list, _, _ = self.vllm_generation.generate(
+            prompts=prompt_ids,
+            images=None,
+            num_generations=num_generations,
+        )
+        return prompt_ids_out, completion_ids_list
+
+    def _generate_transformers(self, prompt_ids: list[list[int]]) -> tuple[list[list[int]], list[list[int]]]:
+        device = self.accelerator.device
+        prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
+        padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left").to(
+            device=device
+        )
+        attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left").to(
+            device=device
+        )
+        generate_inputs: dict[str, torch.Tensor | Any] = {"input_ids": padded_ids, "attention_mask": attention_mask}
+
+        with (
+            unwrap_model_for_generation(
+                self.model_wrapped,
+                self.accelerator,
+                gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                generation_kwargs=self.generation_kwargs,
+            ) as unwrapped_model,
+            torch.no_grad(),
+        ):
+            prompt_completion_ids = unwrapped_model.generate(
+                **generate_inputs, generation_config=self.generation_config
+            )
+
+        prompt_length = generate_inputs["input_ids"].size(1)
+        completion_ids = prompt_completion_ids[:, prompt_length:]
+        is_eos = completion_ids == self._tokenizer.eos_token_id
+        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+        seq_idx = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+        completion_mask = (seq_idx <= eos_idx.unsqueeze(1)).int()
+        completion_ids_list = [
+            c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
+        ]
+        return prompt_ids, completion_ids_list
+
     def sample_rollouts(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
         """Generate completions for a batch of prompts and assemble the training batch."""
         prompts = [example["prompt"] for example in inputs]
@@ -517,15 +627,7 @@ class SDFTTrainer(_BaseTrainer):
             generation_prompt_text=None,
         )
 
-        num_generations = self.num_generations if self.model.training else self.num_generations_eval
-        if self.args.use_vllm and self.state.global_step != self._last_loaded_step:
-            self.generation_engine.sync_weights()
-            self._last_loaded_step = self.state.global_step
-        generation_output = self.generation_engine.generate(
-            generation_prompt_ids_list,
-            num_generations=num_generations,
-        )
-        completion_ids_list = generation_output.completion_ids
+        _, completion_ids_list = self._generate(generation_prompt_ids_list)
         device = self.accelerator.device
         prompt_ids = [torch.tensor(ids) for ids in student_prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
