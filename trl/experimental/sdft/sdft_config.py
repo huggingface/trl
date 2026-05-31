@@ -260,35 +260,6 @@ class SDFTConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
-        if self.loss_type not in ["grpo", "bnpo", "dr_grpo", "dapo"]:
-            raise ValueError("loss_type must be one of: 'grpo', 'bnpo', 'dr_grpo', 'dapo'")
-        if self.teacher_model_kind not in {"base", "live", "ema"}:
-            raise ValueError("teacher_model_kind must be one of: 'base', 'live', 'ema'")
-        if not 0.0 <= self.teacher_update_rate <= 1.0:
-            raise ValueError("teacher_update_rate must be in [0, 1]")
-        if self.teacher_sync_steps <= 0:
-            raise ValueError("teacher_sync_steps must be positive")
-        if self.num_generations < 1:
-            raise ValueError("num_generations must be at least 1")
-        if not 0.0 <= self.distillation_alpha <= 1.0:
-            raise ValueError("distillation_alpha must be in [0, 1]")
-        if self.distillation_mode not in {"sampled_token", "full_logits", "topk_logits"}:
-            raise ValueError("distillation_mode must be one of: 'sampled_token', 'full_logits', 'topk_logits'")
-        if self.distillation_topk is not None and self.distillation_topk <= 0:
-            raise ValueError("distillation_topk must be positive when provided")
-        if self.distillation_mode == "topk_logits":
-            if self.distillation_topk is None:
-                raise ValueError("`distillation_mode='topk_logits'` requires `distillation_topk` to be set.")
-        elif self.distillation_topk is not None:
-            raise ValueError("`distillation_topk` is only valid when `distillation_mode='topk_logits'`.")
-        if self.distillation_mode == "sampled_token" and self.distillation_alpha != 1.0:
-            raise ValueError(
-                "sampled-token distillation requires `distillation_alpha=1.0`. "
-                "Set `distillation_mode='full_logits'` or `distillation_mode='topk_logits'` to use other divergence settings."
-            )
-        if self.distillation_is_clip is not None and self.distillation_is_clip <= 0:
-            raise ValueError("distillation_is_clip must be positive when provided")
-
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
             self.steps_per_generation = self.gradient_accumulation_steps
@@ -325,5 +296,3 @@ class SDFTConfig(_BaseConfig):
             raise ValueError(
                 "teacher_prompt_template must contain both `{prompt}` and `{privileged_context}` placeholders"
             )
-        if self.num_loss_tokens_to_skip < 0:
-            raise ValueError("num_loss_tokens_to_skip must be non-negative")
