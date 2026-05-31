@@ -300,10 +300,6 @@ class SDPOConfig(_BaseConfig):
         default=1,
         metadata={"help": "How often to synchronize the EMA teacher model."},
     )
-    top_entropy_quantile: float = field(
-        default=1.0,
-        metadata={"help": "Reserved for entropy-based token filtering."},
-    )
     max_reprompt_len: int = field(
         default=10240,
         metadata={"help": "Maximum length for reprompting in self-distillation."},

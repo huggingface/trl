@@ -180,12 +180,8 @@ class SDFTConfig(_BaseConfig):
         metadata={"help": "Number of optimization iterations per generated batch."},
     )
     loss_type: str = field(
-        default="dapo",
+        default="grpo",
         metadata={"help": "Policy loss aggregation. Supported: `grpo`, `bnpo`, `dr_grpo`, `dapo`."},
-    )
-    mask_truncated_completions: bool = field(
-        default=False,
-        metadata={"help": "Whether to exclude truncated completions from the loss."},
     )
     teacher_model_kind: str = field(
         default="base",
@@ -204,10 +200,6 @@ class SDFTConfig(_BaseConfig):
     teacher_sync_steps: int = field(
         default=1,
         metadata={"help": "Number of optimizer steps between teacher updates."},
-    )
-    top_entropy_quantile: float = field(
-        default=1.0,
-        metadata={"help": "Reserved for entropy-based token filtering."},
     )
     distillation_alpha: float = field(
         default=0.5,

@@ -269,7 +269,6 @@ class SDFTTrainer(_BaseTrainer):
         self.num_iterations = args.num_iterations
         self.shuffle_dataset = args.shuffle_dataset
         self.loss_type = args.loss_type
-        self.mask_truncated_completions = args.mask_truncated_completions
         self.temperature = args.temperature
         self.generate_from_teacher = args.generate_from_teacher
         self.chat_template_kwargs = args.chat_template_kwargs or {}
@@ -539,11 +538,6 @@ class SDFTTrainer(_BaseTrainer):
             device=device
         )
         completion_mask = pad(completion_mask, padding_value=0, padding_side="right").to(device=device)
-
-        if self.mask_truncated_completions:
-            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
-            is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
-            completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
         old_per_token_logps = None
         if not self.generate_from_teacher:
