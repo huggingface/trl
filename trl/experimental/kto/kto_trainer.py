@@ -1166,6 +1166,11 @@ class KTOTrainer(_BaseTrainer):
                 logits, labels = outputs.logits, inputs["completion_input_ids"]
         return loss, logits, labels
 
+    # Override training step to add activation offloading context.
+    def training_step(self, *args, **kwargs):
+        with self.maybe_activation_offload_context:
+            return super().training_step(*args, **kwargs)
+
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
