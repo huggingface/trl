@@ -514,6 +514,47 @@ class KTOTrainer(_BaseTrainer):
             result = processing_class(text=input)
         return result
 
+    def _get_kl_dataset(
+        self,
+        dataset: Dataset | IterableDataset,
+        dataset_name: str,
+        args: KTOConfig,
+    ) -> Dataset | IterableDataset:
+        """
+        Creates the KL dataset by creating mismatched (prompt, completion) pairs for KL divergence estimation.
+
+        Args:
+            dataset (`Dataset` or `IterableDataset`):
+                Tokenized dataset with `prompt_ids` and `completion_ids` columns.
+            dataset_name (`str`):
+                Name used in progress bar descriptions.
+            args ([`KTOConfig`]):
+                Training arguments providing `per_device_train_batch_size` and `dataset_num_proc`.
+
+        Returns:
+            `Dataset` or `IterableDataset` with a single `KL_completion_ids` column.
+        """
+        map_kwargs = {}
+        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
+            map_kwargs["num_proc"] = args.dataset_num_proc
+            map_kwargs["desc"] = f"Extracting KL {dataset_name} dataset"
+        kl_dataset = dataset.map(
+            _get_kl_completion_ids, batched=True, batch_size=args.per_device_train_batch_size, **map_kwargs
+        )
+
+        def rename_kl_fn(example):
+            return {"KL_completion_ids": example["completion_ids"]}
+
+        if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+            map_kwargs["desc"] = f"Assembling KL {dataset_name} dataset"
+        column_names = get_dataset_column_names(dataset)
+        kl_dataset = kl_dataset.map(
+            rename_kl_fn,
+            remove_columns=[c for c in get_dataset_column_names(kl_dataset) if c in column_names],
+            **map_kwargs,
+        )
+        return kl_dataset
+
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
