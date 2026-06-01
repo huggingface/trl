@@ -637,28 +637,9 @@ class KTOTrainer(_BaseTrainer):
 
             # Get KL datasets if needed
             if self.calculate_KL:
-
-                def rename_kl_fn(example):
-                    return {"KL_completion_ids": example["completion_ids"]}
-
                 # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
                 # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Extracting KL {dataset_name} dataset"
-                kl_dataset = dataset.map(
-                    _get_kl_dataset, batched=True, batch_size=args.per_device_train_batch_size, **map_kwargs
-                )
-
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Assembling KL {dataset_name} dataset"
-                column_names = get_dataset_column_names(dataset)
-                kl_dataset = kl_dataset.map(
-                    rename_kl_fn,
-                    remove_columns=[c for c in get_dataset_column_names(kl_dataset) if c in column_names],
-                    **map_kwargs,
-                )
-
-                # merge the datasets
+                kl_dataset = self._get_kl_dataset(dataset, dataset_name, args)
                 dataset = concatenate_datasets([dataset, kl_dataset], axis=1)
 
             # Calculate dataset desirability balance
