@@ -1078,7 +1078,7 @@ class KTOTrainer(_BaseTrainer):
             else:
                 ref_KL_logps = None
         else:
-            with torch.no_grad():
+            with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
                 if is_peft_model(self.model) and self.ref_model is None:
                     model = self.accelerator.unwrap_model(self.model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
