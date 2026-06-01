@@ -145,7 +145,6 @@ class TestSDPOTrainer(TrlTestCase):
             sdpo_policy_loss_mode="distillation_only",
             distillation_mode="full_logits",
             distillation_is_clip=None,
-            loss_type="bnpo",
             distillation_weight=0.7,
         )
 

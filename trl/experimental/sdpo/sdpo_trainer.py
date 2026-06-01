@@ -1227,15 +1227,21 @@ class SDPOTrainer(_BaseTrainer):
         true_labels = torch.where(response_mask.bool(), completion_ids, torch.full_like(completion_ids, -100))
 
         student_head = student.get_output_embeddings()
-        loss = self.liger_jsd_loss(
-            student_input=student_hidden.reshape(-1, student_hidden.size(-1)),
-            student_weight=student_head.weight,
-            teacher_input=teacher_hidden.reshape(-1, teacher_hidden.size(-1)),
-            teacher_weight=teacher_weight,
-            true_labels=true_labels.reshape(-1),
-            student_bias=student_head.bias,
-            teacher_bias=teacher_bias,
-        )
+        # Per-sequence then batch mean (grpo), matching the non-Liger path: the fused kernel reduces by total tokens
+        # (bnpo), so we call it per sequence and average.
+        seq_losses = [
+            self.liger_jsd_loss(
+                student_input=student_hidden[i],
+                student_weight=student_head.weight,
+                teacher_input=teacher_hidden[i],
+                teacher_weight=teacher_weight,
+                true_labels=true_labels[i],
+                student_bias=student_head.bias,
+                teacher_bias=teacher_bias,
+            )
+            for i in range(student_hidden.size(0))
+        ]
+        loss = torch.stack(seq_losses).mean()
 
         mode = "train" if student.training else "eval"
         self._log_self_distillation_metric(mode, self.accelerator.gather(loss.detach()).mean().item())
