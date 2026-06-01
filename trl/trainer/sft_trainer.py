@@ -243,6 +243,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
     final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
     logit_scale = getattr(text_config, "logit_scale", 1.0)
     original_forward = model.forward
+    lm_head = model.get_output_embeddings()
 
     def _chunked_ce_forward(
         self: torch.nn.Module,
@@ -285,14 +286,14 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
 
         loss, num_correct_tokens, entropy_sum, num_valid_tokens = _chunked_cross_entropy_loss(
             hidden_states,
-            self.lm_head.weight,
+            lm_head.weight,
             chunk_size,
             labels=labels,
             shift_labels=shift_labels,
             num_items_in_batch=num_items_in_batch,
             logit_scale=logit_scale,
             final_logit_softcapping=final_logit_softcapping,
-            lm_head_bias=self.lm_head.bias,
+            lm_head_bias=lm_head.bias,
         )
 
         aux_loss = None
@@ -1121,7 +1122,7 @@ class SFTTrainer(_BaseTrainer):
             if not use_flash_attention:
                 logger.warning(
                     "Padding-free training is enabled, but the attention implementation is not set to a supported "
-                    "flash attention variant. Padding-free training flattens batches into a single sequence, and only "
+                    "Flash Attention variant. Padding-free training flattens batches into a single sequence, and only "
                     "the following implementations are known to reliably support this: "
                     f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to "
                     "unexpected behavior. To ensure compatibility, set `attn_implementation` in the model "
@@ -1181,7 +1182,7 @@ class SFTTrainer(_BaseTrainer):
 
         if args.packing and args.packing_strategy in {"bfd", "bfd_split"} and not use_flash_attention:
             logger.warning(
-                "You are using packing, but the attention implementation is not set to a supported flash attention "
+                "You are using packing, but the attention implementation is not set to a supported Flash Attention "
                 "variant. Packing gathers multiple samples into a single sequence, and only the following "
                 f"implementations are known to reliably support this: {', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. "
                 "Using other implementations may lead to cross-contamination between samples. To avoid this, either "
@@ -1259,18 +1260,17 @@ class SFTTrainer(_BaseTrainer):
                 # `PeftModel.forward`. Prompt-learning variants need `PeftModel.forward` to run first (to inject
                 # virtual tokens), then it delegates into the patched inner forward.
                 target = model.get_base_model() if is_peft_model(model) else model
-                # The chunked path reads `lm_head.weight` directly, which would silently drop the adapter delta
-                # (and starve its parameters of gradients) if `lm_head` itself is a PEFT tuner layer.
+                # The chunked path reads the output projection weight directly, which would silently drop the
+                # adapter delta (and starve its parameters of gradients) if the head itself is a PEFT tuner layer.
                 if is_peft_model(model):
                     from peft.tuners.tuners_utils import BaseTunerLayer
 
-                    if isinstance(target.lm_head, BaseTunerLayer):
+                    if isinstance(target.get_output_embeddings(), BaseTunerLayer):
                         raise ValueError(
-                            "`loss_type='chunked_nll'` is not supported when `lm_head` is wrapped by a PEFT "
-                            "adapter (e.g. `target_modules='all-linear'` or explicitly including `'lm_head'`). "
-                            "Either remove `lm_head` from `target_modules`, or switch to `loss_type='nll'`. If "
-                            "this is a real use case for you, please open an issue at "
-                            "https://github.com/huggingface/trl/issues."
+                            "`loss_type='chunked_nll'` is not supported when `lm_head` is wrapped by a PEFT adapter "
+                            "(e.g. `target_modules='all-linear'` or explicitly including `'lm_head'`). Either remove "
+                            "`lm_head` from `target_modules`, or switch to `loss_type='nll'`. If this is a real use "
+                            "case for you, please open an issue at https://github.com/huggingface/trl/issues."
                         )
                 _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
             else:
