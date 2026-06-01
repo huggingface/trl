@@ -24,7 +24,7 @@ from collections.abc import Mapping, Sequence, Sized
 from contextlib import contextmanager
 from importlib.metadata import version
 from itertools import accumulate
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -940,12 +940,148 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
     if isinstance(image_position_ids, list):
         merged = torch.cat(image_position_ids, dim=0)
         batch = {**batch, "image_position_ids": merged}
-
     return batch
 
 
-TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
+def _sync_multimodal_after_truncation(
+    input_ids: torch.Tensor,
+    output: dict[str, Any],
+    processor: "ProcessorMixin",
+    num_images_per_sample: list[int],
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """
+    After truncating ``input_ids`` to ``max_length``, ensure that multimodal tensors
+    (``pixel_values``, ``image_grid_thw``, etc.) only contain features for images whose
+    placeholder tokens are **fully** present in the (truncated) ``input_ids``.
 
+    Images whose placeholder tokens were partially or fully removed by truncation are
+    dropped from ``pixel_values`` / ``image_grid_thw``, and any residual partial
+    placeholder tokens in ``input_ids`` are replaced with the pad token to avoid
+    downstream "Image features and image tokens do not match" errors.
+
+    Args:
+        input_ids: Truncated input_ids tensor of shape ``(batch_size, seq_len)``.
+        output: The collator output dict that still holds the *original*
+            ``pixel_values`` / ``image_grid_thw`` / ``image_sizes`` etc.
+        processor: The multimodal processor used to resolve image token IDs and merge size.
+        num_images_per_sample: A list of length ``batch_size`` indicating how many images
+            each sample originally had. Used to correctly map images in ``image_grid_thw``
+            to their respective samples.
+
+    Returns:
+        A ``(input_ids, output)`` tuple with image-related tensors trimmed to match the
+        truncated ``input_ids``.
+    """
+    if "pixel_values" not in output:
+        return input_ids, output
+
+    tokenizer = getattr(processor, "tokenizer", processor)
+
+    # Resolve the image placeholder token id
+    image_token_id = getattr(processor, "image_token_id", None)
+    if image_token_id is None:
+        for candidate in ("<|image_pad|>", "<|image|>"):
+            tid = tokenizer.convert_tokens_to_ids(candidate)
+            if tid != tokenizer.unk_token_id:
+                image_token_id = tid
+                break
+    if image_token_id is None:
+        return input_ids, output
+
+    image_grid_thw = output.get("image_grid_thw")
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+
+    if image_grid_thw is not None:
+        # Qwen2-VL style: pixel_values rows are determined by image_grid_thw
+        merge_size = getattr(getattr(processor, "image_processor", None), "merge_size", 2)
+        merge_length = merge_size**2
+        tokens_per_image = (image_grid_thw.prod(dim=-1) // merge_length).tolist()
+        pixel_rows_per_image = image_grid_thw.prod(dim=-1).tolist()
+
+        batch_size = input_ids.shape[0]
+        num_images_total = image_grid_thw.shape[0]
+
+        # Determine how many images belong to each sample
+        sample_image_counts = list(num_images_per_sample)
+
+        keep_grid_indices: list[int] = []
+        keep_pixel_ranges: list[tuple[int, int]] = []
+        num_dropped_images = 0
+
+        img_idx = 0
+        pixel_offset = 0
+        for b in range(batch_size):
+            remaining_image_tokens = (input_ids[b] == image_token_id).sum().item()
+            consumed = 0
+            num_imgs_this_sample = sample_image_counts[b]
+
+            for j in range(num_imgs_this_sample):
+                cur_img = img_idx + j
+                if cur_img >= num_images_total:
+                    break
+                needed = tokens_per_image[cur_img]
+                pix_rows = pixel_rows_per_image[cur_img]
+
+                if consumed + needed <= remaining_image_tokens:
+                    # This image is fully present after truncation
+                    keep_grid_indices.append(cur_img)
+                    keep_pixel_ranges.append((pixel_offset, pixel_offset + pix_rows))
+                    consumed += needed
+                else:
+                    # Partially or fully truncated image
+                    leftover = remaining_image_tokens - consumed
+                    if leftover > 0:
+                        # Replace residual partial placeholder tokens with pad
+                        positions = (input_ids[b] == image_token_id).nonzero(as_tuple=True)[0]
+                        input_ids[b, positions[consumed : consumed + leftover]] = pad_id
+                    num_dropped_images += num_imgs_this_sample - j
+                    # Accumulate pixel_offset for all remaining images in this sample
+                    for skip in range(j, num_imgs_this_sample):
+                        skip_img = img_idx + skip
+                        if skip_img < num_images_total:
+                            pixel_offset += pixel_rows_per_image[skip_img]
+                    break
+
+                pixel_offset += pix_rows
+            else:
+                # All images in this sample were kept
+                pass
+
+            img_idx += num_imgs_this_sample
+
+        if num_dropped_images > 0:
+            logger.warning(
+                f"{num_dropped_images} image(s) were dropped because their placeholder tokens were truncated "
+                f"by max_length. Consider increasing max_length or reducing image resolution to avoid losing "
+                f"image information during training."
+            )
+
+        if keep_grid_indices:
+            output["image_grid_thw"] = image_grid_thw[keep_grid_indices]
+            keep_pixel_indices = []
+            for start, end in keep_pixel_ranges:
+                keep_pixel_indices.extend(range(start, end))
+            output["pixel_values"] = output["pixel_values"][keep_pixel_indices]
+        else:
+            output.pop("pixel_values", None)
+            output.pop("image_grid_thw", None)
+
+    else:
+        # Fallback for non-Qwen models (LLaVA, etc.): if mismatch detected, drop all images
+        total_image_tokens = (input_ids == image_token_id).sum().item()
+        num_features = output["pixel_values"].shape[0]
+        if total_image_tokens != num_features:
+            logger.warning(
+                f"Image features and image tokens do not match after truncation (tokens: {total_image_tokens}, "
+                f"features: {num_features}). All images in this batch have been dropped. Consider increasing "
+                f"max_length or reducing image resolution."
+            )
+            output.pop("pixel_values", None)
+            output.pop("image_sizes", None)
+
+    return input_ids, output
+
+TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
 # This function is intentionally not used internally. It is provided as a utility for users whose datasets contain
 # `None` values inserted by tabular backends (e.g., Arrow/Parquet) for missing keys in nested structures. This

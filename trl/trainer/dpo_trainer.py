@@ -52,6 +52,7 @@ from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig
 from .utils import (
+    _sync_multimodal_after_truncation,
     create_model_from_path,
     disable_dropout_in_model,
     entropy_from_logits,
@@ -390,6 +391,15 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
                 token_type_ids = token_type_ids[:, : self.max_length]
             if "mm_token_type_ids" in processed_prompts:
                 mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
+
+            # After truncation, image placeholder tokens may have been partially removed
+            # while pixel_values still contains features for all images. Synchronise to
+            # prevent "Image features and image tokens do not match" errors.
+            if "pixel_values" in processed_prompts:
+                num_images = [len(img_list) for img_list in images]
+                input_ids, processed_prompts = _sync_multimodal_after_truncation(
+                    input_ids, processed_prompts, self.processor, num_images
+                )
 
         # Build the output dictionary
         output = processed_prompts  # we take processed_prompts because it contains the images

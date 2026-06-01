@@ -60,6 +60,7 @@ from ..models import get_act_offloading_ctx_manager
 from .base_trainer import _BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
+    _sync_multimodal_after_truncation,
     create_model_from_path,
     entropy_from_logits,
     flush_left,
@@ -243,7 +244,6 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
     final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
     logit_scale = getattr(text_config, "logit_scale", 1.0)
     original_forward = model.forward
-    lm_head = model.get_output_embeddings()
 
     def _chunked_ce_forward(
         self: torch.nn.Module,
@@ -286,14 +286,14 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
 
         loss, num_correct_tokens, entropy_sum, num_valid_tokens = _chunked_cross_entropy_loss(
             hidden_states,
-            lm_head.weight,
+            self.lm_head.weight,
             chunk_size,
             labels=labels,
             shift_labels=shift_labels,
             num_items_in_batch=num_items_in_batch,
             logit_scale=logit_scale,
             final_logit_softcapping=final_logit_softcapping,
-            lm_head_bias=lm_head.bias,
+            lm_head_bias=self.lm_head.bias,
         )
 
         aux_loss = None
@@ -685,6 +685,17 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             return_tensors=self.return_tensors,
             add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
+
+        # When truncation is enabled, the tokenizer may remove image placeholder tokens while
+        # the image processor retains all pixel features. Synchronise multimodal tensors with
+        # the (possibly truncated) input_ids to prevent "Image features and image tokens do not
+        # match" errors.
+        if self.max_length is not None and "pixel_values" in output:
+            num_images = [len(img_list) for img_list in images]
+            output["input_ids"], output = _sync_multimodal_after_truncation(
+                output["input_ids"], output, self.processor, num_images
+            )
+
         labels = output["input_ids"].clone()
         labels[output["attention_mask"] == 0] = -100
         # We mask only padding tokens (-100) in the labels. Vision tokens are left unchanged because their handling in
@@ -773,6 +784,15 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                 token_type_ids = token_type_ids[:, : self.max_length]
             if "mm_token_type_ids" in processed_prompts:
                 mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
+
+            # After truncation, image placeholder tokens may have been partially removed
+            # while pixel_values still contains features for all images. Synchronise to
+            # prevent "Image features and image tokens do not match" errors.
+            if "pixel_values" in processed_prompts:
+                num_images = [len(img_list) for img_list in images]
+                input_ids, processed_prompts = _sync_multimodal_after_truncation(
+                    input_ids, processed_prompts, self.processor, num_images
+                )
 
         # Create labels and mask padding tokens
         labels = input_ids.clone()
@@ -1260,17 +1280,18 @@ class SFTTrainer(_BaseTrainer):
                 # `PeftModel.forward`. Prompt-learning variants need `PeftModel.forward` to run first (to inject
                 # virtual tokens), then it delegates into the patched inner forward.
                 target = model.get_base_model() if is_peft_model(model) else model
-                # The chunked path reads the output projection weight directly, which would silently drop the
-                # adapter delta (and starve its parameters of gradients) if the head itself is a PEFT tuner layer.
+                # The chunked path reads `lm_head.weight` directly, which would silently drop the adapter delta
+                # (and starve its parameters of gradients) if `lm_head` itself is a PEFT tuner layer.
                 if is_peft_model(model):
                     from peft.tuners.tuners_utils import BaseTunerLayer
 
-                    if isinstance(target.get_output_embeddings(), BaseTunerLayer):
+                    if isinstance(target.lm_head, BaseTunerLayer):
                         raise ValueError(
-                            "`loss_type='chunked_nll'` is not supported when `lm_head` is wrapped by a PEFT adapter "
-                            "(e.g. `target_modules='all-linear'` or explicitly including `'lm_head'`). Either remove "
-                            "`lm_head` from `target_modules`, or switch to `loss_type='nll'`. If this is a real use "
-                            "case for you, please open an issue at https://github.com/huggingface/trl/issues."
+                            "`loss_type='chunked_nll'` is not supported when `lm_head` is wrapped by a PEFT "
+                            "adapter (e.g. `target_modules='all-linear'` or explicitly including `'lm_head'`). "
+                            "Either remove `lm_head` from `target_modules`, or switch to `loss_type='nll'`. If "
+                            "this is a real use case for you, please open an issue at "
+                            "https://github.com/huggingface/trl/issues."
                         )
                 _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
             else:
@@ -1632,24 +1653,15 @@ class SFTTrainer(_BaseTrainer):
                     shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
                 per_token_entropy = entropy_from_logits(shift_logits)
-                predictions = shift_logits.argmax(dim=-1)
                 mask = shift_labels != -100
-
                 entropy_sum = (per_token_entropy * mask).sum()
                 total_tokens = mask.sum()
-                correct_predictions = (predictions == shift_labels) & mask
-                correct_tokens = correct_predictions.sum()
 
                 # Gather counts across ranks and weight-average
                 entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
                 total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
-                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
                 entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
-
-                total_sum = total_tokens.sum()
-                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
             self._metrics[mode]["entropy"].append(entropy)
-            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
@@ -1678,6 +1690,46 @@ class SFTTrainer(_BaseTrainer):
                     "not be logged. This is unexpected; please report it to the liger-kernel repository.",
                     stacklevel=2,
                 )
+        else:
+            # Compute accuracy from logits using argmax (traditional method)
+            with torch.no_grad():
+                if "shift_labels" in inputs:
+                    # When using CP or SP, labels are pre-shifted. We must use these (and cannot manually shift) because:
+                    # - The first discarded token from inputs["labels"] actually belongs to process n-1
+                    # - The last logits require the label from process n+1
+                    shift_logits = outputs.logits.contiguous()
+                    shift_labels = inputs["shift_labels"]
+                else:
+                    shift_logits = outputs.logits[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+
+                # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
+                if (
+                    self.num_virtual_tokens > 0
+                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
+                ):
+                    shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
+
+                # Get predictions
+                predictions = shift_logits.argmax(dim=-1)
+
+                # Create mask for non-padding tokens (assuming ignore_index is -100)
+                mask = shift_labels != -100
+
+                # Calculate accuracy only on non-padding tokens
+                correct_predictions = (predictions == shift_labels) & mask
+                total_tokens = mask.sum()
+                correct_tokens = correct_predictions.sum()
+
+                # Gather the correct_tokens and total_tokens across all processes
+                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
+                total_tokens = self.accelerator.gather_for_metrics(total_tokens)
+
+                # Compute the mean token accuracy and log it
+                total_sum = total_tokens.sum()
+                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
+                self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+
         # Log auxiliary loss if enabled (applies to both Liger and non-Liger)
         if self.aux_loss_enabled:
             aux_loss = outputs.aux_loss
