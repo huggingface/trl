@@ -56,7 +56,6 @@ from ...trainer.utils import (
 )
 from ..utils import prepare_peft_model
 from .loss_utils import (
-    aggregate_loss,
     apply_importance_sampling_clipping,
     compute_full_logit_self_distillation_loss,
     compute_sampled_token_self_distillation_loss,
@@ -1000,7 +999,7 @@ class SDPOTrainer(_BaseTrainer):
         inputs: TrainingBatch,
         distillation_logits: DistillationLogits,
     ) -> torch.Tensor:
-        """Compute the per-token distillation loss and aggregate it according to `loss_type`.
+        """Compute the per-token distillation loss and aggregate by normalizing over sequence length.
 
         Dispatches between three objectives based on `distillation_mode`:
 
@@ -1060,12 +1059,10 @@ class SDPOTrainer(_BaseTrainer):
                 self.args.distillation_is_clip,
             )
 
-        loss = aggregate_loss(
-            per_token_loss,
-            distillation_logits.response_mask,
-            loss_type=self.loss_type,
-            max_completion_length=self.max_completion_length,
-        )
+        loss = (per_token_loss * distillation_logits.response_mask).sum(-1) / distillation_logits.response_mask.sum(
+            -1
+        ).clamp(min=1.0)
+        loss = loss.mean()
 
         mode = "train" if model.training else "eval"
         mean_distill_loss = (
@@ -1465,12 +1462,17 @@ class SDPOTrainer(_BaseTrainer):
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
         per_token_loss = -torch.min(coef_1 * advantages, coef_2 * advantages)
 
-        loss = aggregate_loss(
-            per_token_loss,
-            completion_mask,
-            loss_type=self.loss_type,
-            max_completion_length=self.max_completion_length,
-        )
+        if self.loss_type == "grpo":
+            loss = (per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+            loss = loss.mean()
+        elif self.loss_type == "bnpo":
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        elif self.loss_type == "dr_grpo":
+            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+        elif self.loss_type == "dapo":
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        else:
+            raise ValueError(f"Unsupported loss_type: {self.loss_type}")
 
         mode = "train" if self.model.training else "eval"
         self._metrics[mode]["self_distillation/policy_loss"].append(

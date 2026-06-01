@@ -24,7 +24,6 @@ from transformers.utils import is_peft_available
 
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
 from trl.experimental.sdft.loss_utils import (
-    aggregate_loss,
     apply_importance_sampling_clipping,
     compute_full_logit_self_distillation_loss,
     compute_sampled_token_self_distillation_loss,
@@ -53,8 +52,6 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         }
         args.update(args_overrides)
         trainer.args = SimpleNamespace(**args)
-        trainer.loss_type = "dapo"
-        trainer.max_completion_length = 2
         trainer.accelerator = SimpleNamespace(gather=lambda tensor: tensor)
         trainer._metrics = {
             "train": defaultdict(list),
@@ -130,21 +127,6 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         teacher_with_tail = torch.tensor([0.2, 0.6, 0.2], dtype=torch.float32)
         expected_loss = (teacher_with_tail * (teacher_with_tail.log() - student_with_tail.log())).sum()
         torch.testing.assert_close(loss, expected_loss.reshape(1, 1))
-
-    def test_aggregate_loss_masks_response_tokens(self):
-        per_token_loss = torch.tensor([[1.0, 100.0], [3.0, 5.0]])
-        response_mask = torch.tensor([[1.0, 0.0], [1.0, 1.0]])
-
-        loss = aggregate_loss(per_token_loss, response_mask, loss_type="dapo", max_completion_length=2)
-
-        torch.testing.assert_close(loss, torch.tensor(3.0))
-
-    def test_aggregate_loss_rejects_unsupported_loss_modes(self):
-        per_token_loss = torch.tensor([[1.0]])
-        response_mask = torch.tensor([[1.0]])
-
-        with pytest.raises(ValueError, match="Unsupported loss_type: luspo"):
-            aggregate_loss(per_token_loss, response_mask, loss_type="luspo", max_completion_length=1)
 
     def test_importance_sampling_clipping_caps_token_ratio(self):
         per_token_loss = torch.tensor([[1.0, 2.0]])

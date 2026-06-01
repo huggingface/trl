@@ -105,7 +105,6 @@ class TestSDFTTrainer(TrlTestCase):
             num_generations=1,
             distillation_mode="full_logits",
             distillation_is_clip=None,
-            loss_type="bnpo",
             num_loss_tokens_to_skip=1,
         )
 

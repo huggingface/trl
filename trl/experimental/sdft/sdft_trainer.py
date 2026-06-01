@@ -56,7 +56,6 @@ from ...trainer.utils import (
 )
 from ..utils import prepare_peft_model
 from .loss_utils import (
-    aggregate_loss,
     apply_importance_sampling_clipping,
     compute_full_logit_self_distillation_loss,
     compute_sampled_token_self_distillation_loss,
@@ -285,7 +284,6 @@ class SDFTTrainer(_BaseTrainer):
         self.num_generations_eval = args.num_generations_eval or args.num_generations
         self.num_iterations = args.num_iterations
         self.shuffle_dataset = args.shuffle_dataset
-        self.loss_type = args.loss_type
         self.temperature = args.temperature
         self.generate_from_teacher = args.generate_from_teacher
         self.use_vllm = args.use_vllm
@@ -332,11 +330,6 @@ class SDFTTrainer(_BaseTrainer):
                 raise ValueError(
                     "`use_liger_kernel` is incompatible with `distillation_is_clip`: the fused kernel does not expose "
                     "per-token losses for importance-sampling clipping."
-                )
-            if args.loss_type != "bnpo":
-                logger.warning(
-                    "The Liger fused loss reduces with a token-level mean (equivalent to `loss_type='bnpo'`); the "
-                    f"configured `loss_type={args.loss_type!r}` is ignored on the Liger path."
                 )
             self.liger_jsd_loss = LigerFusedLinearJSDLoss(
                 beta=args.distillation_alpha,
@@ -752,7 +745,7 @@ class SDFTTrainer(_BaseTrainer):
         inputs: TrainingBatch,
         distillation_logits: DistillationLogits,
     ) -> torch.Tensor:
-        """Compute the per-token distillation loss and aggregate it according to `loss_type`.
+        """Compute the per-token distillation loss and aggregate by normalizing over sequence length.
 
         Dispatches between three objectives based on `distillation_mode`:
 
@@ -812,12 +805,10 @@ class SDFTTrainer(_BaseTrainer):
                 self.args.distillation_is_clip,
             )
 
-        loss = aggregate_loss(
-            per_token_loss,
-            distillation_logits.response_mask,
-            loss_type=self.loss_type,
-            max_completion_length=self.max_completion_length,
-        )
+        loss = (per_token_loss * distillation_logits.response_mask).sum(-1) / distillation_logits.response_mask.sum(
+            -1
+        ).clamp(min=1.0)
+        loss = loss.mean()
 
         mode = "train" if model.training else "eval"
         mean_distill_loss = (

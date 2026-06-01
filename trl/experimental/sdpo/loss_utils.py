@@ -81,37 +81,6 @@ def apply_importance_sampling_clipping(
     return per_token_loss * ratio
 
 
-def aggregate_loss(
-    per_token_loss: torch.Tensor,
-    response_mask: torch.Tensor,
-    *,
-    loss_type: str,
-    max_completion_length: int,
-) -> torch.Tensor:
-    """Reduce a per-token loss tensor according to the configured reduction.
-
-    Args:
-        per_token_loss:
-            Per-token loss values of shape `(batch_size, seq_len)`.
-        response_mask:
-            Mask selecting which completion-token positions contribute to the loss.
-        loss_type:
-            Reduction mode. Uses the same loss-type conventions as the GRPO-family trainers.
-        max_completion_length:
-            Used by the `dr_grpo` reduction, which normalizes by a fixed completion budget.
-    """
-    if loss_type == "grpo":
-        loss = (per_token_loss * response_mask).sum(-1) / response_mask.sum(-1).clamp(min=1.0)
-        return loss.mean()
-    if loss_type == "bnpo":
-        return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
-    if loss_type == "dr_grpo":
-        return (per_token_loss * response_mask).sum() / (per_token_loss.size(0) * max_completion_length)
-    if loss_type == "dapo":
-        return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
-    raise ValueError(f"Unsupported loss_type: {loss_type}")
-
-
 def compute_topk_self_distillation_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
