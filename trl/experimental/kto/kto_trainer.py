@@ -980,13 +980,14 @@ class KTOTrainer(_BaseTrainer):
         )
 
         # reference model
-        ref_base_model = self.ref_model.get_decoder()
-        ref_outputs = ref_base_model(
-            batch["completion_input_ids"],
-            attention_mask=batch["completion_attention_mask"],
-            use_cache=False,
-            **model_kwargs,
-        )
+        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
+            ref_base_model = self.ref_model.get_decoder()
+            ref_outputs = ref_base_model(
+                batch["completion_input_ids"],
+                attention_mask=batch["completion_attention_mask"],
+                use_cache=False,
+                **model_kwargs,
+            )
         lm_head = model.get_output_embeddings()
         ref_lm_head = self.ref_model.get_output_embeddings()
 
