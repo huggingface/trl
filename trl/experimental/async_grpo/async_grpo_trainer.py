@@ -603,12 +603,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
             device = completion_mask.device
             n_samples = torch.tensor(completion_mask.shape[0], dtype=torch.float32, device=device)
             if keys:
-                local_sums = torch.stack([sample_metrics[k].to(device).sum() for k in keys])
-                stats = torch.cat([local_sums, n_samples.unsqueeze(0)])
+                # nan-aware per key: unscorable samples carry NaN, so a plain .sum() would poison the whole metric.
+                local_sums = torch.stack([torch.nansum(sample_metrics[k].to(device)) for k in keys])
+                local_counts = torch.stack(
+                    [(~torch.isnan(sample_metrics[k].to(device))).sum().to(torch.float32) for k in keys]
+                )
+                stats = torch.cat([local_sums, local_counts])
                 stats = self.accelerator.reduce(stats, reduction="sum")
-                global_sums, global_n_samples = stats[:-1], stats[-1]
-                for k, global_sum in zip(keys, global_sums, strict=True):
-                    self._metrics["train"][k].append((global_sum / global_n_samples).item())
+                n = len(keys)
+                global_sums, global_counts = stats[:n], stats[n:]
+                for k, global_sum, global_count in zip(keys, global_sums, global_counts, strict=True):
+                    metric = (global_sum / global_count).item() if global_count > 0 else float("nan")
+                    self._metrics["train"][k].append(metric)
 
             completion_length = completion_mask.sum(dim=1).float()
             length_stats = torch.stack([completion_length.sum(), n_samples])
