@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import os
 import textwrap
 from collections import defaultdict
@@ -48,6 +49,7 @@ from ...data_utils import (
     unpair_preference_dataset,
 )
 from ...import_utils import is_liger_kernel_available
+from ...models import get_act_offloading_ctx_manager
 from ...models.utils import disable_gradient_checkpointing, prepare_deepspeed, prepare_fsdp
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
@@ -391,6 +393,12 @@ class KTOTrainer(_BaseTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+
+        # Initialize activation offloading context
+        if self.args.activation_offloading:
+            self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
+        else:
+            self.maybe_activation_offload_context = contextlib.nullcontext()
 
         # Reference model
         if ref_model is None:
@@ -1159,6 +1167,11 @@ class KTOTrainer(_BaseTrainer):
                 loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
                 logits, labels = outputs.logits, inputs["completion_input_ids"]
         return loss, logits, labels
+
+    # Override training step to add activation offloading context.
+    def training_step(self, *args, **kwargs):
+        with self.maybe_activation_offload_context:
+            return super().training_step(*args, **kwargs)
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
