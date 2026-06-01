@@ -1631,7 +1631,6 @@ class SFTTrainer(_BaseTrainer):
                 ):
                     shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
-                # Compute entropy and accuracy together to avoid a second .contiguous() copy of logits
                 per_token_entropy = entropy_from_logits(shift_logits)
                 predictions = shift_logits.argmax(dim=-1)
                 mask = shift_labels != -100
