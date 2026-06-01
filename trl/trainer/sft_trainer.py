@@ -1631,16 +1631,26 @@ class SFTTrainer(_BaseTrainer):
                 ):
                     shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
+                # Compute entropy and accuracy together to avoid a second .contiguous() copy of logits
                 per_token_entropy = entropy_from_logits(shift_logits)
+                predictions = shift_logits.argmax(dim=-1)
                 mask = shift_labels != -100
+
                 entropy_sum = (per_token_entropy * mask).sum()
                 total_tokens = mask.sum()
+                correct_predictions = (predictions == shift_labels) & mask
+                correct_tokens = correct_predictions.sum()
 
                 # Gather counts across ranks and weight-average
                 entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
                 total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
+                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
                 entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
+
+                total_sum = total_tokens.sum()
+                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
             self._metrics[mode]["entropy"].append(entropy)
+            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
@@ -1669,46 +1679,6 @@ class SFTTrainer(_BaseTrainer):
                     "not be logged. This is unexpected; please report it to the liger-kernel repository.",
                     stacklevel=2,
                 )
-        else:
-            # Compute accuracy from logits using argmax (traditional method)
-            with torch.no_grad():
-                if "shift_labels" in inputs:
-                    # When using CP or SP, labels are pre-shifted. We must use these (and cannot manually shift) because:
-                    # - The first discarded token from inputs["labels"] actually belongs to process n-1
-                    # - The last logits require the label from process n+1
-                    shift_logits = outputs.logits.contiguous()
-                    shift_labels = inputs["shift_labels"]
-                else:
-                    shift_logits = outputs.logits[..., :-1, :].contiguous()
-                    shift_labels = labels[..., 1:].contiguous()
-
-                # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
-                if (
-                    self.num_virtual_tokens > 0
-                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
-                ):
-                    shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
-
-                # Get predictions
-                predictions = shift_logits.argmax(dim=-1)
-
-                # Create mask for non-padding tokens (assuming ignore_index is -100)
-                mask = shift_labels != -100
-
-                # Calculate accuracy only on non-padding tokens
-                correct_predictions = (predictions == shift_labels) & mask
-                total_tokens = mask.sum()
-                correct_tokens = correct_predictions.sum()
-
-                # Gather the correct_tokens and total_tokens across all processes
-                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-                total_tokens = self.accelerator.gather_for_metrics(total_tokens)
-
-                # Compute the mean token accuracy and log it
-                total_sum = total_tokens.sum()
-                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-                self._metrics[mode]["mean_token_accuracy"].append(accuracy)
-
         # Log auxiliary loss if enabled (applies to both Liger and non-Liger)
         if self.aux_loss_enabled:
             aux_loss = outputs.aux_loss
