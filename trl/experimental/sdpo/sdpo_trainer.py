@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import inspect
 import re
 import textwrap
@@ -597,9 +596,12 @@ class SDPOTrainer(_BaseTrainer):
             self.teacher_model = self.model
             return
 
-        # create teacher model from student copy
-        student_model = self.accelerator.unwrap_model(self.model)
-        self.teacher_model = copy.deepcopy(student_model)
+        # Build the teacher from the model path (like the GRPO/DPO reference model) rather than deep-copying the
+        # student: under ZeRO-3 the student params are already sharded, so a deep copy would clone empty shards.
+        model_init_kwargs = self.args.model_init_kwargs or {}
+        if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+            model_init_kwargs["device_map"] = None
+        self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()
         if self.is_deepspeed_enabled:
