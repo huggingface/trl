@@ -48,7 +48,7 @@ from ...data_utils import (
     unpair_preference_dataset,
 )
 from ...import_utils import is_liger_kernel_available
-from ...models.utils import prepare_deepspeed, prepare_fsdp
+from ...models.utils import disable_gradient_checkpointing, prepare_deepspeed, prepare_fsdp
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     create_model_from_path,
@@ -713,7 +713,7 @@ class KTOTrainer(_BaseTrainer):
 
     def compute_ref_log_probs(self, inputs):
         """Computes reference log probabilities for a single padded batch."""
-        with torch.no_grad():
+        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             if self.ref_model is None:
                 if is_peft_model(self.model):
                     model = self.accelerator.unwrap_model(self.model)
