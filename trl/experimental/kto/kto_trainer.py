@@ -535,7 +535,7 @@ class KTOTrainer(_BaseTrainer):
             `Dataset` or `IterableDataset` with a single `KL_completion_ids` column.
         """
         map_kwargs = {}
-        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
+        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc or desc
             map_kwargs["num_proc"] = args.dataset_num_proc
             map_kwargs["desc"] = f"Extracting KL {dataset_name} dataset"
         kl_dataset = dataset.map(
