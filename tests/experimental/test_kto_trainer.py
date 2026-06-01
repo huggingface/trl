@@ -19,7 +19,7 @@ from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.kto import KTOConfig, KTOTrainer
-from trl.experimental.kto.kto_trainer import _get_kl_dataset
+from trl.experimental.kto.kto_trainer import _get_kl_completion_ids
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft
 
@@ -146,7 +146,7 @@ class TestKTOTrainer(TrlTestCase):
         assert completion_labels[first_unmasked:] == completion_input_ids[first_unmasked:]
 
         # Test corruption of (prompt, completion) pairs for KL dataset.
-        # _get_kl_dataset shifts completion_ids by one within each batch; prompt_ids are unchanged.
+        # _get_kl_completion_ids shifts completion_ids by one within each batch; prompt_ids are unchanged.
         synthetic = Dataset.from_dict(
             {
                 "prompt_ids": [[1, 2], [3, 4], [5, 6]],
@@ -155,7 +155,7 @@ class TestKTOTrainer(TrlTestCase):
             }
         )
         for batch_size in [2, 3]:
-            rotated = synthetic.map(_get_kl_dataset, batched=True, batch_size=batch_size)
+            rotated = synthetic.map(_get_kl_completion_ids, batched=True, batch_size=batch_size)
 
             # Verify that completion_ids have been rotated (differ from original). When the dataset length
             # modulo batch_size equals 1, the last batch is unaltered: exclude it from the check.
