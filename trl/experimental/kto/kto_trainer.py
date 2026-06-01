@@ -80,7 +80,7 @@ def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
     return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
-def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
+def _get_kl_completion_ids(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     """
     Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of
     completions. For best results, the mismatched outputs y' used to estimate the KL term for a batch should be the
@@ -522,6 +522,47 @@ class KTOTrainer(_BaseTrainer):
             result = processing_class(text=input)
         return result
 
+    def _get_kl_dataset(
+        self,
+        dataset: Dataset | IterableDataset,
+        dataset_name: str,
+        args: KTOConfig,
+    ) -> Dataset | IterableDataset:
+        """
+        Creates the KL dataset by creating mismatched (prompt, completion) pairs for KL divergence estimation.
+
+        Args:
+            dataset (`Dataset` or `IterableDataset`):
+                Tokenized dataset with `prompt_ids` and `completion_ids` columns.
+            dataset_name (`str`):
+                Name used in progress bar descriptions.
+            args ([`KTOConfig`]):
+                Training arguments providing `per_device_train_batch_size` and `dataset_num_proc`.
+
+        Returns:
+            `Dataset` or `IterableDataset` with a single `KL_completion_ids` column.
+        """
+        map_kwargs = {}
+        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc or desc
+            map_kwargs["num_proc"] = args.dataset_num_proc
+            map_kwargs["desc"] = f"Extracting KL {dataset_name} dataset"
+        kl_dataset = dataset.map(
+            _get_kl_completion_ids, batched=True, batch_size=args.per_device_train_batch_size, **map_kwargs
+        )
+
+        def rename_kl_fn(example):
+            return {"KL_completion_ids": example["completion_ids"]}
+
+        if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+            map_kwargs["desc"] = f"Assembling KL {dataset_name} dataset"
+        column_names = get_dataset_column_names(dataset)
+        kl_dataset = kl_dataset.map(
+            rename_kl_fn,
+            remove_columns=[c for c in get_dataset_column_names(kl_dataset) if c in column_names],
+            **map_kwargs,
+        )
+        return kl_dataset
+
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
@@ -604,28 +645,9 @@ class KTOTrainer(_BaseTrainer):
 
             # Get KL datasets if needed
             if self.calculate_KL:
-
-                def rename_kl_fn(example):
-                    return {"KL_completion_ids": example["completion_ids"]}
-
                 # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
                 # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Extracting KL {dataset_name} dataset"
-                kl_dataset = dataset.map(
-                    _get_kl_dataset, batched=True, batch_size=args.per_device_train_batch_size, **map_kwargs
-                )
-
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Assembling KL {dataset_name} dataset"
-                column_names = get_dataset_column_names(dataset)
-                kl_dataset = kl_dataset.map(
-                    rename_kl_fn,
-                    remove_columns=[c for c in get_dataset_column_names(kl_dataset) if c in column_names],
-                    **map_kwargs,
-                )
-
-                # merge the datasets
+                kl_dataset = self._get_kl_dataset(dataset, dataset_name, args)
                 dataset = concatenate_datasets([dataset, kl_dataset], axis=1)
 
             # Calculate dataset desirability balance
