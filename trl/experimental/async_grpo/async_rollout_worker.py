@@ -33,8 +33,9 @@ from trl.chat_template_utils import (
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     parse_response,
+    supports_tool_calling,
 )
-from trl.import_utils import is_vllm_available
+from trl.import_utils import is_jmespath_available, is_vllm_available
 from trl.trainer.utils import print_prompt_completions_sample
 
 
@@ -132,6 +133,20 @@ class AsyncRolloutWorker:
         self.reward_func_names = [f.__name__ for f in reward_funcs]
         self.num_generations = num_generations
         self.max_inflight_tasks = max_inflight_tasks
+
+        # Tools
+        if tools or environment_factory:
+            if not is_jmespath_available():
+                raise ImportError(
+                    "Using tools with AsyncRolloutWorker requires the jmespath library for response parsing. Please install "
+                    "it with `pip install jmespath` to use this feature."
+                )
+            if not supports_tool_calling(processing_class):
+                raise ValueError(
+                    "The provided chat template does not support tool calling. The template must be able to render a "
+                    "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
+                )
+
         self.environments = None
         environment_methods = [[] for _ in range(self.max_inflight_tasks)]
         if environment_factory is not None:
@@ -167,7 +182,12 @@ class AsyncRolloutWorker:
         self.log_completions = log_completions
         self.num_completions_to_print = num_completions_to_print
         self.tokenizer = processing_class
-        self.tokenizer = add_response_schema(self.tokenizer)
+        # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
+        # While waiting for broader adoption, we provide this utility function to manually set the response schema for
+        # known chat templates. `response_schema` lives on the (inner) tokenizer, since `parse_response` is a tokenizer
+        # method that reads `self.response_schema`.
+        if self.tools and getattr(self.tokenizer, "response_schema", None) is None:
+            self.tokenizer = add_response_schema(self.tokenizer)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
         if self.tools and not is_chat_template_prefix_preserving(self.tokenizer):
