@@ -78,7 +78,7 @@ def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
     return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
-def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
+def _get_kl_completion_ids(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     """
     Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of
     completions. For best results, the mismatched outputs y' used to estimate the KL term for a batch should be the
