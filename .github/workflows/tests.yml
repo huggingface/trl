@@ -241,7 +241,9 @@ jobs:
             ".[dev]" \
             "accelerate==1.4.0" \
             "datasets==4.7.0" \
-            "transformers==4.56.2"
+            "transformers==4.56.2" \
+            "cuda-bindings==13.2.0" \
+            "cuda-pathfinder==1.5.4"
 
       - name: Test with pytest
         run: |
