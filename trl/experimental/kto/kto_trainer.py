@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import os
 import textwrap
 from collections import defaultdict
@@ -48,7 +49,7 @@ from ...data_utils import (
     unpair_preference_dataset,
 )
 from ...import_utils import is_liger_kernel_available
-from ...models.utils import prepare_deepspeed, prepare_fsdp
+from ...models.utils import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     create_model_from_path,
@@ -391,6 +392,12 @@ class KTOTrainer(_BaseTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+
+        # Initialize activation offloading context
+        if self.args.activation_offloading:
+            self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
+        else:
+            self.maybe_activation_offload_context = contextlib.nullcontext()
 
         # Reference model
         if ref_model is None:
