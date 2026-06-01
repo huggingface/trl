@@ -54,6 +54,27 @@ EnvironmentFactory = Callable[[], _SupportsReset]
 
 
 class RolloutWorkerProtocol(Protocol):
+    """Interface a rollout worker must implement to be passed as `rollout_worker` to [`AsyncGRPOTrainer`].
+
+    The default [`AsyncRolloutWorker`] spawns a CUDA-free child process and scores completions with the trainer's
+    `reward_funcs`. Implement this protocol to plug in a custom rollout/scoring backend instead — for example, one that
+    runs reward models on their own GPUs. The trainer only ever calls these members:
+
+    Attributes:
+        rollout_buffer (`queue.Queue`):
+            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it.
+
+    Methods:
+        start():
+            Begin producing rollouts. Called once on train begin, after the initial weight sync.
+        stop():
+            Stop the worker and release its resources. Called on train end.
+        update_model_version(version):
+            Tell the worker which policy version is now live, so it can tag/discard stale samples.
+        check_health(stale_after_s):
+            Raise if the worker has crashed or stopped producing within `stale_after_s` seconds.
+    """
+
     rollout_buffer: queue.Queue
 
     def start(self) -> None: ...
@@ -251,6 +272,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
               function](#using-a-custom-reward-function).
             - A list of reward functions, where each item is a reward function as described above. Rewards from all
               functions are summed.
+
+            Unlike [`GRPOTrainer`], rewards are computed in a spawned child process, so each reward function (along
+            with `tools` and `environment_factory`) must be picklable: use a module-level function,
+            `functools.partial`, or a callable class instance — lambdas and closures will fail at startup. The child
+            process also runs with `CUDA_VISIBLE_DEVICES=""`, so a GPU-backed reward model runs on CPU (slow), not the
+            trainer's GPU.
         args ([`AsyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):

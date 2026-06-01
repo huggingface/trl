@@ -51,7 +51,7 @@ Messages: TypeAlias = list[dict[str, str]]
 _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
-async def _retry_on_http_error(coro_factory: Callable[[], Awaitable], *, max_attempts: int, label: str):
+async def _retry_on_http_error(coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
     """Retry an aiohttp coroutine on transport errors with bounded exponential backoff."""
     for attempt in range(max_attempts):
         try:
@@ -134,7 +134,7 @@ def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event: MPEvent) 
 
 
 def _child_main(
-    loop_kwargs_pkl: bytes,
+    loop_kwargs: dict[str, Any],
     samples_queue: MPQueue,
     model_version_value: MPValue,
     stop_event: MPEvent,
@@ -149,7 +149,6 @@ def _child_main(
 
     PartialState()
 
-    loop_kwargs = pickle.loads(loop_kwargs_pkl)
     rollout_loop = _AsyncRolloutLoop(
         **loop_kwargs,
         rollout_buffer=samples_queue,
@@ -688,7 +687,7 @@ class _AsyncRolloutLoop:
                 content = await response.json()
                 return content if content else {}
 
-        return await _retry_on_http_error(_do_post, max_attempts=max_retries, label=f"POST {path}")
+        return await _retry_on_http_error(_do_post, label=f"POST {path}", max_attempts=max_retries)
 
 
 class AsyncRolloutWorker:
@@ -699,7 +698,11 @@ class AsyncRolloutWorker:
     reads/writes.
 
     Constructor kwargs are forwarded as-is to `_AsyncRolloutLoop` when the child spawns; only `queue_maxsize` and
-    `child_ready_timeout` are consumed here.
+    `child_ready_timeout` are consumed here. Because the child is spawned, every forwarded kwarg is pickled:
+    `reward_funcs`, `tools`, and `environment_factory` (and anything they close over) must be picklable — module-level
+    functions, `functools.partial`, or callable instances, never lambdas or closures. `start()` validates this up front
+    and raises a `TypeError` otherwise. The child also runs with `CUDA_VISIBLE_DEVICES=""`, so GPU reward models
+    execute on CPU.
     """
 
     def __init__(
@@ -749,11 +752,19 @@ class AsyncRolloutWorker:
             return
         # Reset so spawn-import latency (~tens of seconds) doesn't immediately trip check_health.
         self._heartbeat_value.value = time.time()
-        loop_kwargs_pkl = pickle.dumps(self._loop_kwargs)
+        try:
+            pickle.dumps(self._loop_kwargs)
+        except (pickle.PicklingError, AttributeError, TypeError) as e:
+            # fails fast with an actionable message instead of an opaque traceback
+            raise TypeError(
+                "AsyncRolloutWorker forwards reward_funcs / tools / environment_factory to a spawned "
+                "child process, so they must be picklable. Lambdas and closures are not: use a "
+                "module-level function, functools.partial, or a callable class instance instead."
+            ) from e
         self._process = self._mp_ctx.Process(
             target=_child_main,
             args=(
-                loop_kwargs_pkl,
+                self._loop_kwargs,
                 self.rollout_buffer,
                 self._model_version_value,
                 self._stop_event_mp,
