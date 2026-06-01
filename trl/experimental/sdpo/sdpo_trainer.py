@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import inspect
 import re
 import textwrap
@@ -39,10 +38,11 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_peft_available, logging
+from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available, logging
 
 from ...data_utils import apply_chat_template, is_conversational
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     RepeatSampler,
@@ -72,6 +72,9 @@ logger = logging.get_logger(__name__)
 
 if is_peft_available():
     from peft import PeftConfig
+
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 TrainingBatch = dict[str, torch.Tensor | Any]
@@ -419,6 +422,47 @@ class SDPOTrainer(_BaseTrainer):
         if hasattr(model, "warnings_issued"):
             model.warnings_issued["estimate_tokens"] = True
 
+        # Liger fused JSD loss for `full_logits`: same generalized JSD as `compute_divergence`, so alpha maps to beta.
+        self.use_liger_loss = False
+        if args.use_liger_kernel:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "Liger is required to use `use_liger_kernel` as the self-distillation loss. Run "
+                    "`pip install liger-kernel`."
+                )
+            if args.sdpo_policy_loss_mode != "distillation_only":
+                raise ValueError(
+                    "`use_liger_kernel` only supports `sdpo_policy_loss_mode='distillation_only'`, got "
+                    f"{args.sdpo_policy_loss_mode!r}. The `hybrid` policy loss needs the full-vocabulary logits, so "
+                    "the fused kernel offers no benefit there."
+                )
+            if args.distillation_mode != "full_logits":
+                raise ValueError(
+                    "`use_liger_kernel` only supports `distillation_mode='full_logits'`, got "
+                    f"{args.distillation_mode!r}. The fused JSD kernel operates on the full vocabulary and cannot "
+                    "express the top-k support or sampled-token objectives."
+                )
+            if args.distillation_is_clip is not None:
+                raise ValueError(
+                    "`use_liger_kernel` is incompatible with `distillation_is_clip`: the fused kernel does not expose "
+                    "per-token losses for importance-sampling clipping."
+                )
+            if args.loss_type != "bnpo":
+                logger.warning(
+                    "The Liger fused loss reduces with a token-level mean (equivalent to `loss_type='bnpo'`); the "
+                    f"configured `loss_type={args.loss_type!r}` is ignored on the Liger path."
+                )
+            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+                beta=args.distillation_alpha,
+                ignore_index=-100,
+                temperature=args.temperature,
+                compiled=False,
+                weight_hard_loss=0.0,
+                weight_soft_loss=1.0,
+            )
+            self._forward_redirection = _ForwardRedirection()
+            self.use_liger_loss = True
+
         super().__init__(
             model=model,
             args=args,
@@ -597,9 +641,12 @@ class SDPOTrainer(_BaseTrainer):
             self.teacher_model = self.model
             return
 
-        # create teacher model from student copy
-        student_model = self.accelerator.unwrap_model(self.model)
-        self.teacher_model = copy.deepcopy(student_model)
+        # Build the teacher from the model path (like the GRPO/DPO reference model) rather than deep-copying the
+        # student: under ZeRO-3 the student params are already sharded, so a deep copy would clone empty shards.
+        model_init_kwargs = self.args.model_init_kwargs or {}
+        if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+            model_init_kwargs["device_map"] = None
+        self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()
         if self.is_deepspeed_enabled:
@@ -662,7 +709,9 @@ class SDPOTrainer(_BaseTrainer):
         )
 
     def training_step(self, model, inputs, num_items_in_batch):
-        output = super().training_step(model, inputs, num_items_in_batch)
+        # Gather spans forward+backward: the fused JSD computes the lm_head grad in backward.
+        with self._get_liger_zero3_lm_head_gather_ctx(model):
+            output = super().training_step(model, inputs, num_items_in_batch)
         self._step += 1
         return output
 
@@ -1100,6 +1149,125 @@ class SDPOTrainer(_BaseTrainer):
         logits = logits[:, -logits_to_keep:, :]
         return logits / self.temperature
 
+    def _compute_liger_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
+        """`full_logits` distillation via the Liger fused JSD kernel: forwards the base models for hidden states and
+        fuses the lm_head projection with the divergence, never materializing the full-vocab logits.
+
+        Each model is forwarded through its own wrapper via `_forward_redirection` so FSDP2/DeepSpeed materialize the
+        sharded params during the unwrapped base forward. The fused kernel needs both lm_head weights live at once, so
+        the frozen teacher weight is captured while the teacher is materialized and handed to the student pass.
+        """
+        logits_to_keep = inputs["completion_ids"].size(1)
+        self_distillation_mask = inputs.get("self_distillation_mask")
+        if self_distillation_mask is None:
+            response_mask = inputs["completion_mask"]
+        else:
+            response_mask = inputs["completion_mask"] * self_distillation_mask.unsqueeze(1)
+
+        unwrapped_student = self.accelerator.unwrap_model(model)
+        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
+
+        self.teacher_model.eval()
+        with torch.no_grad(), self._get_teacher_context_for_self_distillation():
+            teacher_hidden, teacher_weight, teacher_bias = self._forward_redirection(
+                self.teacher_model,
+                unwrapped_teacher,
+                self._liger_teacher_side,
+                unwrapped_teacher,
+                inputs,
+                logits_to_keep,
+            )
+
+        return self._forward_redirection(
+            model,
+            unwrapped_student,
+            self._liger_student_loss,
+            unwrapped_student,
+            inputs,
+            logits_to_keep,
+            response_mask,
+            teacher_hidden,
+            teacher_weight,
+            teacher_bias,
+        )
+
+    def _liger_teacher_side(self, teacher, inputs: TrainingBatch, logits_to_keep: int):
+        """Teacher hidden states + frozen lm_head weight, captured while the teacher params are materialized."""
+        hidden = teacher.get_decoder()(
+            input_ids=inputs["teacher_input_ids"],
+            attention_mask=inputs["teacher_attention_mask"],
+            use_cache=False,
+        ).last_hidden_state
+        hidden = hidden[:, :-1][:, -logits_to_keep:]
+        head = teacher.get_output_embeddings()
+        # Clone so the weight survives re-sharding once this forward context exits.
+        weight = head.weight.detach().clone()
+        bias = head.bias.detach().clone() if head.bias is not None else None
+        return hidden, weight, bias
+
+    def _liger_student_loss(
+        self,
+        student,
+        inputs: TrainingBatch,
+        logits_to_keep,
+        response_mask,
+        teacher_hidden,
+        teacher_weight,
+        teacher_bias,
+    ):
+        student_input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
+        student_attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
+        student_hidden = student.get_decoder()(
+            input_ids=student_input_ids,
+            attention_mask=student_attention_mask,
+            use_cache=False,
+        ).last_hidden_state
+        # Align hidden states to the completion-predicting positions, matching `_forward_logits`.
+        student_hidden = student_hidden[:, :-1][:, -logits_to_keep:]
+
+        # `ignore_index` masks non-response positions; the token values only feed the disabled hard-CE term.
+        completion_ids = inputs["completion_ids"]
+        true_labels = torch.where(response_mask.bool(), completion_ids, torch.full_like(completion_ids, -100))
+
+        student_head = student.get_output_embeddings()
+        loss = self.liger_jsd_loss(
+            student_input=student_hidden.reshape(-1, student_hidden.size(-1)),
+            student_weight=student_head.weight,
+            teacher_input=teacher_hidden.reshape(-1, teacher_hidden.size(-1)),
+            teacher_weight=teacher_weight,
+            true_labels=true_labels.reshape(-1),
+            student_bias=student_head.bias,
+            teacher_bias=teacher_bias,
+        )
+
+        mode = "train" if student.training else "eval"
+        self._log_self_distillation_metric(mode, self.accelerator.gather(loss.detach()).mean().item())
+        return loss
+
+    def _get_liger_zero3_lm_head_gather_ctx(self, model):
+        """Gather the sharded student/teacher lm_head weights for the fused matmul under ZeRO-3. Liger reads
+        `lm_head.weight` by attribute, so the gather hook never fires; the decoder forward gathers itself. No-op
+        outside ZeRO-3."""
+        if not self.use_liger_loss:
+            return nullcontext()
+
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
+            return nullcontext()
+
+        import deepspeed
+
+        unwrapped_student = self.accelerator.unwrap_model(model)
+        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
+        student_head = unwrapped_student.get_output_embeddings()
+        teacher_head = unwrapped_teacher.get_output_embeddings()
+        params = [student_head.weight, teacher_head.weight]
+        if student_head.bias is not None:
+            params.append(student_head.bias)
+        if teacher_head.bias is not None:
+            params.append(teacher_head.bias)
+        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
+
     def _get_teacher_context_for_self_distillation(self):
         """Return the context manager that routes the teacher forward to the correct weights.
 
@@ -1346,6 +1514,9 @@ class SDPOTrainer(_BaseTrainer):
         if self.args.sdpo_policy_loss_mode == "hybrid":
             return self._compute_hybrid_loss(model, inputs)
         if self.args.sdpo_policy_loss_mode == "distillation_only":
+            if self.use_liger_loss:
+                accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
+                return self.args.distillation_weight * (self._compute_liger_loss(model, inputs) / accumulation_scale)
             distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
             return self._compute_weighted_self_distillation_loss(model, inputs, distillation_logits)
 
