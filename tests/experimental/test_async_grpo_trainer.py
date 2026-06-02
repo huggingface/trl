@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import itertools
+import os
 import queue
 
 import numpy as np
@@ -38,6 +39,8 @@ class _StubRolloutWorker:
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
         self._sample_iter = self._make_sample_iter(tokenizer, dataset, num_generations)
+        self.dataset = dataset
+        self._dataset_iter = iter(dataset)
 
     def _make_sample_iter(self, tokenizer, dataset, num_generations):
         for row in itertools.cycle(dataset):
@@ -128,3 +131,59 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_resume_from_checkpoint_skips_vllm(self):
+        # When resuming from a checkpoint with ignore_data_skip=False, the Trainer would normally
+        # pull already-seen batches from the DataLoader and discard them which would trigger vLLM inference
+        # for each one. This test verifies that skip_samples is set on the RolloutQueueDataset so
+        # those batches are served as cheap dummy samples instead.
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_steps=2,
+            save_steps=1,
+            max_completion_length=8,
+            vllm_server_timeout=5.0,
+            report_to="none",
+        )
+
+        # First run: train for 2 steps, which saves a checkpoint at step 1.
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
+        )
+        trainer.train()
+
+        # Second run: resume from the step-1 checkpoint.
+        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-1")
+        assert os.path.isfile(os.path.join(checkpoint_dir, "trainer_state.json"))
+
+        training_args2 = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_steps=3,
+            max_completion_length=8,
+            vllm_server_timeout=5.0,
+            report_to="none",
+        )
+        trainer2 = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args2,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
+        )
+        trainer2.train(resume_from_checkpoint=checkpoint_dir)
+
+        # global_step=1, gradient_accumulation_steps=1, batch_size=3*1=3 → samples_to_skip = 3
+        expected_skip = 1 * 1 * (3 * 1)
+        assert trainer2._rollout_dataset.skip_samples == expected_skip

@@ -14,6 +14,7 @@
 
 
 import math
+import os
 import queue
 import textwrap
 import time
@@ -27,7 +28,7 @@ from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback, TrainerState
 from transformers.data.data_collator import DataCollatorMixin
 
 from trl.trainer.base_trainer import _BaseTrainer
@@ -145,8 +146,14 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         self.stale_after_s = stale_after_s
         self.max_staleness = max_staleness
         self.poll_interval_s = poll_interval_s
+        self.skip_samples = 0
 
     def __iter__(self):
+        # When resuming from a checkpoint, yield dummy samples so the Trainer can skip
+        # already-seen batches without triggering vLLM inference for each one.
+        for _ in range(self.skip_samples):
+            yield {"input_ids": [0], "completion_mask": [0.0], "old_log_probs": [0.0], "advantage": 0.0, "metrics": {}}
+
         while True:
             t0 = time.time()
             if self.queue.qsize() == 0:
@@ -412,6 +419,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._train_tokens_start_time = None
+        self._rollout_dataset = None
+        self._pending_skip_samples = 0
         self.model_version = 0
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
@@ -485,8 +494,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
             )
+            dataset.skip_samples = self._pending_skip_samples
+            self._rollout_dataset = dataset
         else:
             dataset = _EmptyIterableDataset()
+            self._rollout_dataset = None
 
         return self.accelerator.prepare(
             DataLoader(
@@ -701,6 +713,30 @@ class AsyncGRPOTrainer(_BaseTrainer):
         logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
 
     def _inner_training_loop(self, *args, **kwargs):
+        # When resuming from a checkpoint with ignore_data_skip=False, the Trainer skips already-seen
+        # batches by pulling and discarding them from the DataLoader. For AsyncGRPO this would trigger
+        # vLLM inference for every skipped batch. Instead, we set skip_samples on the RolloutQueueDataset
+        # so it yields cheap dummy samples during the skip phase, and we advance the prompt dataset
+        # iterator to the correct position to preserve data ordering.
+        resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
+        if resume_from_checkpoint is not None and not self.args.ignore_data_skip:
+            state_file = os.path.join(resume_from_checkpoint, "trainer_state.json")
+            if os.path.isfile(state_file) and self.accelerator.is_main_process:
+                global_step = TrainerState.load_from_json(state_file).global_step
+                if global_step > 0:
+                    batch_size = self.args.per_device_train_batch_size * self.accelerator.num_processes
+                    samples_to_skip = global_step * self.args.gradient_accumulation_steps * batch_size
+                    # _pending_skip_samples is read by get_train_dataloader (called inside super())
+                    # to set skip_samples on the RolloutQueueDataset before iteration begins.
+                    self._pending_skip_samples = samples_to_skip
+                    if self.rollout_worker is not None:
+                        prompts_to_skip = samples_to_skip // self.args.num_generations
+                        for _ in range(prompts_to_skip):
+                            try:
+                                next(self.rollout_worker._dataset_iter)
+                            except StopIteration:
+                                self.rollout_worker._dataset_iter = iter(self.rollout_worker.dataset)
+                                next(self.rollout_worker._dataset_iter)
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
