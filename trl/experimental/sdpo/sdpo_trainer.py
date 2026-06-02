@@ -640,6 +640,13 @@ class SDPOTrainer(_BaseTrainer):
             self.teacher_model = self.model
             return
 
+        if is_peft_model(self.model):
+            raise ValueError(
+                "`teacher_model_kind='ema'` with a non-pure-LoRA PEFT model is not supported: the separate EMA "
+                "teacher cannot be parameter-matched to the PEFT student. Use pure-LoRA training, a non-PEFT model, "
+                "or `teacher_model_kind` in {'live', 'base'}."
+            )
+
         # Build the teacher from the model path (like the GRPO/DPO reference model) rather than deep-copying the
         # student: under ZeRO-3 the student params are already sharded, so a deep copy would clone empty shards.
         model_init_kwargs = self.args.model_init_kwargs or {}
