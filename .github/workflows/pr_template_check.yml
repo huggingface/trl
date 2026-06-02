@@ -1,6 +1,7 @@
 # This workflow runs when a PR is first opened by an external contributor
 # (author_association is FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, or NONE).
 # Org members with public membership are skipped (author_association = MEMBER).
+# Dependabot PRs are also skipped, as they don't have to follow the human PR template.
 # It checks that the PR body:
 #   1. Contains a non-empty description (not just the template placeholder)
 #   2. Includes the "## Before submitting" checklist
@@ -22,9 +23,11 @@ jobs:
   check-pr-template:
     runs-on: ubuntu-latest
     if: >
-      github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' ||
-      github.event.pull_request.author_association == 'FIRST_TIMER' ||
-      github.event.pull_request.author_association == 'NONE'
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'hf-dependantbot-rollout[bot]' &&
+      (github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' ||
+       github.event.pull_request.author_association == 'FIRST_TIMER' ||
+       github.event.pull_request.author_association == 'NONE')
     steps:
       - name: Check PR body follows template
         id: check
