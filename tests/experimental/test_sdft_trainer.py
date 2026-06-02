@@ -20,7 +20,7 @@ from transformers.utils import is_peft_available
 
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
 
-from ..testing_utils import TrlTestCase, require_peft
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_torch_accelerator
 
 
 if is_peft_available():
@@ -92,6 +92,63 @@ class TestSDFTTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
+
+    @require_liger_kernel
+    @require_torch_accelerator
+    def test_liger_loss_matches_non_liger_loss(self):
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."], "privileged_context": ["Example answer: 4."]})
+        common = dict(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            per_device_train_batch_size=1,
+            max_completion_length=3,
+            num_generations=1,
+            distillation_mode="full_logits",
+            distillation_is_clip=None,
+            num_loss_tokens_to_skip=1,
+        )
+
+        ref_trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=SDFTConfig(use_liger_kernel=False, **common),
+            train_dataset=dataset,
+        )
+        liger_trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=SDFTConfig(use_liger_kernel=True, **common),
+            train_dataset=dataset,
+        )
+
+        liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for param in ref_trainer.teacher_model.parameters():
+                param.add_(0.5 * torch.randn_like(param))
+        liger_trainer.teacher_model.load_state_dict(ref_trainer.teacher_model.state_dict())
+
+        device = next(ref_trainer.model.parameters()).device
+        batch = {
+            "prompt_ids": torch.tensor([[10, 11], [12, 13]], device=device),
+            "prompt_mask": torch.tensor([[1, 1], [1, 1]], device=device),
+            "completion_ids": torch.tensor([[14, 15, 16], [17, 18, 19]], device=device),
+            "completion_mask": torch.tensor([[1, 1, 0], [1, 1, 1]], device=device),
+            "teacher_input_ids": torch.tensor([[20, 21, 22, 14, 15, 16], [23, 24, 25, 17, 18, 19]], device=device),
+            "teacher_attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]], device=device),
+            "self_distillation_mask": torch.tensor([1.0, 0.0], device=device),
+        }
+
+        ref_trainer.model.eval()
+        liger_trainer.model.eval()
+        with torch.no_grad():
+            ref_loss = ref_trainer.compute_loss(ref_trainer.model, batch).item()
+            liger_loss = liger_trainer.compute_loss(liger_trainer.model, batch).item()
+
+        torch.testing.assert_close(
+            torch.tensor(liger_loss),
+            torch.tensor(ref_loss),
+            rtol=2e-2,
+            atol=1e-6,
+        )
 
     def test_train_rejects_none_privileged_context(self):
         dataset = Dataset.from_dict(

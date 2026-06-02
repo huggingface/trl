@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import inspect
 import re
 import textwrap
@@ -27,7 +26,6 @@ import torch
 from accelerate.utils import gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForSequenceClassification,
@@ -40,10 +38,11 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_peft_available, logging
+from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available, logging
 
 from ...data_utils import apply_chat_template, is_conversational
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     RepeatSampler,
@@ -52,17 +51,16 @@ from ...trainer.utils import (
     get_config_model_id,
     identity,
     pad,
-    selective_log_softmax,
     split_tensor_dict,
     use_adapter,
 )
 from ..utils import prepare_peft_model
 from .loss_utils import (
-    aggregate_loss,
     apply_importance_sampling_clipping,
     compute_full_logit_self_distillation_loss,
     compute_sampled_token_self_distillation_loss,
     compute_topk_self_distillation_loss,
+    select_token_log_probs,
 )
 from .sdpo_config import SDPOConfig
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
@@ -74,6 +72,9 @@ logger = logging.get_logger(__name__)
 if is_peft_available():
     from peft import PeftConfig
 
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+
 
 TrainingBatch = dict[str, torch.Tensor | Any]
 
@@ -84,7 +85,7 @@ class DistillationLogits:
 
     completion_ids: torch.Tensor
     completion_mask: torch.Tensor
-    loss_mask: torch.Tensor
+    response_mask: torch.Tensor
     student_logits: torch.Tensor
     teacher_logits: torch.Tensor
 
@@ -420,6 +421,47 @@ class SDPOTrainer(_BaseTrainer):
         if hasattr(model, "warnings_issued"):
             model.warnings_issued["estimate_tokens"] = True
 
+        # Liger fused JSD loss for `full_logits`: same generalized JSD as `compute_divergence`, so alpha maps to beta.
+        self.use_liger_loss = False
+        if args.use_liger_kernel:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "Liger is required to use `use_liger_kernel` as the self-distillation loss. Run "
+                    "`pip install liger-kernel`."
+                )
+            if args.sdpo_policy_loss_mode != "distillation_only":
+                raise ValueError(
+                    "`use_liger_kernel` only supports `sdpo_policy_loss_mode='distillation_only'`, got "
+                    f"{args.sdpo_policy_loss_mode!r}. The `hybrid` policy loss needs the full-vocabulary logits, so "
+                    "the fused kernel offers no benefit there."
+                )
+            if args.distillation_mode != "full_logits":
+                raise ValueError(
+                    "`use_liger_kernel` only supports `distillation_mode='full_logits'`, got "
+                    f"{args.distillation_mode!r}. The fused JSD kernel operates on the full vocabulary and cannot "
+                    "express the top-k support or sampled-token objectives."
+                )
+            if args.distillation_is_clip is not None:
+                raise ValueError(
+                    "`use_liger_kernel` is incompatible with `distillation_is_clip`: the fused kernel does not expose "
+                    "per-token losses for importance-sampling clipping."
+                )
+            if args.loss_type != "bnpo":
+                logger.warning(
+                    "The Liger fused loss reduces with a token-level mean (equivalent to `loss_type='bnpo'`); the "
+                    f"configured `loss_type={args.loss_type!r}` is ignored on the Liger path."
+                )
+            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+                beta=args.distillation_alpha,
+                ignore_index=-100,
+                temperature=args.temperature,
+                compiled=False,
+                weight_hard_loss=0.0,
+                weight_soft_loss=1.0,
+            )
+            self._forward_redirection = _ForwardRedirection()
+            self.use_liger_loss = True
+
         super().__init__(
             model=model,
             args=args,
@@ -598,9 +640,19 @@ class SDPOTrainer(_BaseTrainer):
             self.teacher_model = self.model
             return
 
-        # create teacher model from student copy
-        student_model = self.accelerator.unwrap_model(self.model)
-        self.teacher_model = copy.deepcopy(student_model)
+        if is_peft_model(self.model):
+            raise ValueError(
+                "`teacher_model_kind='ema'` with a non-pure-LoRA PEFT model is not supported: the separate EMA "
+                "teacher cannot be parameter-matched to the PEFT student. Use pure-LoRA training, a non-PEFT model, "
+                "or `teacher_model_kind` in {'live', 'base'}."
+            )
+
+        # Build the teacher from the model path (like the GRPO/DPO reference model) rather than deep-copying the
+        # student: under ZeRO-3 the student params are already sharded, so a deep copy would clone empty shards.
+        model_init_kwargs = self.args.model_init_kwargs or {}
+        if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+            model_init_kwargs["device_map"] = None
+        self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()
         if self.is_deepspeed_enabled:
@@ -663,7 +715,9 @@ class SDPOTrainer(_BaseTrainer):
         )
 
     def training_step(self, model, inputs, num_items_in_batch):
-        output = super().training_step(model, inputs, num_items_in_batch)
+        # Gather spans forward+backward: the fused JSD computes the lm_head grad in backward.
+        with self._get_liger_zero3_lm_head_gather_ctx(model):
+            output = super().training_step(model, inputs, num_items_in_batch)
         self._step += 1
         return output
 
@@ -732,13 +786,30 @@ class SDPOTrainer(_BaseTrainer):
             std_rewards = group_std_rewards.repeat_interleave(num_generations, dim=0)
         advantages = (rewards - mean_grouped_rewards) / (std_rewards + 1e-4)
         self._record_reward_diagnostics(mode, rewards, rewards_per_func, group_std_rewards)
-        self._record_completion_metrics(mode, completion_ids_list)
 
         local_batch_size = batch["completion_ids"].size(0)
         process_start = self.accelerator.process_index * local_batch_size
         process_slice = slice(process_start, process_start + local_batch_size)
         local_rewards = rewards[process_slice]
         local_advantages = advantages[process_slice]
+
+        agg_completion_lengths = self.accelerator.gather(
+            torch.tensor([len(ids) for ids in completion_ids_list], device=device)
+        )
+        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
+
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+        agg_is_truncated = self.accelerator.gather(is_truncated)
+        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
+        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
+        if len(term_completion_lengths) == 0:
+            term_completion_lengths = torch.zeros(1, device=device)
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
         batch["rewards"] = local_rewards
         batch["advantages"] = local_advantages
@@ -749,7 +820,10 @@ class SDPOTrainer(_BaseTrainer):
             feedbacks=privileged_contexts,
         )
 
-        self._record_teacher_context_metrics(mode)
+        mode = "train" if self.model.training else "eval"
+        for key, value in self.teacher_context_builder.last_metrics.items():
+            self._metrics[mode][key].append(value)
+        self._warn_on_inactive_self_distillation(mode)
 
         self._dispatch_self_distillation_callback(
             "on_teacher_context_built",
@@ -836,7 +910,6 @@ class SDPOTrainer(_BaseTrainer):
                 generation_kwargs=self.generation_kwargs,
             ) as unwrapped_model,
             torch.no_grad(),
-            FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
         ):
             prompt_completion_ids = unwrapped_model.generate(
                 **generate_inputs, generation_config=self.generation_config
@@ -923,9 +996,321 @@ class SDPOTrainer(_BaseTrainer):
                     attention_mask,
                     logits_to_keep,
                 )
-                old_per_token_logps = selective_log_softmax(logits, completion_ids)
+                old_per_token_logps = select_token_log_probs(logits, completion_ids)
 
         return old_per_token_logps
+
+    def _compute_self_distillation_loss(
+        self,
+        model,
+        inputs: TrainingBatch,
+        distillation_logits: DistillationLogits,
+    ) -> torch.Tensor:
+        """Compute the per-token distillation loss and aggregate by normalizing over sequence length.
+
+        Dispatches between three objectives based on `distillation_mode`:
+
+            - `"topk_logits"`: top-k approximation of the divergence, optionally with a tail bucket for the remaining
+              probability mass (`distillation_add_tail`).
+            - `"full_logits"`: full-vocab divergence.
+            - `"sampled_token"`: token-level (reverse-KL) distillation on sampled `completion_ids`.
+
+        When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a clipped
+        importance-sampling ratio between the current student and the student at rollout time.
+        """
+        if distillation_logits.response_mask.sum() == 0:
+            mode = "train" if model.training else "eval"
+            self._log_self_distillation_metric(mode, 0.0)
+            # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
+            return distillation_logits.student_logits.sum() * 0.0
+
+        if self.args.distillation_mode == "topk_logits":
+            if self.args.distillation_topk is None:
+                raise ValueError("`distillation_mode='topk_logits'` requires `distillation_topk` to be set.")
+            per_token_loss = compute_topk_self_distillation_loss(
+                distillation_logits.student_logits,
+                distillation_logits.teacher_logits,
+                distillation_topk=self.args.distillation_topk,
+                distillation_alpha=self.args.distillation_alpha,
+                distillation_add_tail=self.args.distillation_add_tail,
+            )
+        elif self.args.distillation_mode == "full_logits":
+            per_token_loss = compute_full_logit_self_distillation_loss(
+                distillation_logits.student_logits,
+                distillation_logits.teacher_logits,
+                distillation_alpha=self.args.distillation_alpha,
+            )
+        elif self.args.distillation_mode == "sampled_token":
+            per_token_loss = compute_sampled_token_self_distillation_loss(
+                distillation_logits.student_logits,
+                distillation_logits.teacher_logits,
+                distillation_logits.completion_ids,
+                distillation_alpha=self.args.distillation_alpha,
+            )
+        else:
+            raise ValueError(
+                "distillation_mode must be one of: 'sampled_token', 'full_logits', 'topk_logits', "
+                f"got {self.args.distillation_mode!r}"
+            )
+
+        old_per_token_logps = inputs.get("old_per_token_logps")
+        if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
+            student_per_token_logps = select_token_log_probs(
+                distillation_logits.student_logits,
+                distillation_logits.completion_ids,
+            )
+            per_token_loss = apply_importance_sampling_clipping(
+                per_token_loss,
+                student_per_token_logps,
+                old_per_token_logps,
+                self.args.distillation_is_clip,
+            )
+
+        loss = (per_token_loss * distillation_logits.response_mask).sum(-1) / distillation_logits.response_mask.sum(
+            -1
+        ).clamp(min=1.0)
+        loss = loss.mean()
+
+        mode = "train" if model.training else "eval"
+        mean_distill_loss = (
+            per_token_loss * distillation_logits.response_mask
+        ).sum() / distillation_logits.response_mask.sum().clamp(min=1.0)
+        self._log_self_distillation_metric(
+            mode,
+            self.accelerator.gather(mean_distill_loss).mean().item(),
+        )
+        return loss
+
+    def _compute_teacher_student_logits(
+        self,
+        model,
+        teacher_model,
+        inputs: TrainingBatch,
+    ) -> DistillationLogits:
+        """Compute the per-token logits of the student and teacher over the completion tokens.
+
+        The student is forwarded on its own input (original prompt plus the sampled completion) while the teacher is
+        forwarded on its input (prompt, privileged context, and the same completion). Both sets of logits are aligned
+        to the completion tokens so they can be compared position-by-position in the distillation loss.
+
+        The teacher forward runs under `torch.no_grad()` and the context resolved by
+        `_get_teacher_context_for_self_distillation`, which routes it to the correct weights.
+        """
+        prompt_ids = inputs["prompt_ids"]
+        prompt_mask = inputs["prompt_mask"]
+        completion_ids = inputs["completion_ids"]
+        completion_mask = inputs["completion_mask"]
+        logits_to_keep = completion_ids.size(1)
+
+        self_distillation_mask = inputs.get("self_distillation_mask")
+        if self_distillation_mask is None:
+            response_mask = completion_mask
+        else:
+            response_mask = completion_mask * self_distillation_mask.unsqueeze(1)
+        student_input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        student_attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        student_logits = self._forward_logits(
+            model=model,
+            input_ids=student_input_ids,
+            attention_mask=student_attention_mask,
+            logits_to_keep=logits_to_keep,
+        )
+
+        with torch.no_grad(), self._get_teacher_context_for_self_distillation():
+            teacher_logits = self._forward_logits(
+                model=teacher_model,
+                input_ids=inputs["teacher_input_ids"],
+                attention_mask=inputs["teacher_attention_mask"],
+                logits_to_keep=logits_to_keep,
+            )
+
+        return DistillationLogits(
+            completion_ids=completion_ids,
+            completion_mask=completion_mask,
+            response_mask=response_mask,
+            student_logits=student_logits,
+            teacher_logits=teacher_logits,
+        )
+
+    def _forward_logits(
+        self,
+        model,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        logits_to_keep: int,
+    ) -> torch.Tensor:
+        """Forward the model and return temperature-scaled logits aligned to the completion tokens."""
+        model_inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "use_cache": False,
+        }
+        if "logits_to_keep" in self.model_kwarg_keys:
+            model_inputs["logits_to_keep"] = logits_to_keep + 1
+
+        logits = model(**model_inputs).logits
+        logits = logits[:, :-1, :]
+        logits = logits[:, -logits_to_keep:, :]
+        return logits / self.temperature
+
+    def _compute_liger_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
+        """`full_logits` distillation via the Liger fused JSD kernel: forwards the base models for hidden states and
+        fuses the lm_head projection with the divergence, never materializing the full-vocab logits.
+
+        Each model is forwarded through its own wrapper via `_forward_redirection` so FSDP2/DeepSpeed materialize the
+        sharded params during the unwrapped base forward. The fused kernel needs both lm_head weights live at once, so
+        the frozen teacher weight is captured while the teacher is materialized and handed to the student pass.
+        """
+        logits_to_keep = inputs["completion_ids"].size(1)
+        self_distillation_mask = inputs.get("self_distillation_mask")
+        if self_distillation_mask is None:
+            response_mask = inputs["completion_mask"]
+        else:
+            response_mask = inputs["completion_mask"] * self_distillation_mask.unsqueeze(1)
+
+        unwrapped_student = self.accelerator.unwrap_model(model)
+        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
+
+        with torch.no_grad(), self._get_teacher_context_for_self_distillation():
+            teacher_hidden, teacher_weight, teacher_bias = self._forward_redirection(
+                self.teacher_model,
+                unwrapped_teacher,
+                self._liger_teacher_side,
+                unwrapped_teacher,
+                inputs,
+                logits_to_keep,
+            )
+
+        return self._forward_redirection(
+            model,
+            unwrapped_student,
+            self._liger_student_loss,
+            unwrapped_student,
+            inputs,
+            logits_to_keep,
+            response_mask,
+            teacher_hidden,
+            teacher_weight,
+            teacher_bias,
+        )
+
+    def _liger_teacher_side(self, teacher, inputs: TrainingBatch, logits_to_keep: int):
+        """Teacher hidden states + frozen lm_head weight, captured while the teacher params are materialized."""
+        hidden = teacher.get_decoder()(
+            input_ids=inputs["teacher_input_ids"],
+            attention_mask=inputs["teacher_attention_mask"],
+            use_cache=False,
+        ).last_hidden_state
+        hidden = hidden[:, :-1][:, -logits_to_keep:]
+        head = teacher.get_output_embeddings()
+        # Clone so the weight survives re-sharding once this forward context exits.
+        weight = head.weight.detach().clone()
+        bias = head.bias.detach().clone() if head.bias is not None else None
+        return hidden, weight, bias
+
+    def _liger_student_loss(
+        self,
+        student,
+        inputs: TrainingBatch,
+        logits_to_keep,
+        response_mask,
+        teacher_hidden,
+        teacher_weight,
+        teacher_bias,
+    ):
+        student_input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
+        student_attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
+        student_hidden = student.get_decoder()(
+            input_ids=student_input_ids,
+            attention_mask=student_attention_mask,
+            use_cache=False,
+        ).last_hidden_state
+        # Align hidden states to the completion-predicting positions, matching `_forward_logits`.
+        student_hidden = student_hidden[:, :-1][:, -logits_to_keep:]
+
+        # `ignore_index` masks non-response positions; the token values only feed the disabled hard-CE term.
+        completion_ids = inputs["completion_ids"]
+        true_labels = torch.where(response_mask.bool(), completion_ids, torch.full_like(completion_ids, -100))
+
+        student_head = student.get_output_embeddings()
+        # Per-sequence then batch mean (grpo), matching the non-Liger path: the fused kernel reduces by total tokens
+        # (bnpo), so we call it per sequence and average.
+        seq_losses = [
+            self.liger_jsd_loss(
+                student_input=student_hidden[i],
+                student_weight=student_head.weight,
+                teacher_input=teacher_hidden[i],
+                teacher_weight=teacher_weight,
+                true_labels=true_labels[i],
+                student_bias=student_head.bias,
+                teacher_bias=teacher_bias,
+            )
+            for i in range(student_hidden.size(0))
+        ]
+        loss = torch.stack(seq_losses).mean()
+
+        mode = "train" if student.training else "eval"
+        self._log_self_distillation_metric(mode, self.accelerator.gather(loss.detach()).mean().item())
+        return loss
+
+    def _get_liger_zero3_lm_head_gather_ctx(self, model):
+        """Gather the sharded student/teacher lm_head weights for the fused matmul under ZeRO-3. Liger reads
+        `lm_head.weight` by attribute, so the gather hook never fires; the decoder forward gathers itself. No-op
+        outside ZeRO-3."""
+        if not self.use_liger_loss:
+            return nullcontext()
+
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
+            return nullcontext()
+
+        import deepspeed
+
+        unwrapped_student = self.accelerator.unwrap_model(model)
+        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
+        student_head = unwrapped_student.get_output_embeddings()
+        teacher_head = unwrapped_teacher.get_output_embeddings()
+        params = [student_head.weight, teacher_head.weight]
+        if student_head.bias is not None:
+            params.append(student_head.bias)
+        if teacher_head.bias is not None:
+            params.append(teacher_head.bias)
+        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
+
+    def _get_teacher_context_for_self_distillation(self):
+        """Return the context manager that routes the teacher forward to the correct weights.
+
+        For non-PEFT models this is a no-op. For PEFT models:
+
+            - `teacher_model_kind == "base"`: disable the student adapter so the teacher forward uses the base weights.
+            - `teacher_model_kind == "ema"` under pure-LoRA training: switch to the `"teacher"` LoRA adapter.
+            - otherwise: no-op; the teacher is a separate deepcopy.
+        """
+        teacher_model_kind = self.args.teacher_model_kind
+        if not is_peft_model(self.model):
+            return nullcontext()
+
+        target_model = self.accelerator.unwrap_model(self.teacher_model)
+
+        if teacher_model_kind == "base":
+            return use_adapter(target_model, adapter_name=None)
+        if teacher_model_kind == "ema" and self._use_peft_ema_teacher_adapter():
+            return use_adapter(target_model, adapter_name="teacher")
+        return nullcontext()
+
+    def _log_self_distillation_metric(self, mode: str, value: float) -> None:
+        metric_prefix = self._name.lower().replace(" ", "_")
+        self._metrics[mode]["self_distillation/distillation_loss"].append(value)
+        self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
+
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        mode = "train" if self.model.training else "eval"
+        metrics = {k: sum(v) / len(v) for k, v in self._metrics[mode].items() if v}
+        if mode == "eval":
+            metrics = {f"eval_{k}": v for k, v in metrics.items()}
+        logs = {**logs, **metrics}
+        super().log(logs, start_time)
+        self._metrics[mode].clear()
 
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
         device = self.accelerator.device
@@ -971,263 +1356,38 @@ class SDPOTrainer(_BaseTrainer):
 
         return self.accelerator.gather(rewards_per_func)
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if return_outputs:
-            raise ValueError("The SDPOTrainer does not support returning outputs")
+    def _warn_on_inactive_self_distillation(self, mode: str) -> None:
+        metrics = self.teacher_context_builder.last_metrics
+        tolerance = self.args.diagnostics_flat_tolerance
 
-        distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
-        policy_loss = self._compute_policy_loss(inputs, distillation_logits.student_logits)
-        distillation_loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
-        loss = (1 - self.args.distillation_weight) * policy_loss + self.args.distillation_weight * distillation_loss
+        reprompt_fraction = metrics.get("self_distillation/reprompt_sample_fraction", 0.0)
+        success_fraction = metrics.get("self_distillation/success_group_fraction", 0.0)
 
-        accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
-        return loss / accumulation_scale
-
-    def _compute_policy_loss(
-        self,
-        inputs,
-        student_logits,
-    ) -> torch.Tensor:
-        completion_ids = inputs["completion_ids"]
-        completion_mask = inputs["completion_mask"]
-        per_token_logps = selective_log_softmax(student_logits, completion_ids)
-        old_per_token_logps = inputs.get("old_per_token_logps")
-        old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
-        advantages = inputs["advantages"]
-        if advantages.dim() == 1:
-            advantages = advantages.unsqueeze(1)
-        log_ratio = per_token_logps - old_per_token_logps
-        if self.importance_sampling_level == "sequence":
-            log_ratio = (log_ratio * completion_mask).sum(-1, keepdim=True) / completion_mask.sum(
-                -1, keepdim=True
-            ).clamp(min=1.0)
-        coef_1 = torch.exp(log_ratio)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss = -torch.min(coef_1 * advantages, coef_2 * advantages)
-
-        loss = aggregate_loss(
-            per_token_loss,
-            completion_mask,
-            loss_type=self.loss_type,
-            max_completion_length=self.max_completion_length,
-        )
-
-        mode = "train" if self.model.training else "eval"
-        self._metrics[mode]["self_distillation/policy_loss"].append(
-            self.accelerator.gather(loss.detach()).mean().item()
-        )
-
-        return loss
-
-    def _compute_self_distillation_loss(
-        self,
-        model,
-        inputs: TrainingBatch,
-        distillation_logits: DistillationLogits,
-    ) -> torch.Tensor:
-        """Compute the per-token distillation loss and aggregate it according to `loss_type`.
-
-        Dispatches between three objectives based on `distillation_mode`:
-
-            - `"topk_logits"`: top-k approximation of the divergence, optionally with a tail bucket for the remaining
-              probability mass (`distillation_add_tail`).
-            - `"full_logits"`: full-vocab divergence.
-            - `"sampled_token"`: token-level (reverse-KL) distillation on sampled `completion_ids`.
-
-        When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a clipped
-        importance-sampling ratio between the current student and the student at rollout time.
-        """
-        if distillation_logits.loss_mask.sum() == 0:
-            mode = "train" if model.training else "eval"
-            self._log_self_distillation_metric(mode, 0.0)
-            # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
-            return distillation_logits.student_logits.sum() * 0.0
-
-        if self.args.distillation_mode == "topk_logits":
-            if self.args.distillation_topk is None:
-                raise ValueError("`distillation_mode='topk_logits'` requires `distillation_topk` to be set.")
-            per_token_loss = compute_topk_self_distillation_loss(
-                distillation_logits.student_logits,
-                distillation_logits.teacher_logits,
-                distillation_topk=self.args.distillation_topk,
-                distillation_alpha=self.args.distillation_alpha,
-                distillation_add_tail=self.args.distillation_add_tail,
-            )
-        elif self.args.distillation_mode == "full_logits":
-            per_token_loss = compute_full_logit_self_distillation_loss(
-                distillation_logits.student_logits,
-                distillation_logits.teacher_logits,
-                distillation_alpha=self.args.distillation_alpha,
-            )
-        elif self.args.distillation_mode == "sampled_token":
-            per_token_loss = compute_sampled_token_self_distillation_loss(
-                distillation_logits.student_logits,
-                distillation_logits.teacher_logits,
-                distillation_logits.completion_ids,
-                distillation_alpha=self.args.distillation_alpha,
+        if reprompt_fraction <= tolerance:
+            self._warn_on_degenerate_diagnostics(
+                mode=mode,
+                counter_key="inactive_self_distillation",
+                message=(
+                    "SDPO self-distillation is inactive because no reprompted samples were constructed. "
+                    "This usually means no rollout exceeded `success_reward_threshold` and no usable privileged "
+                    "feedback was available."
+                ),
             )
         else:
-            raise ValueError(
-                "distillation_mode must be one of: 'sampled_token', 'full_logits', 'topk_logits', "
-                f"got {self.args.distillation_mode!r}"
+            self._diagnostic_counters[mode]["inactive_self_distillation"] = 0
+
+        if success_fraction <= tolerance:
+            self._warn_on_degenerate_diagnostics(
+                mode=mode,
+                counter_key="no_successful_rollouts",
+                message=(
+                    "SDPO did not find any successful rollouts in the current generation groups. "
+                    "If this persists, reduce task difficulty, adjust reward shaping, or lower "
+                    "`success_reward_threshold`."
+                ),
             )
-
-        old_per_token_logps = inputs.get("old_per_token_logps")
-        if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
-            student_per_token_logps = selective_log_softmax(
-                distillation_logits.student_logits,
-                distillation_logits.completion_ids,
-            )
-            per_token_loss = apply_importance_sampling_clipping(
-                per_token_loss,
-                student_per_token_logps,
-                old_per_token_logps,
-                self.args.distillation_is_clip,
-            )
-
-        loss = aggregate_loss(
-            per_token_loss,
-            distillation_logits.loss_mask,
-            loss_type=self.loss_type,
-            max_completion_length=self.max_completion_length,
-        )
-
-        mode = "train" if model.training else "eval"
-        mean_distill_loss = (
-            per_token_loss * distillation_logits.loss_mask
-        ).sum() / distillation_logits.loss_mask.sum().clamp(min=1.0)
-        self._log_self_distillation_metric(
-            mode,
-            self.accelerator.gather(mean_distill_loss).mean().item(),
-        )
-        return loss
-
-    def _compute_teacher_student_logits(
-        self,
-        model,
-        teacher_model,
-        inputs: TrainingBatch,
-    ) -> DistillationLogits:
-        """Compute the per-token logits of the student and teacher over the completion tokens.
-
-        The student is forwarded on its own input (original prompt plus the sampled completion) while the teacher is
-        forwarded on its input (prompt, privileged context, and the same completion). Both sets of logits are aligned
-        to the completion tokens so they can be compared position-by-position in the distillation loss.
-
-        The teacher forward runs under `torch.no_grad()` and the context resolved by
-        `_get_teacher_context_for_self_distillation`, which routes it to the correct weights.
-        """
-        prompt_ids = inputs["prompt_ids"]
-        prompt_mask = inputs["prompt_mask"]
-        completion_ids = inputs["completion_ids"]
-        completion_mask = inputs["completion_mask"]
-        logits_to_keep = completion_ids.size(1)
-
-        self_distillation_mask = inputs.get("self_distillation_mask")
-        if self_distillation_mask is None:
-            loss_mask = completion_mask
         else:
-            loss_mask = completion_mask * self_distillation_mask.unsqueeze(1)
-        student_input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-        student_attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        student_logits = self._forward_logits(
-            model=model,
-            input_ids=student_input_ids,
-            attention_mask=student_attention_mask,
-            logits_to_keep=logits_to_keep,
-        )
-
-        with torch.no_grad(), self._get_teacher_context_for_self_distillation():
-            teacher_logits = self._forward_logits(
-                model=teacher_model,
-                input_ids=inputs["teacher_input_ids"],
-                attention_mask=inputs["teacher_attention_mask"],
-                logits_to_keep=logits_to_keep,
-            )
-
-        return DistillationLogits(
-            completion_ids=completion_ids,
-            completion_mask=completion_mask,
-            loss_mask=loss_mask,
-            student_logits=student_logits,
-            teacher_logits=teacher_logits,
-        )
-
-    def _forward_logits(
-        self,
-        model,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        logits_to_keep: int,
-    ) -> torch.Tensor:
-        """Forward the model and return temperature-scaled logits aligned to the completion tokens."""
-        model_inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "use_cache": False,
-        }
-        if "logits_to_keep" in self.model_kwarg_keys:
-            model_inputs["logits_to_keep"] = logits_to_keep + 1
-
-        logits = model(**model_inputs).logits
-        logits = logits[:, :-1, :]
-        logits = logits[:, -logits_to_keep:, :]
-        return logits / self.temperature
-
-    def _get_teacher_context_for_self_distillation(self):
-        """Return the context manager that routes the teacher forward to the correct weights.
-
-        For non-PEFT models this is a no-op. For PEFT models:
-
-            - `teacher_model_kind == "base"`: disable the student adapter so the teacher forward uses the base weights.
-            - `teacher_model_kind == "ema"` under pure-LoRA training: switch to the `"teacher"` LoRA adapter.
-            - otherwise: no-op; the teacher is a separate deepcopy.
-        """
-        teacher_model_kind = self.args.teacher_model_kind
-        if not is_peft_model(self.model):
-            return nullcontext()
-
-        target_model = self.accelerator.unwrap_model(self.teacher_model)
-
-        if teacher_model_kind == "base":
-            return use_adapter(target_model, adapter_name=None)
-        if teacher_model_kind == "ema" and self._use_peft_ema_teacher_adapter():
-            return use_adapter(target_model, adapter_name="teacher")
-        return nullcontext()
-
-    def _log_self_distillation_metric(self, mode: str, value: float) -> None:
-        metric_prefix = self._name.lower().replace(" ", "_")
-        self._metrics[mode]["self_distillation/distillation_loss"].append(value)
-        self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
-
-    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
-        mode = "train" if self.model.training else "eval"
-        metrics = {k: sum(v) / len(v) for k, v in self._metrics[mode].items() if v}
-        if mode == "eval":
-            metrics = {f"eval_{k}": v for k, v in metrics.items()}
-        logs = {**logs, **metrics}
-        super().log(logs, start_time)
-        self._metrics[mode].clear()
-
-    def _record_completion_metrics(self, mode: str, completion_ids_list: list[list[int]]) -> None:
-        device = self.accelerator.device
-        agg_completion_lengths = self.accelerator.gather(
-            torch.tensor([len(ids) for ids in completion_ids_list], device=device)
-        )
-        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
-        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
-        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
-
-        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
-        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
-        agg_is_truncated = self.accelerator.gather(is_truncated)
-        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
-        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
-        if len(term_completion_lengths) == 0:
-            term_completion_lengths = torch.zeros(1, device=device)
-        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
-        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
-        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
+            self._diagnostic_counters[mode]["no_successful_rollouts"] = 0
 
     def _record_reward_diagnostics(
         self,
@@ -1282,44 +1442,6 @@ class SDPOTrainer(_BaseTrainer):
         else:
             self._diagnostic_counters[mode]["flat_rewards"] = 0
 
-    def _record_teacher_context_metrics(self, mode: str) -> None:
-        for key, value in self.teacher_context_builder.last_metrics.items():
-            self._metrics[mode][key].append(value)
-        self._warn_on_inactive_self_distillation(mode)
-
-    def _warn_on_inactive_self_distillation(self, mode: str) -> None:
-        metrics = self.teacher_context_builder.last_metrics
-        tolerance = self.args.diagnostics_flat_tolerance
-
-        reprompt_fraction = metrics.get("self_distillation/reprompt_sample_fraction", 0.0)
-        success_fraction = metrics.get("self_distillation/success_group_fraction", 0.0)
-
-        if reprompt_fraction <= tolerance:
-            self._warn_on_degenerate_diagnostics(
-                mode=mode,
-                counter_key="inactive_self_distillation",
-                message=(
-                    "SDPO self-distillation is inactive because no reprompted samples were constructed. "
-                    "This usually means no rollout exceeded `success_reward_threshold` and no usable privileged "
-                    "feedback was available."
-                ),
-            )
-        else:
-            self._diagnostic_counters[mode]["inactive_self_distillation"] = 0
-
-        if success_fraction <= tolerance:
-            self._warn_on_degenerate_diagnostics(
-                mode=mode,
-                counter_key="no_successful_rollouts",
-                message=(
-                    "SDPO did not find any successful rollouts in the current generation groups. "
-                    "If this persists, reduce task difficulty, adjust reward shaping, or lower "
-                    "`success_reward_threshold`."
-                ),
-            )
-        else:
-            self._diagnostic_counters[mode]["no_successful_rollouts"] = 0
-
     def _warn_on_degenerate_diagnostics(self, mode: str, counter_key: str, message: str) -> None:
         interval = self.args.diagnostics_warning_interval
         if interval == 0:
@@ -1329,3 +1451,90 @@ class SDPOTrainer(_BaseTrainer):
         count = self._diagnostic_counters[mode][counter_key]
         if count == 1 or count % interval == 0:
             logger.warning("%s Consecutive degenerate steps: %s.", message, count)
+
+    def _compute_policy_loss(
+        self,
+        inputs,
+        student_logits,
+    ) -> torch.Tensor:
+        completion_ids = inputs["completion_ids"]
+        completion_mask = inputs["completion_mask"]
+        per_token_logps = select_token_log_probs(student_logits, completion_ids)
+        old_per_token_logps = inputs.get("old_per_token_logps")
+        old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
+        advantages = inputs["advantages"]
+        if advantages.dim() == 1:
+            advantages = advantages.unsqueeze(1)
+        log_ratio = per_token_logps - old_per_token_logps
+        if self.importance_sampling_level == "sequence":
+            log_ratio = (log_ratio * completion_mask).sum(-1, keepdim=True) / completion_mask.sum(
+                -1, keepdim=True
+            ).clamp(min=1.0)
+        coef_1 = torch.exp(log_ratio)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        per_token_loss = -torch.min(coef_1 * advantages, coef_2 * advantages)
+
+        if self.loss_type == "grpo":
+            loss = (per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+            loss = loss.mean()
+        elif self.loss_type == "bnpo":
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        elif self.loss_type == "dr_grpo":
+            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+        elif self.loss_type == "dapo":
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        else:
+            raise ValueError(f"Unsupported loss_type: {self.loss_type}")
+
+        mode = "train" if self.model.training else "eval"
+        self._metrics[mode]["self_distillation/policy_loss"].append(
+            self.accelerator.gather(loss.detach()).mean().item()
+        )
+
+        accumulation_scale = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+        return loss / accumulation_scale
+
+    def _compute_weighted_self_distillation_loss(
+        self,
+        model,
+        inputs,
+        distillation_logits: DistillationLogits,
+    ) -> torch.Tensor:
+        accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
+        distillation_loss = (
+            self._compute_self_distillation_loss(
+                model,
+                inputs,
+                distillation_logits,
+            )
+            / accumulation_scale
+        )
+        return self.args.distillation_weight * distillation_loss
+
+    def _compute_hybrid_loss(self, model, inputs) -> torch.Tensor:
+        distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
+        policy_loss = self._compute_policy_loss(inputs, distillation_logits.student_logits)
+        weighted_distillation_loss = self._compute_weighted_self_distillation_loss(
+            model,
+            inputs,
+            distillation_logits,
+        )
+        return policy_loss + weighted_distillation_loss
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        if return_outputs:
+            raise ValueError("The SDPOTrainer does not support returning outputs")
+
+        if self.args.sdpo_policy_loss_mode == "hybrid":
+            return self._compute_hybrid_loss(model, inputs)
+        if self.args.sdpo_policy_loss_mode == "distillation_only":
+            if self.use_liger_loss:
+                accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
+                return self.args.distillation_weight * (self._compute_liger_loss(model, inputs) / accumulation_scale)
+            distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
+            return self._compute_weighted_self_distillation_loss(model, inputs, distillation_logits)
+
+        raise ValueError(
+            "Unsupported `sdpo_policy_loss_mode`: "
+            f"{self.args.sdpo_policy_loss_mode!r}. Expected one of: 'hybrid', 'distillation_only'."
+        )

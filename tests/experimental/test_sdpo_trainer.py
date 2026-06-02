@@ -20,7 +20,7 @@ from transformers import TrainerCallback
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
-from ..testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
 
 
 class SelfDistillationCaptureCallback(TrainerCallback):
@@ -130,6 +130,67 @@ class TestSDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    @require_torch_accelerator
+    def test_liger_loss_matches_non_liger_loss(self):
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
+        common = dict(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            per_device_train_batch_size=1,
+            generation_batch_size=2,
+            num_generations=2,
+            max_completion_length=3,
+            sdpo_policy_loss_mode="distillation_only",
+            distillation_mode="full_logits",
+            distillation_is_clip=None,
+            distillation_weight=0.7,
+        )
+
+        ref_trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=SDPOConfig(use_liger_kernel=False, **common),
+            train_dataset=dataset,
+        )
+        liger_trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=SDPOConfig(use_liger_kernel=True, **common),
+            train_dataset=dataset,
+        )
+
+        liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for param in ref_trainer.teacher_model.parameters():
+                param.add_(0.5 * torch.randn_like(param))
+        liger_trainer.teacher_model.load_state_dict(ref_trainer.teacher_model.state_dict())
+
+        device = next(ref_trainer.model.parameters()).device
+        batch = {
+            "prompt_ids": torch.tensor([[10, 11], [12, 13]], device=device),
+            "prompt_mask": torch.tensor([[1, 1], [1, 1]], device=device),
+            "completion_ids": torch.tensor([[14, 15, 16], [17, 18, 19]], device=device),
+            "completion_mask": torch.tensor([[1, 1, 0], [1, 1, 1]], device=device),
+            "teacher_input_ids": torch.tensor([[20, 21, 22, 14, 15, 16], [23, 24, 25, 17, 18, 19]], device=device),
+            "teacher_attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]], device=device),
+            "self_distillation_mask": torch.tensor([1.0, 0.0], device=device),
+        }
+
+        ref_trainer.model.eval()
+        liger_trainer.model.eval()
+        with torch.no_grad():
+            ref_loss = ref_trainer.compute_loss(ref_trainer.model, batch).item()
+            liger_loss = liger_trainer.compute_loss(liger_trainer.model, batch).item()
+
+        torch.testing.assert_close(
+            torch.tensor(liger_loss),
+            torch.tensor(ref_loss),
+            rtol=2e-2,
+            atol=1e-6,
+        )
 
     def test_train_without_successful_rollouts(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

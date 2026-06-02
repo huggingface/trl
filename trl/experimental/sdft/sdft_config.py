@@ -346,10 +346,6 @@ class SDFTConfig(_BaseConfig):
         default=1,
         metadata={"help": "Number of iterations per batch (denoted as μ in the algorithm)."},
     )
-    loss_type: str = field(
-        default="grpo",
-        metadata={"help": "Policy loss aggregation. Supported: `grpo`, `bnpo`, `dr_grpo`, `dapo`."},
-    )
     teacher_model_kind: str = field(
         default="base",
         metadata={
