@@ -29,7 +29,7 @@ import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model, tqdm
-from datasets import Dataset, IterableDataset, IterableDatasetDict
+from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
 from torch.utils.data import DataLoader
@@ -1007,44 +1007,53 @@ class DPOTrainer(_BaseTrainer):
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash))
-        cache_file = dataset._get_cache_file_path(fingerprint).removesuffix(".arrow") + ".npz"
+        cache_file = dataset._get_cache_file_path(fingerprint)
+
         if os.path.exists(cache_file):
-            loaded = np.load(cache_file)
-            ref_chosen_logps = loaded["ref_chosen_logps"]
-            ref_rejected_logps = loaded["ref_rejected_logps"]
-        else:
-            dataloader = DataLoader(
-                dataset,
-                batch_size=batch_size,
-                collate_fn=self.data_collator,
-                num_workers=self.args.dataloader_num_workers,
-                pin_memory=self.args.dataloader_pin_memory,
-                shuffle=False,
+            return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
+
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            collate_fn=self.data_collator,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
+            shuffle=False,
+        )
+        data_loader = self.accelerator.prepare(dataloader)
+        ref_chosen_logps = []
+        ref_rejected_logps = []
+        for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
+            ref_chosen_logp, ref_rejected_logp = self.compute_ref_log_probs(padded_batch)
+            ref_chosen_logp, ref_rejected_logp = self.accelerator.gather_for_metrics(
+                (ref_chosen_logp, ref_rejected_logp)
             )
-            data_loader = self.accelerator.prepare(dataloader)
-            ref_chosen_logps = []
-            ref_rejected_logps = []
-            for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-                ref_chosen_logp, ref_rejected_logp = self.compute_ref_log_probs(padded_batch)
-                ref_chosen_logp, ref_rejected_logp = self.accelerator.gather_for_metrics(
-                    (ref_chosen_logp, ref_rejected_logp)
-                )
-                ref_chosen_logps.append(ref_chosen_logp.cpu())
-                ref_rejected_logps.append(ref_rejected_logp.cpu())
+            ref_chosen_logps.append(ref_chosen_logp.cpu())
+            ref_rejected_logps.append(ref_rejected_logp.cpu())
 
-            # Save the reference log probabilities to cache. We need .float() because bf16 is not supported by numpy
-            ref_chosen_logps = torch.cat(ref_chosen_logps).float().numpy()
-            ref_rejected_logps = torch.cat(ref_rejected_logps).float().numpy()
-            if self.accelerator.is_main_process:
-                np.savez_compressed(
-                    cache_file, ref_chosen_logps=ref_chosen_logps, ref_rejected_logps=ref_rejected_logps
-                )
-            self.accelerator.wait_for_everyone()
+        # We need .float() because bf16 is not supported by numpy
+        ref_chosen_logps = torch.cat(ref_chosen_logps).float().numpy()
+        ref_rejected_logps = torch.cat(ref_rejected_logps).float().numpy()
 
-        dataset = dataset.add_column(name="ref_chosen_logps", column=ref_chosen_logps)
-        dataset = dataset.add_column(name="ref_rejected_logps", column=ref_rejected_logps, new_fingerprint=fingerprint)
+        if self.accelerator.is_main_process:
 
-        return dataset
+            def add_ref_logps(batch, indices):
+                return {
+                    "ref_chosen_logps": ref_chosen_logps[indices],
+                    "ref_rejected_logps": ref_rejected_logps[indices],
+                }
+
+            dataset.map(
+                add_ref_logps,
+                with_indices=True,
+                batched=True,
+                remove_columns=dataset.column_names,
+                new_fingerprint=fingerprint,
+                desc=f"Caching reference log probs for {name} dataset",
+            )
+        self.accelerator.wait_for_everyone()
+
+        return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
 
     def compute_ref_log_probs(self, inputs):
         """Computes reference log probabilities for a single padded batch."""
