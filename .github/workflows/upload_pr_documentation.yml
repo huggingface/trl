@@ -13,4 +13,5 @@ jobs:
       package_name: trl
     secrets:
       hf_token: ${{ secrets.HF_DOC_BUILD_PUSH }}
-      comment_bot_token: ${{ secrets.COMMENT_BOT_TOKEN }}
+      comment_bot_app_id: ${{ secrets.COMMENT_BOT_APP_ID }}
+      comment_bot_secret_pem: ${{ secrets.COMMENT_BOT_SECRET_PEM }}
