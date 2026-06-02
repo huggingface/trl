@@ -263,7 +263,7 @@ def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
 
     # No optimizer is passed below. Drop these so DeepSpeed doesn't build a CPUAdam on GPU params.
     config_kwargs.pop("optimizer", None)
-    config_kwargs.get("zero_optimization", {}).pop("offload_optimizer", None)
+    config_kwargs["zero_optimization"].pop("offload_optimizer", None)
     # If ZeRO-3 is used, we shard both the active and reference model.
     # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO
     # disabled (stage 0)
