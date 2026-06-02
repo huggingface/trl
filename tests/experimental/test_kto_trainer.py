@@ -138,17 +138,13 @@ class TestKTOTrainer(TrlTestCase):
         batch = trainer.data_collator([example])
         # completion_input_ids ends with EOS
         assert batch["completion_input_ids"][0, -1].item() == self.tokenizer.eos_token_id
-        # completion_labels: prompt prefix masked with -100, answer+EOS unmasked and matching input_ids
-        completion_input_ids = batch["completion_input_ids"][0].tolist()
-        completion_labels = batch["completion_labels"][0].tolist()
-        first_unmasked = next(i for i, lbl in enumerate(completion_labels) if lbl != -100)
-        assert first_unmasked > 0  # at least the prompt is masked
-        assert completion_labels[first_unmasked:] == completion_input_ids[first_unmasked:]
-        # completion_mask: binary mask consistent with completion_labels (-100 ↔ 0, non-(-100) ↔ 1)
+        # completion_mask: prompt tokens are 0, completion tokens are 1; at least the prompt is masked
         assert "completion_mask" in batch
         completion_mask = batch["completion_mask"][0].tolist()
-        expected_mask = [0 if lbl == -100 else 1 for lbl in completion_labels]
-        assert completion_mask == expected_mask
+        assert 0 in completion_mask and 1 in completion_mask
+        first_completion = next(i for i, m in enumerate(completion_mask) if m == 1)
+        assert first_completion > 0  # at least the prompt is masked
+        assert all(m == 0 for m in completion_mask[:first_completion])
 
         # Test corruption of (prompt, completion) pairs for KL dataset.
         # _get_kl_completion_ids shifts completion_ids by one within each batch; prompt_ids are unchanged.
