@@ -149,11 +149,6 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                 padding_value=0,
                 padding_side="right",
             )
-            batch[f"{prefix}_labels"] = pad(
-                [torch.tensor(lbl, dtype=torch.int64) for lbl in labels_list],
-                padding_value=-100,
-                padding_side="right",
-            )
             batch[f"{prefix}_mask"] = pad(
                 [torch.tensor(m, dtype=torch.int64) for m in completion_mask_list],
                 padding_value=0,
