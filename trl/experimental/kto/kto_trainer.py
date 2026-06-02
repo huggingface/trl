@@ -95,6 +95,14 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     Data collator for unpaired preference data. Assembles completions from raw token IDs and pads sequences to the
     maximum length of the batch.
 
+    Each example is expected to contain `"prompt_ids"`, `"completion_ids"` (and optionally `"KL_completion_ids"`) keys.
+    The collator returns a dictionary with the following keys for each prefix (`"completion"` and, if present,
+    `"KL_completion"`):
+    - `"{prefix}_input_ids"`: full prompt + completion token IDs, padded to the batch maximum length.
+    - `"{prefix}_attention_mask"`: attention mask, padded with 0s.
+    - `"{prefix}_labels"`: labels with prompt tokens masked as `-100`, padded with `-100`.
+    - `"{prefix}_mask"`: binary mask where 1 marks completion tokens and 0 marks prompt or padding tokens.
+
     Args:
         pad_token_id (`int`):
             Token ID to use for padding `input_ids` sequences.
@@ -116,16 +124,20 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
 
             full_ids_list = []
             labels_list = []
+            completion_mask_list = []
             for ex in examples:
                 prompt_ids = ex["prompt_ids"]
                 answer_ids = ex[ids_key]
                 full_ids = prompt_ids + answer_ids
                 labels = [-100] * len(prompt_ids) + answer_ids
+                completion_mask = [0] * len(prompt_ids) + [1] * len(answer_ids)
                 if self.max_length is not None:
                     full_ids = full_ids[: self.max_length]
                     labels = labels[: self.max_length]
+                    completion_mask = completion_mask[: self.max_length]
                 full_ids_list.append(full_ids)
                 labels_list.append(labels)
+                completion_mask_list.append(completion_mask)
 
             batch[f"{prefix}_input_ids"] = pad(
                 [torch.tensor(ids, dtype=torch.int64) for ids in full_ids_list],
@@ -140,6 +152,11 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
             batch[f"{prefix}_labels"] = pad(
                 [torch.tensor(lbl, dtype=torch.int64) for lbl in labels_list],
                 padding_value=-100,
+                padding_side="right",
+            )
+            batch[f"{prefix}_mask"] = pad(
+                [torch.tensor(m, dtype=torch.int64) for m in completion_mask_list],
+                padding_value=0,
                 padding_side="right",
             )
 
