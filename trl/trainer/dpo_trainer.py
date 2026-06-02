@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 import transformers
@@ -1031,9 +1030,8 @@ class DPOTrainer(_BaseTrainer):
             ref_chosen_logps.append(ref_chosen_logp.cpu())
             ref_rejected_logps.append(ref_rejected_logp.cpu())
 
-        # We need .float() because bf16 is not supported by numpy
-        ref_chosen_logps = torch.cat(ref_chosen_logps).float().numpy()
-        ref_rejected_logps = torch.cat(ref_rejected_logps).float().numpy()
+        ref_chosen_logps = torch.cat(ref_chosen_logps)
+        ref_rejected_logps = torch.cat(ref_rejected_logps)
 
         if self.accelerator.is_main_process:
 
