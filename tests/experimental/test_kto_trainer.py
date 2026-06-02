@@ -144,6 +144,11 @@ class TestKTOTrainer(TrlTestCase):
         first_unmasked = next(i for i, lbl in enumerate(completion_labels) if lbl != -100)
         assert first_unmasked > 0  # at least the prompt is masked
         assert completion_labels[first_unmasked:] == completion_input_ids[first_unmasked:]
+        # completion_mask: binary mask consistent with completion_labels (-100 ↔ 0, non-(-100) ↔ 1)
+        assert "completion_mask" in batch
+        completion_mask = batch["completion_mask"][0].tolist()
+        expected_mask = [0 if lbl == -100 else 1 for lbl in completion_labels]
+        assert completion_mask == expected_mask
 
         # Test corruption of (prompt, completion) pairs for KL dataset.
         # _get_kl_completion_ids shifts completion_ids by one within each batch; prompt_ids are unchanged.
