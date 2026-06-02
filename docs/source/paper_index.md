@@ -1701,7 +1701,8 @@ training_args = SDPOConfig(
     distillation_mode="topk_logits",       # Explicitly select top-K logit distillation
     distillation_topk=100,                 # Required for top-K logit distillation
     distillation_is_clip=2.0,              # Importance sampling clipping
-    distillation_weight=1.0,               # Convex weight: (1-w)*policy + w*distillation; 1.0 = pure distillation
+    distillation_weight=1.0,               # Weight for self-distillation loss
+    sdpo_policy_loss_mode="distillation_only",
     use_successful_as_teacher=True,        # Use successful rollouts as teacher
     teacher_model_kind="ema",              # Supported: "base", "live", "ema"
     teacher_update_rate=0.05,              # EMA update rate

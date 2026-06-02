@@ -44,7 +44,7 @@ python trl/experimental/sdpo/sdpo.py \
     --generation_batch_size 32 \
     --distillation_alpha 1.0 \
     --distillation_mode sampled_token \
-    --distillation_weight 0.5 \
+    --sdpo_policy_loss_mode hybrid \
     --report_to none \
     --eval_strategy steps \
     --eval_steps 1000 \
