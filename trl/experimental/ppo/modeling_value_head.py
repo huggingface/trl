@@ -617,6 +617,12 @@ class ValueHead(nn.Module):
             if config.is_encoder_decoder and hasattr(config, "decoder"):
                 if hasattr(config.decoder, "hidden_size"):
                     hidden_size = config.decoder.hidden_size
+        else:
+            raise ValueError(
+                "Cannot determine `hidden_size` from model config. "
+                "Please open an issue or pass a model whose config exposes one of: "
+                "`hidden_size`, `word_embed_proj_dim`, or `decoder.hidden_size`."
+            )
 
         self.summary = nn.Linear(hidden_size, 1)
 
