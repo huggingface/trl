@@ -100,7 +100,6 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     `"KL_completion"`):
     - `"{prefix}_input_ids"`: full prompt + completion token IDs, padded to the batch maximum length.
     - `"{prefix}_attention_mask"`: attention mask, padded with 0s.
-    - `"{prefix}_labels"`: labels with prompt tokens masked as `-100`, padded with `-100`.
     - `"{prefix}_mask"`: binary mask where 1 marks completion tokens and 0 marks prompt or padding tokens.
 
     Args:
