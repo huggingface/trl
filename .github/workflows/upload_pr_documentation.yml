@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    uses: huggingface/doc-builder/.github/workflows/upload_pr_documentation.yml@2430c1ec91d04667414e2fa31ecfc36c153ea391  # main
+    uses: huggingface/doc-builder/.github/workflows/upload_pr_documentation.yml@b0f9a6e3b6aa912656cbda9f74896eb721d29421  # main
     with:
       package_name: trl
     secrets:
