@@ -610,6 +610,8 @@ class ValueHead(nn.Module):
             hidden_size = config.hidden_size
         if hasattr(config, "word_embed_proj_dim"):
             hidden_size = config.word_embed_proj_dim
+        elif hasattr(config, "text_config") and hasattr(config.text_config, "hidden_size"):
+            hidden_size = config.text_config.hidden_size
         elif hasattr(config, "is_encoder_decoder"):
             if config.is_encoder_decoder and hasattr(config, "decoder"):
                 if hasattr(config.decoder, "hidden_size"):
