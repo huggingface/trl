@@ -58,29 +58,30 @@ class RolloutWorkerProtocol(Protocol):
 
     The default [`AsyncRolloutWorker`] spawns a CUDA-free child process and scores completions with the trainer's
     `reward_funcs`. Implement this protocol to plug in a custom rollout/scoring backend instead — for example, one that
-    runs reward models on their own GPUs. The trainer only ever calls these members:
+    runs reward models on their own GPUs.
 
     Attributes:
         rollout_buffer (`queue.Queue`):
             Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it.
-
-    Methods:
-        start():
-            Begin producing rollouts. Called once on train begin, after the initial weight sync.
-        stop():
-            Stop the worker and release its resources. Called on train end.
-        update_model_version(version):
-            Tell the worker which policy version is now live, so it can tag/discard stale samples.
-        check_health(stale_after_s):
-            Raise if the worker has crashed or stopped producing within `stale_after_s` seconds.
     """
 
     rollout_buffer: queue.Queue
 
-    def start(self) -> None: ...
-    def stop(self) -> None: ...
-    def update_model_version(self, version: int) -> None: ...
-    def check_health(self, stale_after_s: float) -> None: ...
+    def start(self) -> None:
+        """Begin producing rollouts. Called once on train begin, after the initial weight sync."""
+        ...
+
+    def stop(self) -> None:
+        """Stop the worker and release its resources. Called on train end."""
+        ...
+
+    def update_model_version(self, version: int) -> None:
+        """Tell the worker which policy version is now live, so it can tag or discard stale samples."""
+        ...
+
+    def check_health(self, stale_after_s: float) -> None:
+        """Raise if the worker has crashed or stopped producing within `stale_after_s` seconds."""
+        ...
 
 
 class StepIntervalCallback(TrainerCallback):
