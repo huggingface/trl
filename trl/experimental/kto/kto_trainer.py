@@ -998,6 +998,10 @@ class KTOTrainer(_BaseTrainer):
         lm_head = model.get_output_embeddings()
         ref_lm_head = self.ref_model.get_output_embeddings()
 
+        shift_completion_mask = batch["completion_mask"][:, 1:].contiguous()
+        target = batch["completion_input_ids"][:, 1:].clone()
+        target[shift_completion_mask == 0] = -100
+
         (
             loss,
             (
@@ -1011,7 +1015,7 @@ class KTOTrainer(_BaseTrainer):
         ) = self.kto_loss_fn(
             _input=outputs.last_hidden_state[:, :-1],
             lin_weight=lm_head.weight,
-            target=batch["completion_labels"][:, 1:],
+            target=target,
             bias=lm_head.bias if hasattr(lm_head, "bias") else None,
             preference_labels=torch.tensor(batch["label"], dtype=torch.bool).to(self.accelerator.device),
             ref_input=ref_outputs.last_hidden_state[:, :-1],
