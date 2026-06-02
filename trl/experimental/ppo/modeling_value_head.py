@@ -613,10 +613,12 @@ class ValueHead(nn.Module):
             hidden_size = config.word_embed_proj_dim
         elif hasattr(config, "hidden_size"):
             hidden_size = config.hidden_size
-        elif hasattr(config, "is_encoder_decoder"):
-            if config.is_encoder_decoder and hasattr(config, "decoder"):
-                if hasattr(config.decoder, "hidden_size"):
-                    hidden_size = config.decoder.hidden_size
+        elif (
+            getattr(config, "is_encoder_decoder", False)
+            and hasattr(config, "decoder")
+            and hasattr(config.decoder, "hidden_size")
+        ):
+            hidden_size = config.decoder.hidden_size
         else:
             raise ValueError(
                 "Cannot determine `hidden_size` from model config. "
