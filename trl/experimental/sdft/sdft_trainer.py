@@ -907,7 +907,6 @@ class SDFTTrainer(_BaseTrainer):
         unwrapped_student = self.accelerator.unwrap_model(model)
         unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
 
-        self.teacher_model.eval()
         with torch.no_grad(), self._get_teacher_context_for_self_distillation():
             teacher_hidden, teacher_weight, teacher_bias = self._forward_redirection(
                 self.teacher_model,
