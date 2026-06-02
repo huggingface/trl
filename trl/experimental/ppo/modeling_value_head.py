@@ -608,11 +608,14 @@ class ValueHead(nn.Module):
         # Determine hidden_size in priority order:
         # 1. word_embed_proj_dim (OPT-350m): output projection dim, != internal hidden_size
         # 2. hidden_size: standard attribute for most decoder-only and seq2seq models
-        # 3. decoder.hidden_size: EncoderDecoder compositions (e.g. BERT encoder + BERT decoder)
+        # 3. text_config.hidden_size: multimodal configs (Gemma3, LLaVA,...) with no top-level hidden_size
+        # 4. decoder.hidden_size: EncoderDecoder compositions (e.g. BERT encoder + BERT decoder)
         if hasattr(config, "word_embed_proj_dim"):
             hidden_size = config.word_embed_proj_dim
         elif hasattr(config, "hidden_size"):
             hidden_size = config.hidden_size
+        elif hasattr(config, "text_config") and hasattr(config.text_config, "hidden_size"):
+            hidden_size = config.text_config.hidden_size
         elif (
             getattr(config, "is_encoder_decoder", False)
             and hasattr(config, "decoder")
@@ -623,9 +626,8 @@ class ValueHead(nn.Module):
             raise ValueError(
                 "Cannot determine `hidden_size` from model config. "
                 "Please open an issue or pass a model whose config exposes one of: "
-                "`hidden_size`, `word_embed_proj_dim`, or `decoder.hidden_size`."
+                "`hidden_size`, `word_embed_proj_dim`, `text_config.hidden_size`, or `decoder.hidden_size`."
             )
-
         self.summary = nn.Linear(hidden_size, 1)
 
         self.flatten = nn.Flatten()
