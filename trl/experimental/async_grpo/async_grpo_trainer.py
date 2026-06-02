@@ -318,14 +318,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
-            tokenizer = processing_class.tokenizer
+            self._tokenizer = processing_class.tokenizer
         elif isinstance(processing_class, PreTrainedTokenizerBase):
-            tokenizer = processing_class
+            self._tokenizer = processing_class
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -336,7 +336,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             model=model,
             args=self.args,
             train_dataset=train_dataset,
-            processing_class=tokenizer,
+            processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
             compute_loss_func="non-None value to disable scaling",
@@ -392,7 +392,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     model_name=model_name,
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
-                    processing_class=tokenizer,
+                    processing_class=self._tokenizer,
                     tools=tools,
                     environment_factory=environment_factory,
                     num_generations=self.args.num_generations,
@@ -435,7 +435,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             DataLoader(
                 dataset,
                 batch_size=self.args.per_device_train_batch_size * self.accelerator.num_processes,
-                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id),
+                collate_fn=DataCollatorForRollout(self._tokenizer.pad_token_id),
                 num_workers=0,
                 # NOTE(@aminediro):
                 # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
