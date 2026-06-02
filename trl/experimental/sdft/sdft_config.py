@@ -64,7 +64,7 @@ class SDFTConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument
             of the `SDFTTrainer` is provided as a string.
-        disable_dropout (`bool`, *optional*, defaults to `False`):
+        disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the student and teacher models.
 
         > Parameters that control data preprocessing
@@ -181,7 +181,7 @@ class SDFTConfig(_BaseConfig):
         },
     )
     disable_dropout: bool = field(
-        default=False,
+        default=True,
         metadata={"help": "Whether to disable dropout in the student and teacher models."},
     )
     remove_unused_columns: bool = field(

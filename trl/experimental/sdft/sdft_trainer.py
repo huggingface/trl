@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import annotations
-
 import inspect
 import textwrap
 from collections import defaultdict
@@ -28,6 +26,7 @@ from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
@@ -51,6 +50,7 @@ from ...trainer.utils import (
     get_config_model_id,
     identity,
     pad,
+    selective_log_softmax,
     split_tensor_dict,
     use_adapter,
 )
@@ -60,7 +60,6 @@ from .loss_utils import (
     compute_full_logit_self_distillation_loss,
     compute_sampled_token_self_distillation_loss,
     compute_topk_self_distillation_loss,
-    select_token_log_probs,
 )
 from .sdft_config import SDFTConfig
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
@@ -84,8 +83,7 @@ class DistillationLogits:
     """Aligned logits and masks used to compute a self-distillation objective."""
 
     completion_ids: torch.Tensor
-    completion_mask: torch.Tensor
-    response_mask: torch.Tensor
+    loss_mask: torch.Tensor
     student_logits: torch.Tensor
     teacher_logits: torch.Tensor
 
@@ -592,7 +590,6 @@ class SDFTTrainer(_BaseTrainer):
             completion_ids=batch["completion_ids"],
             teacher_input_ids=batch["teacher_input_ids"],
             teacher_attention_mask=batch["teacher_attention_mask"],
-            self_distillation_mask=batch.get("self_distillation_mask"),
         )
         return batch
 
@@ -634,6 +631,7 @@ class SDFTTrainer(_BaseTrainer):
                 generation_kwargs=self.generation_kwargs,
             ) as unwrapped_model,
             torch.no_grad(),
+            FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
         ):
             prompt_completion_ids = unwrapped_model.generate(
                 **generate_inputs, generation_config=self.generation_config
@@ -742,9 +740,21 @@ class SDFTTrainer(_BaseTrainer):
                     attention_mask,
                     logits_to_keep,
                 )
-                old_per_token_logps = select_token_log_probs(logits, completion_ids)
+                old_per_token_logps = selective_log_softmax(logits, completion_ids)
 
         return old_per_token_logps
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        if return_outputs:
+            raise ValueError("The SDFTTrainer does not support returning outputs")
+
+        if self.use_liger_loss:
+            loss = self._compute_liger_loss(model, inputs)
+        else:
+            distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
+            loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
+        accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
+        return loss / accumulation_scale
 
     def _compute_self_distillation_loss(
         self,
@@ -764,7 +774,7 @@ class SDFTTrainer(_BaseTrainer):
         When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a clipped
         importance-sampling ratio between the current student and the student at rollout time.
         """
-        if distillation_logits.response_mask.sum() == 0:
+        if distillation_logits.loss_mask.sum() == 0:
             mode = "train" if model.training else "eval"
             self._log_self_distillation_metric(mode, 0.0)
             # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
@@ -801,7 +811,7 @@ class SDFTTrainer(_BaseTrainer):
 
         old_per_token_logps = inputs.get("old_per_token_logps")
         if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
-            student_per_token_logps = select_token_log_probs(
+            student_per_token_logps = selective_log_softmax(
                 distillation_logits.student_logits,
                 distillation_logits.completion_ids,
             )
@@ -812,15 +822,15 @@ class SDFTTrainer(_BaseTrainer):
                 self.args.distillation_is_clip,
             )
 
-        loss = (per_token_loss * distillation_logits.response_mask).sum(-1) / distillation_logits.response_mask.sum(
-            -1
-        ).clamp(min=1.0)
+        loss = (per_token_loss * distillation_logits.loss_mask).sum(-1) / distillation_logits.loss_mask.sum(-1).clamp(
+            min=1.0
+        )
         loss = loss.mean()
 
         mode = "train" if model.training else "eval"
         mean_distill_loss = (
-            per_token_loss * distillation_logits.response_mask
-        ).sum() / distillation_logits.response_mask.sum().clamp(min=1.0)
+            per_token_loss * distillation_logits.loss_mask
+        ).sum() / distillation_logits.loss_mask.sum().clamp(min=1.0)
         self._log_self_distillation_metric(
             mode,
             self.accelerator.gather(mean_distill_loss).mean().item(),
@@ -848,10 +858,12 @@ class SDFTTrainer(_BaseTrainer):
         completion_mask = inputs["completion_mask"]
         logits_to_keep = completion_ids.size(1)
 
-        response_mask = self._build_self_distillation_response_mask(
-            completion_mask,
-            inputs.get("self_distillation_mask"),
-        )
+        # SDFT skips the first few completion tokens in the distillation loss to suppress teacher-prompt artifacts.
+        loss_mask = completion_mask
+        if self.num_loss_tokens_to_skip > 0:
+            token_positions = torch.arange(completion_mask.size(1), device=completion_mask.device).unsqueeze(0)
+            loss_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
+
         student_input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         student_attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         student_logits = self._forward_logits(
@@ -871,8 +883,7 @@ class SDFTTrainer(_BaseTrainer):
 
         return DistillationLogits(
             completion_ids=completion_ids,
-            completion_mask=completion_mask,
-            response_mask=response_mask,
+            loss_mask=loss_mask,
             student_logits=student_logits,
             teacher_logits=teacher_logits,
         )
@@ -907,9 +918,11 @@ class SDFTTrainer(_BaseTrainer):
         the frozen teacher weight is captured while the teacher is materialized and handed to the student pass.
         """
         logits_to_keep = inputs["completion_ids"].size(1)
-        response_mask = self._build_self_distillation_response_mask(
-            inputs["completion_mask"], inputs.get("self_distillation_mask")
-        )
+        completion_mask = inputs["completion_mask"]
+        loss_mask = completion_mask
+        if self.num_loss_tokens_to_skip > 0:
+            token_positions = torch.arange(completion_mask.size(1), device=completion_mask.device).unsqueeze(0)
+            loss_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
 
         unwrapped_student = self.accelerator.unwrap_model(model)
         unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
@@ -931,7 +944,7 @@ class SDFTTrainer(_BaseTrainer):
             unwrapped_student,
             inputs,
             logits_to_keep,
-            response_mask,
+            loss_mask,
             teacher_hidden,
             teacher_weight,
             teacher_bias,
@@ -956,7 +969,7 @@ class SDFTTrainer(_BaseTrainer):
         student,
         inputs: TrainingBatch,
         logits_to_keep,
-        response_mask,
+        loss_mask,
         teacher_hidden,
         teacher_weight,
         teacher_bias,
@@ -973,7 +986,7 @@ class SDFTTrainer(_BaseTrainer):
 
         # `ignore_index` masks non-response positions; the token values only feed the disabled hard-CE term.
         completion_ids = inputs["completion_ids"]
-        true_labels = torch.where(response_mask.bool(), completion_ids, torch.full_like(completion_ids, -100))
+        true_labels = torch.where(loss_mask.bool(), completion_ids, torch.full_like(completion_ids, -100))
 
         student_head = student.get_output_embeddings()
         # Per-sequence then batch mean (grpo), matching the non-Liger path: the fused kernel reduces by total tokens
@@ -1054,32 +1067,3 @@ class SDFTTrainer(_BaseTrainer):
         logs = {**logs, **metrics}
         super().log(logs, start_time)
         self._metrics[mode].clear()
-
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if return_outputs:
-            raise ValueError("The SDFTTrainer does not support returning outputs")
-
-        if self.use_liger_loss:
-            loss = self._compute_liger_loss(model, inputs)
-        else:
-            distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
-            loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
-        accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
-        return loss / accumulation_scale
-
-    def _build_self_distillation_response_mask(
-        self,
-        completion_mask: torch.Tensor,
-        self_distillation_mask: torch.Tensor | None,
-    ) -> torch.Tensor:
-        if self_distillation_mask is None:
-            response_mask = completion_mask
-        else:
-            response_mask = completion_mask * self_distillation_mask.unsqueeze(1)
-        if self.num_loss_tokens_to_skip <= 0:
-            return response_mask
-
-        # SDFT skips the first few completion tokens only in the distillation loss to suppress teacher-prompt artifacts.
-        token_positions = torch.arange(response_mask.size(1), device=response_mask.device).unsqueeze(0)
-        skip_mask = (token_positions >= self.num_loss_tokens_to_skip).long()
-        return response_mask * skip_mask
