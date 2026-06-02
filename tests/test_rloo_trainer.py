@@ -1325,7 +1325,7 @@ class TestRLOOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1352,8 +1352,9 @@ class TestRLOOTrainer(TrlTestCase):
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
@@ -1371,19 +1372,18 @@ class TestRLOOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
-        # Because of the way the tiny models are initialized, the gradient does not flow properly through the
-        # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
-        params_to_skip = (
-            "model.vision_tower.",
-            "model.multi_modal_projector.",
-            "model.visual.",
-            "model.image_newline",
-        )
         for n, param in previous_trainable_params.items():
-            if n.startswith(params_to_skip):
-                continue
             new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
+            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen — if they
+            # ever start training, the feature-selection plumbing has likely regressed.
+            if model_id in (
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            ) and ("encoder.layers.1" in n or "post_layernorm" in n):
+                assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
+            else:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vision
     def test_train_vlm_with_pad_to_multiple_of(self):
@@ -1398,8 +1398,9 @@ class TestRLOOTrainer(TrlTestCase):
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             pad_to_multiple_of=7,
             report_to="none",
@@ -1440,8 +1441,9 @@ class TestRLOOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
@@ -1459,12 +1461,7 @@ class TestRLOOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
-        # Because of the way the tiny models are initialized, the gradient does not flow properly through the
-        # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
-        params_to_skip = ("model.visual.",)
         for n, param in previous_trainable_params.items():
-            if n.startswith(params_to_skip):
-                continue
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
@@ -1488,8 +1485,9 @@ class TestRLOOTrainer(TrlTestCase):
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
@@ -1542,8 +1540,9 @@ class TestRLOOTrainer(TrlTestCase):
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
             use_vllm=True,
@@ -1583,8 +1582,9 @@ class TestRLOOTrainer(TrlTestCase):
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )

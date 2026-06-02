@@ -535,7 +535,7 @@ class TestSFTTrainer(TrlTestCase):
                 ],
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -571,24 +571,16 @@ class TestSFTTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            # For some reason, these params are not updated. This is probably not related to TRL, but to
-            # the model itself. We should investigate this further, but for now we just skip these params.
-            # fmt: off
-            if (
-                model_id == "trl-internal-testing/tiny-Gemma3ForConditionalGeneration" and "model.vision_tower.vision_model.head" in n or
-                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or  # transformers < 5.6.0
-                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or  # transformers < 5.6.0
-                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.encoder.layers.1" in n or  # transformers >= 5.6.0, see #5497
-                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.post_layernorm" in n or  # transformers >= 5.6.0, see #5497
-                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or  # transformers < 5.6.0
-                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or  # transformers < 5.6.0
-                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "model.vision_tower.encoder.layers.1" in n or  # transformers >= 5.6.0, see #5497
-                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "model.vision_tower.post_layernorm" in n or  # transformers >= 5.6.0, see #5497
-                model_id == "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration" and "model.visual.deepstack_merger_list" in n
-            ):
-            # fmt: on
-                continue
-            assert not torch.equal(param, new_param), f"Param {n} is not updated"
+            # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
+            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen — if they
+            # ever start training, the feature-selection plumbing has likely regressed.
+            if model_id in (
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            ) and ("encoder.layers.1" in n or "post_layernorm" in n):
+                assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     def test_train_moe_model_with_aux_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1095,7 +1087,7 @@ class TestSFTTrainer(TrlTestCase):
     @require_kernels
     @pytest.mark.skipif(
         not is_ampere_or_newer() and torch_device != "xpu",
-        reason="Flash attention 2 requires Ampere or newer GPU, or XPU",
+        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1418,7 +1410,12 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_toolcall_data(self):
         dataset = load_dataset("trl-internal-testing/toolcall", "language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # toolcall sequences are longer than standard data, reduce batch size to avoid OOM
+            max_length=512,  # toolcall sequences are longer than standard data, limit length to avoid OOM
+            report_to="none",
+        )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -1446,7 +1443,12 @@ class TestSFTTrainer(TrlTestCase):
 
         dataset = dataset.map(convert_to_json)
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # toolcall sequences are longer than standard data, reduce batch size to avoid OOM
+            max_length=512,  # toolcall sequences are longer than standard data, limit length to avoid OOM
+            report_to="none",
+        )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -1476,6 +1478,27 @@ class TestSFTTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[0]["eval_loss"] is not None
+
+    def test_train_with_metric_for_best_model(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            eval_strategy="steps",
+            eval_steps=3,
+            # It's important to use a key that SFTTrainer adds itself (not one from the base Trainer), since the bug is
+            # that trainer-specific metrics don't reach the dict returned by `evaluate()`.
+            metric_for_best_model="eval_mean_token_accuracy",
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        trainer.train()
 
     def test_train_with_multiple_eval_dataset(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
@@ -1615,7 +1638,7 @@ class TestSFTTrainer(TrlTestCase):
                 ],
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1651,24 +1674,16 @@ class TestSFTTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            # For some reason, these params are not updated. This is probably not related to TRL, but to
-            # the model itself. We should investigate this further, but for now we just skip these params.
-            # fmt: off
-            if (
-                model_id == "trl-internal-testing/tiny-Gemma3ForConditionalGeneration" and "model.vision_tower.vision_model.head" in n or
-                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or  # transformers < 5.6.0
-                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or  # transformers < 5.6.0
-                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.encoder.layers.1" in n or  # transformers >= 5.6.0, see #5497
-                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.post_layernorm" in n or  # transformers >= 5.6.0, see #5497
-                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or  # transformers < 5.6.0
-                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or  # transformers < 5.6.0
-                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "model.vision_tower.encoder.layers.1" in n or  # transformers >= 5.6.0, see #5497
-                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "model.vision_tower.post_layernorm" in n or  # transformers >= 5.6.0, see #5497
-                model_id == "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration" and "model.visual.deepstack_merger_list" in n
-            ):
-            # fmt: on
-                continue
-            assert not torch.equal(param, new_param), f"Param {n} is not updated"
+            # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
+            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen — if they
+            # ever start training, the feature-selection plumbing has likely regressed.
+            if model_id in (
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            ) and ("encoder.layers.1" in n or "post_layernorm" in n):
+                assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     @pytest.mark.parametrize(
         "model_id",
@@ -2287,7 +2302,7 @@ _CHUNKED_CE_VLM_MODEL_IDS = [
         ),
     ),
     pytest.param(
-        "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+        "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.2.0"),
             reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -2470,7 +2485,7 @@ class TestPatchChunkedCELMHead:
     CHUNK_SIZE = 5  # small, to exercise the chunk loop
 
     def _setup(self, model_id):
-        ref_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32, device_map=torch_device)
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
         chunked_model = copy.deepcopy(ref_model)
         _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
 
@@ -2518,7 +2533,7 @@ class TestPatchChunkedCELMHead:
         """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
         to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
         ref_model = AutoModelForCausalLM.from_pretrained(
-            model_id, torch_dtype=torch.float32, output_router_logits=True, device_map=torch_device
+            model_id, dtype=torch.float32, output_router_logits=True, device_map=torch_device
         )
         chunked_model = copy.deepcopy(ref_model)
         _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)

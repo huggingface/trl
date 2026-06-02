@@ -86,10 +86,29 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
     aux_loss: torch.Tensor | None = None
 
 
+def _maybe_gather_lm_head_ctx(w, b):
+    # Allgather ZeRO-3 partitioned `lm_head` weight/bias for the chunked matmul. No-op if not ZeRO-3, or if the
+    # param is already gathered (tied embeddings: `embed_tokens` shares the weight and keeps it `AVAILABLE`, so
+    # partitioning on our exit would collide with its active-submodule tracking).
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+
+    if not is_deepspeed_zero3_enabled():
+        return contextlib.nullcontext()
+
+    import deepspeed
+    from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+
+    params = [w] if b is None else [w, b]
+    if all(p.ds_status == ZeroParamStatus.AVAILABLE for p in params):
+        return contextlib.nullcontext()
+    return deepspeed.zero.GatheredParameters(params)
+
+
 def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
-    logits = h.float() @ w.float().t()
-    if b is not None:
-        logits = logits + b.float()
+    with _maybe_gather_lm_head_ctx(w, b):
+        logits = h.float() @ w.float().t()
+        if b is not None:
+            logits = logits + b.float()
     if logit_scale != 1.0:
         logits = logits * logit_scale
     if final_logit_softcapping is not None:
@@ -179,9 +198,10 @@ def _chunked_cross_entropy_loss(
         # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
         # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
         # FSDP gradient sync doesn't hang on a missing param.
-        loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
-        if lm_head_bias is not None:
-            loss = loss + lm_head_bias.float().sum() * 0.0
+        with _maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+            loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
+            if lm_head_bias is not None:
+                loss = loss + lm_head_bias.float().sum() * 0.0
         return loss, correct, entropy_sum, n_valid_tensor
 
     loss = hidden.new_zeros((), dtype=torch.float32)
@@ -243,6 +263,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
     final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
     logit_scale = getattr(text_config, "logit_scale", 1.0)
     original_forward = model.forward
+    lm_head = model.get_output_embeddings()
 
     def _chunked_ce_forward(
         self: torch.nn.Module,
@@ -285,14 +306,14 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
 
         loss, num_correct_tokens, entropy_sum, num_valid_tokens = _chunked_cross_entropy_loss(
             hidden_states,
-            self.lm_head.weight,
+            lm_head.weight,
             chunk_size,
             labels=labels,
             shift_labels=shift_labels,
             num_items_in_batch=num_items_in_batch,
             logit_scale=logit_scale,
             final_logit_softcapping=final_logit_softcapping,
-            lm_head_bias=self.lm_head.bias,
+            lm_head_bias=lm_head.bias,
         )
 
         aux_loss = None
@@ -308,7 +329,13 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
                 num_experts_per_tok = self.num_experts_per_tok
                 router_aux_loss_coef = self.router_aux_loss_coef
             else:
-                num_experts = text_config.num_experts
+                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
+                if text_config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
+                    transformers.__version__
+                ) < Version("5.6.0"):
+                    num_experts = self.num_experts
+                else:
+                    num_experts = text_config.num_experts
                 num_experts_per_tok = text_config.num_experts_per_tok
                 router_aux_loss_coef = text_config.router_aux_loss_coef
             aux_loss = load_balancing_loss_func(
@@ -1115,7 +1142,7 @@ class SFTTrainer(_BaseTrainer):
             if not use_flash_attention:
                 logger.warning(
                     "Padding-free training is enabled, but the attention implementation is not set to a supported "
-                    "flash attention variant. Padding-free training flattens batches into a single sequence, and only "
+                    "Flash Attention variant. Padding-free training flattens batches into a single sequence, and only "
                     "the following implementations are known to reliably support this: "
                     f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to "
                     "unexpected behavior. To ensure compatibility, set `attn_implementation` in the model "
@@ -1175,7 +1202,7 @@ class SFTTrainer(_BaseTrainer):
 
         if args.packing and args.packing_strategy in {"bfd", "bfd_split"} and not use_flash_attention:
             logger.warning(
-                "You are using packing, but the attention implementation is not set to a supported flash attention "
+                "You are using packing, but the attention implementation is not set to a supported Flash Attention "
                 "variant. Packing gathers multiple samples into a single sequence, and only the following "
                 f"implementations are known to reliably support this: {', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. "
                 "Using other implementations may lead to cross-contamination between samples. To avoid this, either "
@@ -1253,18 +1280,17 @@ class SFTTrainer(_BaseTrainer):
                 # `PeftModel.forward`. Prompt-learning variants need `PeftModel.forward` to run first (to inject
                 # virtual tokens), then it delegates into the patched inner forward.
                 target = model.get_base_model() if is_peft_model(model) else model
-                # The chunked path reads `lm_head.weight` directly, which would silently drop the adapter delta
-                # (and starve its parameters of gradients) if `lm_head` itself is a PEFT tuner layer.
+                # The chunked path reads the output projection weight directly, which would silently drop the
+                # adapter delta (and starve its parameters of gradients) if the head itself is a PEFT tuner layer.
                 if is_peft_model(model):
                     from peft.tuners.tuners_utils import BaseTunerLayer
 
-                    if isinstance(target.lm_head, BaseTunerLayer):
+                    if isinstance(target.get_output_embeddings(), BaseTunerLayer):
                         raise ValueError(
-                            "`loss_type='chunked_nll'` is not supported when `lm_head` is wrapped by a PEFT "
-                            "adapter (e.g. `target_modules='all-linear'` or explicitly including `'lm_head'`). "
-                            "Either remove `lm_head` from `target_modules`, or switch to `loss_type='nll'`. If "
-                            "this is a real use case for you, please open an issue at "
-                            "https://github.com/huggingface/trl/issues."
+                            "`loss_type='chunked_nll'` is not supported when `lm_head` is wrapped by a PEFT adapter "
+                            "(e.g. `target_modules='all-linear'` or explicitly including `'lm_head'`). Either remove "
+                            "`lm_head` from `target_modules`, or switch to `loss_type='nll'`. If this is a real use "
+                            "case for you, please open an issue at https://github.com/huggingface/trl/issues."
                         )
                 _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
             else:
@@ -1626,15 +1652,24 @@ class SFTTrainer(_BaseTrainer):
                     shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
                 per_token_entropy = entropy_from_logits(shift_logits)
+                predictions = shift_logits.argmax(dim=-1)
                 mask = shift_labels != -100
+
                 entropy_sum = (per_token_entropy * mask).sum()
                 total_tokens = mask.sum()
+                correct_predictions = (predictions == shift_labels) & mask
+                correct_tokens = correct_predictions.sum()
 
                 # Gather counts across ranks and weight-average
                 entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
                 total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
+                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
                 entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
+
+                total_sum = total_tokens.sum()
+                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
             self._metrics[mode]["entropy"].append(entropy)
+            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
@@ -1663,46 +1698,6 @@ class SFTTrainer(_BaseTrainer):
                     "not be logged. This is unexpected; please report it to the liger-kernel repository.",
                     stacklevel=2,
                 )
-        else:
-            # Compute accuracy from logits using argmax (traditional method)
-            with torch.no_grad():
-                if "shift_labels" in inputs:
-                    # When using CP or SP, labels are pre-shifted. We must use these (and cannot manually shift) because:
-                    # - The first discarded token from inputs["labels"] actually belongs to process n-1
-                    # - The last logits require the label from process n+1
-                    shift_logits = outputs.logits.contiguous()
-                    shift_labels = inputs["shift_labels"]
-                else:
-                    shift_logits = outputs.logits[..., :-1, :].contiguous()
-                    shift_labels = labels[..., 1:].contiguous()
-
-                # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
-                if (
-                    self.num_virtual_tokens > 0
-                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
-                ):
-                    shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
-
-                # Get predictions
-                predictions = shift_logits.argmax(dim=-1)
-
-                # Create mask for non-padding tokens (assuming ignore_index is -100)
-                mask = shift_labels != -100
-
-                # Calculate accuracy only on non-padding tokens
-                correct_predictions = (predictions == shift_labels) & mask
-                total_tokens = mask.sum()
-                correct_tokens = correct_predictions.sum()
-
-                # Gather the correct_tokens and total_tokens across all processes
-                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-                total_tokens = self.accelerator.gather_for_metrics(total_tokens)
-
-                # Compute the mean token accuracy and log it
-                total_sum = total_tokens.sum()
-                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-                self._metrics[mode]["mean_token_accuracy"].append(accuracy)
-
         # Log auxiliary loss if enabled (applies to both Liger and non-Liger)
         if self.aux_loss_enabled:
             aux_loss = outputs.aux_loss
@@ -1730,7 +1725,7 @@ class SFTTrainer(_BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 

@@ -592,7 +592,7 @@ app = create_app(
 - **`environment_factory`** (recommended): You define an environment class with tool methods, and the trainer handles generation, tool-call parsing, and the multi-turn loop automatically. This is the approach used throughout this guide.
 - **`rollout_func`**: You write the entire generation and environment interaction loop yourself. This gives full control over how completions are produced, how tools are executed, and how rewards are computed.
 
-Use `rollout_func` when `environment_factory` doesn't fit your use case. For example, **external agent servers** like [NeMo-Gym](nemo_gym), where an external server owns the generation loop and manages its own agent-environment interaction protocol.
+Use `rollout_func` when `environment_factory` doesn't fit your use case. For example, **external agent servers** where an external server owns the generation loop and manages its own agent-environment interaction protocol.
 
 ### Migrating from `rollout_func` to `environment_factory`
 
