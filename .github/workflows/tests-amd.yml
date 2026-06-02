@@ -1,0 +1,62 @@
+name: Slow tests on AMD ROCm
+
+# Mirror of slow-tests.yml on AMD ROCm hardware. Scheduled + manual rather than on-push because
+# it needs a self-hosted AMD GPU runner; set `runs-on` below to your AMD runner group to enable it.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * *"
+
+env:
+  RUN_SLOW: "yes"
+  IS_GITHUB_CI: "1"
+  SLACK_API_TOKEN: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  TRL_EXPERIMENTAL_SILENCE: 1
+
+jobs:
+  run_all_tests_single_gpu:
+    # TODO: point this at the provisioned AMD runner.
+    runs-on:
+      group: amd-mi325
+    env:
+      TEST_TYPE: "single_gpu_amd"
+    container:
+      # Stable ROCm torch, matching transformers' AMD image; bump in lockstep with the FA2 wheel below.
+      image: rocm/pytorch:rocm7.2.2_ubuntu22.04_py3.10_pytorch_release_2.10.0
+      # --env ROCR_VISIBLE_DEVICES forwards the runner's GPU-isolation assignment into the container.
+      options: --device /dev/kfd --device /dev/dri --group-add video --env ROCR_VISIBLE_DEVICES --ipc=host --shm-size "16gb"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        run: apt-get update && apt-get install -y make git curl
+
+      # The base image already ships a ROCm build of torch, so install into it directly: a fresh
+      # `uv venv` (as in the CUDA workflows) would reinstall a CUDA torch from PyPI and break ROCm.
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e ".[dev]" pytest-reportlog
+          # Prebuilt ROCm flash-attention wheel, pinned to the base image's ABI (gfx942/gfx950).
+          python3 -m pip install --no-cache-dir \
+            https://rocm.frameworks-devreleases.amd.com/whl/gfx942-gfx950/flash_attn-2.8.3-cp310-cp310-linux_x86_64.whl
+          # Most hub kernels have no ROCm build and cause failing tests on ROCm (same as transformers' AMD CI).
+          python3 -m pip uninstall -y kernels
+
+      - name: Verify ROCm torch is intact
+        run: python3 -c "import torch; assert torch.version.hip, 'CUDA torch got installed'; print('ROCm torch', torch.__version__, '| HIP', torch.version.hip)"
+
+      - name: Run slow tests on single GPU
+        if: always()
+        run: make slow_tests
+
+      - name: Generate Report
+        if: always()
+        run: |
+          python3 -m pip install slack_sdk tabulate
+          python3 scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
