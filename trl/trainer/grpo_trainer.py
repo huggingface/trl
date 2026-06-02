@@ -2325,19 +2325,35 @@ class GRPOTrainer(_BaseTrainer):
 
         # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
         loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
-        # Compute loss and metrics using liger grpo loss
-        loss, metrics = self.liger_grpo_loss(
-            _input=last_hidden_state,
-            lin_weight=unwrapped_model.lm_head.weight,
-            selected_token_ids=completion_ids,
-            # The attention_mask parameter in liger loss is actually used as a loss mask (not model attention)
-            attention_mask=loss_mask,
-            advantages=inputs["advantages"],
-            bias=unwrapped_model.lm_head.bias,
-            old_per_token_logps=inputs.get("old_per_token_logps"),
-            ref_per_token_logps=inputs.get("ref_per_token_logps"),
-            vllm_is_ratio=inputs.get("importance_sampling_ratio"),
-        )
+        lm_head_weight = unwrapped_model.lm_head.weight
+        lm_head_bias = unwrapped_model.lm_head.bias
+        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires
+        # and the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
+        # computed during this forward, so it isn't needed in the backward). Skip it when already gathered: with tied
+        # embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning on exit breaks its tracking.
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        gather_ctx = nullcontext()
+        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+            from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+
+            params = [lm_head_weight] if lm_head_bias is None else [lm_head_weight, lm_head_bias]
+            if any(p.ds_status != ZeroParamStatus.AVAILABLE for p in params):
+                import deepspeed
+
+                gather_ctx = deepspeed.zero.GatheredParameters(params, modifier_rank=None)
+        with gather_ctx:
+            loss, metrics = self.liger_grpo_loss(
+                _input=last_hidden_state,
+                lin_weight=lm_head_weight,
+                selected_token_ids=completion_ids,
+                # The attention_mask parameter in liger loss is actually used as a loss mask (not model attention)
+                attention_mask=loss_mask,
+                advantages=inputs["advantages"],
+                bias=lm_head_bias,
+                old_per_token_logps=inputs.get("old_per_token_logps"),
+                ref_per_token_logps=inputs.get("ref_per_token_logps"),
+                vllm_is_ratio=inputs.get("importance_sampling_ratio"),
+            )
         # Extract metrics from the liger_grpo_loss output
         # KL divergence is the first metric when beta is non-zero
         mean_kl = metrics[0] if self.beta != 0.0 else None
