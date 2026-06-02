@@ -123,20 +123,16 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                 continue
 
             full_ids_list = []
-            labels_list = []
             completion_mask_list = []
             for ex in examples:
                 prompt_ids = ex["prompt_ids"]
                 answer_ids = ex[ids_key]
                 full_ids = prompt_ids + answer_ids
-                labels = [-100] * len(prompt_ids) + answer_ids
                 completion_mask = [0] * len(prompt_ids) + [1] * len(answer_ids)
                 if self.max_length is not None:
                     full_ids = full_ids[: self.max_length]
-                    labels = labels[: self.max_length]
                     completion_mask = completion_mask[: self.max_length]
                 full_ids_list.append(full_ids)
-                labels_list.append(labels)
                 completion_mask_list.append(completion_mask)
 
             batch[f"{prefix}_input_ids"] = pad(
