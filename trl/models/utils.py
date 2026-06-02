@@ -261,11 +261,7 @@ def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
                 }
             )
 
-    # The reference/teacher/reward model is initialized for inference only; no optimizer is passed to
-    # `deepspeed.initialize` below. Inherited `optimizer` and `zero_optimization.offload_optimizer` entries are
-    # therefore dead config here, and harmful when `offload_optimizer` is set with stage lowered to 0: DeepSpeed
-    # would build a `DeepSpeedCPUAdam` from the config and crash in `initialize_optimizer_states`
-    # (`AssertionError: CPUAdam param is on cuda:0 and must be 'cpu'`).
+    # No optimizer is passed below. Drop these so DeepSpeed doesn't build a CPUAdam on GPU params.
     config_kwargs.pop("optimizer", None)
     config_kwargs.get("zero_optimization", {}).pop("offload_optimizer", None)
     # If ZeRO-3 is used, we shard both the active and reference model.
