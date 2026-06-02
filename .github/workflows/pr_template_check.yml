@@ -33,7 +33,7 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         with:
           script: |
-            const body = process.env.PR_BODY || "";
+            const body = (process.env.PR_BODY || "").slice(0, 65536);
 
             const errors = [];
 
