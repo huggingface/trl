@@ -19,7 +19,7 @@ from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.kto import KTOConfig, KTOTrainer
-from trl.experimental.kto.kto_trainer import _get_kl_dataset
+from trl.experimental.kto.kto_trainer import _get_kl_completion_ids
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft
 
@@ -46,7 +46,6 @@ class TestKTOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
-            remove_unused_columns=False,
             gradient_accumulation_steps=1,
             learning_rate=9e-1,
             eval_strategy="steps" if eval_dataset else "no",
@@ -108,7 +107,6 @@ class TestKTOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
-            remove_unused_columns=False,
             gradient_accumulation_steps=1,
             learning_rate=9e-1,
             eval_strategy="steps",
@@ -148,7 +146,7 @@ class TestKTOTrainer(TrlTestCase):
         assert completion_labels[first_unmasked:] == completion_input_ids[first_unmasked:]
 
         # Test corruption of (prompt, completion) pairs for KL dataset.
-        # _get_kl_dataset shifts completion_ids by one within each batch; prompt_ids are unchanged.
+        # _get_kl_completion_ids shifts completion_ids by one within each batch; prompt_ids are unchanged.
         synthetic = Dataset.from_dict(
             {
                 "prompt_ids": [[1, 2], [3, 4], [5, 6]],
@@ -157,7 +155,7 @@ class TestKTOTrainer(TrlTestCase):
             }
         )
         for batch_size in [2, 3]:
-            rotated = synthetic.map(_get_kl_dataset, batched=True, batch_size=batch_size)
+            rotated = synthetic.map(_get_kl_completion_ids, batched=True, batch_size=batch_size)
 
             # Verify that completion_ids have been rotated (differ from original). When the dataset length
             # modulo batch_size equals 1, the last batch is unaltered: exclude it from the check.
@@ -170,7 +168,6 @@ class TestKTOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
-            remove_unused_columns=False,
             gradient_accumulation_steps=4,
             learning_rate=9e-1,
             eval_strategy="steps",
@@ -217,7 +214,6 @@ class TestKTOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
-            remove_unused_columns=False,
             gradient_accumulation_steps=4,
             learning_rate=9e-1,
             eval_strategy="steps",
@@ -294,7 +290,6 @@ class TestKTOTrainer(TrlTestCase):
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
-            remove_unused_columns=False,
             per_device_train_batch_size=2,
             do_eval=True,
             eval_strategy="steps",
