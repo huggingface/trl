@@ -19,7 +19,7 @@ jobs:
       - name: "Initialize CodeQL"
         uses: github/codeql-action/init@7211b7c8077ea37d8641b6271f6a365a22a5fbfa  # v4.36.0
         with:
-          languages: "yaml"
+          languages: "actions"
           queries: +security-and-quality, ./.github/codeql/custom-queries.qls
 
       - name: "Perform CodeQL Analysis"
