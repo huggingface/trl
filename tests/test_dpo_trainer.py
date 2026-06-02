@@ -245,6 +245,61 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_train_chunked_loss(self):
+        """`use_chunked_loss=True` should train end-to-end and update params."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            report_to="none",
+            use_chunked_loss=True,
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "incompatible_kwargs",
+        [{"use_weighting": True}, {"loss_type": "sft"}, {"precompute_ref_log_probs": True}],
+    )
+    def test_chunked_loss_incompatibilities(self, incompatible_kwargs):
+        """Each MVP-incompatible option should raise at trainer construction."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        args = DPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            use_chunked_loss=True,
+            **incompatible_kwargs,
+        )
+        with pytest.raises((ValueError, NotImplementedError)):
+            DPOTrainer(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=args, train_dataset=dataset)
+
+    def test_chunked_loss_with_ld_alpha(self):
+        """`use_chunked_loss` should compose with `ld_alpha` (LD-DPO operates on per-token logps only)."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            report_to="none",
+            use_chunked_loss=True,
+            ld_alpha=0.5,
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     @pytest.mark.parametrize(
         "loss_type",
         [
