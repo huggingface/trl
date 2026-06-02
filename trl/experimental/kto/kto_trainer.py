@@ -798,18 +798,18 @@ class KTOTrainer(_BaseTrainer):
                         attention_mask=inputs["KL_completion_attention_mask"],
                     ).logits
 
-        completion_logps = self.get_batch_logps(
-            completion_logits,
-            inputs["completion_labels"],
-            average_log_prob=False,
-        )
+        shift_logits = completion_logits[:, :-1, :].contiguous()
+        per_token_logps = selective_log_softmax(shift_logits, inputs["completion_input_ids"][:, 1:].contiguous())
+        per_token_logps[inputs["completion_mask"][:, 1:] == 0] = 0.0
+        completion_logps = per_token_logps.sum(-1)
 
         if self.calculate_KL:
-            KL_logps = self.get_batch_logps(
-                KL_logits,
-                inputs["KL_completion_labels"],
-                average_log_prob=False,
+            shift_KL_logits = KL_logits[:, :-1, :].contiguous()
+            KL_per_token_logps = selective_log_softmax(
+                shift_KL_logits, inputs["KL_completion_input_ids"][:, 1:].contiguous()
             )
+            KL_per_token_logps[inputs["KL_completion_mask"][:, 1:] == 0] = 0.0
+            KL_logps = KL_per_token_logps.sum(-1)
         else:
             KL_logps = None
 
@@ -870,11 +870,10 @@ class KTOTrainer(_BaseTrainer):
         )
         completion_logits = outputs.logits
 
-        completion_logps = self.get_batch_logps(
-            completion_logits,
-            batch["completion_labels"],
-            average_log_prob=False,
-        )
+        shift_logits = completion_logits[:, :-1, :].contiguous()
+        per_token_logps = selective_log_softmax(shift_logits, batch["completion_input_ids"][:, 1:].contiguous())
+        per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
+        completion_logps = per_token_logps.sum(-1)
 
         if completion_logps.shape[0] != len(batch["label"]):
             raise ValueError(
@@ -986,11 +985,12 @@ class KTOTrainer(_BaseTrainer):
             with torch.no_grad():
                 KL_logits = model(**KL_model_kwargs).logits
 
-            KL_logps = self.get_batch_logps(
-                KL_logits,
-                batch["KL_completion_labels"],
-                average_log_prob=False,
+            shift_KL_logits = KL_logits[:, :-1, :].contiguous()
+            KL_per_token_logps = selective_log_softmax(
+                shift_KL_logits, batch["KL_completion_input_ids"][:, 1:].contiguous()
             )
+            KL_per_token_logps[batch["KL_completion_mask"][:, 1:] == 0] = 0.0
+            KL_logps = KL_per_token_logps.sum(-1)
         return KL_logps
 
     def _compute_loss_liger(self, model, inputs, return_outputs):
