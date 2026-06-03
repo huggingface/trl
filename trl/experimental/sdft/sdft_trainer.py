@@ -568,6 +568,8 @@ class SDFTTrainer(_BaseTrainer):
     def _prepare_training_batch(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
         """Sample student rollouts and construct teacher prompts"""
         batch = self.sample_rollouts(inputs)
+        mode = "train" if self.model.training else "eval"
+        self._record_completion_metrics(mode, batch)
         prompts = [example["prompt"] for example in inputs]
         privileged_contexts = [example.get("privileged_context") for example in inputs]
         teacher_batch = self.teacher_context_builder.build(
@@ -592,6 +594,83 @@ class SDFTTrainer(_BaseTrainer):
             teacher_attention_mask=batch["teacher_attention_mask"],
         )
         return batch
+
+    def sample_rollouts(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
+        """Generate completions for a batch of prompts and assemble the training batch."""
+        prompts = [example["prompt"] for example in inputs]
+        privileged_contexts = [example.get("privileged_context") for example in inputs]
+
+        student_prompt_ids_list = self._tokenize_prompts(prompts)
+        if self.generate_from_teacher:
+            generation_prompts = self.teacher_context_builder.select_generation_prompts(prompts, privileged_contexts)
+            generation_prompt_ids_list = self._tokenize_prompts(generation_prompts)
+        else:
+            generation_prompts = prompts
+            generation_prompt_ids_list = student_prompt_ids_list
+
+        self._dispatch_self_distillation_callback(
+            "on_generation_prompts_selected",
+            generation_prompts=generation_prompts,
+            generation_prompt_text=None,
+        )
+
+        _, completion_ids_list = self._generate(generation_prompt_ids_list)
+        device = self.accelerator.device
+        prompt_ids = [torch.tensor(ids) for ids in student_prompt_ids_list]
+        prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
+        prompt_ids = pad(prompt_ids, padding_value=self._tokenizer.pad_token_id, padding_side="left").to(device=device)
+        prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left").to(device=device)
+
+        completion_ids = [torch.tensor(ids) for ids in completion_ids_list]
+        completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
+        completion_ids = pad(completion_ids, padding_value=self._tokenizer.pad_token_id, padding_side="right").to(
+            device=device
+        )
+        completion_mask = pad(completion_mask, padding_value=0, padding_side="right").to(device=device)
+
+        old_per_token_logps = None
+        if not self.generate_from_teacher:
+            old_per_token_logps = self._compute_rollout_logps(
+                prompt_ids=prompt_ids,
+                prompt_mask=prompt_mask,
+                completion_ids=completion_ids,
+                completion_mask=completion_mask,
+            )
+        batch: TrainingBatch = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "raw_completion_lengths": torch.tensor(
+                [len(ids) for ids in completion_ids_list], device=device, dtype=torch.long
+            ),
+        }
+        if old_per_token_logps is not None:
+            batch["old_per_token_logps"] = old_per_token_logps
+        return batch
+
+    def _get_completion_ids_list(self, batch: TrainingBatch) -> list[list[int]]:
+        raw_completion_lengths = batch["raw_completion_lengths"].detach().cpu().tolist()
+        return [
+            ids[:length].tolist()
+            for ids, length in zip(batch["completion_ids"].detach().cpu(), raw_completion_lengths, strict=True)
+        ]
+
+    def _tokenize_prompts(self, prompts: list[Any]) -> list[list[int]]:
+        if is_conversational({"prompt": prompts[0]}):
+            tokenized = self.processing_class.apply_chat_template(
+                conversation=prompts,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                **self.chat_template_kwargs,
+            )
+            prompt_ids = tokenized["input_ids"]
+        else:
+            prompt_ids = self.processing_class(text=prompts)["input_ids"]
+        if self.max_prompt_length is not None:
+            prompt_ids = [ids[-self.max_prompt_length :] for ids in prompt_ids]
+        return prompt_ids
 
     def _generate(self, prompt_ids: list[list[int]]) -> tuple[list[list[int]], list[list[int]]]:
         if self.use_vllm:
@@ -648,76 +727,6 @@ class SDFTTrainer(_BaseTrainer):
             c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
         ]
         return prompt_ids, completion_ids_list
-
-    def sample_rollouts(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
-        """Generate completions for a batch of prompts and assemble the training batch."""
-        prompts = [example["prompt"] for example in inputs]
-        privileged_contexts = [example.get("privileged_context") for example in inputs]
-
-        student_prompt_ids_list = self._tokenize_prompts(prompts)
-        if self.generate_from_teacher:
-            generation_prompts = self.teacher_context_builder.select_generation_prompts(prompts, privileged_contexts)
-            generation_prompt_ids_list = self._tokenize_prompts(generation_prompts)
-        else:
-            generation_prompts = prompts
-            generation_prompt_ids_list = student_prompt_ids_list
-
-        self._dispatch_self_distillation_callback(
-            "on_generation_prompts_selected",
-            generation_prompts=generation_prompts,
-            generation_prompt_text=None,
-        )
-
-        _, completion_ids_list = self._generate(generation_prompt_ids_list)
-        device = self.accelerator.device
-        prompt_ids = [torch.tensor(ids) for ids in student_prompt_ids_list]
-        prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
-        prompt_ids = pad(prompt_ids, padding_value=self._tokenizer.pad_token_id, padding_side="left").to(device=device)
-        prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left").to(device=device)
-
-        completion_ids = [torch.tensor(ids) for ids in completion_ids_list]
-        completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
-        completion_ids = pad(completion_ids, padding_value=self._tokenizer.pad_token_id, padding_side="right").to(
-            device=device
-        )
-        completion_mask = pad(completion_mask, padding_value=0, padding_side="right").to(device=device)
-
-        old_per_token_logps = None
-        if not self.generate_from_teacher:
-            old_per_token_logps = self._compute_rollout_logps(
-                prompt_ids=prompt_ids,
-                prompt_mask=prompt_mask,
-                completion_ids=completion_ids,
-                completion_mask=completion_mask,
-            )
-        batch: TrainingBatch = {
-            "prompt_ids": prompt_ids,
-            "prompt_mask": prompt_mask,
-            "completion_ids": completion_ids,
-            "completion_mask": completion_mask,
-            "raw_completion_lengths": torch.tensor(
-                [len(ids) for ids in completion_ids_list], device=device, dtype=torch.long
-            ),
-        }
-        if old_per_token_logps is not None:
-            batch["old_per_token_logps"] = old_per_token_logps
-        return batch
-
-    def _tokenize_prompts(self, prompts: list[Any]) -> list[list[int]]:
-        if is_conversational({"prompt": prompts[0]}):
-            tokenized = self.processing_class.apply_chat_template(
-                conversation=prompts,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                **self.chat_template_kwargs,
-            )
-            prompt_ids = tokenized["input_ids"]
-        else:
-            prompt_ids = self.processing_class(text=prompts)["input_ids"]
-        if self.max_prompt_length is not None:
-            prompt_ids = [ids[-self.max_prompt_length :] for ids in prompt_ids]
-        return prompt_ids
 
     def _compute_rollout_logps(
         self,
@@ -1053,6 +1062,25 @@ class SDFTTrainer(_BaseTrainer):
         if teacher_model_kind == "ema" and self._use_peft_ema_teacher_adapter():
             return use_adapter(target_model, adapter_name="teacher")
         return nullcontext()
+
+    def _record_completion_metrics(self, mode: str, batch: TrainingBatch) -> None:
+        device = self.accelerator.device
+        completion_ids_list = self._get_completion_ids_list(batch)
+        agg_completion_lengths = self.accelerator.gather(batch["raw_completion_lengths"])
+        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
+
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+        agg_is_truncated = self.accelerator.gather(is_truncated)
+        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
+        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
+        if len(term_completion_lengths) == 0:
+            term_completion_lengths = torch.zeros(1, device=device)
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
     def _log_self_distillation_metric(self, mode: str, value: float) -> None:
         metric_prefix = self._name.lower().replace(" ", "_")

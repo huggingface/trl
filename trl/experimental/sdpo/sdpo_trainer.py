@@ -752,28 +752,28 @@ class SDPOTrainer(_BaseTrainer):
 
     def _prepare_training_batch(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
         """Sample student rollouts, calculate advantage and construct teacher prompts"""
-        batch = self.sample_rollouts(inputs)
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
+
+        # Generate student rollouts and decode completions for reward functions
+        batch = self.sample_rollouts(inputs)
         prompts = [example["prompt"] for example in inputs]
         privileged_contexts = [example.get("privileged_context") for example in inputs]
-        raw_completion_lengths = batch["raw_completion_lengths"].detach().cpu().tolist()
-        completion_ids_list = [
-            ids[:length].tolist()
-            for ids, length in zip(batch["completion_ids"].detach().cpu(), raw_completion_lengths, strict=True)
-        ]
+        completion_ids_list = self._get_completion_ids_list(batch)
         if is_conversational({"prompt": prompts[0]}):
             completions_text = self.processing_class.batch_decode(batch["completion_ids"], skip_special_tokens=True)
             completions = [[{"role": "assistant", "content": content}] for content in completions_text]
         else:
             completions = self.processing_class.batch_decode(batch["completion_ids"], skip_special_tokens=True)
 
+        # Compute rewards over the globally gathered rollout batch
         rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
         if rewards_per_func.numel() == 0:
             rewards = torch.zeros(self.accelerator.num_processes * len(prompts), device=device)
         else:
             rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
+        # Normalize rewards within generation groups to produce local policy advantages
         num_generations = self.num_generations if mode == "train" else self.num_generations_eval
         mean_grouped_rewards = rewards.view(-1, num_generations).mean(dim=1).repeat_interleave(num_generations, dim=0)
         if self.scale_rewards == "batch":
@@ -786,31 +786,14 @@ class SDPOTrainer(_BaseTrainer):
             group_std_rewards = rewards.view(-1, num_generations).std(dim=1)
             std_rewards = group_std_rewards.repeat_interleave(num_generations, dim=0)
         advantages = (rewards - mean_grouped_rewards) / (std_rewards + 1e-4)
-        self._record_reward_diagnostics(mode, rewards, rewards_per_func, group_std_rewards)
-
         local_batch_size = batch["completion_ids"].size(0)
         process_start = self.accelerator.process_index * local_batch_size
         process_slice = slice(process_start, process_start + local_batch_size)
         local_rewards = rewards[process_slice]
         local_advantages = advantages[process_slice]
 
-        agg_completion_lengths = self.accelerator.gather(
-            torch.tensor([len(ids) for ids in completion_ids_list], device=device)
-        )
-        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
-        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
-        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
-
-        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
-        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
-        agg_is_truncated = self.accelerator.gather(is_truncated)
-        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
-        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
-        if len(term_completion_lengths) == 0:
-            term_completion_lengths = torch.zeros(1, device=device)
-        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
-        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
-        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
+        self._record_reward_diagnostics(mode, rewards, rewards_per_func, group_std_rewards)
+        self._record_completion_metrics(mode, batch)
 
         batch["rewards"] = local_rewards
         batch["advantages"] = local_advantages
@@ -821,7 +804,6 @@ class SDPOTrainer(_BaseTrainer):
             feedbacks=privileged_contexts,
         )
 
-        mode = "train" if self.model.training else "eval"
         for key, value in self.teacher_context_builder.last_metrics.items():
             self._metrics[mode][key].append(value)
         self._warn_on_inactive_self_distillation(mode)
@@ -852,6 +834,61 @@ class SDPOTrainer(_BaseTrainer):
             self_distillation_mask=batch.get("self_distillation_mask"),
         )
         return batch
+
+    def sample_rollouts(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
+        """Generate completions for a batch of prompts and assemble the training batch."""
+        prompts = [example["prompt"] for example in inputs]
+        prompt_ids = self._tokenize_prompts(prompts)
+        self._dispatch_self_distillation_callback(
+            "on_generation_prompts_selected",
+            generation_prompts=prompts,
+            generation_prompt_text=None,
+        )
+
+        prompt_ids_list, completion_ids_list = self._generate(prompt_ids)
+        device = self.accelerator.device
+        prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
+        prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
+        prompt_ids = pad(prompt_ids, padding_value=self._tokenizer.pad_token_id, padding_side="left").to(device=device)
+        prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left").to(device=device)
+
+        completion_ids = [torch.tensor(ids) for ids in completion_ids_list]
+        completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
+        completion_ids = pad(completion_ids, padding_value=self._tokenizer.pad_token_id, padding_side="right").to(
+            device=device
+        )
+        completion_mask = pad(completion_mask, padding_value=0, padding_side="right").to(device=device)
+
+        if self.mask_truncated_completions:
+            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+            is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+            completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
+
+        old_per_token_logps = self._compute_rollout_logps(
+            prompt_ids=prompt_ids,
+            prompt_mask=prompt_mask,
+            completion_ids=completion_ids,
+            completion_mask=completion_mask,
+        )
+        batch: TrainingBatch = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "raw_completion_lengths": torch.tensor(
+                [len(ids) for ids in completion_ids_list], device=device, dtype=torch.long
+            ),
+        }
+        if old_per_token_logps is not None:
+            batch["old_per_token_logps"] = old_per_token_logps
+        return batch
+
+    def _get_completion_ids_list(self, batch: TrainingBatch) -> list[list[int]]:
+        raw_completion_lengths = batch["raw_completion_lengths"].detach().cpu().tolist()
+        return [
+            ids[:length].tolist()
+            for ids, length in zip(batch["completion_ids"].detach().cpu(), raw_completion_lengths, strict=True)
+        ]
 
     def _tokenize_prompts_untruncated(self, prompts: list[Any]) -> list[list[int]]:
         if is_conversational({"prompt": prompts[0]}):
@@ -928,54 +965,6 @@ class SDPOTrainer(_BaseTrainer):
             c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
         ]
         return prompt_ids, completion_ids_list
-
-    def sample_rollouts(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
-        """Generate completions for a batch of prompts and assemble the training batch."""
-        prompts = [example["prompt"] for example in inputs]
-        prompt_ids = self._tokenize_prompts(prompts)
-        self._dispatch_self_distillation_callback(
-            "on_generation_prompts_selected",
-            generation_prompts=prompts,
-            generation_prompt_text=None,
-        )
-
-        prompt_ids_list, completion_ids_list = self._generate(prompt_ids)
-        device = self.accelerator.device
-        prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
-        prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
-        prompt_ids = pad(prompt_ids, padding_value=self._tokenizer.pad_token_id, padding_side="left").to(device=device)
-        prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left").to(device=device)
-
-        completion_ids = [torch.tensor(ids) for ids in completion_ids_list]
-        completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
-        completion_ids = pad(completion_ids, padding_value=self._tokenizer.pad_token_id, padding_side="right").to(
-            device=device
-        )
-        completion_mask = pad(completion_mask, padding_value=0, padding_side="right").to(device=device)
-
-        if self.mask_truncated_completions:
-            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
-            is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
-            completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
-
-        old_per_token_logps = self._compute_rollout_logps(
-            prompt_ids=prompt_ids,
-            prompt_mask=prompt_mask,
-            completion_ids=completion_ids,
-            completion_mask=completion_mask,
-        )
-        batch: TrainingBatch = {
-            "prompt_ids": prompt_ids,
-            "prompt_mask": prompt_mask,
-            "completion_ids": completion_ids,
-            "completion_mask": completion_mask,
-            "raw_completion_lengths": torch.tensor(
-                [len(ids) for ids in completion_ids_list], device=device, dtype=torch.long
-            ),
-        }
-        if old_per_token_logps is not None:
-            batch["old_per_token_logps"] = old_per_token_logps
-        return batch
 
     def _compute_rollout_logps(
         self,
@@ -1415,6 +1404,25 @@ class SDPOTrainer(_BaseTrainer):
         if teacher_model_kind == "ema" and self._use_peft_ema_teacher_adapter():
             return use_adapter(target_model, adapter_name="teacher")
         return nullcontext()
+
+    def _record_completion_metrics(self, mode: str, batch: TrainingBatch) -> None:
+        device = self.accelerator.device
+        completion_ids_list = self._get_completion_ids_list(batch)
+        agg_completion_lengths = self.accelerator.gather(batch["raw_completion_lengths"])
+        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
+
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+        agg_is_truncated = self.accelerator.gather(is_truncated)
+        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
+        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
+        if len(term_completion_lengths) == 0:
+            term_completion_lengths = torch.zeros(1, device=device)
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
     def _log_self_distillation_metric(self, mode: str, value: float) -> None:
         metric_prefix = self._name.lower().replace(" ", "_")
