@@ -618,9 +618,9 @@ class TPOTrainer(_BaseTrainer):
 
         input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
-        shift_logits = outputs.logits[..., :-1, :]
-        shift_labels = input_ids[..., 1:]
-        shift_completion_mask = completion_mask[..., 1:]
+        shift_logits = outputs.logits[..., :-1, :].contiguous()
+        shift_labels = input_ids[..., 1:].contiguous()
+        shift_completion_mask = completion_mask[..., 1:].contiguous()
         per_token_logps = selective_log_softmax(shift_logits, shift_labels)
         per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
 

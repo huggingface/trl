@@ -1125,7 +1125,7 @@ class DPOTrainer(_BaseTrainer):
             ref_weight = ref_lm_head.weight
             ref_bias = ref_lm_head.bias
 
-        shift_completion_mask = completion_mask[:, 1:]
+        shift_completion_mask = completion_mask[:, 1:].contiguous()
         labels = input_ids[:, 1:].clone()
         labels[shift_completion_mask == 0] = -100
 
