@@ -30,10 +30,6 @@ from dataclasses import dataclass, field
 from trl import ScriptArguments
 
 
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
-
-
 @dataclass
 class GRPOScriptArguments(ScriptArguments):
     """
@@ -70,7 +66,6 @@ class GRPOScriptArguments(ScriptArguments):
 
 
 def main(script_args, training_args, model_args, dataset_args):
-    import torch
     from accelerate import logging
     from datasets import load_dataset
 
@@ -111,21 +106,18 @@ def main(script_args, training_args, model_args, dataset_args):
                     f"Could not load reward function '{func_name}'. Expected one of "
                     f"{list(reward_funcs_registry.keys())} or a valid import path."
                 )
-    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
 
-    model_kwargs = dict(
+    training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
-        dtype=dtype,
+        dtype=model_args.dtype,
     )
     quantization_config = get_quantization_config(model_args)
-
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
-        model_kwargs["quantization_config"] = quantization_config
-
-    training_args.model_init_kwargs = model_kwargs
+        training_args.model_init_kwargs["device_map"] = get_kbit_device_map()
+        training_args.model_init_kwargs["quantization_config"] = quantization_config
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:

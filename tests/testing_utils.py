@@ -34,9 +34,9 @@ from trl.import_utils import (
     is_jmespath_available,
     is_joblib_available,
     is_liger_kernel_available,
-    is_llm_blender_available,
     is_math_verify_available,
     is_mergekit_available,
+    is_openreward_available,
     is_vllm_available,
 )
 
@@ -46,9 +46,9 @@ require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requir
 require_jmespath = pytest.mark.skipif(not is_jmespath_available(), reason="test requires jmespath")
 require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test requires kernels")
 require_liger_kernel = pytest.mark.skipif(not is_liger_kernel_available(), reason="test requires liger-kernel")
-require_llm_blender = pytest.mark.skipif(not is_llm_blender_available(), reason="test requires llm-blender")
 require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
 require_mergekit = pytest.mark.skipif(not is_mergekit_available(), reason="test requires mergekit")
+require_openreward = pytest.mark.skipif(not is_openreward_available(), reason="test requires openreward")
 require_peft = pytest.mark.skipif(not is_peft_available(), reason="test requires peft")
 require_rich = pytest.mark.skipif(not is_rich_available(), reason="test requires rich")
 require_sklearn = pytest.mark.skipif(
@@ -89,12 +89,14 @@ def is_ampere_or_newer(device_index=0):
     if not torch.cuda.is_available():
         return False
 
+    # "Ampere" is an NVIDIA architecture; an AMD (ROCm) GPU is never Ampere. On ROCm,
+    # torch.cuda.get_device_capability returns the gfx version, which would spuriously compare >= (8, 0).
+    if torch.version.hip is not None:
+        return False
+
     major, minor = torch.cuda.get_device_capability(device_index)
     # Ampere starts at compute capability 8.0 (e.g., A100 = 8.0, RTX 30xx = 8.6)
     return (major, minor) >= (8, 0)
-
-
-require_ampere_or_newer = pytest.mark.skipif(not is_ampere_or_newer(), reason="test requires Ampere or newer GPU")
 
 
 class TrlTestCase:

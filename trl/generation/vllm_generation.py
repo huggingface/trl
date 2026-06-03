@@ -22,11 +22,15 @@ from typing import TYPE_CHECKING
 
 import torch
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
-from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
-from transformers.utils import is_torch_mlu_available, is_torch_npu_available, is_torch_xpu_available
+from transformers.utils import (
+    is_torch_mlu_available,
+    is_torch_mps_available,
+    is_torch_npu_available,
+    is_torch_xpu_available,
+)
 
 from ..extras.profiling import ProfilingContext
 from ..import_utils import is_vllm_available
@@ -36,6 +40,7 @@ from .vllm_client import VLLMClient
 
 if is_vllm_available():
     from vllm import LLM, RequestOutput, SamplingParams
+    from vllm.sampling_params import StructuredOutputsParams
 
 
 logger = logging.getLogger(__name__)
@@ -44,17 +49,19 @@ logger = logging.getLogger(__name__)
 def empty_cache() -> None:
     """Empties the cache of the available torch device.
 
-    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA) and empties the cache of
-    the first available device it finds.
+    This function checks for the availability of different torch devices (CUDA, MLU, MPS, NPU, XPU) and empties the
+    cache of the first available device it finds.
 
     If none of the specific devices are available, it defaults to emptying the CUDA cache.
     """
-    if is_torch_xpu_available():
-        torch.xpu.empty_cache()
-    elif is_torch_mlu_available():
+    if is_torch_mlu_available():
         torch.mlu.empty_cache()
+    elif is_torch_mps_available():
+        torch.mps.empty_cache()
     elif is_torch_npu_available():
         torch.npu.empty_cache()
+    elif is_torch_xpu_available():
+        torch.xpu.empty_cache()
     else:
         torch.cuda.empty_cache()
 
@@ -545,17 +552,6 @@ class VLLMGeneration:
             `num_logprobs` is 1 when `logprobs=0`, or up to N+1 when `logprobs=N` (the sampled token is always included
             and may fall outside the top-N).
         """
-        import vllm
-
-        if Version(vllm.__version__) <= Version("0.10.2"):
-            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
-
-            structured_outputs_key = "guided_decoding"
-        else:
-            from vllm.sampling_params import StructuredOutputsParams
-
-            structured_outputs_key = "structured_outputs"
-
         profiler = profiler or nullcontext()
         accelerator = self.accelerator
         temperature = self.temperature
@@ -652,16 +648,14 @@ class VLLMGeneration:
             generation_kwargs.update(self.generation_kwargs)
 
             if self.structured_outputs_regex is not None:
-                if generation_kwargs.get(structured_outputs_key) is not None:
+                if generation_kwargs.get("structured_outputs") is not None:
                     logger.warning(
-                        f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
+                        "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
                         "`structured_outputs_regex` takes precedence."
                     )
-                generation_kwargs[structured_outputs_key] = StructuredOutputsParams(
-                    regex=self.structured_outputs_regex
-                )
-            elif isinstance(structured_outputs_kwargs := generation_kwargs.get(structured_outputs_key), dict):
-                generation_kwargs[structured_outputs_key] = StructuredOutputsParams(**structured_outputs_kwargs)
+                generation_kwargs["structured_outputs"] = StructuredOutputsParams(regex=self.structured_outputs_regex)
+            elif isinstance(structured_outputs_kwargs := generation_kwargs.get("structured_outputs"), dict):
+                generation_kwargs["structured_outputs"] = StructuredOutputsParams(**structured_outputs_kwargs)
             sampling_params = SamplingParams(**generation_kwargs)
 
             if self.tensor_parallel_size > 1:

@@ -72,11 +72,10 @@ class DPPOTrainer(GRPOTrainer):
     """
     Trainer for Divergence Proximal Policy Optimization (DPPO).
 
-    DPPO replaces PPO/GRPO's heuristic ratio-clipping with a principled trust region based on direct policy
-    divergence estimates. PPO-style clipping masks tokens based on probability ratio π/μ, which over-penalizes
-    low-probability tokens and under-penalizes high-probability tokens. In contrast, DPPO masks based on
-    direct approximation of policy divergence (e.g TV or KL) ensuring updates stay within a theoretically
-    grounded trust region.
+    DPPO replaces PPO/GRPO's heuristic ratio-clipping with a principled trust region based on direct policy divergence
+    estimates. PPO-style clipping masks tokens based on probability ratio π/μ, which over-penalizes low-probability
+    tokens and under-penalizes high-probability tokens. In contrast, DPPO masks based on direct approximation of policy
+    divergence (e.g TV or KL) ensuring updates stay within a theoretically grounded trust region.
 
 
     Four divergence approximations are supported:
@@ -247,23 +246,28 @@ class DPPOTrainer(GRPOTrainer):
                 images.append(prompt_images if prompt_images else None)
             images = images if has_images else None
 
-            # We pass padding=True to work around a bug introduced in transformers 5.2.0 in some processors
-            # (e.g. Qwen2.5-VL) that crash on batched unpadded input. We then unpad input_ids using attention_mask.
-            # See: https://github.com/huggingface/transformers/issues/44514
+            # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
+            # batched unpadded input (transformers#44514).
+            # Fixed in transformers 5.4.0 (transformers#44563).
+            needs_padding_workaround = Version("5.3.0") <= Version(transformers.__version__) < Version("5.4.0")
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
-                tools=self.tools,
+                tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
                 chat_template=self.chat_template,
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
-                padding=True,
+                **({"padding": True} if needs_padding_workaround else {}),
                 **self.chat_template_kwargs,
             )
-            prompt_ids = [
-                [tok for tok, mask in zip(ids, attention_mask, strict=True) if mask]
-                for ids, attention_mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
-            ]
+            if needs_padding_workaround:
+                # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
+                prompt_ids = [
+                    [tok for tok, m in zip(ids, mask, strict=True) if m]
+                    for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
+                ]
+            else:
+                prompt_ids = tokenized["input_ids"]
             multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
@@ -275,8 +279,8 @@ class DPPOTrainer(GRPOTrainer):
         """Generate completions, always extracting sampled token logprobs.
 
         Returns:
-            5-tuple of (prompt_ids, completion_ids, logprobs, topk_logprobs, topk_token_ids).
-            topk_logprobs and topk_token_ids are None when divergence_type is not topk.
+            5-tuple of (prompt_ids, completion_ids, logprobs, topk_logprobs, topk_token_ids). topk_logprobs and
+            topk_token_ids are None when divergence_type is not topk.
         """
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
@@ -329,7 +333,7 @@ class DPPOTrainer(GRPOTrainer):
             return prompt_ids, completion_ids, sampled_logprobs, topk_logprobs, topk_token_ids
         else:
             prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
-            padded_ids = pad(prompt_tensors, padding_value=self.pad_token_id, padding_side="left")
+            padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
             attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
             generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
             for key, value in multimodal_fields.items():
@@ -356,9 +360,7 @@ class DPPOTrainer(GRPOTrainer):
                 torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
-                gen_output = unwrapped_model.generate(
-                    **generate_inputs, generation_config=gen_config, disable_compile=True
-                )
+                gen_output = unwrapped_model.generate(**generate_inputs, generation_config=gen_config)
 
             prompt_ids_tensor, prompt_mask = generate_inputs["input_ids"], generate_inputs["attention_mask"]
             prompt_length = prompt_ids_tensor.size(1)
@@ -394,7 +396,7 @@ class DPPOTrainer(GRPOTrainer):
                     topk_logps_chunks.append(topk_lp_t.cpu())
 
             # Mask everything after the first EOS token
-            is_eos = completion_ids == self.eos_token_id
+            is_eos = completion_ids == self._tokenizer.eos_token_id
             has_eos = is_eos.any(dim=1)
             eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
             eos_idx[has_eos] = is_eos.int().argmax(dim=1)[has_eos]
@@ -420,9 +422,9 @@ class DPPOTrainer(GRPOTrainer):
     ):
         """Tool execution loop that also threads top-K logprob data alongside logprobs.
 
-        Mirrors GRPOTrainer._tool_call_loop but additionally concatenates topk_logprobs and topk_token_ids
-        the same way logprobs is concatenated: real data for model-generated tokens, zero-padding for
-        tool-result tokens. When topk data is None (binary divergence), behaves identically to the parent.
+        Mirrors GRPOTrainer._tool_call_loop but additionally concatenates topk_logprobs and topk_token_ids the same way
+        logprobs is concatenated: real data for model-generated tokens, zero-padding for tool-result tokens. When topk
+        data is None (binary divergence), behaves identically to the parent.
         """
         K = self.divergence_topk
         has_topk = topk_logprobs is not None
@@ -492,7 +494,7 @@ class DPPOTrainer(GRPOTrainer):
             # Tokenize and filter samples whose length exceeds max allowed length
             pct_ids = self.processing_class.apply_chat_template(
                 prompt_completion_tools,
-                tools=self.tools,
+                tools=self.tools or None,  #  `or None`: Llama bug: it renders tool boilerplate for tools=[]
                 chat_template=self.chat_template,
                 add_generation_prompt=True,
                 tokenize=True,
@@ -590,9 +592,7 @@ class DPPOTrainer(GRPOTrainer):
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
             # Decode post-tool completions
-            post_tool_completions = [
-                parse_response(self.processing_class, ids) if ids else {} for ids in post_tool_ids
-            ]
+            post_tool_completions = [parse_response(self._tokenizer, ids) if ids else {} for ids in post_tool_ids]
 
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
@@ -620,8 +620,8 @@ class DPPOTrainer(GRPOTrainer):
         """Generate completions, handling tool calls, and thread top-K logprob data through the full pipeline.
 
         Returns:
-            9-tuple of (prompt_ids, completion_ids, tool_mask, completions, total_completion_tokens,
-            logprobs, topk_logprobs, topk_token_ids, extra_fields).
+            9-tuple of (prompt_ids, completion_ids, tool_mask, completions, total_completion_tokens, logprobs,
+            topk_logprobs, topk_token_ids, extra_fields).
         """
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
@@ -668,11 +668,10 @@ class DPPOTrainer(GRPOTrainer):
         if is_conversational({"prompt": prompts[0]}):
             if (
                 Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
-                and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
-                and hasattr(self.processing_class, "response_schema")  # attribute not set by default for now
-                and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
+                and hasattr(self._tokenizer, "response_schema")  # attribute not set by default for now
+                and self._tokenizer.response_schema is not None  # only works if the tokenizer has a schema
             ):
-                completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
+                completions = [[parse_response(self._tokenizer, ids)] for ids in completion_ids]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
@@ -715,7 +714,7 @@ class DPPOTrainer(GRPOTrainer):
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
-        eos_and_pad = [self.eos_token_id, self.pad_token_id]
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
@@ -768,8 +767,8 @@ class DPPOTrainer(GRPOTrainer):
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
         """Compute per-token log-probs, (optionally) entropies, and top-K log-probs in one forward pass.
 
-        Evaluates the current policy's log-probs at the rollout's top-K token IDs from the same
-        forward pass used for per_token_logps, avoiding an extra model call.
+        Evaluates the current policy's log-probs at the rollout's top-K token IDs from the same forward pass used for
+        per_token_logps, avoiding an extra model call.
 
         Args:
             topk_token_ids: Rollout policy's top-K token IDs, shape (B, T, K). The current policy's
@@ -875,7 +874,7 @@ class DPPOTrainer(GRPOTrainer):
                     "template internally."
                 )
             prompts = [
-                prepare_multimodal_messages(prompt, image_list)
+                prepare_multimodal_messages(prompt, images=image_list)
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
@@ -896,7 +895,7 @@ class DPPOTrainer(GRPOTrainer):
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
         prompt_ids = pad(
             prompt_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="left",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -907,7 +906,7 @@ class DPPOTrainer(GRPOTrainer):
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         completion_ids = pad(
             completion_ids,
-            padding_value=self.pad_token_id,
+            padding_value=self._tokenizer.pad_token_id,
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
@@ -949,7 +948,7 @@ class DPPOTrainer(GRPOTrainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions for attention and loss masking
         if self.mask_truncated_completions:
-            eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
@@ -1118,7 +1117,7 @@ class DPPOTrainer(GRPOTrainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
-        rewards = rewards_per_func.nansum(dim=1)
+        rewards = (rewards_per_func * self.reward_weights.to(rewards_per_func.device).unsqueeze(0)).nansum(dim=1)
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(rewards.std().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
@@ -1207,11 +1206,11 @@ class DPPOTrainer(GRPOTrainer):
             completion_mask (`torch.Tensor`):
                 Binary mask of shape `(B, T)` where `1` indicates valid completion tokens and `0` padding.
             current_topk_logps (`torch.Tensor` or `None`):
-                Log-probabilities of the current policy at the rollout's top-K token IDs, shape `(B, T, K)`.
-                Required when `divergence_type` is `"topk_tv"` or `"topk_kl"`.
+                Log-probabilities of the current policy at the rollout's top-K token IDs, shape `(B, T, K)`. Required
+                when `divergence_type` is `"topk_tv"` or `"topk_kl"`.
             sampling_topk_logps (`torch.Tensor` or `None`):
-                Log-probabilities of the sampling policy at the rollout's top-K token IDs, shape `(B, T, K)`.
-                Required when `divergence_type` is `"topk_tv"` or `"topk_kl"`.
+                Log-probabilities of the sampling policy at the rollout's top-K token IDs, shape `(B, T, K)`. Required
+                when `divergence_type` is `"topk_tv"` or `"topk_kl"`.
 
         Returns:
             `torch.Tensor`:

@@ -55,29 +55,20 @@ accelerate launch \
     --lora_target_modules q_proj k_proj v_proj o_proj gate_proj up_proj down_proj
 """
 
-import os
-
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_peft_config
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args):
     # NemotronH does not support gradient checkpointing
     training_args.gradient_checkpointing = False
 
-    # Load model
-    model_kwargs = dict(
+    training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
     )
-    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     # Load dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
@@ -103,7 +94,7 @@ def main(script_args, training_args, model_args):
 
     # Train model
     trainer = SFTTrainer(
-        model=model,
+        model=model_args.model_name_or_path,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=eval_dataset,

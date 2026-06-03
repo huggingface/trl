@@ -14,6 +14,7 @@
 
 import logging
 import threading
+from collections.abc import Callable
 
 from ..import_utils import is_math_verify_available
 
@@ -23,7 +24,12 @@ if is_math_verify_available():
     from math_verify import LatexExtractionConfig, parse, verify
 
 
-def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[float | None]:
+def accuracy_reward(
+    completions: list[list[dict[str, str]]],
+    solution: list[str],
+    log_extra: Callable[[str, list], None] | None = None,
+    **kwargs,
+) -> list[float | None]:
     r"""
     Reward function that checks if the completion matches the ground truth.
         - If both gold and prediction are parseable → use math verification.
@@ -35,6 +41,9 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
             containing the key `"content"` with the value being the text of the completion.
         solution: (`list[str]`):
             List of the raw-text solutions to the questions/problems/prompts.
+        log_extra (`callable`, *optional*):
+            Callable to log extra columns to the completions table, provided automatically by the trainer. Defaults to
+            `None` to allow calling the function directly outside of a trainer (e.g., for testing).
         **kwargs:
             Additional keyword arguments. This function does not use them, but they are required in the function
             signature to ensure compatibility with trainers like [`GRPOTrainer`].
@@ -56,6 +65,8 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
 
     contents = [completion[0]["content"] for completion in completions]
     rewards = []
+    gold_parsed_strs = []
+    answer_parsed_strs = []
 
     # math_verify uses signal.alarm() for timeouts, which only works in the main thread.
     # Disable timeouts when running in a non-main thread to avoid ValueError.
@@ -86,10 +97,19 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
                 parsing_timeout=parsing_timeout,
             )
             reward = float(verify(gold_parsed, answer_parsed, timeout_seconds=verify_timeout))
+            gold_parsed_strs.append(str(gold_parsed))
+            answer_parsed_strs.append(str(answer_parsed) if answer_parsed else "[unparseable]")
         else:
             # If the gold solution cannot be parsed, we assign `None` to skip this example
             reward = None
+            gold_parsed_strs.append("[unparseable]")
+            answer_parsed_strs.append("[skipped]")
         rewards.append(reward)
+
+    if log_extra is not None:
+        log_extra("solution", list(solution))
+        log_extra("gold_parsed", gold_parsed_strs)
+        log_extra("answer_parsed", answer_parsed_strs)
 
     return rewards
 
@@ -98,6 +118,7 @@ def reasoning_accuracy_reward(
     completions: list[list[dict[str, str]]],
     solution: list[str],
     reasoning_delimiters: list[str] | None = None,
+    log_extra: Callable[[str, list], None] | None = None,
     **kwargs,
 ) -> list[float | None]:
     r"""
@@ -114,6 +135,9 @@ def reasoning_accuracy_reward(
         reasoning_delimiters (`list[str]]`, *optional*):
             List of strings indicating where the reasoning content ends. The final answer is assumed to be after the
             last occurrence of any of these delimiters. If `None`, defaults to `["</think>"]`.
+        log_extra (`callable`, *optional*):
+            Callable to log extra columns to the completions table, provided automatically by the trainer. Defaults to
+            `None` to allow calling the function directly outside of a trainer (e.g., for testing).
         **kwargs:
             Additional keyword arguments. This function does not use them, but they are required in the function
             signature to ensure compatibility with trainers like [`GRPOTrainer`].
@@ -156,6 +180,8 @@ def reasoning_accuracy_reward(
 
     rewards = []
     contents = [completion[0]["content"] for completion in completions]
+    gold_parsed_strs = []
+    answer_parsed_strs = []
 
     # math_verify uses signal.alarm() for timeouts, which only works in the main thread.
     # Disable timeouts when running in a non-main thread to avoid ValueError.
@@ -179,6 +205,8 @@ def reasoning_accuracy_reward(
         if not is_reasoning_complete:
             # We assign zero reward instead of `None` to penalize incomplete reasoning
             rewards.append(0.0)
+            gold_parsed_strs.append("[incomplete reasoning]")
+            answer_parsed_strs.append("[incomplete reasoning]")
             continue
 
         gold_parsed = parse(sol, parsing_timeout=parsing_timeout)
@@ -199,9 +227,18 @@ def reasoning_accuracy_reward(
                 parsing_timeout=parsing_timeout,
             )
             reward = float(verify(gold_parsed, answer_parsed, timeout_seconds=verify_timeout))
+            gold_parsed_strs.append(str(gold_parsed))
+            answer_parsed_strs.append(str(answer_parsed) if answer_parsed else "[unparseable]")
         else:
             # If the gold solution cannot be parsed, we assign `None` to skip this example
             reward = None
+            gold_parsed_strs.append("[unparseable]")
+            answer_parsed_strs.append("[skipped]")
         rewards.append(reward)
+
+    if log_extra is not None:
+        log_extra("solution", list(solution))
+        log_extra("gold_parsed", gold_parsed_strs)
+        log_extra("answer_parsed", answer_parsed_strs)
 
     return rewards

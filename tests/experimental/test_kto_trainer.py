@@ -15,13 +15,13 @@
 import multiprocess
 import pytest
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.kto import KTOConfig, KTOTrainer
-from trl.experimental.kto.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
+from trl.experimental.kto.kto_trainer import _get_kl_completion_ids
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_no_wandb, require_peft
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft
 
 
 class TestKTOTrainer(TrlTestCase):
@@ -46,7 +46,6 @@ class TestKTOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
-            remove_unused_columns=False,
             gradient_accumulation_steps=1,
             learning_rate=9e-1,
             eval_strategy="steps" if eval_dataset else "no",
@@ -56,15 +55,15 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        dataset = load_dataset("trl-internal-testing/zen", config_name)
 
         trainer = KTOTrainer(
             model=self.model,
             ref_model=self.ref_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"] if eval_dataset else None,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"] if eval_dataset else None,
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -73,7 +72,7 @@ class TestKTOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -87,7 +86,7 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         with pytest.raises(ValueError):
             KTOTrainer(
@@ -95,7 +94,7 @@ class TestKTOTrainer(TrlTestCase):
                 ref_model=self.model,  # ref_model can't be the same as model
                 args=training_args,
                 processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
+                train_dataset=dataset,
             )
 
     def test_tokenize_and_process_tokens(self):
@@ -108,7 +107,6 @@ class TestKTOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
-            remove_unused_columns=False,
             gradient_accumulation_steps=1,
             learning_rate=9e-1,
             eval_strategy="steps",
@@ -116,68 +114,61 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        train_dataset = dataset["train"]
 
         trainer = KTOTrainer(
             model=self.model,
             ref_model=self.ref_model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=train_dataset,
+            eval_dataset=dataset["test"],
         )
 
-        train_dataset = dummy_dataset["train"]
-        tokenized_dataset = train_dataset.map(
-            _tokenize,
-            fn_kwargs={"tokenizer": trainer.processing_class},
-            batched=True,
-            batch_size=2,
-        )
-        assert tokenized_dataset["prompt"][:] == train_dataset["prompt"][:]
-        assert tokenized_dataset["completion"][:] == train_dataset["completion"][:]
-        assert tokenized_dataset["label"][:] == train_dataset["label"][:]
-        assert tokenized_dataset["prompt_input_ids"][0] == [46518, 374, 2664, 1091]
-        assert tokenized_dataset["prompt_attention_mask"][0] == [1, 1, 1, 1]
-        assert tokenized_dataset["answer_input_ids"][0] == [27261, 13]
-        assert tokenized_dataset["answer_attention_mask"][0] == [1, 1]
+        # Verify the tokenization step: dataset stores raw token IDs (aligned with DPO style).
+        # prompt_ids must start with the tokenized prompt text.
+        prompt_ids = self.tokenizer(train_dataset["prompt"][0])["input_ids"]
+        assert trainer.train_dataset[0]["prompt_ids"][: len(prompt_ids)] == prompt_ids
+        # completion_ids are the raw answer tokens (no prompt prefix, no BOS/EOS added yet).
+        assert len(trainer.train_dataset[0]["completion_ids"]) > 0
 
-        # Test corruption of (prompt, completion) pairs for KL dataset
+        # Verify the collator output (assembly, BOS/EOS insertion, labels).
+        example = trainer.train_dataset[0]
+        batch = trainer.data_collator([example])
+        # completion_input_ids ends with EOS
+        assert batch["completion_input_ids"][0, -1].item() == self.tokenizer.eos_token_id
+        # completion_mask: prompt tokens are 0, completion tokens are 1; at least the prompt is masked
+        assert "completion_mask" in batch
+        completion_mask = batch["completion_mask"][0].tolist()
+        assert 0 in completion_mask and 1 in completion_mask
+        first_completion = next(i for i, m in enumerate(completion_mask) if m == 1)
+        assert first_completion > 0  # at least the prompt is masked
+        assert all(m == 0 for m in completion_mask[:first_completion])
+
+        # Test corruption of (prompt, completion) pairs for KL dataset.
+        # _get_kl_completion_ids shifts completion_ids by one within each batch; prompt_ids are unchanged.
+        synthetic = Dataset.from_dict(
+            {
+                "prompt_ids": [[1, 2], [3, 4], [5, 6]],
+                "completion_ids": [[10, 11], [20, 21], [30, 31]],
+                "label": [True, False, True],
+            }
+        )
         for batch_size in [2, 3]:
-            tokenized_kl_dataset = tokenized_dataset.map(_get_kl_dataset, batched=True, batch_size=batch_size)
+            rotated = synthetic.map(_get_kl_completion_ids, batched=True, batch_size=batch_size)
 
-            # Verify that the "answer_input_ids" have been modified, meaning the new "answer_input_ids" differ
-            # from the original ones. However, when the length of the dataset modulo batch_size equals 1,
-            # the last batch remains unaltered. This is a rare scenario that does not impact the training
-            # process, so we exclude it from testing by iterating only up to len - 1.
-            for i in range(len(tokenized_kl_dataset["answer_input_ids"]) - 1):
-                assert tokenized_dataset["prompt_input_ids"][i] == tokenized_kl_dataset["prompt_input_ids"][i]
-                assert (
-                    tokenized_dataset["prompt_attention_mask"][i] == tokenized_kl_dataset["prompt_attention_mask"][i]
-                )
-                assert tokenized_dataset["answer_input_ids"][i] != tokenized_kl_dataset["answer_input_ids"][i]
-
-        fn_kwargs = {
-            "prefix": "",
-            "tokenizer": trainer.processing_class,
-            "max_length": trainer.max_length,
-        }
-        processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
-        assert processed_dataset["prompt"][:] == train_dataset["prompt"][:]
-        assert processed_dataset["completion"][:] == train_dataset["completion"][:]
-        assert processed_dataset["label"][:] == train_dataset["label"][:]
-        assert processed_dataset["prompt_input_ids"][0] == [46518, 374, 2664, 1091]
-        assert processed_dataset["prompt_attention_mask"][0] == [1, 1, 1, 1]
-        assert processed_dataset["completion_input_ids"][0] == [46518, 374, 2664, 1091, 27261, 13, 151645]
-        assert processed_dataset["completion_attention_mask"][0] == [1, 1, 1, 1, 1, 1, 1]
-        assert processed_dataset["completion_labels"][0] == [-100, -100, -100, -100, 27261, 13, 151645]
+            # Verify that completion_ids have been rotated (differ from original). When the dataset length
+            # modulo batch_size equals 1, the last batch is unaltered: exclude it from the check.
+            for i in range(len(rotated) - 1):
+                assert synthetic["prompt_ids"][i] == rotated["prompt_ids"][i]
+                assert synthetic["completion_ids"][i] != rotated["completion_ids"][i]
 
     def test_kto_trainer_without_providing_ref_model(self):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
-            remove_unused_columns=False,
             gradient_accumulation_steps=4,
             learning_rate=9e-1,
             eval_strategy="steps",
@@ -185,15 +176,15 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
         trainer = KTOTrainer(
             model=self.model,
             ref_model=None,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -202,7 +193,7 @@ class TestKTOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -224,7 +215,6 @@ class TestKTOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
-            remove_unused_columns=False,
             gradient_accumulation_steps=4,
             learning_rate=9e-1,
             eval_strategy="steps",
@@ -232,15 +222,15 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
         trainer = KTOTrainer(
             model=self.model,
             ref_model=None,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
             peft_config=lora_config,
         )
 
@@ -250,43 +240,12 @@ class TestKTOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             if "lora" in n:
                 new_param = trainer.model.get_parameter(n)
                 if param.sum() != 0:  # ignore 0 biases
                     assert not torch.equal(param, new_param)
-
-    @require_no_wandb
-    def test_kto_trainer_generate_during_eval_no_wandb(self):
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=1,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            generate_during_eval=True,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
-
-        with pytest.raises(
-            ValueError,
-            match="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
-            " Please install `wandb` or `comet-ml` to resolve.",
-        ):
-            KTOTrainer(
-                model=self.model,
-                ref_model=None,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-            )
 
     @require_liger_kernel
     def test_kto_trainer_with_liger(self):
@@ -297,13 +256,13 @@ class TestKTOTrainer(TrlTestCase):
             use_liger_kernel=True,  # Enable Liger kernel
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         trainer = KTOTrainer(
             model=self.model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
+            train_dataset=dataset,
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -325,14 +284,13 @@ class TestKTOTrainer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         tokenizer.pad_token = tokenizer.eos_token
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
         def dummy_compute_metrics(*args, **kwargs):
             return {"test": 0.0}
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
-            remove_unused_columns=False,
             per_device_train_batch_size=2,
             do_eval=True,
             eval_strategy="steps",
@@ -346,8 +304,8 @@ class TestKTOTrainer(TrlTestCase):
             ref_model=ref_model,
             args=training_args,
             processing_class=tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
             compute_metrics=dummy_compute_metrics,
         )
 

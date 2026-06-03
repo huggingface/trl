@@ -9,6 +9,7 @@ on:
 
 env:
   TQDM_DISABLE: 1
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
   TRL_EXPERIMENTAL_SILENCE: 1
@@ -52,8 +53,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@v8.1.0
 
       - name: Create Python virtual environment
         run: |

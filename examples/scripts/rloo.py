@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl[vllm]",
-#     "peft",
+#     "trl[vllm,peft]",
 #     "math-verify",
 #     "latex2sympy2_extended",
 #     "trackio",
@@ -34,18 +33,12 @@ For TL;DR or other datasets with a reward model, use the generic script:
   python -m trl.scripts.rloo --dataset_name trl-lib/tldr --reward_model_name_or_path ... --model_name_or_path ...
 """
 
-import os
-
 import torch
 from datasets import load_dataset
 from peft import LoraConfig
 
 from trl import RLOOConfig, RLOOTrainer
 from trl.rewards import accuracy_reward, think_format_reward
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main():
