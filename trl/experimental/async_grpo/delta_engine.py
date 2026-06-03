@@ -182,7 +182,7 @@ class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo
 
     @staticmethod
     def trainer_send_weights(iterator, trainer_args) -> None:
-        raise NotImplementedError("Use AsyncRolloutWorker._send_weights_delta (upload) instead")
+        raise NotImplementedError("Use AsyncRolloutWorker.upload_weights / apply_weights instead")
 
     @staticmethod
     def upload(
@@ -290,9 +290,7 @@ class DeltaWorkerExtension:
 
     Required: ``--worker-extension-cls`` makes the vLLM *worker* process import this module, which
     runs the ``register_engine`` call below so the ``"delta"`` backend exists in the worker (the
-    factory registry is per-process). The class body is intentionally empty — importing it is the
-    whole point.
-    """
+    factory registry is per-process)"""
 
     pass
 

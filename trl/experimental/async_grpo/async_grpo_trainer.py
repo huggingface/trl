@@ -61,6 +61,8 @@ class RolloutWorkerProtocol(Protocol):
     def pause(self) -> None: ...
     def resume(self) -> None: ...
     def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None: ...
+    def upload_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None: ...
+    def apply_weights(self) -> None: ...
     def update_model_version(self, version: int) -> None: ...
 
 
@@ -646,7 +648,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # Phase 1: Upload to HF Hub while inference continues
             logger.info("Weight sync: uploading to HF Hub (inference still running)...")
             if self.accelerator.is_main_process and self.rollout_worker:
-                self.rollout_worker.send_weights(self._streaming_iter())
+                self.rollout_worker.upload_weights(self._streaming_iter())
             else:
                 for _ in self._streaming_iter():
                     pass
@@ -667,7 +669,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             logger.info(f"Weight sync: signaling vLLM to apply... (pause took {t_pause - t_upload:.1f}s)")
             if self.accelerator.is_main_process and self.rollout_worker:
                 try:
-                    self.rollout_worker.send_weights(iter([]))
+                    self.rollout_worker.apply_weights()
                 except Exception as e:
                     logger.warning(f"Weight sync: apply failed ({e}), skipping — vLLM will use stale weights")
         else:

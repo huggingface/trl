@@ -15,7 +15,6 @@
 import asyncio
 import copy
 import inspect
-import itertools
 import queue
 import threading
 import time
@@ -314,50 +313,39 @@ class AsyncRolloutWorker:
         logger.debug(f"[weight_sync] resume HTTP took {time.time() - t0:.1f}s")
 
     def send_weights(self, iterator) -> None:
-        if self.delta_sync_enabled:
-            self._send_weights_delta(iterator)
-        else:
-            self._send_weights_nccl(iterator)
+        """NCCL path: broadcast all params and signal the apply in one call.
 
-    def _send_weights_delta(self, iterator) -> None:
-        """Delta sync via HF Bucket.
-
-        - Non-empty iterator: upload the patch (anchor or delta based on step count).
-        - Empty iterator + pending patch: drive vLLM's start/update/finish weight-update lifecycle.
-        - Empty iterator + nothing pending: no-op.
+        Delta sync uses the explicit two-phase [`upload_weights`] / [`apply_weights`] instead.
         """
-        first = next(iterator, None)
+        self._send_weights_nccl(iterator)
 
-        # (empty iterator), signal vLLM to fetch + apply the already-uploaded patch.
-        if first is None:
-            if self._delta_pending is not None:
-                p = self._delta_pending
-                # Anchors are HF-checkpoint-format full tensors; deltas are sparse kernel-format.
-                self._post_vllm("/start_weight_update", {"is_checkpoint_format": p["is_anchor"]})
-                self._post_vllm("/update_weights", {"update_info": p["update_info"]}, retries=5)
-                self._post_vllm("/finish_weight_update", {})
-                self._delta_pending = None
-            return
+    def upload_weights(self, iterator) -> None:
+        """Delta phase 1 (inference still running): encode the changed params as a patch, upload it
+        to the bucket, and record where [`apply_weights`] should fetch it from.
 
-        # Upload phase
+        If nothing changed (empty ``iterator``) the upload is a no-op and ``_delta_pending`` is left
+        cleared, so the later apply is skipped and vLLM keeps its current weights. The phase is
+        explicit — never inferred from iterator emptiness — so a zero-change step can't be mistaken
+        for the apply signal.
+        """
         self._delta_model_version += 1
         is_anchor = self._delta_model_version == 1 or self._delta_model_version % self._delta_sync_anchor_interval == 0
-
-        full_iter = itertools.chain([first], iterator)
         if is_anchor:
-            full_iter = ((name, tensor, None) for name, tensor, _mask in full_iter)  # strip masks -> full tensors
+            iterator = ((name, tensor, None) for name, tensor, _mask in iterator)  # strip masks -> full tensors
 
         subdir = "anchors" if is_anchor else "deltas"
         filename = f"{subdir}/step_{self._delta_model_version:06d}.safetensors"
         meta = DeltaWeightTransferEngine.upload(
-            iterator=full_iter,
+            iterator=iterator,
             bucket_id=self._delta_sync_repo_id,
             filename=filename,
             model_version=self._delta_model_version,
             encoding=self._delta_sync_encoding,
         )
-        if meta is not None:
-            self._delta_pending = {
+        self._delta_pending = (
+            None
+            if meta is None
+            else {
                 "is_anchor": is_anchor,
                 "update_info": {
                     "repo_id": self._delta_sync_repo_id,
@@ -365,6 +353,21 @@ class AsyncRolloutWorker:
                     "update_kind": "dense" if is_anchor else "sparse_flat",
                 },
             }
+        )
+
+    def apply_weights(self) -> None:
+        """Delta phase 3 (inference paused): signal vLLM to fetch + apply the uploaded patch.
+
+        No-op when nothing was uploaded this step. ``_delta_pending`` is cleared up front so a failed
+        apply leaves no stale state for the next step.
+        """
+        if self._delta_pending is None:
+            return
+        p, self._delta_pending = self._delta_pending, None
+        # Anchors are HF-checkpoint-format full tensors; deltas are sparse kernel-format.
+        self._post_vllm("/start_weight_update", {"is_checkpoint_format": p["is_anchor"]})
+        self._post_vllm("/update_weights", {"update_info": p["update_info"]}, retries=5)
+        self._post_vllm("/finish_weight_update", {})
 
     def _post_vllm(self, path: str, json_body: dict, retries: int = 1, timeout: int = 300) -> None:
         """POST to a vLLM server endpoint with bounded retry on 429 / connection errors."""
