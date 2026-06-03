@@ -73,12 +73,18 @@ class KTOConfig(_BaseConfig):
             Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
         undesirable_weight (`float`, *optional*, defaults to `1.0`):
             Undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
     > - `logging_steps`: Defaults to `10` instead of `500`.
     > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
+    > - `train_sampling_strategy`: Defaults to `"sequential"` instead of `"random"`. Loss types
+    >   that estimate the KL divergence term (all except `"apo_zero_unpaired"`) require sequential
+    >   sampling because the KL completion for each example is precomputed against its neighbors in
+    >   a fixed-order batch; any other strategy breaks that pairing.
     """
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -87,6 +93,16 @@ class KTOConfig(_BaseConfig):
     learning_rate: float = field(
         default=1e-6,
         metadata={"help": "The initial learning rate for AdamW."},
+    )
+    train_sampling_strategy: str = field(
+        default="sequential",
+        metadata={
+            "help": "Sampler to use for the training dataloader. Loss types that estimate the KL divergence term "
+            "(all except `'apo_zero_unpaired'`) require `'sequential'` because the KL completion for each example is "
+            "precomputed against its neighbors in a fixed-order batch; any other strategy breaks that pairing. "
+            "Possible values are `'random'`, `'sequential'`, and `'group_by_length'`.",
+            "choices": ["random", "sequential", "group_by_length"],
+        },
     )
 
     # Parameters that control the model
@@ -159,4 +175,8 @@ class KTOConfig(_BaseConfig):
             "help": "Undesirable losses are weighed by this factor to counter unequal number of desirable and "
             "undesirable pairs.",
         },
+    )
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )

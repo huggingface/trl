@@ -1,6 +1,6 @@
 # OpenEnv Integration for Training LLMs with Environments
 
-[OpenEnv](https://github.com/meta-pytorch/OpenEnv) is an open-source framework for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It provides standardized APIs for environment interaction and supports running environments as backend servers (via WebSocket or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/openenv-environment-hub).
+[OpenEnv](https://github.com/huggingface/OpenEnv) is an open-source framework for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It provides standardized APIs for environment interaction and supports running environments as backend servers (via WebSocket or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/openenv-environment-hub).
 
 This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv itself, see the [OpenEnv docs](https://meta-pytorch.org/OpenEnv/).
 
@@ -26,18 +26,18 @@ pip install "openenv-textarena @ git+https://huggingface.co/spaces/openenv/wordl
 pip install "openenv-openspiel-env @ git+https://huggingface.co/spaces/openenv/openspiel_env"
 ```
 
-This installs the **environment client** (e.g., `EchoEnv`) that communicates with the remote environment server via WebSocket, along with the action/observation models and all required dependencies (including `openenv-core`).
+This installs the **environment client** (e.g., `EchoEnv`) that communicates with the remote environment server via WebSocket, along with the action/observation models and all required dependencies (including `openenv`).
 
 > [!TIP]
 > You can find the install command for any environment on its HF Space page. Click the **⋮ (three dots)** menu and select **"Use this Space"** to see the install instructions.
 
 > [!TIP]
-> You can also install the core package from PyPI with `pip install "openenv-core[core]>=0.2.1"`, but note that environment-specific dependencies may need to be installed separately.
+> You can also install the core package from PyPI with `pip install "openenv[core]>=0.3.1"`, but note that environment-specific dependencies may need to be installed separately.
 
 For development, you can clone the OpenEnv repo and install locally:
 
 ```bash
-git clone https://github.com/meta-pytorch/OpenEnv.git
+git clone https://github.com/huggingface/OpenEnv.git
 cd OpenEnv/envs/echo_env
 pip install -e .
 ```
@@ -592,7 +592,7 @@ app = create_app(
 - **`environment_factory`** (recommended): You define an environment class with tool methods, and the trainer handles generation, tool-call parsing, and the multi-turn loop automatically. This is the approach used throughout this guide.
 - **`rollout_func`**: You write the entire generation and environment interaction loop yourself. This gives full control over how completions are produced, how tools are executed, and how rewards are computed.
 
-Use `rollout_func` when `environment_factory` doesn't fit your use case. For example, **external agent servers** like [NeMo-Gym](nemo_gym), where an external server owns the generation loop and manages its own agent-environment interaction protocol.
+Use `rollout_func` when `environment_factory` doesn't fit your use case. For example, **external agent servers** where an external server owns the generation loop and manages its own agent-environment interaction protocol.
 
 ### Migrating from `rollout_func` to `environment_factory`
 
