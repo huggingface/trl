@@ -35,7 +35,7 @@ from trl.trainer.utils import pad, selective_log_softmax
 
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
-from .weight_diff import BF16ChangeDetector
+from .weight_diff import LowByteChangeDetector
 
 
 logger = get_logger(__name__)
@@ -383,6 +383,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     delta_sync_enabled=self.args.delta_sync_enabled,
                     delta_sync_repo_id=self.args.delta_sync_repo_id,
                     delta_sync_anchor_interval=self.args.delta_sync_anchor_interval,
+                    delta_sync_encoding=self.args.delta_sync_encoding,
                 )
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
@@ -393,7 +394,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
 
         # ULP change detector for diagnostic logging (delta sync only)
-        self._change_detector: BF16ChangeDetector | None = None
+        self._change_detector: LowByteChangeDetector | None = None
 
     def get_train_dataloader(self) -> DataLoader:
         if self.accelerator.is_main_process:
@@ -435,6 +436,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # NOTE: Register the change detector before the first optimizer.step so step 1 is captured and the
+        # first delta sync is already sparse (not a full upload)
+        self._maybe_init_change_detector()
+
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
@@ -576,6 +581,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         The anchor/delta decision is NOT made here — the rollout worker handles that.
         """
+        # TODO(@aminediro): _validated_masks maybe a property or a getter function because this is weird
         if self._change_detector is None or not self._change_detector._validated_masks:
             for name, param in self.model.named_parameters():
                 name = name.removeprefix("module.")
@@ -594,20 +600,27 @@ class AsyncGRPOTrainer(_BaseTrainer):
             yielded += 1
         logger.info(f"Delta: {yielded}/{total} params changed")
 
-    def _sync_weight(self):
-        # Lazy-init ULP detector for diagnostic logging (delta sync only) bc
-        # Optimizer only exists after Trainer creates it inside super()._inner_training_loop().
+    def _maybe_init_change_detector(self):
+        """Create the bf16 change detector once the (prepared) optimizer exists. No-op otherwise.
+
+        Called from ``compute_loss`` on the first training step so the optimizer step hooks are
+        registered *before* the first ``optimizer.step()``. If we waited until the first weight sync
+        (``on_step_end``), step 1's update would be missed and that sync would fall back to a full
+        upload instead of a sparse delta. Idempotent; only runs when delta sync is enabled.
+        """
         if (
             self.args.delta_sync_enabled
             and self._change_detector is None
-            and hasattr(self, "optimizer")
-            and self.optimizer is not None
+            and getattr(self, "optimizer", None) is not None
         ):
-            # TODO(@aminediro): check this works with FSDP2
-            # Unwrap AcceleratedOptimizer to get the native PyTorch optimizer
-            # (register_step_pre_hook requires torch.optim.Optimizer internals)
+            # Unwrap AcceleratedOptimizer to the native PyTorch optimizer (register_step_*_hook
+            # requires torch.optim.Optimizer internals).
             raw_optimizer = getattr(self.optimizer, "optimizer", self.optimizer)
-            self._change_detector = BF16ChangeDetector(self.model, raw_optimizer)
+            self._change_detector = LowByteChangeDetector(self.model, raw_optimizer)
+
+    def _sync_weight(self):
+        # Normally already created in compute_loss; this is a fallback (e.g. a sync before any step).
+        self._maybe_init_change_detector()
 
         if (
             self.args.delta_sync_enabled

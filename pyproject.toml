@@ -99,6 +99,15 @@ vlm = [
 math_verify = [
     "math-verify>=0.5.2",
 ]
+delta_weight_sync = [
+    # Delta weight sync for AsyncGRPO (trl/experimental/async_grpo). Needs vLLM's sparse weight
+    # transfer (vllm-project/vllm#40096): merged to main 2026-06-01, NOT in any release yet (latest
+    # is v0.22.0). Install vLLM from the nightly index until it ships in a stable release — hence no
+    # `vllm` pin here (validated against 0.22.1rc1.dev*; expected to first land in ~0.23.0).
+    # "vllm>=0.23.0"
+    "huggingface-hub>=1.17.0",
+    "nvidia-nvcomp-cu12>=5.2.0",   # optional: only for the nvcomp_cascaded index encoding (CUDA 12)
+]
 dev = [
     # bco
     "scikit-learn",

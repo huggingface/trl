@@ -209,11 +209,13 @@ class AsyncGRPOConfig(_BaseConfig):
             "only sparse delta patches are saved. Fireworks blog uses N=25, PULSE paper uses N=50."
         },
     )
-    delta_sync_verify_checksum: bool = field(
-        default=True,
+    # TODO: should probably inherit from the same (str,Enum) for delta sync encoding
+    delta_sync_encoding: str = field(
+        default="gap_delta",
         metadata={
-            "help": "Verify SHA256 checksum after applying each delta patch on the vLLM server. "
-            "Adds overhead per sync but guarantees bit-exact reconstruction."
+            "help": "Index encoding for delta patches: 'raw' (int32), 'gap_delta' (uint16 gaps, "
+            "default), or 'nvcomp_cascaded' (GPU Cascaded delta+bitpack, ~1.3 B/idx, needs "
+            "nvidia-nvcomp). Values are always stored raw; this only compresses the index half."
         },
     )
 

@@ -111,6 +111,7 @@ class AsyncRolloutWorker:
         delta_sync_enabled: bool = False,
         delta_sync_repo_id: str | None = None,
         delta_sync_anchor_interval: int = 10,
+        delta_sync_encoding: str = "gap_delta",
     ):
         if not is_vllm_available(min_version="0.17.1"):
             raise ImportError(
@@ -183,6 +184,7 @@ class AsyncRolloutWorker:
 
         self._delta_sync_repo_id = delta_sync_repo_id
         self._delta_sync_anchor_interval = delta_sync_anchor_interval
+        self._delta_sync_encoding = delta_sync_encoding
 
         # Wait for the vLLM server and initialize weight transfer.
         self._wait_for_server_ready_sync(timeout_s=self.server_timeout)
@@ -215,7 +217,7 @@ class AsyncRolloutWorker:
         if self.delta_sync_enabled:
             create_bucket(self._delta_sync_repo_id, exist_ok=True)
             self._delta_model_version = 0
-            self._delta_pending_update_info: dict | None = None
+            self._delta_pending: dict | None = None
             requests.post(
                 f"{self.vllm_server_url}/init_weight_transfer_engine",
                 json={"init_info": {}},
@@ -320,37 +322,21 @@ class AsyncRolloutWorker:
     def _send_weights_delta(self, iterator) -> None:
         """Delta sync via HF Bucket.
 
-        - Non-empty iterator: upload (anchor or delta based on step count).
-        - Empty iterator + pending info: signal vLLM to apply.
+        - Non-empty iterator: upload the patch (anchor or delta based on step count).
+        - Empty iterator + pending patch: drive vLLM's start/update/finish weight-update lifecycle.
         - Empty iterator + nothing pending: no-op.
         """
         first = next(iterator, None)
 
-        # (empty iterator)
+        # (empty iterator), signal vLLM to fetch + apply the already-uploaded patch.
         if first is None:
-            if self._delta_pending_update_info is not None:
-                for attempt in range(5):
-                    try:
-                        resp = requests.post(
-                            f"{self.vllm_server_url}/update_weights",
-                            json={"update_info": self._delta_pending_update_info},
-                            timeout=300,
-                        )
-                        if resp.status_code < 429:
-                            break
-                    except requests.RequestException as e:
-                        resp = None
-                        logger.warning(f"[weight_sync] /update_weights request failed: {e}")
-                    wait = min(2**attempt, 30)
-                    status = resp.status_code if resp is not None else "connection error"
-                    logger.warning(
-                        f"[weight_sync] /update_weights returned {status}, "
-                        f"retrying in {wait}s (attempt {attempt + 1}/5)"
-                    )
-                    time.sleep(wait)
-                if resp is not None:
-                    resp.raise_for_status()
-                self._delta_pending_update_info = None
+            if self._delta_pending is not None:
+                p = self._delta_pending
+                # Anchors are HF-checkpoint-format full tensors; deltas are sparse kernel-format.
+                self._post_vllm("/start_weight_update", {"is_checkpoint_format": p["is_anchor"]})
+                self._post_vllm("/update_weights", {"update_info": p["update_info"]}, retries=5)
+                self._post_vllm("/finish_weight_update", {})
+                self._delta_pending = None
             return
 
         # Upload phase
@@ -359,8 +345,7 @@ class AsyncRolloutWorker:
 
         full_iter = itertools.chain([first], iterator)
         if is_anchor:
-            # Force full tensors — strip masks
-            full_iter = ((name, tensor, None) for name, tensor, _mask in full_iter)
+            full_iter = ((name, tensor, None) for name, tensor, _mask in full_iter)  # strip masks -> full tensors
 
         subdir = "anchors" if is_anchor else "deltas"
         filename = f"{subdir}/step_{self._delta_model_version:06d}.safetensors"
@@ -369,13 +354,36 @@ class AsyncRolloutWorker:
             bucket_id=self._delta_sync_repo_id,
             filename=filename,
             model_version=self._delta_model_version,
+            encoding=self._delta_sync_encoding,
         )
         if meta is not None:
-            self._delta_pending_update_info = {
-                "repo_id": self._delta_sync_repo_id,
-                "filename": filename,
-                "is_checkpoint_format": True,
+            self._delta_pending = {
+                "is_anchor": is_anchor,
+                "update_info": {
+                    "repo_id": self._delta_sync_repo_id,
+                    "filename": filename,
+                    "update_kind": "dense" if is_anchor else "sparse_flat",
+                },
             }
+
+    def _post_vllm(self, path: str, json_body: dict, retries: int = 1, timeout: int = 300) -> None:
+        """POST to a vLLM server endpoint with bounded retry on 429 / connection errors."""
+        url = f"{self.vllm_server_url}{path}"
+        for attempt in range(retries):
+            try:
+                resp = requests.post(url, json=json_body, timeout=timeout)
+                if resp.status_code < 429:
+                    resp.raise_for_status()
+                    return
+                status = resp.status_code
+            except requests.RequestException as e:
+                logger.warning(f"[weight_sync] POST {path} failed: {e}")
+                status = "connection error"
+            if attempt < retries - 1:
+                wait = min(2**attempt, 30)
+                logger.warning(f"[weight_sync] POST {path} -> {status}, retry in {wait}s ({attempt + 1}/{retries})")
+                time.sleep(wait)
+        raise RuntimeError(f"[weight_sync] POST {path} failed after {retries} attempt(s)")
 
     def _send_weights_nccl(self, iterator) -> None:
         """NCCL sync: broadcast all params via NCCL + signal /update_weights."""
@@ -799,6 +807,7 @@ class AsyncRolloutWorker:
                 prompt=group.prompt,
                 completion=completion,
                 input_ids=group.prompt_ids + completion_ids,
+                # FIXME(): normalize completion_mask with GRPO, add tool_mask to the RolloutSample
                 completion_mask=[0] * len(group.prompt_ids) + tool_mask,
                 old_log_probs=[0.0] * len(group.prompt_ids) + logprobs,
                 advantage=advantage,
