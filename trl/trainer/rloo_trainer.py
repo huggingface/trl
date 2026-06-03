@@ -1281,6 +1281,8 @@ class RLOOTrainer(_BaseTrainer):
 
         # Include the KL penalty in the reward
         if self.beta != 0.0:
+            # RLOO follows Ahmadian et al. and uses the sampled log-ratio estimator here.
+            # This differs intentionally from GRPO's Schulman approximation.
             per_token_kl = old_per_token_logps - ref_per_token_logps
             # Apply sequence-level KL penalty to rewards (sum KL across tokens first, then apply to each sequence)
             kl = (per_token_kl * completion_mask).sum(-1)
