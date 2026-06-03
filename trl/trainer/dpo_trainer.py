@@ -552,8 +552,7 @@ class DPOTrainer(_BaseTrainer):
             )
         if ref_model is not None and is_peft_model(ref_model):
             raise ValueError(
-                "`ref_model` cannot be a `PeftModel`. If you want to use a `PeftModel` as the reference model, please "
-                "pass it as `model` and set `ref_model=None`."
+                "`ref_model` cannot be a `PeftModel`. To use a `PeftModel`, pass it as `model` and omit `ref_model`."
             )
 
         # Processing class
