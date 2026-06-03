@@ -86,10 +86,29 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
     aux_loss: torch.Tensor | None = None
 
 
+def _maybe_gather_lm_head_ctx(w, b):
+    # Allgather ZeRO-3 partitioned `lm_head` weight/bias for the chunked matmul. No-op if not ZeRO-3, or if the
+    # param is already gathered (tied embeddings: `embed_tokens` shares the weight and keeps it `AVAILABLE`, so
+    # partitioning on our exit would collide with its active-submodule tracking).
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+
+    if not is_deepspeed_zero3_enabled():
+        return contextlib.nullcontext()
+
+    import deepspeed
+    from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+
+    params = [w] if b is None else [w, b]
+    if all(p.ds_status == ZeroParamStatus.AVAILABLE for p in params):
+        return contextlib.nullcontext()
+    return deepspeed.zero.GatheredParameters(params)
+
+
 def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
-    logits = h.float() @ w.float().t()
-    if b is not None:
-        logits = logits + b.float()
+    with _maybe_gather_lm_head_ctx(w, b):
+        logits = h.float() @ w.float().t()
+        if b is not None:
+            logits = logits + b.float()
     if logit_scale != 1.0:
         logits = logits * logit_scale
     if final_logit_softcapping is not None:
@@ -179,9 +198,10 @@ def _chunked_cross_entropy_loss(
         # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
         # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
         # FSDP gradient sync doesn't hang on a missing param.
-        loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
-        if lm_head_bias is not None:
-            loss = loss + lm_head_bias.float().sum() * 0.0
+        with _maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+            loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
+            if lm_head_bias is not None:
+                loss = loss + lm_head_bias.float().sum() * 0.0
         return loss, correct, entropy_sum, n_valid_tensor
 
     loss = hidden.new_zeros((), dtype=torch.float32)
