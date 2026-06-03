@@ -788,15 +788,15 @@ class KTOTrainer(_BaseTrainer):
                         attention_mask=inputs["KL_completion_attention_mask"],
                     ).logits
 
-        shift_logits = completion_logits[:, :-1, :].contiguous()
-        per_token_logps = selective_log_softmax(shift_logits, inputs["completion_input_ids"][:, 1:].contiguous())
+        shift_logits = completion_logits[:, :-1, :]
+        per_token_logps = selective_log_softmax(shift_logits, inputs["completion_input_ids"][:, 1:])
         per_token_logps[inputs["completion_mask"][:, 1:] == 0] = 0.0
         completion_logps = per_token_logps.sum(-1)
 
         if self.calculate_KL:
-            shift_KL_logits = KL_logits[:, :-1, :].contiguous()
+            shift_KL_logits = KL_logits[:, :-1, :]
             KL_per_token_logps = selective_log_softmax(
-                shift_KL_logits, inputs["KL_completion_input_ids"][:, 1:].contiguous()
+                shift_KL_logits, inputs["KL_completion_input_ids"][:, 1:]
             )
             KL_per_token_logps[inputs["KL_completion_mask"][:, 1:] == 0] = 0.0
             KL_logps = KL_per_token_logps.sum(-1)
@@ -819,8 +819,8 @@ class KTOTrainer(_BaseTrainer):
         )
         completion_logits = outputs.logits
 
-        shift_logits = completion_logits[:, :-1, :].contiguous()
-        per_token_logps = selective_log_softmax(shift_logits, batch["completion_input_ids"][:, 1:].contiguous())
+        shift_logits = completion_logits[:, :-1, :]
+        per_token_logps = selective_log_softmax(shift_logits, batch["completion_input_ids"][:, 1:])
         per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
         completion_logps = per_token_logps.sum(-1)
 
@@ -934,9 +934,9 @@ class KTOTrainer(_BaseTrainer):
             with torch.no_grad():
                 KL_logits = model(**KL_model_kwargs).logits
 
-            shift_KL_logits = KL_logits[:, :-1, :].contiguous()
+            shift_KL_logits = KL_logits[:, :-1, :]
             KL_per_token_logps = selective_log_softmax(
-                shift_KL_logits, batch["KL_completion_input_ids"][:, 1:].contiguous()
+                shift_KL_logits, batch["KL_completion_input_ids"][:, 1:]
             )
             KL_per_token_logps[batch["KL_completion_mask"][:, 1:] == 0] = 0.0
             KL_logps = KL_per_token_logps.sum(-1)
@@ -988,7 +988,7 @@ class KTOTrainer(_BaseTrainer):
         lm_head = model.get_output_embeddings()
         ref_lm_head = self.ref_model.get_output_embeddings()
 
-        shift_completion_mask = batch["completion_mask"][:, 1:].contiguous()
+        shift_completion_mask = batch["completion_mask"][:, 1:]
         target = batch["completion_input_ids"][:, 1:].clone()
         target[shift_completion_mask == 0] = -100
 

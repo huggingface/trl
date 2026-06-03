@@ -818,7 +818,7 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
     Rectification](https://huggingface.co/papers/2508.05629)
     """
     labels = nn.functional.pad(labels, (0, 1), value=-100)
-    shift_labels = labels[..., 1:].contiguous()
+    shift_labels = labels[..., 1:]
     loss_mask = shift_labels != -100
     shift_labels[~loss_mask] = 0
     logprobs = selective_log_softmax(outputs.logits, shift_labels)
@@ -1638,11 +1638,11 @@ class SFTTrainer(_BaseTrainer):
             with torch.no_grad():
                 if "shift_labels" in inputs:
                     # When using CP or SP, labels are pre-shifted.
-                    shift_logits = outputs.logits.contiguous()
+                    shift_logits = outputs.logits
                     shift_labels = inputs["shift_labels"]
                 else:
-                    shift_logits = outputs.logits[..., :-1, :].contiguous()
-                    shift_labels = labels[..., 1:].contiguous()
+                    shift_logits = outputs.logits[..., :-1, :]
+                    shift_labels = labels[..., 1:]
 
                 # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
                 if (
