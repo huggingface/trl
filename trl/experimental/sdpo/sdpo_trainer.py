@@ -86,7 +86,7 @@ class DistillationLogits:
 
     completion_ids: torch.Tensor
     completion_mask: torch.Tensor
-    response_mask: torch.Tensor
+    loss_mask: torch.Tensor
     student_logits: torch.Tensor
     teacher_logits: torch.Tensor
 
@@ -1136,7 +1136,7 @@ class SDPOTrainer(_BaseTrainer):
         When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a clipped
         importance-sampling ratio between the current student and the student at rollout time.
         """
-        if distillation_logits.response_mask.sum() == 0:
+        if distillation_logits.loss_mask.sum() == 0:
             mode = "train" if model.training else "eval"
             self._log_self_distillation_metric(mode, 0.0)
             # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
@@ -1184,15 +1184,15 @@ class SDPOTrainer(_BaseTrainer):
                 self.args.distillation_is_clip,
             )
 
-        loss = (per_token_loss * distillation_logits.response_mask).sum(-1) / distillation_logits.response_mask.sum(
-            -1
-        ).clamp(min=1.0)
+        loss = (per_token_loss * distillation_logits.loss_mask).sum(-1) / distillation_logits.loss_mask.sum(-1).clamp(
+            min=1.0
+        )
         loss = loss.mean()
 
         mode = "train" if model.training else "eval"
         mean_distill_loss = (
-            per_token_loss * distillation_logits.response_mask
-        ).sum() / distillation_logits.response_mask.sum().clamp(min=1.0)
+            per_token_loss * distillation_logits.loss_mask
+        ).sum() / distillation_logits.loss_mask.sum().clamp(min=1.0)
         self._log_self_distillation_metric(
             mode,
             self.accelerator.gather(mean_distill_loss).mean().item(),
@@ -1222,9 +1222,9 @@ class SDPOTrainer(_BaseTrainer):
 
         self_distillation_mask = inputs.get("self_distillation_mask")
         if self_distillation_mask is None:
-            response_mask = completion_mask
+            loss_mask = completion_mask
         else:
-            response_mask = completion_mask * self_distillation_mask.unsqueeze(1)
+            loss_mask = completion_mask * self_distillation_mask.unsqueeze(1)
         student_input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         student_attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         student_logits = self._forward_logits(
@@ -1245,7 +1245,7 @@ class SDPOTrainer(_BaseTrainer):
         return DistillationLogits(
             completion_ids=completion_ids,
             completion_mask=completion_mask,
-            response_mask=response_mask,
+            loss_mask=loss_mask,
             student_logits=student_logits,
             teacher_logits=teacher_logits,
         )
@@ -1282,9 +1282,9 @@ class SDPOTrainer(_BaseTrainer):
         logits_to_keep = inputs["completion_ids"].size(1)
         self_distillation_mask = inputs.get("self_distillation_mask")
         if self_distillation_mask is None:
-            response_mask = inputs["completion_mask"]
+            loss_mask = inputs["completion_mask"]
         else:
-            response_mask = inputs["completion_mask"] * self_distillation_mask.unsqueeze(1)
+            loss_mask = inputs["completion_mask"] * self_distillation_mask.unsqueeze(1)
 
         unwrapped_student = self.accelerator.unwrap_model(model)
         unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
@@ -1306,7 +1306,7 @@ class SDPOTrainer(_BaseTrainer):
             unwrapped_student,
             inputs,
             logits_to_keep,
-            response_mask,
+            loss_mask,
             teacher_hidden,
             teacher_weight,
             teacher_bias,
@@ -1331,7 +1331,7 @@ class SDPOTrainer(_BaseTrainer):
         student,
         inputs: TrainingBatch,
         logits_to_keep,
-        response_mask,
+        loss_mask,
         teacher_hidden,
         teacher_weight,
         teacher_bias,
@@ -1348,7 +1348,7 @@ class SDPOTrainer(_BaseTrainer):
 
         # `ignore_index` masks non-response positions; the token values only feed the disabled hard-CE term.
         completion_ids = inputs["completion_ids"]
-        true_labels = torch.where(response_mask.bool(), completion_ids, torch.full_like(completion_ids, -100))
+        true_labels = torch.where(loss_mask.bool(), completion_ids, torch.full_like(completion_ids, -100))
 
         student_head = student.get_output_embeddings()
         # Per-sequence then batch mean (grpo), matching the non-Liger path: the fused kernel reduces by total tokens
