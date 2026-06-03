@@ -1372,8 +1372,8 @@ class TestGRPOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "vllm_importance_sampling_min, vllm_importance_sampling_max",
         [
-            (0.0, 3.0),  # only cap/max (current default)
-            (0.5, float("inf")),  # only min
+            (None, 3.0),  # only cap/max (current default)
+            (0.5, None),  # only min
             (0.5, 5.0),  # both (IcePop)
         ],
     )
