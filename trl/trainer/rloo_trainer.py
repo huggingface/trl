@@ -1266,8 +1266,14 @@ class RLOOTrainer(_BaseTrainer):
         rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
         num_generations = self.num_generations if mode == "train" else self.num_generations_eval
 
+        # A completion for which every reward function returned None is unscorable. nansum would collapse it to 0,
+        # which both biases the leave-one-out baseline and hands the completion a spurious advantage. Mark these rows
+        # NaN so they're excluded from the (nan-aware) baseline below; their advantage is forced to 0 afterwards.
+        unscorable_mask = torch.isnan(rewards_per_func).all(dim=1)
+
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+        rewards[unscorable_mask] = torch.nan
 
         # Apply reward clipping if specified
         if self.reward_clip_range:
@@ -1282,24 +1288,30 @@ class RLOOTrainer(_BaseTrainer):
             rewards = rewards - self.beta * kl
 
         grouped_rewards = rewards.view(-1, num_generations)
-        mean_grouped_rewards = grouped_rewards.mean(dim=1)
+        mean_grouped_rewards = torch.nanmean(grouped_rewards, dim=1)
         if num_generations > 1:
-            std_rewards = grouped_rewards.std(dim=1)
+            std_rewards = nanstd(grouped_rewards, dim=1)
         else:  # doesn't occur during training, but could occur in eval when num_generations_eval=1
             std_rewards = torch.zeros_like(mean_grouped_rewards)
 
-        # RLOO advantages computation
-        grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)  # (num_prompts, 1)
+        # RLOO advantages computation. The leave-one-out baseline averages over scorable siblings only: nansum drops
+        # unscorable rewards and the divisor is (scorable count − 1). A group with a single scorable completion yields
+        # 0/0 = NaN, and unscorable rows stay NaN; both are zeroed by nan_to_num below.
+        scorable_counts = (~torch.isnan(grouped_rewards)).sum(dim=1, keepdim=True)  # (num_prompts, 1)
+        grouped_sum = torch.nansum(grouped_rewards, dim=1, keepdim=True)  # (num_prompts, 1)
         if num_generations > 1:
-            baselines = (grouped_sum - grouped_rewards) / (num_generations - 1)  # (num_prompts, num_generations)
+            baselines = (grouped_sum - grouped_rewards) / (scorable_counts - 1)  # (num_prompts, num_generations)
             baselines = baselines.view(-1)  # Flatten back to match rewards shape
             advantages = rewards - baselines
         else:  # this case doesn't occur during training, but could in eval when num_generations_eval=1
             advantages = torch.zeros_like(rewards)
 
-        # Normalize advantages
+        # Normalize advantages over the scorable subset only (unscorable advantages are still NaN here).
         if self.normalize_advantages:
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-4)
+            advantages = (advantages - torch.nanmean(advantages)) / (nanstd(advantages) + 1e-4)
+
+        # Unscorable completions carry no learning signal: zero their advantage to keep them from moving the policy.
+        advantages = torch.nan_to_num(advantages, nan=0.0)
 
         is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 
@@ -1323,8 +1335,9 @@ class RLOOTrainer(_BaseTrainer):
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
         rewards = (rewards_per_func * self.reward_weights.to(rewards_per_func.device).unsqueeze(0)).nansum(dim=1)
-        self._metrics[mode]["reward"].append(rewards.mean().item())
-        self._metrics[mode]["reward_std"].append(rewards.std().item())
+        rewards[unscorable_mask] = torch.nan  # exclude unscorable rows from the logged reward stats
+        self._metrics[mode]["reward"].append(torch.nanmean(rewards).item())
+        self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts

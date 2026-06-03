@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import os
 import textwrap
 from collections import defaultdict
@@ -20,7 +21,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 import transformers
@@ -48,7 +48,8 @@ from ...data_utils import (
     unpair_preference_dataset,
 )
 from ...import_utils import is_liger_kernel_available
-from ...models.utils import prepare_deepspeed, prepare_fsdp
+from ...models import get_act_offloading_ctx_manager
+from ...models.utils import disable_gradient_checkpointing, prepare_deepspeed, prepare_fsdp
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     create_model_from_path,
@@ -78,7 +79,7 @@ def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
     return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
-def _get_kl_dataset(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
+def _get_kl_completion_ids(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     """
     Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of
     completions. For best results, the mismatched outputs y' used to estimate the KL term for a batch should be the
@@ -392,6 +393,12 @@ class KTOTrainer(_BaseTrainer):
             optimizers=optimizers,
         )
 
+        # Initialize activation offloading context
+        if self.args.activation_offloading:
+            self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
+        else:
+            self.maybe_activation_offload_context = contextlib.nullcontext()
+
         # Reference model
         if ref_model is None:
             if is_peft_model(self.model) or args.precompute_ref_log_probs:
@@ -514,6 +521,47 @@ class KTOTrainer(_BaseTrainer):
             result = processing_class(text=input)
         return result
 
+    def _get_kl_dataset(
+        self,
+        dataset: Dataset | IterableDataset,
+        dataset_name: str,
+        args: KTOConfig,
+    ) -> Dataset | IterableDataset:
+        """
+        Creates the KL dataset by creating mismatched (prompt, completion) pairs for KL divergence estimation.
+
+        Args:
+            dataset (`Dataset` or `IterableDataset`):
+                Tokenized dataset with `prompt_ids` and `completion_ids` columns.
+            dataset_name (`str`):
+                Name used in progress bar descriptions.
+            args ([`KTOConfig`]):
+                Training arguments providing `per_device_train_batch_size` and `dataset_num_proc`.
+
+        Returns:
+            `Dataset` or `IterableDataset` with a single `KL_completion_ids` column.
+        """
+        map_kwargs = {}
+        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc or desc
+            map_kwargs["num_proc"] = args.dataset_num_proc
+            map_kwargs["desc"] = f"Extracting KL {dataset_name} dataset"
+        kl_dataset = dataset.map(
+            _get_kl_completion_ids, batched=True, batch_size=args.per_device_train_batch_size, **map_kwargs
+        )
+
+        def rename_kl_fn(example):
+            return {"KL_completion_ids": example["completion_ids"]}
+
+        if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+            map_kwargs["desc"] = f"Assembling KL {dataset_name} dataset"
+        column_names = get_dataset_column_names(dataset)
+        kl_dataset = kl_dataset.map(
+            rename_kl_fn,
+            remove_columns=[c for c in get_dataset_column_names(kl_dataset) if c in column_names],
+            **map_kwargs,
+        )
+        return kl_dataset
+
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
@@ -596,28 +644,9 @@ class KTOTrainer(_BaseTrainer):
 
             # Get KL datasets if needed
             if self.calculate_KL:
-
-                def rename_kl_fn(example):
-                    return {"KL_completion_ids": example["completion_ids"]}
-
                 # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
                 # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Extracting KL {dataset_name} dataset"
-                kl_dataset = dataset.map(
-                    _get_kl_dataset, batched=True, batch_size=args.per_device_train_batch_size, **map_kwargs
-                )
-
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Assembling KL {dataset_name} dataset"
-                column_names = get_dataset_column_names(dataset)
-                kl_dataset = kl_dataset.map(
-                    rename_kl_fn,
-                    remove_columns=[c for c in get_dataset_column_names(kl_dataset) if c in column_names],
-                    **map_kwargs,
-                )
-
-                # merge the datasets
+                kl_dataset = self._get_kl_dataset(dataset, dataset_name, args)
                 dataset = concatenate_datasets([dataset, kl_dataset], axis=1)
 
             # Calculate dataset desirability balance
@@ -664,56 +693,58 @@ class KTOTrainer(_BaseTrainer):
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
-        # "ref_logps" is included to invalidate caches written before the key was renamed from "reference_logps"
-        fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL, "ref_logps"))
-        cache_file = dataset._get_cache_file_path(fingerprint).removesuffix(".arrow") + ".npz"
+        fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
+        cache_file = dataset._get_cache_file_path(fingerprint)
         if os.path.exists(cache_file):
-            loaded = np.load(cache_file)
-            ref_logps = loaded["ref_logps"]
-            if self.calculate_KL:
-                ref_KL_logps = loaded["ref_KL_logps"]
-        else:
-            dataloader = DataLoader(
-                dataset,
-                batch_size=batch_size,
-                collate_fn=self.data_collator,
-                num_workers=self.args.dataloader_num_workers,
-                pin_memory=self.args.dataloader_pin_memory,
-                shuffle=False,
-            )
-            data_loader = self.accelerator.prepare(dataloader)
-            ref_logps = []
-            ref_KL_logps = []
-            for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
-                ref_logp, ref_KL_logp = self.compute_ref_log_probs(padded_batch)
-                if self.calculate_KL:
-                    ref_logp, ref_KL_logp = self.accelerator.gather_for_metrics((ref_logp, ref_KL_logp))
-                    ref_KL_logps.append(ref_KL_logp.cpu())
-                else:
-                    ref_logp = self.accelerator.gather_for_metrics(ref_logp)
-                ref_logps.append(ref_logp.cpu())
+            return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
 
-            # Save the reference log probabilities to cache. We need .float() because bf16 is not supported by numpy
-            ref_logps = torch.cat(ref_logps).float().numpy()
-            save_dict = {"ref_logps": ref_logps}
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            collate_fn=self.data_collator,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
+            shuffle=False,
+        )
+        data_loader = self.accelerator.prepare(dataloader)
+        ref_logps = []
+        ref_KL_logps = []
+        for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
+            ref_logp, ref_KL_logp = self.compute_ref_log_probs(padded_batch)
             if self.calculate_KL:
-                ref_KL_logps = torch.cat(ref_KL_logps).float().numpy()
-                save_dict["ref_KL_logps"] = ref_KL_logps
-            if self.accelerator.is_main_process:
-                np.savez_compressed(cache_file, **save_dict)
-            self.accelerator.wait_for_everyone()
+                ref_logp, ref_KL_logp = self.accelerator.gather_for_metrics((ref_logp, ref_KL_logp))
+                ref_KL_logps.append(ref_KL_logp.cpu())
+            else:
+                ref_logp = self.accelerator.gather_for_metrics(ref_logp)
+            ref_logps.append(ref_logp.cpu())
 
+        ref_logps = torch.cat(ref_logps)
         if self.calculate_KL:
-            dataset = dataset.add_column(name="ref_logps", column=ref_logps)
-            dataset = dataset.add_column(name="ref_KL_logps", column=ref_KL_logps, new_fingerprint=fingerprint)
-        else:
-            dataset = dataset.add_column(name="ref_logps", column=ref_logps, new_fingerprint=fingerprint)
+            ref_KL_logps = torch.cat(ref_KL_logps)
 
-        return dataset
+        if self.accelerator.is_main_process:
+
+            def add_ref_logps(batch, indices):
+                result = {"ref_logps": ref_logps[indices]}
+                if self.calculate_KL:
+                    result.update({"ref_KL_logps": ref_KL_logps[indices]})
+                return result
+
+            dataset.map(
+                add_ref_logps,
+                with_indices=True,
+                batched=True,
+                remove_columns=dataset.column_names,
+                new_fingerprint=fingerprint,
+                desc=f"Caching reference log probs for {name} dataset",
+            )
+        self.accelerator.wait_for_everyone()
+
+        return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
 
     def compute_ref_log_probs(self, inputs):
         """Computes reference log probabilities for a single padded batch."""
-        with torch.no_grad():
+        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             if self.ref_model is None:
                 if is_peft_model(self.model):
                     model = self.accelerator.unwrap_model(self.model)
@@ -980,13 +1011,14 @@ class KTOTrainer(_BaseTrainer):
         )
 
         # reference model
-        ref_base_model = self.ref_model.get_decoder()
-        ref_outputs = ref_base_model(
-            batch["completion_input_ids"],
-            attention_mask=batch["completion_attention_mask"],
-            use_cache=False,
-            **model_kwargs,
-        )
+        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
+            ref_base_model = self.ref_model.get_decoder()
+            ref_outputs = ref_base_model(
+                batch["completion_input_ids"],
+                attention_mask=batch["completion_attention_mask"],
+                use_cache=False,
+                **model_kwargs,
+            )
         lm_head = model.get_output_embeddings()
         ref_lm_head = self.ref_model.get_output_embeddings()
 
@@ -1078,7 +1110,7 @@ class KTOTrainer(_BaseTrainer):
             else:
                 ref_KL_logps = None
         else:
-            with torch.no_grad():
+            with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
                 if is_peft_model(self.model) and self.ref_model is None:
                     model = self.accelerator.unwrap_model(self.model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
@@ -1158,6 +1190,11 @@ class KTOTrainer(_BaseTrainer):
                 loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
                 logits, labels = outputs.logits, inputs["completion_input_ids"]
         return loss, logits, labels
+
+    # Override training step to add activation offloading context.
+    def training_step(self, *args, **kwargs):
+        with self.maybe_activation_offload_context:
+            return super().training_step(*args, **kwargs)
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
