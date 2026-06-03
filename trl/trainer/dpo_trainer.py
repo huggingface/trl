@@ -1061,7 +1061,7 @@ class DPOTrainer(_BaseTrainer):
         model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
 
-        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
+        with torch.inference_mode(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             if self.ref_model is None:
                 if is_peft_model(self.model):
                     model = self.accelerator.unwrap_model(self.model)
