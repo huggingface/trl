@@ -303,10 +303,10 @@ class GRPOConfig(_BaseConfig):
             Importance sampling upper bound C_max used by `vllm_importance_sampling_mode`. For `*_truncate` modes,
             importance ratios are clipped from above at C_max. For `*_mask` modes, ratios larger than C_max are set to
             zero.
-        vllm_importance_sampling_min (`float`, *optional*, defaults to `0.0`):
+        vllm_importance_sampling_min (`float`, *optional*):
             Importance sampling lower bound C_min used by `vllm_importance_sampling_mode`. For `*_truncate` modes,
             ratios are clipped from below at C_min. For `*_mask` modes, ratios below C_min are set to zero. To strictly
-            mask ratios below C_min without upper bound, set `vllm_importance_sampling_max` to `float('inf')`.
+            mask ratios below C_min without upper bound, set `vllm_importance_sampling_max=None`.
         off_policy_mask_threshold (`float`, *optional*):
             Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. When set,
             sequences with negative advantages and high KL divergence are masked out to stabilize training. This
@@ -828,7 +828,7 @@ class GRPOConfig(_BaseConfig):
         },
     )
 
-    vllm_importance_sampling_max: float = field(
+    vllm_importance_sampling_max: float | None = field(
         default=3.0,
         metadata={
             "help": "Importance sampling upper bound C_max used by `vllm_importance_sampling_mode`. For '*_truncate' "
@@ -837,13 +837,12 @@ class GRPOConfig(_BaseConfig):
         },
     )
 
-    vllm_importance_sampling_min: float = field(
-        default=0.0,
+    vllm_importance_sampling_min: float | None = field(
+        default=None,
         metadata={
             "help": "Importance sampling lower bound C_min used by `vllm_importance_sampling_mode`. For `*_truncate` "
             "modes, ratios are clipped from below at C_min. For `*_mask` modes, ratios below C_min are set to "
-            "zero. To strictly mask ratios below C_min without upper bound, set `vllm_importance_sampling_max` to "
-            "`float('inf')`"
+            "zero. To strictly mask ratios below C_min without upper bound, set `vllm_importance_sampling_max=None`."
         },
     )
     off_policy_mask_threshold: float | None = field(
