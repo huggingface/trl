@@ -717,6 +717,12 @@ class DPOTrainer(_BaseTrainer):
                 )
             if is_peft_model(model):
                 raise NotImplementedError("Liger DPO loss is not implemented for PEFT models.")
+            if self._is_vision_dataset:
+                raise ValueError(
+                    "`use_liger_kernel=True` is not supported for vision datasets. The Liger path calls "
+                    "`get_decoder()` on the model and bypasses the vision encoder, so visual inputs cannot be "
+                    "processed. Set `use_liger_kernel=False`."
+                )
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
