@@ -716,8 +716,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # When resuming from a checkpoint with ignore_data_skip=False, the Trainer skips already-seen
         # batches by pulling and discarding them from the DataLoader. For AsyncGRPO this would trigger
         # vLLM inference for every skipped batch. Instead, we set skip_samples on the RolloutQueueDataset
-        # so it yields cheap dummy samples during the skip phase, and we advance the prompt dataset
-        # iterator to the correct position to preserve data ordering.
+        # so it yields cheap dummy samples during the skip phase.
         resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
         if resume_from_checkpoint is not None and not self.args.ignore_data_skip:
             state_file = os.path.join(resume_from_checkpoint, "trainer_state.json")
@@ -729,14 +728,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     # _pending_skip_samples is read by get_train_dataloader (called inside super())
                     # to set skip_samples on the RolloutQueueDataset before iteration begins.
                     self._pending_skip_samples = samples_to_skip
-                    if self.rollout_worker is not None:
-                        prompts_to_skip = samples_to_skip // self.args.num_generations
-                        for _ in range(prompts_to_skip):
-                            try:
-                                next(self.rollout_worker._dataset_iter)
-                            except StopIteration:
-                                self.rollout_worker._dataset_iter = iter(self.rollout_worker.dataset)
-                                next(self.rollout_worker._dataset_iter)
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:

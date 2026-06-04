@@ -39,8 +39,6 @@ class _StubRolloutWorker:
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
         self._sample_iter = self._make_sample_iter(tokenizer, dataset, num_generations)
-        self.dataset = dataset
-        self._dataset_iter = iter(dataset)
 
     def _make_sample_iter(self, tokenizer, dataset, num_generations):
         for row in itertools.cycle(dataset):
