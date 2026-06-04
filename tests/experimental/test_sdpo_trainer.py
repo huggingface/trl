@@ -13,12 +13,15 @@
 # limitations under the License.
 
 import logging
+from unittest.mock import MagicMock
 
+import pytest
 import torch
 from datasets import Dataset, load_dataset
 from transformers import TrainerCallback
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
+from trl.experimental.sdpo.loss_utils import add_tail_bucket, compute_divergence
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
 
@@ -493,3 +496,68 @@ class TestSDPOTrainer(TrlTestCase):
         completion_length = capture_callback.captured_completion_mask.shape[1]
         teacher_completion_attention = capture_callback.captured_teacher_attention_mask[0, -completion_length:]
         assert torch.equal(teacher_completion_attention, capture_callback.captured_completion_mask[0])
+
+
+class TestSDPOTeacherServerTopk(TrlTestCase):
+    """Server-free unit tests for the `use_teacher_server` + `topk_logits` path (no vLLM server needed)."""
+
+    def test_getter_shapes_and_padding_sentinels(self):
+        # Sample 0 has a 1-token completion (positions 1-2 are padding); sample 1 is full length 3.
+        ragged = {
+            "actual_logprobs": [[[-2.3]], [[-1.1], [-0.4], [-3.0]]],
+            "logprobs": [[[-2.3, -2.6]], [[-1.1, -1.5], [-0.4, -0.9], [-3.0, -3.4]]],
+            "logprob_token_ids": [[[90, 91]], [[90, 91], [9217, 9218], [100, 101]]],
+        }
+        mock_self = MagicMock()
+        mock_self.teacher_client.get_sequence_logprobs = MagicMock(return_value=ragged)
+        mock_self.temperature = 1.0
+        mock_self.args.distillation_mode = "topk_logits"
+        mock_self.args.distillation_topk = 2
+
+        inputs = {
+            "teacher_input_ids": torch.tensor([[10, 11, 90, 0, 0], [10, 11, 90, 9217, 100]]),
+            "teacher_attention_mask": torch.tensor([[1, 1, 1, 0, 0], [1, 1, 1, 1, 1]]),
+        }
+        out = SDPOTrainer._get_teacher_token_logprobs_from_server(mock_self, inputs, logits_to_keep=3)
+
+        assert out["actual_logprobs"].shape == (2, 3)
+        assert out["topk_logprobs"].shape == (2, 3, 2)
+        assert out["topk_token_ids"].shape == (2, 3, 2)
+        # Real positions preserved.
+        assert out["actual_logprobs"][0, 0].item() == pytest.approx(-2.3, rel=1e-5)
+        assert out["actual_logprobs"][1, 2].item() == pytest.approx(-3.0, rel=1e-5)
+        # Padding tail uses the -inf sentinel; the full-length sample stays finite.
+        assert out["actual_logprobs"][0, 1].item() == float("-inf")
+        assert out["topk_logprobs"][0, 2, 0].item() == float("-inf")
+        assert torch.isfinite(out["actual_logprobs"][1]).all()
+        # The requested top-k matches `distillation_topk`.
+        assert mock_self.teacher_client.get_sequence_logprobs.call_args.kwargs["top_logprobs"] == 2
+
+    def test_topk_mask_keeps_forward_and_backward_finite(self):
+        # Sample 0 has completion length 1 (positions 1-2 padded with -inf); sample 1 is full length.
+        teacher_topk = torch.tensor(
+            [
+                [[-2.3, -2.6], [float("-inf"), float("-inf")], [float("-inf"), float("-inf")]],
+                [[-1.1, -1.5], [-0.4, -0.9], [-3.0, -3.4]],
+            ],
+            dtype=torch.float32,
+        )
+        loss_mask = torch.tensor([[1.0, 0.0, 0.0], [1.0, 1.0, 1.0]])
+
+        # Neutralize -inf at masked positions before the divergence (matches the server topk path).
+        keep = loss_mask.bool().unsqueeze(-1)
+        zero = torch.zeros((), dtype=teacher_topk.dtype)
+        teacher_topk = torch.where(keep, teacher_topk, zero)
+        raw_student = torch.randn(2, 3, 2, requires_grad=True)
+        student_topk = torch.where(keep, torch.log_softmax(raw_student, dim=-1), zero)
+
+        student_sparse = add_tail_bucket(student_topk)
+        teacher_sparse = add_tail_bucket(teacher_topk)
+        assert torch.isfinite(student_sparse).all()
+
+        per_token_loss = compute_divergence(student_sparse, teacher_sparse, 0.5)
+        loss = (per_token_loss * loss_mask).sum() / loss_mask.sum()
+        assert torch.isfinite(loss)
+
+        loss.backward()
+        assert torch.isfinite(raw_student.grad).all()
