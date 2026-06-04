@@ -1060,7 +1060,9 @@ class KTOTrainer(_BaseTrainer):
             with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
                 if is_peft_model(self.model) and self.ref_model is None:
                     ref_model_unwrapped = self.accelerator.unwrap_model(self.model)
-                    with use_adapter(ref_model_unwrapped, adapter_name="ref" if "ref" in ref_model_unwrapped.peft_config else None):
+                    with use_adapter(
+                        ref_model_unwrapped, adapter_name="ref" if "ref" in ref_model_unwrapped.peft_config else None
+                    ):
                         ref_KL_logps = self._compute_kl_logps(self.model, batch)
                         ref_outputs = self.model(
                             batch["completion_input_ids"],
@@ -1073,7 +1075,9 @@ class KTOTrainer(_BaseTrainer):
                         attention_mask=batch["completion_attention_mask"],
                     )
             ref_shift_logits = ref_outputs.logits[:, :-1, :].contiguous()
-            ref_per_token_logps = selective_log_softmax(ref_shift_logits, batch["completion_input_ids"][:, 1:].contiguous())
+            ref_per_token_logps = selective_log_softmax(
+                ref_shift_logits, batch["completion_input_ids"][:, 1:].contiguous()
+            )
             ref_per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
             ref_completion_logps = ref_per_token_logps.sum(-1)
             ref_chosen_logps = ref_completion_logps.index_select(0, chosen_idx)
