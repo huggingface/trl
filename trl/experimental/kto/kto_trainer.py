@@ -1043,15 +1043,17 @@ class KTOTrainer(_BaseTrainer):
     def _compute_logps(self, model, batch):
         KL_logps = self._compute_kl_logps(model, batch)
 
-        model_kwargs = {}
+        model_kwargs = {
+            "input_ids": batch["completion_input_ids"],
+            "attention_mask": batch["completion_attention_mask"],
+        }
+        for key in ["pixel_values", "image_grid_thw", "token_type_ids", "mm_token_type_ids", "image_position_ids"]:
+            if key in batch:
+                model_kwargs[key] = batch[key]
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
-        outputs = model(
-            batch["completion_input_ids"],
-            attention_mask=batch["completion_attention_mask"],
-            **model_kwargs,
-        )
+        outputs = model(**model_kwargs)
         completion_logits = outputs.logits
 
         shift_logits = completion_logits[:, :-1, :].contiguous()
