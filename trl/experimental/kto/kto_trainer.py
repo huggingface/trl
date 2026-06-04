@@ -593,15 +593,17 @@ class KTOTrainer(_BaseTrainer):
             )
 
         # Dataset
-        train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
-        if eval_dataset is not None:
-            if isinstance(eval_dataset, dict):
-                eval_dataset = {
-                    key: self._prepare_dataset(dataset, processing_class, args, key)
-                    for key, dataset in eval_dataset.items()
-                }
-            else:
-                eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
+        # Skip dataset preparation for VLMs: tokenization and image processing happen on-the-fly in the collator.
+        if not self._is_vision_dataset:
+            train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
+            if eval_dataset is not None:
+                if isinstance(eval_dataset, dict):
+                    eval_dataset = {
+                        key: self._prepare_dataset(dataset, processing_class, args, key)
+                        for key, dataset in eval_dataset.items()
+                    }
+                else:
+                    eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
