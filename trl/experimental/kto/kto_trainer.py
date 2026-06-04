@@ -1054,16 +1054,40 @@ class KTOTrainer(_BaseTrainer):
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
-        (
-            policy_chosen_logps,
-            policy_rejected_logps,
-            policy_chosen_logits,
-            policy_rejected_logits,
-            policy_KL_logps,
-            outputs,
-        ) = self._compute_logps(model, batch)
+        policy_KL_logps = self._compute_kl_logps(model, batch)
+
+        model_kwargs = {}
+        if self.aux_loss_enabled:
+            model_kwargs["output_router_logits"] = True
+
+        outputs = model(
+            batch["completion_input_ids"],
+            attention_mask=batch["completion_attention_mask"],
+            **model_kwargs,
+        )
         if self.aux_loss_enabled:
             aux_loss = outputs.aux_loss
+
+        shift_logits = outputs.logits[:, :-1, :].contiguous()
+        per_token_logps = selective_log_softmax(shift_logits, batch["completion_input_ids"][:, 1:].contiguous())
+        per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
+        completion_logps = per_token_logps.sum(-1)
+
+        if completion_logps.shape[0] != len(batch["label"]):
+            raise ValueError(
+                "There is a mismatch between the number of examples in this batch and the number of "
+                "examples for which an output sequence was predicted."
+            )
+
+        device = outputs.logits.device
+        bool_labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
+        chosen_idx = torch.nonzero(bool_labels, as_tuple=False).view(-1)
+        rejected_idx = torch.nonzero(~bool_labels, as_tuple=False).view(-1)
+
+        policy_chosen_logps = completion_logps.index_select(0, chosen_idx)
+        policy_rejected_logps = completion_logps.index_select(0, rejected_idx)
+        policy_chosen_logits = outputs.logits.index_select(0, chosen_idx)
+        policy_rejected_logits = outputs.logits.index_select(0, rejected_idx)
 
         if self.precompute_ref_logps:
             # Convert Python lists to tensor indices for efficient CUDA operations
