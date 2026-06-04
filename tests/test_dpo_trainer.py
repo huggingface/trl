@@ -1202,3 +1202,31 @@ class TestDPOTrainer(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
             )
+
+    @require_liger_kernel
+    @require_vision
+    def test_train_vlm_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            max_length=None,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"
