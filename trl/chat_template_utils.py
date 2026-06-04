@@ -327,6 +327,8 @@ llama3_1_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1.jinja").read_text(enco
 
 llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text(encoding="utf-8")
 
+nemotron_h_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_h.jinja").read_text(encoding="utf-8")
+
 phi3_chat_template = (_CHAT_TEMPLATES_DIR / "phi3.jinja").read_text(encoding="utf-8")
 
 phi3_5_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5.jinja").read_text(encoding="utf-8")
@@ -410,6 +412,8 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         qwen3_5_think_chat_template,
         qwen3_6_chat_template,
     ]:
+        tokenizer.response_schema = qwen3_5_schema
+    elif chat_template == nemotron_h_chat_template:
         tokenizer.response_schema = qwen3_5_schema
     else:
         raise ValueError(
