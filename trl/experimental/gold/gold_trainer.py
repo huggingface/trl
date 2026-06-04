@@ -46,7 +46,7 @@ from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
-from ...models.utils import unwrap_model_for_generation
+from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import (
     RepeatSampler,
@@ -789,6 +789,7 @@ class GOLDTrainer(SFTTrainer):
                 weight_soft_loss=1.0,
             )
             self.use_liger_gkd_loss = True
+            self._forward_redirection = _ForwardRedirection()
 
         if args.teacher_model_init_kwargs is None:
             teacher_model_init_kwargs = {}
