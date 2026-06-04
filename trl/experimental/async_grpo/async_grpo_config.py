@@ -195,6 +195,35 @@ class AsyncGRPOConfig(_BaseConfig):
         },
     )
 
+    # Parameters that control delta weight sync (Transport B: sparse patches over an HF Storage Bucket)
+    delta_sync_enabled: bool = field(
+        default=False,
+        metadata={
+            "help": "Sync only the changed bf16 weights as sparse safetensors patches via an HF Storage Bucket "
+            "(applied in place on vLLM), instead of broadcasting the full policy over NCCL. Requires a vLLM with "
+            "sparse weight transfer (#40096), served with `--model-impl transformers` and `VLLM_USE_V2_MODEL_RUNNER=0`."
+        },
+    )
+    delta_sync_repo_id: str | None = field(
+        default=None,
+        metadata={
+            "help": "HF Storage Bucket for the delta patches/anchors (created if missing). Required when "
+            "`delta_sync_enabled=True`."
+        },
+    )
+    delta_sync_anchor_interval: int = field(
+        default=10,
+        metadata={
+            "help": "Send a full anchor every N syncs; sparse deltas in between (bounds drift from missed bits)."
+        },
+    )
+    delta_sync_encoding: str = field(
+        default="gap_delta",
+        metadata={
+            "help": "Index encoding for delta patches: 'raw', 'gap_delta', or 'nvcomp_cascaded' (needs nvcomp)."
+        },
+    )
+
     # Parameters that control the logging
     log_completions: bool = field(
         default=False,

@@ -35,6 +35,7 @@ from trl.trainer.utils import pad, patch_chunked_lm_head
 
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
+from .weight_diff import LowByteChangeDetector
 from .weight_transfer import WeightTransferClient
 
 
@@ -413,6 +414,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._train_tokens_start_time = None
         self.model_version = 0
+        self._change_detector: LowByteChangeDetector | None = None  # delta sync only; created in compute_loss
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
             if self.train_dataset is None:
@@ -444,6 +446,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
                         "packed": True,
                         "is_checkpoint_format": True,
                     },
+                    delta_sync_enabled=self.args.delta_sync_enabled,
+                    delta_sync_repo_id=self.args.delta_sync_repo_id,
+                    delta_sync_anchor_interval=self.args.delta_sync_anchor_interval,
+                    delta_sync_encoding=self.args.delta_sync_encoding,
                 )
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=model_name,
@@ -517,6 +523,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # Register the change detector before the first optimizer.step so step 1 is captured and the
+        # first delta sync is already sparse (no-op unless delta sync is enabled).
+        self._maybe_init_change_detector()
+
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
@@ -667,8 +677,48 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 full = full.to(device)
             yield name, full
 
+    def _streaming_iter_delta(self):
+        """Like [`_streaming_iter`] but yields ``(name, full, mask)`` for delta sync. With an active
+        change detector, only changed params are yielded (their element-level masks); otherwise all params with
+        ``mask=None`` (the cold anchor). All ranks must walk this identically so the FSDP2 ``full_tensor()``
+        collectives line up.
+        """
+        device = self.accelerator.device
+        masks = self._change_detector._validated_masks if self._change_detector is not None else {}
+        for name, param in self.model.named_parameters():
+            name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+            mask = masks.get(name) if masks else None
+            if masks and (mask is None or not mask.any()):
+                continue  # unchanged param -> not in this delta
+            full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
+            if full.device != device:
+                full = full.to(device)
+            yield name, full, mask
+
+    def _maybe_init_change_detector(self):
+        """Create the bf16 change detector once the (prepared) optimizer exists, before its first
+        step, so the first delta sync is already sparse. No-op unless delta sync is enabled."""
+        if self.args.delta_sync_enabled and self._change_detector is None and getattr(self, "optimizer", None):
+            # Unwrap AcceleratedOptimizer to the native torch optimizer (register_step_*_hook).
+            raw_optimizer = getattr(self.optimizer, "optimizer", self.optimizer)
+            self._change_detector = LowByteChangeDetector(self.model, raw_optimizer)
+
     def _sync_weight(self):
         t0 = time.time()
+        is_delta = self.args.delta_sync_enabled
+
+        if is_delta:
+            # Delta phase 1: upload the sparse patch to the bucket while inference keeps running.
+            logger.info("Weight sync: uploading delta patch (inference still running)...")
+            if self.accelerator.is_main_process and self.weight_transfer:
+                self.weight_transfer.upload_weights(self._streaming_iter_delta())
+            else:
+                # Non-rank-0 still walks the iterator so full_tensor() collectives complete.
+                for _ in self._streaming_iter_delta():
+                    pass
+            self.accelerator.wait_for_everyone()
+
+        # Pause vllm both delta and full
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process and self.weight_transfer:
             self.weight_transfer.pause()
@@ -679,7 +729,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
         t_barrier = time.time()
 
         logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        if self.accelerator.is_main_process and self.weight_transfer:
+        if is_delta:
+            if self.accelerator.is_main_process and self.weight_transfer:
+                try:
+                    self.weight_transfer.apply_weights_delta()
+                except Exception as e:
+                    logger.warning(f"Weight sync: apply failed ({e}), skipping, vLLM will use stale weights")
+        elif self.accelerator.is_main_process and self.weight_transfer:
             self.weight_transfer.send_weights(self._streaming_iter())
         else:
             # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.

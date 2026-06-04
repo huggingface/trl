@@ -95,6 +95,14 @@ vlm = [
 math_verify = [
     "math-verify>=0.5.2",
 ]
+delta_weight_sync = [
+    # Delta weight sync for AsyncGRPO (trl/experimental/async_grpo). Needs vLLM's sparse weight
+    # transfer (vllm-project/vllm#40096): merged to main after v0.22.0, not in a release yet —
+    # install vLLM from the nightly index until it ships (so no `vllm` pin here). Serve with
+    # `--model-impl transformers` and `VLLM_USE_V2_MODEL_RUNNER=0`.
+    "huggingface-hub>=1.17.0",     # HF Storage Bucket API (create/batch/download_bucket_files)
+    "nvidia-nvcomp-cu12>=5.2.0",   # optional: only for the nvcomp_cascaded index encoding (CUDA 12)
+]
 openreward = [
     "openreward>=0.1.109; python_version >= '3.11'",  # openreward requires Python 3.11+
 ]

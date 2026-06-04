@@ -17,6 +17,7 @@ import time
 
 import requests
 from accelerate.logging import get_logger
+from huggingface_hub import create_bucket
 
 from trl.import_utils import is_vllm_available
 
@@ -36,6 +37,10 @@ class WeightTransferClient:
         weight_update_info: dict,
         server_timeout: float = 240.0,
         init_weight_transfer_timeout: int = 1800,
+        delta_sync_enabled: bool = False,
+        delta_sync_repo_id: str | None = None,
+        delta_sync_anchor_interval: int = 10,
+        delta_sync_encoding: str = "gap_delta",
     ):
         if not is_vllm_available(min_version="0.17.1"):
             raise ImportError(
@@ -46,6 +51,13 @@ class WeightTransferClient:
         self.init_weight_transfer_timeout = init_weight_transfer_timeout
         self._weight_update_info = weight_update_info
         self.model_update_group = None
+        # Delta sync (Transport B): sparse patches over an HF Storage Bucket instead of NCCL.
+        self.delta_sync_enabled = delta_sync_enabled
+        self._delta_sync_repo_id = delta_sync_repo_id
+        self._delta_sync_anchor_interval = delta_sync_anchor_interval
+        self._delta_sync_encoding = delta_sync_encoding
+        self._delta_model_version = 0
+        self._delta_pending: dict | None = None
 
     def _wait_for_server_ready_sync(self, timeout_s: float | None = None, poll_interval_s: float = 2.0) -> None:
         timeout_s = timeout_s if timeout_s is not None else self.server_timeout
@@ -72,6 +84,15 @@ class WeightTransferClient:
 
     def init_weight_transfer(self) -> None:
         self._wait_for_server_ready_sync()
+        if self.delta_sync_enabled:
+            create_bucket(self._delta_sync_repo_id, exist_ok=True)
+            requests.post(
+                f"{self.vllm_server_url}/init_weight_transfer_engine",
+                json={"init_info": {}},
+                timeout=self.init_weight_transfer_timeout,
+            )
+            logger.info("Initialised delta weight transfer (bucket %s)", self._delta_sync_repo_id)
+            return
         response = requests.get(f"{self.vllm_server_url}/get_world_size")
         inference_world_size = response.json()["world_size"]
         world_size = inference_world_size + 1
@@ -122,6 +143,74 @@ class WeightTransferClient:
             f"[weight_sync] /update_weights join took {time.time() - t_join:.1f}s "
             f"(total send_weights: {time.time() - t0:.1f}s)"
         )
+
+    def upload_weights(self, iterator) -> None:
+        """Delta phase 1 (inference still running): encode the changed params as a sparse patch,
+        upload it to the bucket, and record where [`apply_weights`] should fetch it.
+
+        Every Nth sync is a full anchor; the rest are gap-delta patches. An empty iterator (nothing changed) is a no-op
+        and leaves ``_delta_pending`` cleared, so the apply is skipped. The phase is explicit — never inferred from
+        emptiness — so a zero-change step can't trigger an apply.
+        """
+        from .delta_engine import DeltaWeightTransferEngine
+
+        self._delta_model_version += 1
+        is_anchor = self._delta_model_version == 1 or self._delta_model_version % self._delta_sync_anchor_interval == 0
+        if is_anchor:
+            iterator = ((name, tensor, None) for name, tensor, _mask in iterator)  # strip masks -> full tensors
+        subdir = "anchors" if is_anchor else "deltas"
+        filename = f"{subdir}/step_{self._delta_model_version:06d}.safetensors"
+        meta = DeltaWeightTransferEngine.upload(
+            iterator=iterator,
+            bucket_id=self._delta_sync_repo_id,
+            filename=filename,
+            model_version=self._delta_model_version,
+            encoding=self._delta_sync_encoding,
+        )
+        self._delta_pending = (
+            None
+            if meta is None
+            else {
+                "repo_id": self._delta_sync_repo_id,
+                "filename": filename,
+                "update_kind": "dense" if is_anchor else "sparse_flat",  # "dense" <=> anchor
+            }
+        )
+
+    def apply_weights_delta(self) -> None:
+        """Signal vLLM to fetch and apply the uploaded patch.
+
+        No-op when nothing was uploaded this step; ``_delta_pending`` is cleared up front so a failed apply leaves no
+        stale state.
+        """
+        if self._delta_pending is None:
+            return
+        info, self._delta_pending = self._delta_pending, None
+        # Anchors are HF-checkpoint-format full tensors; deltas are sparse kernel-format.
+        self._post_vllm("/start_weight_update", {"is_checkpoint_format": info["update_kind"] == "dense"})
+        # vLLM fetches the patch from the bucket inside this call; a full anchor can take minutes, so
+        # the timeout must cover the download — otherwise a read-timeout would retry into a re-download.
+        self._post_vllm("/update_weights", {"update_info": info}, retries=5, timeout=1800)
+        self._post_vllm("/finish_weight_update", {})
+
+    def _post_vllm(self, path: str, json_body: dict, retries: int = 1, timeout: int = 300) -> None:
+        """POST to a vLLM server endpoint with bounded retry on 429 / connection errors."""
+        url = f"{self.vllm_server_url}{path}"
+        for attempt in range(retries):
+            try:
+                resp = requests.post(url, json=json_body, timeout=timeout)
+                if resp.status_code < 429:
+                    resp.raise_for_status()
+                    return
+                status = resp.status_code
+            except requests.RequestException as e:
+                logger.warning(f"[weight_sync] POST {path} failed: {e}")
+                status = "connection error"
+            if attempt < retries - 1:
+                wait = min(2**attempt, 30)
+                logger.warning(f"[weight_sync] POST {path} -> {status}, retry in {wait}s ({attempt + 1}/{retries})")
+                time.sleep(wait)
+        raise RuntimeError(f"[weight_sync] POST {path} failed after {retries} attempt(s)")
 
     def pause(self) -> None:
         t0 = time.time()
