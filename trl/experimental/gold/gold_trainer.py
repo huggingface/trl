@@ -1910,6 +1910,18 @@ class GOLDTrainer(SFTTrainer):
 
         return new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts
 
+    def _liger_student_forward(self, student, inputs):
+        """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
+        if hasattr(student, "get_decoder") and student.get_decoder() is not None:
+            decoder = student.get_decoder()
+        else:
+            decoder = getattr(student, getattr(student, "base_model_prefix", "model"), student)
+        return decoder(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            use_cache=False,
+        )
+
     def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
         if not self.use_liger_gkd_loss:
             return nullcontext()
