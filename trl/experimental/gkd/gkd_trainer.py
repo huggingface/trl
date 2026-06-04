@@ -392,6 +392,18 @@ class GKDTrainer(SFTTrainer):
         # Return loss
         return (loss, student_outputs) if return_outputs else loss
 
+    def _liger_student_forward(self, student, inputs):
+        """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
+        if hasattr(student, "get_decoder") and student.get_decoder() is not None:
+            decoder = student.get_decoder()
+        else:
+            decoder = getattr(student, getattr(student, "base_model_prefix", "model"), student)
+        return decoder(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            use_cache=False,
+        )
+
     @staticmethod
     def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None):
         # Generate output with respect to the prompt-only
