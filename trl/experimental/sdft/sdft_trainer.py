@@ -78,6 +78,28 @@ logger = get_logger(__name__)
 TrainingBatch = dict[str, torch.Tensor | Any]
 
 
+def build_teacher_request_inputs(
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    prompt_attention_mask: torch.Tensor,
+) -> tuple[list[list[int]], list[int], list[int]]:
+    """Trim padded batch tensors into per-sample (prompt+completion) sequences for teacher-server requests."""
+    input_ids_cpu = input_ids.detach().cpu()
+    attention_mask_cpu = attention_mask.detach().cpu().bool()
+    prompt_lengths = prompt_attention_mask.detach().cpu().sum(dim=1).to(torch.long)
+
+    sequences: list[list[int]] = []
+    prompt_lengths_list: list[int] = []
+    completion_lengths_list: list[int] = []
+    for row, mask, prompt_length in zip(input_ids_cpu, attention_mask_cpu, prompt_lengths, strict=True):
+        trimmed_row = row[mask]
+        prompt_len = int(prompt_length.item())
+        sequences.append(trimmed_row.tolist())
+        prompt_lengths_list.append(prompt_len)
+        completion_lengths_list.append(int(trimmed_row.numel()) - prompt_len)
+    return sequences, prompt_lengths_list, completion_lengths_list
+
+
 @dataclass
 class DistillationLogits:
     """Aligned logits and masks used to compute a self-distillation objective."""
@@ -310,6 +332,31 @@ class SDFTTrainer(_BaseTrainer):
         if hasattr(model, "warnings_issued"):
             model.warnings_issued["estimate_tokens"] = True
 
+        # Teacher logprobs from the running vLLM generation server (reuses the synced student weights) instead of a
+        # local teacher forward. MVP: `live` teacher only — the generation server holds the current student weights.
+        self.use_teacher_server = args.use_teacher_server
+        if self.use_teacher_server:
+            if not (args.use_vllm and args.vllm_mode == "server"):
+                raise ValueError(
+                    "`use_teacher_server=True` requires `use_vllm=True` and `vllm_mode='server'`: teacher logprobs are "
+                    "served by the same vLLM server used for generation."
+                )
+            if args.teacher_model_kind != "live":
+                raise ValueError(
+                    "`use_teacher_server=True` only supports `teacher_model_kind='live'` (the generation server holds "
+                    f"the current student weights), got {args.teacher_model_kind!r}."
+                )
+            if args.distillation_mode != "sampled_token":
+                raise ValueError(
+                    "`use_teacher_server=True` only supports `distillation_mode='sampled_token'` (reverse KL on the "
+                    f"realized token), got {args.distillation_mode!r}. The server returns sparse logprobs, not the "
+                    "full vocabulary, and its top-k support cannot match the local top-k objective."
+                )
+            if args.use_liger_kernel:
+                raise ValueError(
+                    "`use_teacher_server=True` is incompatible with `use_liger_kernel`: the server returns top-k "
+                    "logprobs while the Liger fused loss needs full-vocabulary hidden states."
+                )
         # Liger fused JSD loss for `full_logits`: same generalized JSD as `compute_divergence`, so alpha maps to beta.
         self.use_liger_loss = False
         if args.use_liger_kernel:
@@ -384,6 +431,16 @@ class SDFTTrainer(_BaseTrainer):
                 logprobs=None,
                 generation_kwargs=args.generation_kwargs,
             )
+
+        # Per-rank read-only client to the same generation server for teacher scoring (weights are synced there by
+        # `VLLMGeneration`; scoring needs no weight-update communicator). Mirrors the distillation trainer's
+        # `teacher_client`.
+        self.teacher_client = None
+        if self.use_teacher_server:
+            from ...generation.vllm_client import VLLMClient
+
+            base_url = args.vllm_server_base_url or f"http://{args.vllm_server_host}:{args.vllm_server_port}"
+            self.teacher_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
 
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
@@ -757,7 +814,9 @@ class SDFTTrainer(_BaseTrainer):
         if return_outputs:
             raise ValueError("The SDFTTrainer does not support returning outputs")
 
-        if self.use_liger_loss:
+        if self.use_teacher_server:
+            loss = self._compute_server_distillation_loss(model, inputs)
+        elif self.use_liger_loss:
             loss = self._compute_liger_loss(model, inputs)
         else:
             distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
@@ -1095,3 +1154,91 @@ class SDFTTrainer(_BaseTrainer):
         logs = {**logs, **metrics}
         super().log(logs, start_time)
         self._metrics[mode].clear()
+
+    def _compute_server_distillation_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
+        """Distillation loss with teacher logprobs served by the vLLM generation server (`teacher_model_kind='live'`).
+
+        The student is forwarded locally (grad) for its logits; the teacher logprob of each realized completion token
+        is fetched from the server (no local teacher forward). `sampled_token` (reverse KL) only.
+        """
+        completion_ids = inputs["completion_ids"]
+        completion_mask = inputs["completion_mask"]
+        logits_to_keep = completion_ids.size(1)
+
+        # SDFT skips the first few completion tokens in the distillation loss to suppress teacher-prompt artifacts.
+        loss_mask = completion_mask
+        if self.num_loss_tokens_to_skip > 0:
+            token_positions = torch.arange(completion_mask.size(1), device=completion_mask.device).unsqueeze(0)
+            loss_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
+
+        student_input_ids = torch.cat([inputs["prompt_ids"], completion_ids], dim=1)
+        student_attention_mask = torch.cat([inputs["prompt_mask"], completion_mask], dim=1)
+        student_logits = self._forward_logits(
+            model=model,
+            input_ids=student_input_ids,
+            attention_mask=student_attention_mask,
+            logits_to_keep=logits_to_keep,
+        )
+
+        mode = "train" if model.training else "eval"
+        if loss_mask.sum() == 0:
+            self._log_self_distillation_metric(mode, 0.0)
+            return student_logits.sum() * 0.0
+
+        teacher_per_token_logps = self._get_teacher_logprobs_from_server(inputs, logits_to_keep)
+        # Padding positions come back as -inf; replace them with 0 so reverse KL's `(log_s - log_t)` does not leak
+        # +inf through the masked-out positions (mirrors the distillation trainer).
+        required = loss_mask.bool()
+        if (required & ~torch.isfinite(teacher_per_token_logps)).any():
+            raise ValueError("Teacher server returned no logprob for a required completion token.")
+        teacher_per_token_logps = torch.where(
+            required, teacher_per_token_logps, torch.zeros_like(teacher_per_token_logps)
+        )
+
+        # Reverse-KL token-level objective, matching `compute_sampled_token_self_distillation_loss` but with the
+        # teacher logprobs coming from the server instead of a local teacher forward.
+        student_per_token_logps = selective_log_softmax(student_logits, completion_ids)
+        per_token_loss = (student_per_token_logps - teacher_per_token_logps).detach() * student_per_token_logps
+
+        old_per_token_logps = inputs.get("old_per_token_logps")
+        if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
+            per_token_loss = apply_importance_sampling_clipping(
+                per_token_loss, student_per_token_logps, old_per_token_logps, self.args.distillation_is_clip
+            )
+
+        loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
+        loss = loss.mean()
+        mean_distill_loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
+        self._log_self_distillation_metric(mode, self.accelerator.gather(mean_distill_loss).mean().item())
+        return loss
+
+    def _get_teacher_logprobs_from_server(self, inputs: TrainingBatch, logits_to_keep: int) -> torch.Tensor:
+        """Teacher logprob of each realized completion token from the vLLM server, shape `(B, T)`.
+
+        Completions are right-padded, so server values fill the leading positions of each row and trailing padding
+        stays at `-inf` (neutralized by the caller).
+        """
+        import numpy as np
+
+        teacher_input_ids = inputs["teacher_input_ids"]
+        teacher_attention_mask = inputs["teacher_attention_mask"]
+        device = teacher_input_ids.device
+        batch_size = teacher_input_ids.size(0)
+        prompt_attention_mask = teacher_attention_mask[:, : teacher_attention_mask.size(1) - logits_to_keep]
+
+        sequences, prompt_lengths, _ = build_teacher_request_inputs(
+            teacher_input_ids, teacher_attention_mask, prompt_attention_mask
+        )
+        result = self.teacher_client.get_sequence_logprobs(
+            sequences=sequences,
+            prompt_lengths=prompt_lengths,
+            top_logprobs=1,
+            temperature=self.temperature,
+        )
+
+        actual = np.full((batch_size, logits_to_keep), float("-inf"), dtype=np.float32)
+        for i, seq_actual in enumerate(result["actual_logprobs"]):
+            n = min(len(seq_actual), logits_to_keep)
+            if n:
+                actual[i, :n] = np.array(seq_actual, dtype=np.float32)[:n, 0]
+        return torch.from_numpy(actual).to(device)

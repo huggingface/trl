@@ -47,6 +47,28 @@ trainer.train()
 To generate from the teacher-conditioned prompt instead of the student prompt, set `generate_from_teacher=True`.
 To customize how the teacher prompt is built, set `teacher_prompt_template` on [`SDFTConfig`].
 
+## Serving the teacher from the vLLM server
+
+With `teacher_model_kind="live"` the teacher is the current student, whose weights the vLLM **server** already holds (they are synced for generation each step). Set `use_teacher_server=True` to score the teacher log-probabilities on that same server instead of running a separate local teacher forward, removing the teacher from the training step entirely:
+
+```python
+training_args = SDFTConfig(
+    output_dir="sdft-model",
+    use_vllm=True,
+    vllm_mode="server",
+    teacher_model_kind="live",
+    use_teacher_server=True,
+    distillation_mode="sampled_token",
+)
+```
+
+When using the teacher server:
+
+- `use_vllm=True` and `vllm_mode="server"` are required
+- `teacher_model_kind` must be `"live"` (the server holds the current student weights)
+- `distillation_mode` must be `"sampled_token"` (reverse KL on the realized token) — the server returns sparse log-probs, and its top-k support cannot match the local `topk_logits` objective
+- `use_liger_kernel` is not supported
+
 ## Expected dataset columns
 
 Each example must provide:

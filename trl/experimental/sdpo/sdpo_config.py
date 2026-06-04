@@ -352,6 +352,15 @@ class SDPOConfig(_BaseConfig):
             "help": "Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation instead of the default model.generate(). Requires `vllm` to be installed."
         },
     )
+    use_teacher_server: bool = field(
+        default=False,
+        metadata={
+            "help": "Compute teacher logprobs from the running vLLM generation server instead of a local teacher "
+            "forward. Only supported for `teacher_model_kind='live'` with `use_vllm=True`, `vllm_mode='server'`, "
+            "`distillation_weight=1.0` (pure distillation), and `distillation_mode='sampled_token'` (reverse KL on "
+            "the realized token; the server returns per-token logprobs, not the full vocabulary)."
+        },
+    )
     vllm_mode: str = field(
         default="colocate",
         metadata={
