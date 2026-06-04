@@ -1202,3 +1202,15 @@ class TestDPOTrainer(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
             )
+
+    @require_liger_kernel
+    @require_vision
+    def test_liger_kernel_with_vision_dataset_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none", use_liger_kernel=True)
+        with pytest.raises(ValueError, match="use_liger_kernel.*not supported for vision datasets"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                args=training_args,
+                train_dataset=dataset,
+            )
