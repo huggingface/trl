@@ -668,6 +668,34 @@ trainer.train()
 
 The official code [sail-sg/Stable-RL](https://github.com/sail-sg/Stable-RL)
 
+## Optimal Advantage Regression
+
+Papers relating to the [`experimental.a2po.A2POTrainer`].
+
+### Accelerating RL for LLM Reasoning with Optimal Advantage Regression
+
+**📜 Paper**: https://huggingface.co/papers/2505.20686
+
+A\*-PO (Optimal Advantage Regression) is a two-stage RL method for LLM reasoning that avoids both an online critic and multi-sample group rollouts. Stage 1 estimates the optimal value `V*(x) = β·log E_{y∼π_ref}[exp(r(x, y)/β)]` offline from reference-policy samples; Stage 2 performs on-policy updates with a single generation per prompt using a squared-error regression loss `(β·log(π(y|x)/π_ref(y|x)) − (r(x, y) − V*(x)))²`. This yields faster training and lower peak memory than PPO/GRPO/REBEL. The method assumes a binary verifiable reward and cannot exceed the reference policy's Pass@K. See [Experimental - A2PO](experimental#a2po). The official code can be found in [ZhaolinGao/A-PO](https://github.com/ZhaolinGao/A-PO).
+
+```python
+from trl.experimental.a2po import A2POConfig, A2POTrainer
+
+# Hyperparameters from the paper (Qwen2.5, GSM8K/MATH)
+training_args = A2POConfig(
+    beta1=0.5,  # KL temperature for offline V* estimation
+    beta2=1e-3,  # KL temperature for the on-policy regression target
+    num_value_samples=8,  # N samples per prompt from the reference policy
+)
+trainer = A2POTrainer(
+    model=...,
+    reward_funcs=...,  # should return a binary reward in {0, 1}
+    args=training_args,
+    train_dataset=...,
+)
+trainer.train()
+```
+
 ## Direct Policy Optimization
 
 Papers relating to the [`DPOTrainer`]
