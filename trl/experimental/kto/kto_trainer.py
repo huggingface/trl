@@ -43,8 +43,10 @@ from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
 from ...data_utils import (
+    apply_chat_template,
     extract_prompt,
     is_conversational,
+    prepare_multimodal_messages,
     unpair_preference_dataset,
 )
 from ...import_utils import is_liger_kernel_available
@@ -54,6 +56,7 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
+    flush_left,
     get_config_model_id,
     hash_module,
     pad,
@@ -156,6 +159,202 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
             batch["ref_KL_logps"] = torch.tensor([ex["ref_KL_logps"] for ex in examples])
         batch["label"] = [ex["label"] for ex in examples]
         return batch
+
+
+@dataclass
+class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
+    """
+    Data collator for vision unpaired preference data. Performs tokenization and image processing on-the-fly.
+
+    Unlike the text-only [`DataCollatorForUnpairedPreference`], this collator does not expect pre-tokenized inputs.
+    Instead, it takes raw examples with `"prompt"`, `"completion"`, and `"images"` (or `"image"`) keys and processes
+    them at collation time. When `calculate_kl` is `True`, the collator also produces KL sequences by cycling
+    completions within the batch — the same mismatching strategy as the text-only path, but done here rather than as a
+    dataset pre-processing step.
+
+    Each input example should contain at least:
+    - A `"prompt"` key with either a plain text string or a list of message dicts.
+    - A `"completion"` key with a plain text string or a list of message dicts.
+    - An `"images"` key holding a list of images, or an `"image"` key holding a single image.
+    - A `"label"` key (`bool`) indicating whether the completion is desirable.
+
+    The collator outputs:
+    - `"completion_input_ids"`, `"completion_attention_mask"`, `"completion_mask"`: full prompt+completion sequence.
+    - `"pixel_values"` and any additional processor outputs (e.g., `"image_grid_thw"`).
+    - `"label"`: list of booleans.
+    - When `calculate_kl=True`: `"KL_completion_input_ids"`, `"KL_completion_attention_mask"`, `"KL_completion_mask"`
+      for the cycled KL sequences.
+
+    Args:
+        processor ([`~transformers.ProcessorMixin`]):
+            The processor used to tokenize text and process images.
+        max_length (`int`, *optional*):
+            Maximum sequence length. Sequences longer than `max_length` are truncated.
+        calculate_kl (`bool`, *optional*, defaults to `True`):
+            Whether to produce KL sequences by cycling completions within the batch.
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
+            The tensor type to return. Only `"pt"` is supported.
+    """
+
+    processor: ProcessorMixin
+    max_length: int | None = None
+    calculate_kl: bool = True
+    return_tensors: str = "pt"
+
+    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        # Normalize "image" → "images"
+        if "image" in examples[0]:
+            for example in examples:
+                example["images"] = [example.pop("image")]
+
+        images = [example["images"] for example in examples]
+        if all(img_list == [] for img_list in images):
+            images = None
+
+        if is_conversational(examples[0]):
+            for example in examples:
+                img_list = example["images"] if images is not None else []
+                example["prompt"] = prepare_multimodal_messages(example["prompt"], images=img_list)
+                example["completion"] = prepare_multimodal_messages(example["completion"])
+            examples = [apply_chat_template(example, self.processor) for example in examples]
+
+        prompts = [example["prompt"] for example in examples]
+        completions = [example["completion"] for example in examples]
+
+        processed_prompts = self.processor(
+            images=images,
+            text=prompts,
+            padding=True,
+            padding_side="left",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,
+        )
+        processed_completions = self.processor(
+            text=completions,
+            padding=True,
+            padding_side="right",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,
+        )
+
+        # Assemble prompt (left-padded) + completion (right-padded)
+        prompt_ids = processed_prompts["input_ids"]
+        prompt_mask = processed_prompts["attention_mask"]
+        completion_ids = processed_completions["input_ids"]
+        completion_mask = processed_completions["attention_mask"]
+
+        input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
+        attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
+        seq_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
+
+        # Extract token-type tensors before any flush (local refs survive dict mutation below)
+        has_tti = "token_type_ids" in processed_prompts
+        has_mm_tti = "mm_token_type_ids" in processed_prompts
+
+        if has_tti:  # special case for Gemma
+            prompt_tti = processed_prompts["token_type_ids"]
+            completion_tti = processed_completions.get("token_type_ids", torch.zeros_like(completion_ids))
+            token_type_ids = torch.cat((prompt_tti, completion_tti), dim=1)
+        if has_mm_tti:  # special case for Qwen2.5-VL
+            prompt_mm_tti = processed_prompts["mm_token_type_ids"]
+            mm_token_type_ids = torch.cat((prompt_mm_tti, torch.zeros_like(completion_ids)), dim=1)
+
+        # Flush left to remove prompt's leading padding from the concatenated sequences
+        if has_tti and has_mm_tti:
+            attention_mask, input_ids, seq_mask, token_type_ids, mm_token_type_ids = flush_left(
+                attention_mask, input_ids, seq_mask, token_type_ids, mm_token_type_ids
+            )
+        elif has_tti:
+            attention_mask, input_ids, seq_mask, token_type_ids = flush_left(
+                attention_mask, input_ids, seq_mask, token_type_ids
+            )
+        elif has_mm_tti:
+            attention_mask, input_ids, seq_mask, mm_token_type_ids = flush_left(
+                attention_mask, input_ids, seq_mask, mm_token_type_ids
+            )
+        else:
+            attention_mask, input_ids, seq_mask = flush_left(attention_mask, input_ids, seq_mask)
+
+        if self.max_length is not None:
+            input_ids = input_ids[:, : self.max_length]
+            attention_mask = attention_mask[:, : self.max_length]
+            seq_mask = seq_mask[:, : self.max_length]
+            if has_tti:
+                token_type_ids = token_type_ids[:, : self.max_length]
+            if has_mm_tti:
+                mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
+
+        # Build output — start from processed_prompts to carry pixel_values, image_grid_thw, etc.
+        output = processed_prompts
+        output.pop("input_ids", None)
+        output.pop("attention_mask", None)
+        output["completion_input_ids"] = input_ids
+        output["completion_attention_mask"] = attention_mask
+        output["completion_mask"] = seq_mask
+        if has_tti:
+            output["token_type_ids"] = token_type_ids
+        if has_mm_tti:
+            output["mm_token_type_ids"] = mm_token_type_ids
+
+        if self.calculate_kl:
+            # Cycle completions by +1 within the batch to create mismatched KL pairs — same strategy as
+            # _get_kl_completion_ids in the text-only path, but done here to keep the VLM dataset fully raw.
+            kl_completions = completions[-1:] + completions[:-1]
+            processed_kl = self.processor(
+                text=kl_completions,
+                padding=True,
+                padding_side="right",
+                return_tensors=self.return_tensors,
+                add_special_tokens=False,
+            )
+            kl_ids = processed_kl["input_ids"]
+            kl_mask = processed_kl["attention_mask"]
+
+            kl_input_ids = torch.cat((prompt_ids, kl_ids), dim=1)
+            kl_attention_mask = torch.cat((prompt_mask, kl_mask), dim=1)
+            kl_seq_mask = torch.cat((torch.zeros_like(prompt_mask), kl_mask), dim=1)
+
+            # Build KL token-type tensors using the original (pre-flush) prompt tensors
+            if has_tti:
+                kl_tti = processed_kl.get("token_type_ids", torch.zeros_like(kl_ids))
+                kl_token_type_ids = torch.cat((prompt_tti, kl_tti), dim=1)
+            if has_mm_tti:
+                kl_mm_token_type_ids = torch.cat((prompt_mm_tti, torch.zeros_like(kl_ids)), dim=1)
+
+            if has_tti and has_mm_tti:
+                kl_attention_mask, kl_input_ids, kl_seq_mask, kl_token_type_ids, kl_mm_token_type_ids = flush_left(
+                    kl_attention_mask, kl_input_ids, kl_seq_mask, kl_token_type_ids, kl_mm_token_type_ids
+                )
+            elif has_tti:
+                kl_attention_mask, kl_input_ids, kl_seq_mask, kl_token_type_ids = flush_left(
+                    kl_attention_mask, kl_input_ids, kl_seq_mask, kl_token_type_ids
+                )
+            elif has_mm_tti:
+                kl_attention_mask, kl_input_ids, kl_seq_mask, kl_mm_token_type_ids = flush_left(
+                    kl_attention_mask, kl_input_ids, kl_seq_mask, kl_mm_token_type_ids
+                )
+            else:
+                kl_attention_mask, kl_input_ids, kl_seq_mask = flush_left(kl_attention_mask, kl_input_ids, kl_seq_mask)
+
+            if self.max_length is not None:
+                kl_input_ids = kl_input_ids[:, : self.max_length]
+                kl_attention_mask = kl_attention_mask[:, : self.max_length]
+                kl_seq_mask = kl_seq_mask[:, : self.max_length]
+                if has_tti:
+                    kl_token_type_ids = kl_token_type_ids[:, : self.max_length]
+                if has_mm_tti:
+                    kl_mm_token_type_ids = kl_mm_token_type_ids[:, : self.max_length]
+
+            output["KL_completion_input_ids"] = kl_input_ids
+            output["KL_completion_attention_mask"] = kl_attention_mask
+            output["KL_completion_mask"] = kl_seq_mask
+            if has_tti:
+                output["KL_completion_token_type_ids"] = kl_token_type_ids
+            if has_mm_tti:
+                output["KL_completion_mm_token_type_ids"] = kl_mm_token_type_ids
+
+        output["label"] = [ex["label"] for ex in examples]
+        return output
 
 
 class KTOTrainer(_BaseTrainer):
