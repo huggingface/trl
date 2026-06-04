@@ -1106,25 +1106,27 @@ class DPOTrainer(_BaseTrainer):
 
         mode = "train" if self.model.training else "eval"
 
-        input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
-        completion_mask = inputs["completion_mask"]
+        # Use model.model (backbone including vision encoder) rather than get_decoder() so that VLMs process
+        # pixel_values before the text decoder
+        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
+        model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
+        model_kwargs["use_cache"] = False
 
-        decoder = model.get_decoder()
-        outputs = decoder(input_ids, attention_mask=attention_mask, use_cache=False)
+        outputs = model.model(**model_kwargs)
         hidden_states = outputs.last_hidden_state[:, :-1].contiguous()
         lm_head = model.get_output_embeddings()
         weight = lm_head.weight
         bias = lm_head.bias
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            ref_decoder = self.ref_model.get_decoder()
-            ref_outputs = ref_decoder(input_ids, attention_mask=attention_mask, use_cache=False)
+            ref_outputs = self.ref_model.model(**model_kwargs)
             ref_lm_head = self.ref_model.get_output_embeddings()
             ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
             ref_weight = ref_lm_head.weight
             ref_bias = ref_lm_head.bias
 
+        input_ids = model_kwargs["input_ids"]
+        completion_mask = inputs["completion_mask"]
         shift_completion_mask = completion_mask[:, 1:].contiguous()
         labels = input_ids[:, 1:].clone()
         labels[shift_completion_mask == 0] = -100
