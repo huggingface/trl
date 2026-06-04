@@ -574,6 +574,8 @@ class SDPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        if not 0.0 <= self.distillation_weight <= 1.0:
+            raise ValueError(f"`distillation_weight` must be in [0, 1], got {self.distillation_weight}.")
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
             self.steps_per_generation = self.gradient_accumulation_steps
