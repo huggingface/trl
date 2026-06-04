@@ -489,6 +489,14 @@ class TestIsChatTemplatePrefixPreserving:
         ),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM",
+            id="nemotron_h",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="NemotronH tokenizer requires transformers>=5.3.0",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
         pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl"),

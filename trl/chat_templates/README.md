@@ -146,6 +146,13 @@ Patched Llama 3 template. Diff vs `llama3.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
+### `nemotron_h_training.jinja`
+
+Patched NemotronH template. Diff vs `nemotron_h.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
+`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
 ### `phi3_training.jinja`
 
 Patched Phi-3 template. Diff vs `phi3.jinja`:

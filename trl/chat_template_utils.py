@@ -568,6 +568,8 @@ gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").
 
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
+nemotron_h_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_h_training.jinja").read_text(encoding="utf-8")
+
 phi3_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_training.jinja").read_text(encoding="utf-8")
 
 phi3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5_training.jinja").read_text(encoding="utf-8")
@@ -695,6 +697,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == llama3_chat_template:
         return llama3_training_chat_template
+
+    if processing_class.chat_template == nemotron_h_chat_template:
+        return nemotron_h_training_chat_template
 
     if processing_class.chat_template == phi3_chat_template:
         return phi3_training_chat_template
