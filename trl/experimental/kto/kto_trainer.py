@@ -572,7 +572,7 @@ class KTOTrainer(_BaseTrainer):
         self.undesirable_weight = args.undesirable_weight
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
-        self.calculate_KL = False if self.loss_type in ["apo_zero_unpaired"] else True
+        self.calculate_KL = calculate_kl
         if self.calculate_KL and args.train_sampling_strategy != "sequential":
             raise ValueError(
                 f"Loss type `'{args.loss_type}'` estimates the KL divergence term and requires "
