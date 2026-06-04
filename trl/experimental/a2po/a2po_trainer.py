@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import math
 import textwrap
 from collections import defaultdict
@@ -116,6 +117,10 @@ class A2POTrainer(_BaseTrainer):
             model = AutoModelForCausalLM.from_pretrained(model, **(args.model_init_kwargs or {}))
         model_id = model.config._name_or_path
 
+        # Some models (e.g. SmolVLM/Idefics3) don't support the `logits_to_keep` argument and error out if we pass it.
+        # Inspect the forward method so Stage 2 can pass the argument only when it is supported.
+        self.model_kwarg_keys = inspect.signature(model.forward).parameters.keys()
+
         # Reference model: a frozen copy of the initial policy. Stage 1 samples from it and Stage 2 regularizes to it.
         self.ref_model = create_reference_model(model)
 
@@ -175,18 +180,24 @@ class A2POTrainer(_BaseTrainer):
 
         self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
-    def _calculate_rewards(self, prompts, completions):
+    def _calculate_rewards(self, prompts, completions, **reward_kwargs):
         device = self.accelerator.device
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
         for i, reward_func in enumerate(self.reward_funcs):
-            output = reward_func(prompts=prompts, completions=completions)
+            output = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
             rewards_per_func[:, i] = torch.tensor(output, dtype=torch.float32, device=device)
         # A*-PO assumes the (weighted) total reward is binary in {0, 1}.
         return (rewards_per_func * self.reward_weights.to(device)).sum(dim=1)
 
     def _get_sequence_logps(self, model, input_ids, attention_mask, logits_to_keep):
-        logits = model(input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1).logits
+        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
+        # Only pass `logits_to_keep` when the model supports it (some models and VLMs don't).
+        if "logits_to_keep" in self.model_kwarg_keys:
+            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
+            model_inputs["logits_to_keep"] = logits_to_keep + 1
+        logits = model(**model_inputs).logits
         logits = logits[:, :-1, :]  # the last logit predicts beyond the sequence
+        # Only keep the last logits_to_keep. For models that support logits_to_keep, this is a no-op.
         logits = logits[:, -logits_to_keep:, :]
         completion_ids = input_ids[:, -logits_to_keep:]
         per_token_logps = selective_log_softmax(logits, completion_ids)
@@ -198,52 +209,73 @@ class A2POTrainer(_BaseTrainer):
         beta1 = self.args.beta1
         n = self.args.num_value_samples
         optimal_values = {}
+        all_incorrect = set()
 
-        dataloader = DataLoader(
-            self.train_dataset, batch_size=self.args.per_device_train_batch_size, collate_fn=list
-        )
-        dataloader = self.accelerator.prepare(dataloader)
-
-        for batch in dataloader:
-            prompts = [example["prompt"] for example in batch]
-            prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in batch]
-
-            # Sample N completions per prompt from the reference policy
-            inputs = self.processing_class(
-                prompts_text,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=self.args.max_prompt_length,
-                add_special_tokens=False,
-            ).to(self.accelerator.device)
-            with unwrap_model_for_generation(self.ref_model, self.accelerator) as ref_model:
-                completion_ids = ref_model.generate(**inputs, generation_config=self.value_generation_config)
-
-            prompt_length = inputs["input_ids"].size(1)
-            completions_text = self.processing_class.batch_decode(
-                completion_ids[:, prompt_length:], skip_special_tokens=True
+        # Stage 2 looks up V* for every prompt it scores, including eval prompts, so estimate over both datasets.
+        datasets = [self.train_dataset] if self.eval_dataset is None else [self.train_dataset, self.eval_dataset]
+        for dataset in datasets:
+            dataloader = self.accelerator.prepare(
+                DataLoader(dataset, batch_size=self.args.per_device_train_batch_size, collate_fn=list)
             )
+            for batch in dataloader:
+                prompts = [example["prompt"] for example in batch]
+                prompts_text = [
+                    maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in batch
+                ]
 
-            # Each prompt is repeated N times by `num_return_sequences`
-            repeated_prompts = [p for p in prompts for _ in range(n)]
-            rewards = self._calculate_rewards(repeated_prompts, completions_text).view(len(prompts), n)
+                # Sample N completions per prompt from the reference policy
+                inputs = self.processing_class(
+                    prompts_text,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=self.args.max_prompt_length,
+                    add_special_tokens=False,
+                ).to(self.accelerator.device)
+                with unwrap_model_for_generation(self.ref_model, self.accelerator) as ref_model:
+                    completion_ids = ref_model.generate(**inputs, generation_config=self.value_generation_config)
 
-            # V*(x) = beta1 * log(mean_i exp(r_i / beta1)), computed stably
-            v_star = beta1 * (torch.logsumexp(rewards / beta1, dim=1) - math.log(n))
+                prompt_length = inputs["input_ids"].size(1)
+                completions_text = self.processing_class.batch_decode(
+                    completion_ids[:, prompt_length:], skip_special_tokens=True
+                )
 
-            for j, prompt_text in enumerate(prompts_text):
-                if self.args.filter_all_incorrect and rewards[j].sum() == 0:
-                    continue
-                optimal_values[prompt_text] = v_star[j].item()
+                # Each prompt is repeated N times by `num_return_sequences`. Forward any extra dataset columns (e.g.
+                # "solution") to the reward functions, repeated to align with the N samples per prompt.
+                keys = [key for key in batch[0] if key not in ["prompt", "completion"]]
+                reward_kwargs = {key: [example[key] for example in batch for _ in range(n)] for key in keys}
+                repeated_prompts = [p for p in prompts for _ in range(n)]
+                rewards = self._calculate_rewards(
+                    repeated_prompts, completions_text, **reward_kwargs
+                ).view(len(prompts), n)
 
-        # Each rank estimates V* for its shard of prompts; share them so any rank can train any prompt.
-        gathered = gather_object([optimal_values])
-        self._optimal_values = {k: v for d in gathered for k, v in d.items()}
+                # V*(x) = beta1 * log(mean_i exp(r_i / beta1)), computed stably
+                v_star = beta1 * (torch.logsumexp(rewards / beta1, dim=1) - math.log(n))
+
+                for j, prompt_text in enumerate(prompts_text):
+                    optimal_values[prompt_text] = v_star[j].item()
+                    if rewards[j].sum() == 0:
+                        all_incorrect.add(prompt_text)
+
+        # Each rank estimates V* for its shard of prompts; share them so any rank can score any prompt.
+        # `gather_object` concatenates the per-rank lists, so pass flat lists and rebuild on every rank.
+        self._optimal_values = dict(gather_object(list(optimal_values.items())))
+        all_incorrect = set(gather_object(list(all_incorrect)))
+
+        # Drop training prompts whose reference samples all scored zero (no learning signal). Eval prompts are kept
+        # so evaluation can still look up their V*.
+        if self.args.filter_all_incorrect:
+            self.train_dataset = self.train_dataset.filter(
+                lambda example: maybe_apply_chat_template(example, self.processing_class)["prompt"]
+                not in all_incorrect
+            )
         logger.info(f"Stage 1 complete: estimated V* for {len(self._optimal_values)} prompts.")
 
     # Stage 2: on-policy regression
     def _prepare_inputs(self, inputs):
+        # Estimate V* on first use, e.g. when `evaluate()` is called without a preceding `train()`.
+        if self._optimal_values is None:
+            self._estimate_optimal_values()
         mode = "train" if self.model.training else "eval"
         device = self.accelerator.device
         prompts = [example["prompt"] for example in inputs]
@@ -267,8 +299,10 @@ class A2POTrainer(_BaseTrainer):
             prompt_completion_ids[:, prompt_length:], skip_special_tokens=True
         )
 
-        # Scalar (binary) reward and cached optimal value
-        rewards = self._calculate_rewards(prompts, completions_text)
+        # Scalar (binary) reward and cached optimal value. Forward extra dataset columns to the reward functions.
+        keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
+        reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
+        rewards = self._calculate_rewards(prompts, completions_text, **reward_kwargs)
         v_star = torch.tensor([self._optimal_values[p] for p in prompts_text], dtype=torch.float32, device=device)
 
         attention_mask = (prompt_completion_ids != self.processing_class.pad_token_id).long()
