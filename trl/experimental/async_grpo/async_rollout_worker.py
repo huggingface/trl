@@ -64,6 +64,11 @@ async def _retry_on_http_error(coro_factory: Callable[[], Awaitable], *, label: 
             await asyncio.sleep(sleep)
 
 
+def _make_client_session(max_inflight_tasks: int) -> aiohttp.ClientSession:
+    connector = aiohttp.TCPConnector(limit=max(100, max_inflight_tasks))
+    return aiohttp.ClientSession(connector=connector)
+
+
 @dataclass(slots=True)
 class RolloutGroup:
     prompt: Messages
@@ -288,7 +293,7 @@ class _AsyncRolloutLoop:
             self._loop.close()
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
-        async with aiohttp.ClientSession() as session:
+        async with _make_client_session(self.max_inflight_tasks) as session:
             self.session = session
             logger.info(
                 f"vllm worker started: num_generations={self.num_generations}, "
