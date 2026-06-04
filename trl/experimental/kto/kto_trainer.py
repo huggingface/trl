@@ -1043,13 +1043,20 @@ class KTOTrainer(_BaseTrainer):
     def _compute_logps(self, model, batch):
         KL_logps = self._compute_kl_logps(model, batch)
 
-        model_kwargs = {
-            "input_ids": batch["completion_input_ids"],
-            "attention_mask": batch["completion_attention_mask"],
+        _non_model_keys = {
+            "completion_mask",
+            "KL_completion_input_ids",
+            "KL_completion_attention_mask",
+            "KL_completion_mask",
+            "KL_completion_token_type_ids",
+            "KL_completion_mm_token_type_ids",
+            "label",
+            "ref_logps",
+            "ref_KL_logps",
         }
-        for key in ["pixel_values", "image_grid_thw", "token_type_ids", "mm_token_type_ids", "image_position_ids"]:
-            if key in batch:
-                model_kwargs[key] = batch[key]
+        model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
+        model_kwargs["input_ids"] = model_kwargs.pop("completion_input_ids")
+        model_kwargs["attention_mask"] = model_kwargs.pop("completion_attention_mask")
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
@@ -1163,15 +1170,22 @@ class KTOTrainer(_BaseTrainer):
         """Compute KL log probabilities for a given batch."""
         KL_logps = None
         if self.calculate_KL:
-            KL_model_kwargs = {
-                "input_ids": batch["KL_completion_input_ids"],
-                "attention_mask": batch["KL_completion_attention_mask"],
+            _non_model_keys = {
+                "completion_input_ids",
+                "completion_attention_mask",
+                "completion_mask",
+                "KL_completion_mask",
+                "KL_completion_token_type_ids",
+                "KL_completion_mm_token_type_ids",
+                "label",
+                "ref_logps",
+                "ref_KL_logps",
             }
-            # VLM keys: pixel_values and image_grid_thw are shared with the main completion (same prompt+image).
-            # token_type_ids and mm_token_type_ids are KL-specific because the sequence length differs.
-            for key in ["pixel_values", "image_grid_thw", "image_position_ids"]:
-                if key in batch:
-                    KL_model_kwargs[key] = batch[key]
+            KL_model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
+            KL_model_kwargs["input_ids"] = KL_model_kwargs.pop("KL_completion_input_ids")
+            KL_model_kwargs["attention_mask"] = KL_model_kwargs.pop("KL_completion_attention_mask")
+            # KL sequences have different widths from the main completion after flush_left; override token-type
+            # tensors with the KL-specific ones the collator built for exactly this purpose.
             if "KL_completion_token_type_ids" in batch:
                 KL_model_kwargs["token_type_ids"] = batch["KL_completion_token_type_ids"]
             if "KL_completion_mm_token_type_ids" in batch:
