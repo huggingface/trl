@@ -36,7 +36,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import ModelOutput, is_liger_kernel_available, is_peft_available
 
 from ...models import prepare_deepspeed
-from ...models.utils import unwrap_model_for_generation
+from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import disable_dropout_in_model
 from ..utils import DataCollatorForChatML, empty_cache
@@ -153,6 +153,7 @@ class GKDTrainer(SFTTrainer):
                 weight_soft_loss=1.0,
             )
             self.use_liger_gkd_loss = True
+            self._forward_redirection = _ForwardRedirection()
 
         super().__init__(
             model,
