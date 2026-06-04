@@ -1090,13 +1090,6 @@ class KTOTrainer(_BaseTrainer):
         policy_rejected_logits = outputs.logits.index_select(0, rejected_idx)
 
         if self.precompute_ref_logps:
-            # Convert Python lists to tensor indices for efficient CUDA operations
-            device = batch["ref_logps"].device
-            labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
-            chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
-            rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
-
-            # Use index_select for efficient CUDA operations
             ref_chosen_logps = batch["ref_logps"].index_select(0, chosen_idx)
             ref_rejected_logps = batch["ref_logps"].index_select(0, rejected_idx)
             if self.calculate_KL:
@@ -1106,15 +1099,25 @@ class KTOTrainer(_BaseTrainer):
         else:
             with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
                 if is_peft_model(self.model) and self.ref_model is None:
-                    model = self.accelerator.unwrap_model(self.model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_chosen_logps, ref_rejected_logps, _, _, ref_KL_logps, _ = self._compute_logps(
-                            self.model, batch
+                    ref_model_unwrapped = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(ref_model_unwrapped, adapter_name="ref" if "ref" in ref_model_unwrapped.peft_config else None):
+                        ref_KL_logps = self._compute_kl_logps(self.model, batch)
+                        ref_outputs = self.model(
+                            batch["completion_input_ids"],
+                            attention_mask=batch["completion_attention_mask"],
                         )
                 else:
-                    ref_chosen_logps, ref_rejected_logps, _, _, ref_KL_logps, _ = self._compute_logps(
-                        self.ref_model, batch
+                    ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
+                    ref_outputs = self.ref_model(
+                        batch["completion_input_ids"],
+                        attention_mask=batch["completion_attention_mask"],
                     )
+            ref_shift_logits = ref_outputs.logits[:, :-1, :].contiguous()
+            ref_per_token_logps = selective_log_softmax(ref_shift_logits, batch["completion_input_ids"][:, 1:].contiguous())
+            ref_per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
+            ref_completion_logps = ref_per_token_logps.sum(-1)
+            ref_chosen_logps = ref_completion_logps.index_select(0, chosen_idx)
+            ref_rejected_logps = ref_completion_logps.index_select(0, rejected_idx)
 
         losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
             policy_chosen_logps,
