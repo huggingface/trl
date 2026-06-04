@@ -805,46 +805,6 @@ class KTOTrainer(_BaseTrainer):
 
         return completion_logps, KL_logps
 
-    def _compute_logps(self, model, batch):
-        KL_logps = self._compute_kl_logps(model, batch)
-
-        model_kwargs = {}
-        if self.aux_loss_enabled:
-            model_kwargs["output_router_logits"] = True
-
-        outputs = model(
-            batch["completion_input_ids"],
-            attention_mask=batch["completion_attention_mask"],
-            **model_kwargs,
-        )
-        completion_logits = outputs.logits
-
-        shift_logits = completion_logits[:, :-1, :].contiguous()
-        per_token_logps = selective_log_softmax(shift_logits, batch["completion_input_ids"][:, 1:].contiguous())
-        per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
-        completion_logps = per_token_logps.sum(-1)
-
-        if completion_logps.shape[0] != len(batch["label"]):
-            raise ValueError(
-                "There is a mismatch between the number of examples in this batch and the number of "
-                "examples for which an output sequence was predicted."
-            )
-
-        # Use torch.nonzero for efficient tensor index selection
-        device = completion_logits.device
-        labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
-        chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
-        rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
-
-        # Use index_select for efficient CUDA operations
-        chosen_logps = completion_logps.index_select(0, chosen_idx)
-        rejected_logps = completion_logps.index_select(0, rejected_idx)
-
-        chosen_logits = completion_logits.index_select(0, chosen_idx)
-        rejected_logits = completion_logits.index_select(0, rejected_idx)
-
-        return chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, outputs
-
     def kto_loss(
         self,
         policy_chosen_logps: torch.FloatTensor,
