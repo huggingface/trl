@@ -139,8 +139,9 @@ def load(path: Path) -> Trajectory:
     )
 
 
-def compare_scalars(a: Trajectory, b: Trajectory, tol: float, residual_tol: float) -> list[str]:
-    """Compare scalar series (loss, grad_norm). Returns a list of error messages, empty if equal."""
+def compare_scalars(a: Trajectory, b: Trajectory, tol: dict[str, float], residual_tol: dict[str, float]) -> list[str]:
+    """Compare scalar series (loss, grad_norm). `tol` and `residual_tol` are per-field dicts keyed by `'loss'` and
+    `'grad_norm'`."""
     errors: list[str] = []
     if len(a.steps) != len(b.steps):
         return [f"length mismatch: {len(a.steps)} vs {len(b.steps)}"]
@@ -150,16 +151,16 @@ def compare_scalars(a: Trajectory, b: Trajectory, tol: float, residual_tol: floa
         sb = [getattr(s, field) for s in b.steps]
         diffs = [x - y for x, y in zip(sa, sb, strict=False)]
         max_abs = max(abs(d) for d in diffs)
-        if max_abs > tol:
+        if max_abs > tol[field]:
             i = max(range(len(diffs)), key=lambda k: abs(diffs[k]))
             step = a.steps[i].step
             errors.append(
-                f"{field}: max |Δ|={max_abs:.3e} at step {step} (a={sa[i]:.6e}, b={sb[i]:.6e}, tol={tol:.1e})"
+                f"{field}: max |Δ|={max_abs:.3e} at step {step} (a={sa[i]:.6e}, b={sb[i]:.6e}, tol={tol[field]:.1e})"
             )
 
         mean = sum(diffs) / len(diffs)
-        if abs(mean) > residual_tol:
-            errors.append(f"{field}: systematic drift, mean Δ={mean:.3e} (tol={residual_tol:.1e})")
+        if abs(mean) > residual_tol[field]:
+            errors.append(f"{field}: systematic drift, mean Δ={mean:.3e} (tol={residual_tol[field]:.1e})")
 
     return errors
 
@@ -191,8 +192,8 @@ def _build(
 # Every other member is asserted to match that snapshot.
 EQUIVALENCE_CLASSES: dict[str, dict] = {
     "sft": {
-        "tol": 5e-2,
-        "residual_tol": 1e-2,
+        "tol": {"loss": 1e-3, "grad_norm": 1e-1},
+        "residual_tol": {"loss": 1e-5, "grad_norm": 1e-3},
         "members": [
             _build("sft_default", "sft", SFT_DATASET),
             _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
@@ -201,8 +202,8 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
         ],
     },
     "dpo": {
-        "tol": 5e-2,
-        "residual_tol": 1e-2,
+        "tol": {"loss": 1e-4, "grad_norm": 1e-2},
+        "residual_tol": {"loss": 1e-5, "grad_norm": 1e-3},
         "members": [
             _build("dpo_default", "dpo", DPO_DATASET),
             _build("dpo_pdb1_gas8", "dpo", DPO_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),

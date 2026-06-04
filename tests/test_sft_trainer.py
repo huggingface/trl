@@ -371,6 +371,13 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.7.0"),
+                    reason="NemotronH gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
+                ),
+            ),
         ],
     )
     def test_train(self, model_id):
@@ -1112,7 +1119,7 @@ class TestSFTTrainer(TrlTestCase):
     @require_kernels
     @pytest.mark.skipif(
         not is_ampere_or_newer() and torch_device != "xpu",
-        reason="Flash attention 2 requires Ampere or newer GPU, or XPU",
+        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -2299,6 +2306,13 @@ _CHUNKED_CE_MODEL_IDS = [
     "trl-internal-testing/tiny-LlamaForCausalLM-3",
     "trl-internal-testing/tiny-MistralForCausalLM-0.1",
     "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    pytest.param(
+        "trl-internal-testing/tiny-NemotronHForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.3.0"),
+            reason="NemotronH was introduced in transformers>=5.3.0",
+        ),
+    ),
     "trl-internal-testing/tiny-Phi3ForCausalLM",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",

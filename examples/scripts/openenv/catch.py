@@ -35,7 +35,7 @@ uv pip install git+https://huggingface.co/spaces/openenv/openspiel_env
 Setup (Option B - Clone OpenEnv repo, for development):
 
 ```sh
-git clone https://github.com/meta-pytorch/OpenEnv.git
+git clone https://github.com/huggingface/OpenEnv.git
 cd OpenEnv/envs/openspiel_env
 uv pip install -e .
 ```
