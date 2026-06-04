@@ -547,12 +547,19 @@ class KTOTrainer(_BaseTrainer):
             )
 
         # Data collator
-        if data_collator is None:
+        calculate_kl = args.loss_type not in ["apo_zero_unpaired"]
+        if data_collator is None and not self._is_vision_dataset:
             data_collator = DataCollatorForUnpairedPreference(
                 pad_token_id=self._tokenizer.pad_token_id,
                 max_length=args.max_length,
             )
-
+            self.use_dpo_data_collator = True
+        elif data_collator is None and self._is_vision_dataset:
+            data_collator = DataCollatorForVisionUnpairedPreference(
+                processor=processing_class,
+                max_length=args.max_length,
+                calculate_kl=calculate_kl,
+            )
             self.use_dpo_data_collator = True
         else:
             self.use_dpo_data_collator = False
