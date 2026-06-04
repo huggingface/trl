@@ -78,7 +78,7 @@ def main() -> None:
         chat_template_kwargs={"enable_thinking": False},
         # --- delta weight sync (Transport B) ---
         delta_sync_enabled=True,
-        delta_sync_repo_id="aminediroHF/async-grpo-delta-demo",
+        delta_sync_repo_id="<your-hf-username>/async-grpo-delta-demo",  # set to a bucket you own
         delta_sync_anchor_interval=20,  # full anchor every N syncs; sparse deltas in between
         delta_sync_encoding="gap_delta",  # raw | gap_delta | nvcomp_cascaded
     )
