@@ -277,8 +277,10 @@ class KTOTrainer(_BaseTrainer):
             processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
         if isinstance(processing_class, ProcessorMixin):
             self._tokenizer = processing_class.tokenizer
+            self._is_vlm = True
         elif isinstance(processing_class, PreTrainedTokenizerBase):
             self._tokenizer = processing_class
+            self._is_vlm = False
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
         if self._tokenizer.pad_token is None:
