@@ -74,7 +74,7 @@ When using the teacher server:
 - `use_vllm=True` and `vllm_mode="server"` are required
 - `teacher_model_kind` must be `"live"` (the server holds the current student weights)
 - `distillation_weight` must be `1.0` (pure distillation; a convex blend with the policy loss needs the full-vocabulary logits)
-- `distillation_mode` must be `"sampled_token"` (reverse KL on the realized token) — the server returns sparse log-probs, and its top-k support cannot match the local `topk_logits` objective
+- `distillation_mode` must be `"sampled_token"` (reverse KL on the realized token) or `"topk_logits"`. The server returns the teacher's own top-k log-probs, so `topk_logits` distills over the teacher's top-k support (it cannot use the student's, unlike the local objective); with a `"live"` teacher the two supports nearly coincide. `full_logits` is unavailable.
 - `use_liger_kernel` is not supported
 
 ## Callbacks

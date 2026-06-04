@@ -285,8 +285,8 @@ class SDFTConfig(_BaseConfig):
         metadata={
             "help": "Compute teacher logprobs from the running vLLM generation server instead of a local teacher "
             "forward. Only supported for `teacher_model_kind='live'` with `use_vllm=True` and `vllm_mode='server'`, "
-            "and `distillation_mode='sampled_token'` (reverse KL on the realized token; the server returns per-token "
-            "logprobs, not the full vocabulary)."
+            "and `distillation_mode` in {'sampled_token', 'topk_logits'} (the server returns the teacher's top-k "
+            "logprobs, not the full vocabulary; `topk_logits` distills over the teacher's own top-k support)."
         },
     )
     vllm_mode: str = field(
