@@ -1167,6 +1167,15 @@ class KTOTrainer(_BaseTrainer):
                 "input_ids": batch["KL_completion_input_ids"],
                 "attention_mask": batch["KL_completion_attention_mask"],
             }
+            # VLM keys: pixel_values and image_grid_thw are shared with the main completion (same prompt+image).
+            # token_type_ids and mm_token_type_ids are KL-specific because the sequence length differs.
+            for key in ["pixel_values", "image_grid_thw", "image_position_ids"]:
+                if key in batch:
+                    KL_model_kwargs[key] = batch[key]
+            if "KL_completion_token_type_ids" in batch:
+                KL_model_kwargs["token_type_ids"] = batch["KL_completion_token_type_ids"]
+            if "KL_completion_mm_token_type_ids" in batch:
+                KL_model_kwargs["mm_token_type_ids"] = batch["KL_completion_mm_token_type_ids"]
 
             with torch.no_grad():
                 KL_logits = model(**KL_model_kwargs).logits
