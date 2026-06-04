@@ -577,7 +577,9 @@ gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").
 
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
-nemotron_3_nano_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano_training.jinja").read_text(encoding="utf-8")
+nemotron_3_nano_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano_training.jinja").read_text(
+    encoding="utf-8"
+)
 
 nemotron_3_super_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_super_training.jinja").read_text(
     encoding="utf-8"
