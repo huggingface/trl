@@ -914,14 +914,24 @@ class KTOTrainer(_BaseTrainer):
         # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
         # and "attention_mask").
         if self._signature_columns is None:
-            self._signature_columns = [
-                "prompt_ids",
-                "completion_ids",
-                "KL_completion_ids",
-                "label",
-                "ref_logps",
-                "ref_KL_logps",
-            ]
+            if self._is_vision_dataset:
+                self._signature_columns = [
+                    "prompt",
+                    "completion",
+                    "image",
+                    "images",
+                    "label",
+                    "chat_template_kwargs",
+                ]
+            else:
+                self._signature_columns = [
+                    "prompt_ids",
+                    "completion_ids",
+                    "KL_completion_ids",
+                    "label",
+                    "ref_logps",
+                    "ref_KL_logps",
+                ]
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
