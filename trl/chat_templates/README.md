@@ -49,6 +49,10 @@ Original Llama 3 chat template.
 
 Original Llama 3.1 / 3.2 chat templates. Both render tool calls as a single bare JSON object using the key `parameters` (instead of `arguments`) and support at most one tool call per assistant turn.
 
+### `nemotron_h.jinja`
+
+Original NemotronH chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-Nano-*` checkpoints). Renders tool calls in the same Hermes-style `<function=...>` / `<parameter=...>` format as Qwen3.5, so it reuses `qwen3_5_schema` for response parsing.
+
 ### `phi3.jinja`
 
 Original Phi-3 chat template.
@@ -141,6 +145,13 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Llama 3 template. Diff vs `llama3.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `nemotron_h_training.jinja`
+
+Patched NemotronH template. Diff vs `nemotron_h.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
+`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `phi3_training.jinja`
 

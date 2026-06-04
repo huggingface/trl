@@ -19,7 +19,7 @@ from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.kto import KTOConfig, KTOTrainer
-from trl.experimental.kto.kto_trainer import _get_kl_dataset
+from trl.experimental.kto.kto_trainer import _get_kl_completion_ids
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft
 
@@ -138,15 +138,16 @@ class TestKTOTrainer(TrlTestCase):
         batch = trainer.data_collator([example])
         # completion_input_ids ends with EOS
         assert batch["completion_input_ids"][0, -1].item() == self.tokenizer.eos_token_id
-        # completion_labels: prompt prefix masked with -100, answer+EOS unmasked and matching input_ids
-        completion_input_ids = batch["completion_input_ids"][0].tolist()
-        completion_labels = batch["completion_labels"][0].tolist()
-        first_unmasked = next(i for i, lbl in enumerate(completion_labels) if lbl != -100)
-        assert first_unmasked > 0  # at least the prompt is masked
-        assert completion_labels[first_unmasked:] == completion_input_ids[first_unmasked:]
+        # completion_mask: prompt tokens are 0, completion tokens are 1; at least the prompt is masked
+        assert "completion_mask" in batch
+        completion_mask = batch["completion_mask"][0].tolist()
+        assert 0 in completion_mask and 1 in completion_mask
+        first_completion = next(i for i, m in enumerate(completion_mask) if m == 1)
+        assert first_completion > 0  # at least the prompt is masked
+        assert all(m == 0 for m in completion_mask[:first_completion])
 
         # Test corruption of (prompt, completion) pairs for KL dataset.
-        # _get_kl_dataset shifts completion_ids by one within each batch; prompt_ids are unchanged.
+        # _get_kl_completion_ids shifts completion_ids by one within each batch; prompt_ids are unchanged.
         synthetic = Dataset.from_dict(
             {
                 "prompt_ids": [[1, 2], [3, 4], [5, 6]],
@@ -155,7 +156,7 @@ class TestKTOTrainer(TrlTestCase):
             }
         )
         for batch_size in [2, 3]:
-            rotated = synthetic.map(_get_kl_dataset, batched=True, batch_size=batch_size)
+            rotated = synthetic.map(_get_kl_completion_ids, batched=True, batch_size=batch_size)
 
             # Verify that completion_ids have been rotated (differ from original). When the dataset length
             # modulo batch_size equals 1, the last batch is unaltered: exclude it from the check.
