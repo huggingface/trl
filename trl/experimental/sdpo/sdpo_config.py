@@ -586,6 +586,11 @@ class SDPOConfig(_BaseConfig):
         super().__post_init__()
         if not 0.0 <= self.distillation_weight <= 1.0:
             raise ValueError(f"`distillation_weight` must be in [0, 1], got {self.distillation_weight}.")
+        if self.distillation_mode == "sampled_token" and self.distillation_alpha != 1.0:
+            raise ValueError(
+                "`distillation_mode='sampled_token'` only supports reverse KL, so it requires "
+                f"`distillation_alpha=1.0`, got {self.distillation_alpha}."
+            )
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
             self.steps_per_generation = self.gradient_accumulation_steps

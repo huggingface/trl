@@ -102,6 +102,10 @@ class TestSDPOTrainer(TrlTestCase):
         assert config.vllm_mode == "colocate"
         assert config.vllm_model_impl == "vllm"
 
+    def test_config_sampled_token_requires_reverse_kl_alpha(self):
+        with pytest.raises(ValueError, match="distillation_alpha=1.0"):
+            SDPOConfig(output_dir=self.tmp_dir, distillation_mode="sampled_token", distillation_alpha=0.5)
+
     def test_train(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
