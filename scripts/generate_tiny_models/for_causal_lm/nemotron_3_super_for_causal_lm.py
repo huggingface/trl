@@ -27,7 +27,7 @@ from .._common import (
 
 check_transformers_version("5.3.0")
 
-MODEL_ID = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+MODEL_ID = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
@@ -50,17 +50,10 @@ config = NemotronHConfig(
     moe_shared_expert_intermediate_size=32,
     use_mamba_kernels=False,  # CPU-friendly for testing
 )
+# Unlike the Nano checkpoint, the Super checkpoint keeps the Mamba mixer weights in bfloat16, so no fp32 restore here.
 model = NemotronHForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
-
-# Restore float32 for the Mamba mixer weights that the upstream model keeps in fp32.
-for i, block_type in enumerate(config.layers_block_type):
-    if block_type == "mamba":
-        mixer = model.model.layers[i].mixer
-        mixer.A_log.data = mixer.A_log.data.float()
-        mixer.D.data = mixer.D.data.float()
-
 smoke_test(model, tokenizer)
 check_dtype_pattern(MODEL_ID, model)
 print_config_diff(MODEL_ID, model)
-push_to_hub(model, tokenizer, generation_config, "tiny")
+push_to_hub(model, tokenizer, generation_config, "tiny", "super")
