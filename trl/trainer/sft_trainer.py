@@ -1840,6 +1840,14 @@ class SFTTrainer(_BaseTrainer):
                     "parallelism (the `shift_labels` path). Use `loss_type='nll'` instead."
                 )
             loss = weighted_nll_loss(outputs, labels, sample_weights, num_items_in_batch=num_items_in_batch)
+            # Re-add the MoE router aux loss. The model's forward adds
+            # `router_aux_loss_coef * aux_loss` to `outputs.loss`, but we
+            # discard that when we replace loss with weighted_nll_loss. Mirror
+            # the same scaling so MoE models train correctly.
+            if self.aux_loss_enabled and getattr(outputs, "aux_loss", None) is not None:
+                config = getattr(self.model.config, "text_config", self.model.config)
+                coef = getattr(config, "router_aux_loss_coef", 0.0)
+                loss = loss + coef * outputs.aux_loss.to(loss.device)
 
         # Compute entropy
         if self.args.loss_type == "chunked_nll":
