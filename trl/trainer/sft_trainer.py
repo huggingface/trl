@@ -468,6 +468,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         assistant_masks = (
             [example["assistant_masks"] for example in examples] if "assistant_masks" in examples[0] else None
         )
+        weights = [example["weight"] for example in examples] if "weight" in examples[0] else None
 
         # Truncate per sequence if necessary
         if self.max_length is not None and not self.padding_free:
@@ -544,6 +545,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
             output["labels"][assistant_masks == 0] = -100
+        if weights is not None:
+            output["weight"] = torch.tensor(weights, dtype=torch.float)
         return output
 
     @staticmethod
@@ -853,22 +856,24 @@ def weighted_nll_loss(outputs, labels, weights, num_items_in_batch=None):
         reduction="none",
     ).view(B, -1)
 
-    # Mean over valid tokens within each sample → shape (B,)
     valid_mask = shift_labels != -100
-    tokens_per_sample = valid_mask.sum(dim=-1).clamp(min=1)
-    per_sample_loss = (per_token_loss * valid_mask).sum(dim=-1) / tokens_per_sample
-
-    # Scale by per-sample weights and reduce
-    weights = weights.to(dtype=per_sample_loss.dtype, device=per_sample_loss.device)
-    weighted_loss = (per_sample_loss * weights).sum()
+    weights = weights.to(dtype=per_token_loss.dtype, device=per_token_loss.device)
 
     if num_items_in_batch is None:
+        # Normalise by sum of |weights|: numerically identical to nll when all weights == 1.
+        # Mean over valid tokens per sample, then weight-average across samples.
+        tokens_per_sample = valid_mask.sum(dim=-1).clamp(min=1)
+        per_sample_loss = (per_token_loss * valid_mask).sum(dim=-1) / tokens_per_sample
+        weighted_loss = (per_sample_loss * weights).sum()
         denom = weights.abs().sum().clamp(min=1e-8)
         loss = weighted_loss / denom
     else:
+        # Gradient-accumulation path: broadcast sample weight to every token, then
+        # divide by the global token count — same unit as standard nll.
         if isinstance(num_items_in_batch, torch.Tensor):
-            num_items_in_batch = num_items_in_batch.to(weighted_loss.device)
-        loss = weighted_loss / num_items_in_batch
+            num_items_in_batch = num_items_in_batch.to(per_token_loss.device)
+        weighted_token_loss = per_token_loss * weights.unsqueeze(1) * valid_mask
+        loss = weighted_token_loss.sum() / num_items_in_batch
     return loss
 
 
@@ -1338,6 +1343,12 @@ class SFTTrainer(_BaseTrainer):
                         "`SFTTrainer`. When using `loss_type='weighted_nll'`, the loss function is internally "
                         "set to the weighted NLL loss, so passing a `compute_loss_func` is not allowed."
                     )
+                if args.packing:
+                    raise ValueError(
+                        "`loss_type='weighted_nll'` is not compatible with `packing=True`. Packing merges "
+                        "multiple examples into one sequence, so per-example weights have no well-defined "
+                        "meaning. Disable packing or use `loss_type='nll'`."
+                    )
                 # Actual loss computation is handled in compute_loss; no patch needed here.
             elif args.loss_type == "chunked_nll":
                 # Same math as `"nll"` but the `lm_head` matmul is skipped on ignored tokens and the CE is computed in
@@ -1366,8 +1377,8 @@ class SFTTrainer(_BaseTrainer):
                     f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', "
                     "'weighted_nll', and 'chunked_nll'."
                 )
-        elif args.loss_type == "chunked_nll":
-            raise ValueError("`loss_type='chunked_nll'` is not compatible with `use_liger_kernel=True`.")
+        elif args.loss_type in ("chunked_nll", "weighted_nll"):
+            raise ValueError(f"`loss_type='{args.loss_type}'` is not compatible with `use_liger_kernel=True`.")
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
@@ -1702,6 +1713,11 @@ class SFTTrainer(_BaseTrainer):
                     "loss_type='weighted_nll' requires a 'weight' column in the dataset but none was found in "
                     "the batch. Add a float 'weight' field to each example (positive to reinforce, negative to "
                     "suppress, zero to ignore)."
+                )
+            if labels is None:
+                raise ValueError(
+                    "`loss_type='weighted_nll'` is not supported with context parallelism or sequence "
+                    "parallelism (the `shift_labels` path). Use `loss_type='nll'` instead."
                 )
             loss = weighted_nll_loss(outputs, labels, sample_weights, num_items_in_batch=num_items_in_batch)
 
