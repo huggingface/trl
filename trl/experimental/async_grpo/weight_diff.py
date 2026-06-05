@@ -86,7 +86,8 @@ class BF16ChangeDetector:
                 name = self._param_id_to_name.get(id(p))
                 if name is None or name not in self._pre_step_bf16:
                     continue
-                self._validated_masks[name] = p.detach().to(torch.bfloat16).cpu() != self._pre_step_bf16[name]
+                # pop so each pre-step snapshot is freed right after it's diffed (peak ~1× snapshot, not 2×).
+                self._validated_masks[name] = p.detach().to(torch.bfloat16).cpu() != self._pre_step_bf16.pop(name)
 
     def close(self):
         self._pre_hook_handle.remove()
@@ -196,12 +197,14 @@ class LowByteChangeDetector:
                 name = self._param_id_to_name.get(id(p))
                 if name is None or name not in self._pre_step_low:
                     continue
-                detected = _low_byte(p, self._snap_device) != self._pre_step_low[name]
+                # pop (not index) so each param's pre-step snapshot is freed as soon as it's diffed:
+                # the shrinking snapshot set + growing mask set stay ~1 B/elem total instead of 2.
+                detected = _low_byte(p, self._snap_device) != self._pre_step_low.pop(name)
                 self._validated_masks[name] = detected
                 if self.validate_recall:
                     # True bf16 diff, computed here while p still holds the post-step value.
                     post_bf16 = p.detach().to(torch.bfloat16).to(self._snap_device or p.device)
-                    true_mask = post_bf16 != self._pre_step_bf16[name]
+                    true_mask = post_bf16 != self._pre_step_bf16.pop(name)
                     total_tp += (detected & true_mask).sum().item()
                     total_true += true_mask.sum().item()
                     total_elements += true_mask.numel()
