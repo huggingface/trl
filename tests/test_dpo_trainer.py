@@ -1211,7 +1211,6 @@ class TestDPOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
-            max_steps=3,
             use_liger_kernel=True,
             report_to="none",
         )
