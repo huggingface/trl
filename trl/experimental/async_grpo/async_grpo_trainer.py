@@ -459,15 +459,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
             else:
                 # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
                 # DTensor.shape returns the global shape without triggering any all-gather.
-                # Use base model params for PEFT (vLLM has the full model, not adapters).
-                param_source = model.base_model.model if is_peft_model(model) else model
                 weight_names, weight_dtype_names, weight_shapes = [], [], []
-                for name, param in param_source.named_parameters():
+                for name, param in model.named_parameters():
                     name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
                     if is_peft_model(model):
-                        name = name.replace(".base_layer", "")
+                        # When using PEFT, we need to recover the original parameter name
+                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
                         if model.prefix in name:
                             continue
+                        # When module to save, remove its prefix and discard the original module
+                        if "original_module" in name:
+                            continue
+                        name = name.replace("modules_to_save.default.", "")
                     weight_names.append(name)
                     weight_dtype_names.append(str(param.dtype).split(".")[-1])
                     weight_shapes.append(list(param.shape))
@@ -696,15 +700,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def _streaming_iter(self):
         # Iterate parameters one at a time. For FSDP2 (DTensor), full_tensor() all-gathers just this parameter across
         # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
-        # Use base model params when PEFT is active (after merge, so weights include LoRA contributions).
         device = self.accelerator.device
-        source = self.model.base_model.model if is_peft_model(self.model) else self.model
-        for name, param in source.named_parameters():
+        for name, param in self.model.named_parameters():
             name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
             if is_peft_model(self.model):
-                name = name.replace(".base_layer", "")
+                # When using PEFT, we need to recover the original parameter name
+                name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
                 if self.model.prefix in name:
                     continue
+                # When module to save, remove its prefix and discard the original module
+                if "original_module" in name:
+                    continue
+                name = name.replace("modules_to_save.default.", "")
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)
@@ -725,18 +733,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if is_peft_model(self.model):
             self.model.merge_adapter()
 
-        logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        if self.accelerator.is_main_process and self.weight_transfer:
-            self.weight_transfer.send_weights(self._streaming_iter())
-        else:
-            # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
-            for _ in self._streaming_iter():
-                pass
-        t_transfer = time.time()
-
-        # Unmerge LoRA to resume training
-        if is_peft_model(self.model):
-            self.model.unmerge_adapter()
+        try:
+            logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
+            if self.accelerator.is_main_process and self.weight_transfer:
+                self.weight_transfer.send_weights(self._streaming_iter())
+            else:
+                # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
+                for _ in self._streaming_iter():
+                    pass
+            t_transfer = time.time()
+        finally:
+            # Unmerge LoRA to resume training
+            if is_peft_model(self.model):
+                self.model.unmerge_adapter()
 
         self.accelerator.wait_for_everyone()
 

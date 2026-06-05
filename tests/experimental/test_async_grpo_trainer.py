@@ -198,7 +198,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    def test_peft_weight_metadata_excludes_adapters(self):
+    def test_peft_weight_metadata_excludes_adapters_and_modules_to_save(self):
         from peft import LoraConfig
 
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -242,17 +242,56 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         from unittest.mock import patch
 
-        with patch.object(async_grpo_trainer_module, "AsyncRolloutWorker", _CapturingRolloutWorker):
+        class _CapturingWeightTransferClient:
+            def __init__(self, **kwargs):
+                captured_kwargs.update(kwargs)
+
+        with (
+            patch.object(async_grpo_trainer_module, "AsyncRolloutWorker", _CapturingRolloutWorker),
+            patch.object(async_grpo_trainer_module, "WeightTransferClient", _CapturingWeightTransferClient),
+        ):
             AsyncGRPOTrainer(
                 model=model_id,
                 reward_funcs=dummy_reward_func,
                 args=training_args,
                 train_dataset=dataset,
-                peft_config=LoraConfig(),
+                peft_config=LoraConfig(target_modules="all-linear", modules_to_save=["embed_tokens", "lm_head"]),
                 processing_class=AutoTokenizer.from_pretrained(model_id),
             )
 
-        # Weight names should not contain lora-specific names
-        weight_names = captured_kwargs["weight_names"]
+        # Weight names should not contain PEFT-specific names
+        weight_names = captured_kwargs["weight_update_info"]["names"]
         for name in weight_names:
             assert "lora" not in name, f"Adapter weight {name} leaked into weight metadata"
+            assert "original_module" not in name, f"Original module weight {name} leaked into weight metadata"
+            assert "modules_to_save" not in name, f"Module-to-save prefix {name} leaked into weight metadata"
+        assert "model.embed_tokens.weight" in weight_names
+        assert "lm_head.weight" in weight_names
+
+    @require_peft
+    def test_peft_streaming_iter_excludes_adapters_and_modules_to_save(self):
+        from peft import LoraConfig
+
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(target_modules="all-linear", modules_to_save=["embed_tokens", "lm_head"]),
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=8),
+        )
+
+        weight_names = [name for name, _ in trainer._streaming_iter()]
+        for name in weight_names:
+            assert "lora" not in name, f"Adapter weight {name} leaked into streaming weights"
+            assert "original_module" not in name, f"Original module weight {name} leaked into streaming weights"
+            assert "modules_to_save" not in name, f"Module-to-save prefix {name} leaked into streaming weights"
+        assert "model.embed_tokens.weight" in weight_names
+        assert "lm_head.weight" in weight_names
