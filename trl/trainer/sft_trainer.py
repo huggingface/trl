@@ -290,16 +290,16 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         decoder_kwargs = {}
         if output_router_logits:
             decoder_kwargs["output_router_logits"] = True
-        # `self.base_model` gives the inner module (skipping `lm_head`) — text decoder for LMs, multimodal wrapper
+        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper
         # for VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
         # returns just the text stack and feeds image-placeholder IDs through it.
         # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `self.base_model is self` (re-runs `lm_head`).
         # Fall back to `self.model` there.
         if is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            decoder = self.model
+            backbone = self.model
         else:
-            decoder = self.base_model
-        outputs: BaseModelOutputWithPast = decoder(
+            backbone = self.base_model
+        outputs: BaseModelOutputWithPast = backbone(
             input_ids=input_ids, attention_mask=attention_mask, use_cache=False, **decoder_kwargs, **kwargs
         )
         hidden_states = outputs.last_hidden_state
