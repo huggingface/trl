@@ -95,6 +95,13 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     Data collator for unpaired preference data. Assembles completions from raw token IDs and pads sequences to the
     maximum length of the batch.
 
+    Each example is expected to contain `"prompt_ids"`, `"completion_ids"` (and optionally `"KL_completion_ids"`) keys.
+    The collator returns a dictionary with the following keys for each prefix (`"completion"` and, if present,
+    `"KL_completion"`):
+    - `"{prefix}_input_ids"`: full prompt + completion token IDs, padded to the batch maximum length.
+    - `"{prefix}_attention_mask"`: attention mask, padded with 0s.
+    - `"{prefix}_mask"`: binary mask where 1 marks completion tokens and 0 marks prompt or padding tokens.
+
     Args:
         pad_token_id (`int`):
             Token ID to use for padding `input_ids` sequences.
@@ -115,17 +122,17 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                 continue
 
             full_ids_list = []
-            labels_list = []
+            completion_mask_list = []
             for ex in examples:
                 prompt_ids = ex["prompt_ids"]
                 answer_ids = ex[ids_key]
                 full_ids = prompt_ids + answer_ids
-                labels = [-100] * len(prompt_ids) + answer_ids
+                completion_mask = [0] * len(prompt_ids) + [1] * len(answer_ids)
                 if self.max_length is not None:
                     full_ids = full_ids[: self.max_length]
-                    labels = labels[: self.max_length]
+                    completion_mask = completion_mask[: self.max_length]
                 full_ids_list.append(full_ids)
-                labels_list.append(labels)
+                completion_mask_list.append(completion_mask)
 
             batch[f"{prefix}_input_ids"] = pad(
                 [torch.tensor(ids, dtype=torch.int64) for ids in full_ids_list],
@@ -137,9 +144,9 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                 padding_value=0,
                 padding_side="right",
             )
-            batch[f"{prefix}_labels"] = pad(
-                [torch.tensor(lbl, dtype=torch.int64) for lbl in labels_list],
-                padding_value=-100,
+            batch[f"{prefix}_mask"] = pad(
+                [torch.tensor(m, dtype=torch.int64) for m in completion_mask_list],
+                padding_value=0,
                 padding_side="right",
             )
 
@@ -781,63 +788,22 @@ class KTOTrainer(_BaseTrainer):
                         attention_mask=inputs["KL_completion_attention_mask"],
                     ).logits
 
-        completion_logps = self.get_batch_logps(
-            completion_logits,
-            inputs["completion_labels"],
-            average_log_prob=False,
-        )
+        shift_logits = completion_logits[:, :-1, :].contiguous()
+        per_token_logps = selective_log_softmax(shift_logits, inputs["completion_input_ids"][:, 1:].contiguous())
+        per_token_logps[inputs["completion_mask"][:, 1:] == 0] = 0.0
+        completion_logps = per_token_logps.sum(-1)
 
         if self.calculate_KL:
-            KL_logps = self.get_batch_logps(
-                KL_logits,
-                inputs["KL_completion_labels"],
-                average_log_prob=False,
+            shift_KL_logits = KL_logits[:, :-1, :].contiguous()
+            KL_per_token_logps = selective_log_softmax(
+                shift_KL_logits, inputs["KL_completion_input_ids"][:, 1:].contiguous()
             )
+            KL_per_token_logps[inputs["KL_completion_mask"][:, 1:] == 0] = 0.0
+            KL_logps = KL_per_token_logps.sum(-1)
         else:
             KL_logps = None
 
         return completion_logps, KL_logps
-
-    @staticmethod
-    def get_batch_logps(
-        logits: torch.FloatTensor,
-        labels: torch.LongTensor,
-        average_log_prob: bool = False,
-    ) -> torch.FloatTensor:
-        """Compute the log probabilities of the given labels under the given logits.
-
-        Args:
-            logits:
-                Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
-            labels:
-                Labels for which to compute the log probabilities. Label tokens with a value of `-100` are ignored.
-                Shape: (batch_size, sequence_length)
-            average_log_prob:
-                If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the
-                log probabilities of the (non-masked) tokens.
-
-        Returns:
-            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the
-            given logits.
-        """
-        if logits.shape[:-1] != labels.shape:
-            raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
-
-        # For causal LM, shift labels and logits by one position
-        labels = labels[:, 1:].clone()
-        logits = logits[:, :-1, :]
-
-        loss_mask = labels != -100
-
-        # dummy token; we'll ignore the losses on these tokens later
-        labels[labels == -100] = 0
-
-        per_token_logps = selective_log_softmax(logits, labels)
-
-        if average_log_prob:
-            return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
-        else:
-            return (per_token_logps * loss_mask).sum(-1)
 
     def _compute_logps(self, model, batch):
         KL_logps = self._compute_kl_logps(model, batch)
@@ -853,11 +819,10 @@ class KTOTrainer(_BaseTrainer):
         )
         completion_logits = outputs.logits
 
-        completion_logps = self.get_batch_logps(
-            completion_logits,
-            batch["completion_labels"],
-            average_log_prob=False,
-        )
+        shift_logits = completion_logits[:, :-1, :].contiguous()
+        per_token_logps = selective_log_softmax(shift_logits, batch["completion_input_ids"][:, 1:].contiguous())
+        per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
+        completion_logps = per_token_logps.sum(-1)
 
         if completion_logps.shape[0] != len(batch["label"]):
             raise ValueError(
@@ -969,11 +934,12 @@ class KTOTrainer(_BaseTrainer):
             with torch.no_grad():
                 KL_logits = model(**KL_model_kwargs).logits
 
-            KL_logps = self.get_batch_logps(
-                KL_logits,
-                batch["KL_completion_labels"],
-                average_log_prob=False,
+            shift_KL_logits = KL_logits[:, :-1, :].contiguous()
+            KL_per_token_logps = selective_log_softmax(
+                shift_KL_logits, batch["KL_completion_input_ids"][:, 1:].contiguous()
             )
+            KL_per_token_logps[batch["KL_completion_mask"][:, 1:] == 0] = 0.0
+            KL_logps = KL_per_token_logps.sum(-1)
         return KL_logps
 
     def _compute_loss_liger(self, model, inputs, return_outputs):
@@ -1022,6 +988,10 @@ class KTOTrainer(_BaseTrainer):
         lm_head = model.get_output_embeddings()
         ref_lm_head = self.ref_model.get_output_embeddings()
 
+        shift_completion_mask = batch["completion_mask"][:, 1:].contiguous()
+        target = batch["completion_input_ids"][:, 1:].clone()
+        target[shift_completion_mask == 0] = -100
+
         (
             loss,
             (
@@ -1035,7 +1005,7 @@ class KTOTrainer(_BaseTrainer):
         ) = self.kto_loss_fn(
             _input=outputs.last_hidden_state[:, :-1],
             lin_weight=lm_head.weight,
-            target=batch["completion_labels"][:, 1:],
+            target=target,
             bias=lm_head.bias if hasattr(lm_head, "bias") else None,
             preference_labels=torch.tensor(batch["label"], dtype=torch.bool).to(self.accelerator.device),
             ref_input=ref_outputs.last_hidden_state[:, :-1],

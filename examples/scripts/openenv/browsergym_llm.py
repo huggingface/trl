@@ -38,7 +38,7 @@ uv pip install git+https://huggingface.co/spaces/openenv/browsergym_env
 Setup (Option B - Clone OpenEnv repo, for development):
 
 ```sh
-git clone https://github.com/meta-pytorch/OpenEnv.git
+git clone https://github.com/huggingface/OpenEnv.git
 cd OpenEnv/envs/browsergym_env
 uv pip install -e .
 ```
