@@ -36,7 +36,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import ModelOutput, is_liger_kernel_available, is_peft_available
 
 from ...models import prepare_deepspeed
-from ...models.utils import unwrap_model_for_generation
+from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import disable_dropout_in_model
 from ..utils import DataCollatorForChatML, empty_cache
@@ -153,6 +153,7 @@ class GKDTrainer(SFTTrainer):
                 weight_soft_loss=1.0,
             )
             self.use_liger_gkd_loss = True
+            self._forward_redirection = _ForwardRedirection()
 
         super().__init__(
             model,
@@ -298,19 +299,12 @@ class GKDTrainer(SFTTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if self.use_liger_gkd_loss:
-            # Forward only through the base models (avoid lm_head to save memory)
+            # Forward only through the base models (avoid lm_head to save memory).
+            # Route through the DDP/FSDP wrapper via _forward_redirection so that
+            # DDP.forward() is called and prepare_for_backward() fires correctly.
             unwrapped_student = self.accelerator.unwrap_model(model)
-            if hasattr(unwrapped_student, "get_decoder") and unwrapped_student.get_decoder() is not None:
-                base_student = unwrapped_student.get_decoder()
-            else:
-                base_student = getattr(
-                    unwrapped_student, getattr(unwrapped_student, "base_model_prefix", "model"), unwrapped_student
-                )
-
-            student_outputs = base_student(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                use_cache=False,
+            student_outputs = self._forward_redirection(
+                model, unwrapped_student, self._liger_student_forward, unwrapped_student, inputs
             )
 
             self.teacher_model.eval()
@@ -401,6 +395,18 @@ class GKDTrainer(SFTTrainer):
 
         # Return loss
         return (loss, student_outputs) if return_outputs else loss
+
+    def _liger_student_forward(self, student, inputs):
+        """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
+        if hasattr(student, "get_decoder") and student.get_decoder() is not None:
+            decoder = student.get_decoder()
+        else:
+            decoder = getattr(student, getattr(student, "base_model_prefix", "model"), student)
+        return decoder(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            use_cache=False,
+        )
 
     @staticmethod
     def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None):

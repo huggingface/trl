@@ -46,7 +46,7 @@ from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
-from ...models.utils import unwrap_model_for_generation
+from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import (
     RepeatSampler,
@@ -773,6 +773,7 @@ class GOLDTrainer(SFTTrainer):
                 weight_soft_loss=1.0,
             )
             self.use_liger_gkd_loss = True
+            self._forward_redirection = _ForwardRedirection()
 
         if args.teacher_model_init_kwargs is None:
             teacher_model_init_kwargs = {}
@@ -1689,19 +1690,12 @@ class GOLDTrainer(SFTTrainer):
                 )
         else:
             if self.use_liger_gkd_loss:
-                # Forward only through the base models (avoid lm_head to save memory)
+                # Forward only through the base models (avoid lm_head to save memory).
+                # Route through the DDP/FSDP wrapper via _forward_redirection so that
+                # DDP.forward() is called and prepare_for_backward() fires correctly.
                 unwrapped_student = self.accelerator.unwrap_model(model)
-                if hasattr(unwrapped_student, "get_decoder") and unwrapped_student.get_decoder() is not None:
-                    base_student = unwrapped_student.get_decoder()
-                else:
-                    base_student = getattr(
-                        unwrapped_student, getattr(unwrapped_student, "base_model_prefix", "model"), unwrapped_student
-                    )
-
-                student_outputs = base_student(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
-                    use_cache=False,
+                student_outputs = self._forward_redirection(
+                    model, unwrapped_student, self._liger_student_forward, unwrapped_student, inputs
                 )
 
                 self.teacher_model.eval()
@@ -1868,6 +1862,18 @@ class GOLDTrainer(SFTTrainer):
             )
 
         return new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts
+
+    def _liger_student_forward(self, student, inputs):
+        """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
+        if hasattr(student, "get_decoder") and student.get_decoder() is not None:
+            decoder = student.get_decoder()
+        else:
+            decoder = getattr(student, getattr(student, "base_model_prefix", "model"), student)
+        return decoder(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            use_cache=False,
+        )
 
     def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
         if not self.use_liger_gkd_loss:
