@@ -1106,20 +1106,28 @@ class DPOTrainer(_BaseTrainer):
 
         mode = "train" if self.model.training else "eval"
 
-        # Use model.model (backbone including vision encoder) rather than get_decoder() so that VLMs process
-        # pixel_values before the text decoder
         _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
         model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
 
-        outputs = model.model(**model_kwargs)
+        # `base_model` gives the inner module (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
+        # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
+        # returns just the text stack and feeds image-placeholder IDs through it.
+        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
+        # Fall back to `.model` there.
+        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+            backbone, ref_backbone = model.model, self.ref_model.model
+        else:
+            backbone, ref_backbone = model.base_model, self.ref_model.base_model
+
+        outputs = backbone(**model_kwargs)
         hidden_states = outputs.last_hidden_state[:, :-1].contiguous()
         lm_head = model.get_output_embeddings()
         weight = lm_head.weight
         bias = lm_head.bias
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            ref_outputs = self.ref_model.model(**model_kwargs)
+            ref_outputs = ref_backbone(**model_kwargs)
             ref_lm_head = self.ref_model.get_output_embeddings()
             ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
             ref_weight = ref_lm_head.weight
