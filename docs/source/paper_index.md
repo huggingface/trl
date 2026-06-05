@@ -322,8 +322,8 @@ training_args = GRPOConfig(
     use_vllm=True,
     vllm_importance_sampling_correction=True, # default True
     vllm_importance_sampling_mode="sequence_truncate", # or "token_truncate"
-    vllm_importance_sampling_max=2.0, # hyper-parameter C_max
-    vllm_importance_sampling_min=None, # hyper-parameter C_min
+    vllm_importance_sampling_clip_max=2.0, # hyper-parameter C_max
+    vllm_importance_sampling_clip_min=None, # hyper-parameter C_min
 )
 ```
 
@@ -369,8 +369,8 @@ training_args = GRPOConfig(
     use_vllm=True,
     vllm_importance_sampling_correction=True, # default True
     vllm_importance_sampling_mode="sequence_mask", # or "token_mask"
-    vllm_importance_sampling_max=2.0, # hyper-parameter C_max
-    vllm_importance_sampling_min=0.0, # hyper-parameter C_min
+    vllm_importance_sampling_clip_max=2.0, # hyper-parameter C_max
+    vllm_importance_sampling_clip_min=0.0, # hyper-parameter C_min
 )
 ```
 

@@ -239,8 +239,8 @@ class GFPOTrainer(_GRPOTrainer):
                 importance_sampling_ratio = torch.exp(old_per_token_logps - sampling_per_token_logps)
                 importance_sampling_ratio = torch.clamp(
                     importance_sampling_ratio,
-                    min=self.vllm_importance_sampling_min,
-                    max=self.vllm_importance_sampling_max,
+                    min=self.vllm_importance_sampling_clip_min,
+                    max=self.vllm_importance_sampling_clip_max,
                 )
 
             # Compute the per-token log probabilities for the reference model

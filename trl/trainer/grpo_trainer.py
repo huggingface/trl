@@ -565,8 +565,8 @@ class GRPOTrainer(_BaseTrainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
         self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
-        self.vllm_importance_sampling_max = args.vllm_importance_sampling_max
-        self.vllm_importance_sampling_min = args.vllm_importance_sampling_min
+        self.vllm_importance_sampling_clip_max = args.vllm_importance_sampling_clip_max
+        self.vllm_importance_sampling_clip_min = args.vllm_importance_sampling_clip_min
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
@@ -2081,18 +2081,18 @@ class GRPOTrainer(_BaseTrainer):
                 if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
                     vllm_importance_sampling_ratio = torch.clamp(
                         vllm_importance_sampling_ratio,
-                        min=self.vllm_importance_sampling_min,
-                        max=self.vllm_importance_sampling_max,
+                        min=self.vllm_importance_sampling_clip_min,
+                        max=self.vllm_importance_sampling_clip_max,
                     )
                 elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
                     min_val = (
-                        self.vllm_importance_sampling_min
-                        if self.vllm_importance_sampling_min is not None
+                        self.vllm_importance_sampling_clip_min
+                        if self.vllm_importance_sampling_clip_min is not None
                         else -math.inf
                     )
                     max_val = (
-                        self.vllm_importance_sampling_max
-                        if self.vllm_importance_sampling_max is not None
+                        self.vllm_importance_sampling_clip_max
+                        if self.vllm_importance_sampling_clip_max is not None
                         else math.inf
                     )
 
