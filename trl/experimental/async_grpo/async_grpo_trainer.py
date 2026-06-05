@@ -717,7 +717,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     batch_size = self.args.per_device_train_batch_size * self.accelerator.num_processes
                     samples_seen = global_step * self.args.gradient_accumulation_steps * batch_size
                     prompts_sent = samples_seen // self.args.num_generations
-                    self.rollout_worker._loop_kwargs["dataset_start_index"] = prompts_sent % len(self.train_dataset)
+                    if isinstance(self.train_dataset, Dataset):
+                        self.rollout_worker._loop_kwargs["dataset_start_index"] = prompts_sent % len(self.train_dataset)
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
