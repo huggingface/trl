@@ -796,6 +796,66 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         return output
 
 
+def weighted_nll_loss(outputs, labels, weights, num_items_in_batch=None):
+    """
+    Per-sample weighted NLL loss for SFT.
+
+    Computes per-sample mean cross-entropy and scales each sample's contribution by
+    a scalar weight supplied by the dataset. Positive weights reinforce the response;
+    negative weights invert the gradient (gently pushing the model away from it);
+    zero weights mask the sample entirely.
+
+    When ``weights`` are all ``1.0`` the result is numerically identical to
+    ``loss_type="nll"`` (verified by the unit tests).
+
+    Args:
+        outputs:
+            Model outputs. ``outputs.logits`` must have shape ``(B, S, V)``.
+        labels (`torch.Tensor`):
+            Target token ids of shape ``(B, S)``. Positions equal to ``-100``
+            are excluded from the loss.
+        weights (`torch.Tensor`):
+            Per-sample scalar weights of shape ``(B,)``. Passed through the
+            dataset as a ``"weight"`` column.
+        num_items_in_batch (`int` or `torch.Tensor`, *optional*):
+            Global valid-token count supplied by the Trainer for
+            gradient-accumulation-correct normalisation. When ``None``,
+            normalises by ``weights.abs().sum()``.
+
+    Returns:
+        Scalar weighted loss.
+    """
+    shift_logits = outputs.logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+    B = shift_labels.shape[0]
+
+    # Per-token NLL, shape (B, S-1)
+    per_token_loss = nn.functional.cross_entropy(
+        shift_logits.view(-1, shift_logits.size(-1)),
+        shift_labels.view(-1),
+        ignore_index=-100,
+        reduction="none",
+    ).view(B, -1)
+
+    # Mean over valid tokens within each sample → shape (B,)
+    valid_mask = shift_labels != -100
+    tokens_per_sample = valid_mask.sum(dim=-1).clamp(min=1)
+    per_sample_loss = (per_token_loss * valid_mask).sum(dim=-1) / tokens_per_sample
+
+    # Scale by per-sample weights and reduce
+    weights = weights.to(dtype=per_sample_loss.dtype, device=per_sample_loss.device)
+    weighted_loss = (per_sample_loss * weights).sum()
+
+    if num_items_in_batch is None:
+        denom = weights.abs().sum().clamp(min=1e-8)
+        loss = weighted_loss / denom
+    else:
+        if isinstance(num_items_in_batch, torch.Tensor):
+            num_items_in_batch = num_items_in_batch.to(weighted_loss.device)
+        loss = weighted_loss / num_items_in_batch
+    return loss
+
+
 def dft_loss(outputs, labels, num_items_in_batch=None):
     """
     DFT loss function, as presented in [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward
@@ -1291,6 +1351,14 @@ class SFTTrainer(_BaseTrainer):
                         "passing a `compute_loss_func` is not allowed."
                     )
                 compute_loss_func = dft_loss
+            elif args.loss_type == "weighted_nll":
+                if compute_loss_func is not None:
+                    raise ValueError(
+                        "You passed a `compute_loss_func` together with `loss_type='weighted_nll'` to the "
+                        "`SFTTrainer`. When using `loss_type='weighted_nll'`, the loss function is internally "
+                        "set to the weighted NLL loss, so passing a `compute_loss_func` is not allowed."
+                    )
+                # Actual loss computation is handled in compute_loss; no patch needed here.
             elif args.loss_type == "chunked_nll":
                 # Same math as `"nll"` but the `lm_head` matmul is skipped on ignored tokens and the CE is computed in
                 # chunks of tokens. Implemented by patching the model's forward before `super().__init__` so accelerate
@@ -1315,8 +1383,8 @@ class SFTTrainer(_BaseTrainer):
                 _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
             else:
                 raise ValueError(
-                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
-                    "'chunked_nll'."
+                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', "
+                    "'weighted_nll', and 'chunked_nll'."
                 )
         elif args.loss_type == "chunked_nll":
             raise ValueError("`loss_type='chunked_nll'` is not compatible with `use_liger_kernel=True`.")
@@ -1622,7 +1690,7 @@ class SFTTrainer(_BaseTrainer):
             if self._is_vision_dataset:
                 self._signature_columns = ["messages", "prompt", "completion", "image", "images"]
             else:
-                self._signature_columns = ["input_ids", "labels", "seq_lengths"]
+                self._signature_columns = ["input_ids", "labels", "seq_lengths", "weight"]
 
     def _reject_skip_prepare_without_labels(self, datasets: dict[str, Dataset], data_collator) -> None:
         # This guard may look defensive, but it covers a behavior change introduced when label building moved from
@@ -1685,6 +1753,9 @@ class SFTTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         prediction_loss_only = inputs.pop("_prediction_loss_only", None)
 
+        # Pop per-sample weights before forwarding to the model; the model does not expect them.
+        sample_weights = inputs.pop("weight", None)
+
         # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
         # This can be removed when this issue is fixed.
         # When using CP or SP, labels are pre-shifted, we must use shift_labels instead.
@@ -1732,6 +1803,16 @@ class SFTTrainer(_BaseTrainer):
                     f"Please increase `max_length` or set it to `None` to disable truncation."
                 ) from e
             raise
+
+        # Replace loss with weighted NLL when requested.
+        if self.args.loss_type == "weighted_nll":
+            if sample_weights is None:
+                raise ValueError(
+                    "loss_type='weighted_nll' requires a 'weight' column in the dataset but none was found in "
+                    "the batch. Add a float 'weight' field to each example (positive to reinforce, negative to "
+                    "suppress, zero to ignore)."
+                )
+            loss = weighted_nll_loss(outputs, labels, sample_weights, num_items_in_batch=num_items_in_batch)
 
         # Compute entropy
         if self.args.loss_type == "chunked_nll":
