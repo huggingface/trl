@@ -278,6 +278,8 @@ Note that when using gradient accumulation, the loss is aggregated over the tota
 
 **📰 Blog**: https://fengyao.notion.site/off-policy-rl
 
+**📜 Paper**: https://huggingface.co/papers/1606.02647
+
 Online policy learning methods commonly use an optimized inference framework for rollout generation (e.g vLLM) that is separate from the training backend. This introduces a rollout-training mismatch, exemplified in the following PPO objective:
 
 $$
