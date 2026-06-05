@@ -676,7 +676,7 @@ Papers relating to the [`experimental.a2po.A2POTrainer`].
 
 **📜 Paper**: https://huggingface.co/papers/2505.20686
 
-A\*-PO (Optimal Advantage Regression) is a two-stage RL method for LLM reasoning that avoids both an online critic and multi-sample group rollouts. Stage 1 estimates the optimal value `V*(x) = β·log E_{y∼π_ref}[exp(r(x, y)/β)]` offline from reference-policy samples; Stage 2 performs on-policy updates with a single generation per prompt using a squared-error regression loss `(β·log(π(y|x)/π_ref(y|x)) − (r(x, y) − V*(x)))²`. This yields faster training and lower peak memory than PPO/GRPO/REBEL. The method assumes a binary verifiable reward and cannot exceed the reference policy's Pass@K. See [Experimental - A2PO](experimental#a2po). The official code can be found in [ZhaolinGao/A-PO](https://github.com/ZhaolinGao/A-PO).
+A\*-PO (Optimal Advantage Regression) is a two-stage RL method for LLM reasoning that avoids both an online critic and multi-sample group rollouts. Stage 1 estimates the optimal value `V*(x) = β·log E_{y∼π_ref}[exp(r(x, y)/β)]` offline from reference-policy samples; Stage 2 performs on-policy updates with a single generation per prompt using a squared-error regression loss `(β·log(π(y|x)/π_ref(y|x)) − (r(x, y) − V*(x)))²`. This yields faster training and lower peak memory than PPO/GRPO/REBEL. The method assumes a binary verifiable reward and cannot exceed the reference policy's Pass@K. See [A2PO](a2po_trainer). The official code can be found in [ZhaolinGao/A-PO](https://github.com/ZhaolinGao/A-PO).
 
 ```python
 from trl.experimental.a2po import A2POConfig, A2POTrainer

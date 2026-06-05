@@ -245,9 +245,8 @@ class A2POTrainer(_BaseTrainer):
                 keys = [key for key in batch[0] if key not in ["prompt", "completion"]]
                 reward_kwargs = {key: [example[key] for example in batch for _ in range(n)] for key in keys}
                 repeated_prompts = [p for p in prompts for _ in range(n)]
-                rewards = self._calculate_rewards(
-                    repeated_prompts, completions_text, **reward_kwargs
-                ).view(len(prompts), n)
+                rewards = self._calculate_rewards(repeated_prompts, completions_text, **reward_kwargs)
+                rewards = rewards.view(len(prompts), n)
 
                 # V*(x) = beta1 * log(mean_i exp(r_i / beta1)), computed stably
                 v_star = beta1 * (torch.logsumexp(rewards / beta1, dim=1) - math.log(n))
@@ -291,13 +290,10 @@ class A2POTrainer(_BaseTrainer):
             add_special_tokens=False,
         ).to(device)
         with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-            prompt_completion_ids = unwrapped_model.generate(
-                **prompt_inputs, generation_config=self.generation_config
-            )
+            prompt_completion_ids = unwrapped_model.generate(**prompt_inputs, generation_config=self.generation_config)
         prompt_length = prompt_inputs["input_ids"].size(1)
-        completions_text = self.processing_class.batch_decode(
-            prompt_completion_ids[:, prompt_length:], skip_special_tokens=True
-        )
+        completion_ids = prompt_completion_ids[:, prompt_length:]
+        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
 
         # Scalar (binary) reward and cached optimal value. Forward extra dataset columns to the reward functions.
         keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
@@ -305,8 +301,16 @@ class A2POTrainer(_BaseTrainer):
         rewards = self._calculate_rewards(prompts, completions_text, **reward_kwargs)
         v_star = torch.tensor([self._optimal_values[p] for p in prompts_text], dtype=torch.float32, device=device)
 
-        attention_mask = (prompt_completion_ids != self.processing_class.pad_token_id).long()
-        logits_to_keep = prompt_completion_ids.size(1) - prompt_length
+        # Attention mask: the tokenizer's prompt mask followed by the completion mask. The completion mask is 1 up to
+        # and including the first EOS and 0 afterwards, so the terminal EOS stays in the log-prob sum (a plain
+        # `!= pad_token_id` mask would drop it when `pad_token == eos_token`).
+        is_eos = completion_ids == self.processing_class.eos_token_id
+        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+        completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+        attention_mask = torch.cat([prompt_inputs["attention_mask"], completion_mask], dim=1)
+        logits_to_keep = completion_ids.size(1)
 
         with torch.no_grad():
             ref_logps = self._get_sequence_logps(self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep)

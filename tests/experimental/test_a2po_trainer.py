@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# pyrefly: ignore [missing-import]
-import pytest
 import torch
-# pyrefly: ignore [missing-import]
 from datasets import Dataset
 
 from trl.experimental.a2po import A2POConfig, A2POTrainer
@@ -23,36 +20,28 @@ from trl.experimental.a2po import A2POConfig, A2POTrainer
 from ..testing_utils import TrlTestCase
 
 
-MODEL_ID = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-
-
-def completion_parity_reward(prompts, completions, **kwargs):
+def completion_parity_reward(completions, **kwargs):
     """Completion-dependent binary reward, so samples within a prompt vary (nonzero advantages)."""
     return [float(len(completion) % 2 == 0) for completion in completions]
 
 
-@pytest.mark.low_priority
 class TestA2POTrainer(TrlTestCase):
-    def _make_config(self, **kwargs):
-        defaults = dict(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,
-            per_device_train_batch_size=2,
-            max_completion_length=8,  # keep generation short to reduce memory usage
-            num_value_samples=2,  # keep Stage 1 sampling light
-            report_to="none",
-        )
-        defaults.update(kwargs)
-        return A2POConfig(**defaults)
-
     def test_train(self):
         # Main two-stage smoke test: Stage 1 estimates V*, Stage 2 regresses on a single on-policy generation.
         dataset = Dataset.from_dict(
             {"prompt": ["The capital of France is", "Two plus two equals", "Water is made of", "The sky is"]}
         )
-        training_args = self._make_config(filter_all_incorrect=False)
+        training_args = A2POConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            num_value_samples=2,  # reduce Stage 1 sampling to reduce memory usage
+            filter_all_incorrect=False,  # keep all training prompts (the dummy reward may score a prompt all-zero)
+            report_to="none",
+        )
         trainer = A2POTrainer(
-            model=MODEL_ID,
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=completion_parity_reward,
             args=training_args,
             train_dataset=dataset,
@@ -77,12 +66,18 @@ class TestA2POTrainer(TrlTestCase):
             received_subjects.extend(subject)
             return [1.0] * len(prompts)
 
-        dataset = Dataset.from_dict(
-            {"prompt": ["q1", "q2", "q3", "q4"], "subject": ["math", "geo", "chem", "phys"]}
+        dataset = Dataset.from_dict({"prompt": ["q1", "q2", "q3", "q4"], "subject": ["math", "geo", "chem", "phys"]})
+        training_args = A2POConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            num_value_samples=2,  # reduce Stage 1 sampling to reduce memory usage
+            filter_all_incorrect=False,  # keep all training prompts (the dummy reward may score a prompt all-zero)
+            report_to="none",
         )
-        training_args = self._make_config(filter_all_incorrect=False)
         trainer = A2POTrainer(
-            model=MODEL_ID,
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=reward_using_extra_column,
             args=training_args,
             train_dataset=dataset,
@@ -98,12 +93,18 @@ class TestA2POTrainer(TrlTestCase):
         def reward_from_target(prompts, completions, target, **kwargs):
             return [float(t) for t in target]
 
-        dataset = Dataset.from_dict(
-            {"prompt": ["solvable a", "unsolvable", "solvable b"], "target": [1, 0, 1]}
+        dataset = Dataset.from_dict({"prompt": ["solvable a", "unsolvable", "solvable b"], "target": [1, 0, 1]})
+        training_args = A2POConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            num_value_samples=2,  # reduce Stage 1 sampling to reduce memory usage
+            filter_all_incorrect=True,
+            report_to="none",
         )
-        training_args = self._make_config(filter_all_incorrect=True)
         trainer = A2POTrainer(
-            model=MODEL_ID,
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=reward_from_target,
             args=training_args,
             train_dataset=dataset,
@@ -120,9 +121,17 @@ class TestA2POTrainer(TrlTestCase):
         # without a preceding train() must not raise.
         train_dataset = Dataset.from_dict({"prompt": ["alpha", "beta"]})
         eval_dataset = Dataset.from_dict({"prompt": ["gamma", "delta"]})
-        training_args = self._make_config(filter_all_incorrect=False)
+        training_args = A2POConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            num_value_samples=2,  # reduce Stage 1 sampling to reduce memory usage
+            filter_all_incorrect=False,  # keep all training prompts (the dummy reward may score a prompt all-zero)
+            report_to="none",
+        )
         trainer = A2POTrainer(
-            model=MODEL_ID,
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=completion_parity_reward,
             args=training_args,
             train_dataset=train_dataset,
