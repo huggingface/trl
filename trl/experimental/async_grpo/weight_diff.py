@@ -114,14 +114,16 @@ def _low_byte(p: torch.Tensor, device: torch.device | str | None = None) -> torc
 
 
 class LowByteChangeDetector:
-    """Detects changed bf16 weights from a 1-byte-per-element snapshot.
+    """Detects changed bf16 weights from a 1-byte-per-element snapshot kept in host (CPU) memory.
 
     Like [`BF16ChangeDetector`], hooks the optimizer (PyTorch >= 2.1) and diffs pre/post step — but snapshots only the
     **low byte** of each weight's bf16 pattern (1 B/elem) instead of the full bf16 value (2 B/elem). A flipped low byte
     implies the bf16 value changed, so the detected mask is a strict subset of the true change set: **no false
-    positives**, but rare false negatives (mantissa + exp-LSB unchanged while a high exponent/sign bit changed). Those
-    misses cause inference-side drift, bounded by periodic anchors — set ``validate_recall=True`` to measure the miss
-    rate.
+    positives**, but rare false negatives.
+
+    The snapshot is kept on CPU (0 GPU memory footprint) using pre-allocated pinned memory to maximize transfer
+    bandwidth and avoid runtime allocation overhead. GPU-side diffing is performed in bounded buckets to prevent VRAM
+    explosion while maintaining maximum PCIe saturation.
 
     ``_validated_masks[name]`` is a boolean tensor, True for each element detected as changed.
 
@@ -133,10 +135,10 @@ class LowByteChangeDetector:
         validate_recall (`bool`, *optional*, defaults to `False`):
             Also keep a full bf16 snapshot to score low-byte detection against the true diff. Doubles the snapshot
             cost; for diagnostics only.
-        snapshot_to_cpu (`bool`, *optional*, defaults to `False`):
-            Keep the low-byte snapshot in host memory instead of on the param's device. Masks are then produced on CPU.
-            Use when a full on-device snapshot would not fit (e.g. DeepSpeed-Z2 holds full params per rank). Default
-            keeps it on-GPU so the change mask and sparse extraction stay on the device.
+        snapshot_to_cpu (`bool`, *optional*, defaults to `True`):
+            Kept for backwards compatibility. Snapshots are always kept in host memory.
+        bucket_mb (`int`, *optional*, defaults to `128`):
+            Cap peak GPU memory staging to ~3x this size (e.g. ~384 MB for 128 MB) during transfers and diffing.
     """
 
     def __init__(
@@ -144,73 +146,103 @@ class LowByteChangeDetector:
         model: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
         validate_recall: bool = False,
-        snapshot_to_cpu: bool = False,
+        snapshot_to_cpu: bool = True,
+        bucket_mb: int = 128,
     ):
         self.validate_recall = validate_recall
-        self._snap_device = "cpu" if snapshot_to_cpu else None
+        self.bucket_bytes = bucket_mb * 1024 * 1024
         self._validated_masks: dict[str, torch.Tensor] = {}
-        self._pre_step_low: dict[str, torch.Tensor] = {}
-        self._pre_step_bf16: dict[str, torch.Tensor] = {}  # only populated when validate_recall
-        self._accuracy: dict[str, float] = {}
 
-        # Match model param names to optimizer param objects via data_ptr()
-        # (id() doesn't work because Accelerate wraps params as different objects)
         model_params = {p.data_ptr(): name.removeprefix("module.") for name, p in model.named_parameters()}
-        self._param_id_to_name: dict[int, str] = {}
+        self._params: list[tuple[str, torch.Tensor]] = []
         for group in optimizer.param_groups:
             for p in group["params"]:
                 name = model_params.get(p.data_ptr())
-                if name is not None:
-                    self._param_id_to_name[id(p)] = name
+                if name is not None and p.requires_grad:
+                    self._params.append((name, p))
 
-        logger.info(
-            "LowByteChangeDetector: matched %d/%d optimizer params (validate_recall=%s)",
-            len(self._param_id_to_name),
-            sum(1 for _ in model.named_parameters()),
-            validate_recall,
-        )
+        self._buckets: list[
+            list[tuple[str, torch.Tensor, int, int]]
+        ] = []  # List of buckets: [(name, p, offset_in_bucket, length)]
+        if self._params:
+            self._device = self._params[0][1].device
+
+            current_bucket = []
+            bucket_size = 0
+            for name, p in self._params:
+                current_bucket.append((name, p, bucket_size, p.numel()))
+                bucket_size += p.numel()
+                if bucket_size >= self.bucket_bytes:
+                    self._buckets.append(current_bucket)
+                    current_bucket = []
+                    bucket_size = 0
+            if current_bucket:
+                self._buckets.append(current_bucket)
+
+            # Pre-allocate pinned CPU memory matching the bucket structures
+            self._pinned_pre_low: list[torch.Tensor] = []
+            self._pinned_post_mask: list[torch.Tensor] = []
+            for bucket in self._buckets:
+                total_numel = sum(length for _, _, _, length in bucket)
+                self._pinned_pre_low.append(torch.empty(total_numel, dtype=torch.uint8, device="cpu", pin_memory=True))
+                self._pinned_post_mask.append(
+                    torch.empty(total_numel, dtype=torch.bool, device="cpu", pin_memory=True)
+                )
+
+        self._pre_step_bf16: dict[str, torch.Tensor] = {}
+        self._accuracy: dict[str, float] = {}
 
         self._pre_hook_handle = optimizer.register_step_pre_hook(self._pre_step_hook)
         self._post_hook_handle = optimizer.register_step_post_hook(self._post_step_hook)
 
     def _pre_step_hook(self, optimizer, args, kwargs) -> None:
-        self._pre_step_low.clear()
         self._pre_step_bf16.clear()
-        for group in optimizer.param_groups:
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-                name = self._param_id_to_name.get(id(p))
-                if name is None:
-                    continue
-                self._pre_step_low[name] = _low_byte(p, self._snap_device)
-                if self.validate_recall:
-                    self._pre_step_bf16[name] = p.detach().to(torch.bfloat16).to(self._snap_device or p.device).clone()
+        if not self._buckets:
+            return
+
+        #  Process and copy bucket-by-bucket asynchronously
+        for b_idx, bucket in enumerate(self._buckets):
+            gpu_buf = torch.cat([_low_byte(p).view(-1) for _, p, _, _ in bucket])
+            self._pinned_pre_low[b_idx].copy_(gpu_buf, non_blocking=True)
+
+        if self.validate_recall:
+            for name, p in self._params:
+                self._pre_step_bf16[name] = p.detach().to(torch.bfloat16).cpu().clone()
 
     def _post_step_hook(self, optimizer, args, kwargs) -> None:
         self._validated_masks.clear()
-        total_tp, total_true, total_elements = 0, 0, 0
-        for group in optimizer.param_groups:
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-                name = self._param_id_to_name.get(id(p))
-                if name is None or name not in self._pre_step_low:
-                    continue
-                # pop (not index) so each param's pre-step snapshot is freed as soon as it's diffed:
-                # the shrinking snapshot set + growing mask set stay ~1 B/elem total instead of 2.
-                detected = _low_byte(p, self._snap_device) != self._pre_step_low.pop(name)
-                self._validated_masks[name] = detected
-                if self.validate_recall:
-                    # True bf16 diff, computed here while p still holds the post-step value.
-                    post_bf16 = p.detach().to(torch.bfloat16).to(self._snap_device or p.device)
-                    true_mask = post_bf16 != self._pre_step_bf16.pop(name)
-                    total_tp += (detected & true_mask).sum().item()
-                    total_true += true_mask.sum().item()
-                    total_elements += true_mask.numel()
+        if not self._buckets:
+            return
+
+        for b_idx, bucket in enumerate(self._buckets):
+            cur_buf = torch.cat([_low_byte(p).view(-1) for _, p, _, _ in bucket])
+
+            # Fetch only this bucket's pre-step snapshot to GPU and diff
+            prev_buf = self._pinned_pre_low[b_idx].to(self._device, non_blocking=True)
+            diff = cur_buf != prev_buf
+
+            self._pinned_post_mask[b_idx].copy_(diff, non_blocking=True)
+
+        torch.cuda.synchronize()
+
+        # Unpack masks back to model format
+        for b_idx, bucket in enumerate(self._buckets):
+            mask_buf = self._pinned_post_mask[b_idx]
+            for name, p, offset, length in bucket:
+                self._validated_masks[name] = mask_buf[offset : offset + length].view(p.shape).clone()
+
         if self.validate_recall:
-            # Low-byte changes ⊆ bf16 changes, so precision is 1.0 by construction;
-            # recall = fraction of truly-changed elements the low byte detected.
+            total_tp, total_true, total_elements = 0, 0, 0
+            for name, p in self._params:
+                if name not in self._validated_masks or name not in self._pre_step_bf16:
+                    continue
+                detected = self._validated_masks[name]
+                post_bf16 = p.detach().to(torch.bfloat16).cpu()
+                true_mask = post_bf16 != self._pre_step_bf16.pop(name)
+                total_tp += (detected.cpu() & true_mask).sum().item()
+                total_true += true_mask.sum().item()
+                total_elements += true_mask.numel()
+
             self._accuracy = {
                 "recall": total_tp / max(total_true, 1),
                 "true_changed": total_true,
