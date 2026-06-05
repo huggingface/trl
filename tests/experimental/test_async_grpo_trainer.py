@@ -130,11 +130,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_resume_from_checkpoint_skips_vllm(self):
-        # When resuming from a checkpoint with ignore_data_skip=False, the Trainer would normally
-        # pull already-seen batches from the DataLoader and discard them which would trigger vLLM inference
-        # for each one. This test verifies that skip_samples is set on the RolloutQueueDataset so
-        # those batches are served as cheap dummy samples instead.
+    def test_resume_from_checkpoint(self):
+        # ignore_data_skip must always be True for AsyncGRPO, this is because the base Trainer's skip-and-replay
+        # loop doesn't apply to a live rollout queue and would trigger unnecessary vLLM inference.
+        # This test also verifies that training resumes from a checkpoint without errors.
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -158,6 +157,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
         )
+        assert trainer.args.ignore_data_skip is True
         trainer.train()
 
         # Second run: resume from the step-1 checkpoint.
@@ -180,8 +180,5 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
         )
+        assert trainer2.args.ignore_data_skip is True
         trainer2.train(resume_from_checkpoint=checkpoint_dir)
-
-        # global_step=1, gradient_accumulation_steps=1, batch_size=3*1=3 → samples_to_skip = 3
-        expected_skip = 1 * 1 * (3 * 1)
-        assert trainer2._rollout_dataset.skip_samples == expected_skip

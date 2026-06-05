@@ -146,14 +146,8 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         self.stale_after_s = stale_after_s
         self.max_staleness = max_staleness
         self.poll_interval_s = poll_interval_s
-        self.skip_samples = 0
 
     def __iter__(self):
-        # When resuming from a checkpoint, yield dummy samples so the Trainer can skip
-        # already-seen batches without triggering vLLM inference for each one.
-        for _ in range(self.skip_samples):
-            yield {"input_ids": [0], "completion_mask": [0.0], "old_log_probs": [0.0], "advantage": 0.0, "metrics": {}}
-
         while True:
             t0 = time.time()
             if self.queue.qsize() == 0:
@@ -416,11 +410,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
             )
 
+        # The base Trainer's data-skip replay loop doesn't apply to AsyncGRPO's live rollout queue.
+        self.args.ignore_data_skip = True
+
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._train_tokens_start_time = None
-        self._rollout_dataset = None
-        self._pending_skip_samples = 0
         self.model_version = 0
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
@@ -494,11 +489,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
             )
-            dataset.skip_samples = self._pending_skip_samples
-            self._rollout_dataset = dataset
         else:
             dataset = _EmptyIterableDataset()
-            self._rollout_dataset = None
 
         return self.accelerator.prepare(
             DataLoader(
@@ -713,21 +705,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
         logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
 
     def _inner_training_loop(self, *args, **kwargs):
-        # When resuming from a checkpoint with ignore_data_skip=False, the Trainer skips already-seen
-        # batches by pulling and discarding them from the DataLoader. For AsyncGRPO this would trigger
-        # vLLM inference for every skipped batch. Instead, we set skip_samples on the RolloutQueueDataset
-        # so it yields cheap dummy samples during the skip phase.
+        # When resuming, advance the worker's dataset iterator to the correct prompt position so
+        # rollouts after resume start from where they left off rather than from prompt 0.
+        # We set dataset_start_index on _loop_kwargs before start() is called by the callback.
         resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
-        if resume_from_checkpoint is not None and not self.args.ignore_data_skip:
+        if resume_from_checkpoint is not None and isinstance(self.rollout_worker, AsyncRolloutWorker):
             state_file = os.path.join(resume_from_checkpoint, "trainer_state.json")
-            if os.path.isfile(state_file) and self.accelerator.is_main_process:
+            if os.path.isfile(state_file):
                 global_step = TrainerState.load_from_json(state_file).global_step
                 if global_step > 0:
                     batch_size = self.args.per_device_train_batch_size * self.accelerator.num_processes
-                    samples_to_skip = global_step * self.args.gradient_accumulation_steps * batch_size
-                    # _pending_skip_samples is read by get_train_dataloader (called inside super())
-                    # to set skip_samples on the RolloutQueueDataset before iteration begins.
-                    self._pending_skip_samples = samples_to_skip
+                    samples_seen = global_step * self.args.gradient_accumulation_steps * batch_size
+                    prompts_sent = samples_seen // self.args.num_generations
+                    self.rollout_worker._loop_kwargs["dataset_start_index"] = prompts_sent % len(self.train_dataset)
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
