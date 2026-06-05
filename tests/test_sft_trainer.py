@@ -372,10 +372,10 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
-                "trl-internal-testing/tiny-NemotronHForCausalLM",
+                "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.7.0"),
-                    reason="NemotronH gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
+                    reason="Nemotron 3 gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
                 ),
             ),
         ],
@@ -2282,10 +2282,10 @@ _CHUNKED_CE_MODEL_IDS = [
     "trl-internal-testing/tiny-MistralForCausalLM-0.1",
     "trl-internal-testing/tiny-MistralForCausalLM-0.2",
     pytest.param(
-        "trl-internal-testing/tiny-NemotronHForCausalLM",
+        "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.3.0"),
-            reason="NemotronH was introduced in transformers>=5.3.0",
+            reason="Nemotron 3 was introduced in transformers>=5.3.0",
         ),
     ),
     "trl-internal-testing/tiny-Phi3ForCausalLM",
