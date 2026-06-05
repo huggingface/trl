@@ -698,6 +698,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         # loss computation has to be done by the model, and masking them here would be infeasible in practice as vision
         # token definitions vary across architectures.
         output["labels"] = labels
+        if "weight" in examples[0]:
+            output["weight"] = torch.tensor([example["weight"] for example in examples], dtype=torch.float)
         return output
 
     def _collate_prompt_completion(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -796,6 +798,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             output["token_type_ids"] = token_type_ids
         if "mm_token_type_ids" in processed_prompts:
             output["mm_token_type_ids"] = mm_token_type_ids
+        if "weight" in examples[0]:
+            output["weight"] = torch.tensor([example["weight"] for example in examples], dtype=torch.float)
         return output
 
 
@@ -1706,7 +1710,7 @@ class SFTTrainer(_BaseTrainer):
         # padding-free), so we override the default signature columns to keep it alongside the model inputs.
         if self._signature_columns is None:
             if self._is_vision_dataset:
-                self._signature_columns = ["messages", "prompt", "completion", "image", "images"]
+                self._signature_columns = ["messages", "prompt", "completion", "image", "images", "weight"]
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths", "weight"]
 
