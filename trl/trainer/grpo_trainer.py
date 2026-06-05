@@ -568,6 +568,7 @@ class GRPOTrainer(_BaseTrainer):
         self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
+        self.tool_observation_loss_weight = args.tool_observation_loss_weight
         self.multi_objective_aggregation = args.multi_objective_aggregation
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
@@ -580,6 +581,8 @@ class GRPOTrainer(_BaseTrainer):
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
+        if self.use_liger_kernel and self.tool_observation_loss_weight > 0.0:
+            raise NotImplementedError("Liger Kernels don't currently support tool observation prediction loss.")
         if self.use_liger_kernel and self.importance_sampling_level not in ("token", "sequence"):
             raise ValueError(
                 f"Unknown importance sampling level: {self.importance_sampling_level}. "
@@ -1482,12 +1485,54 @@ class GRPOTrainer(_BaseTrainer):
             raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
         return full_ids[len(prefix_ids) :]
 
+    def _get_tool_observation_mask(self, suffix_ids: list[int], tool_messages: list[dict[str, Any]]) -> list[int]:
+        # `suffix_ids` may include chat-template scaffolding around the tool content. Train tool observation loss only
+        # on exact content spans we can find in the rendered suffix.
+        tool_observation_mask = [0] * len(suffix_ids)
+        for message in tool_messages:
+            content_texts = self._get_tool_content_texts(message["content"])
+            if not content_texts:
+                continue
+
+            for content_text in content_texts:
+                content_ids = self._tokenizer(content_text, add_special_tokens=False)["input_ids"]
+                if not content_ids or len(content_ids) > len(suffix_ids):
+                    continue
+
+                # If the rendered suffix contains the same content more than once, mark every exact occurrence.
+                for start in range(len(suffix_ids) - len(content_ids) + 1):
+                    end = start + len(content_ids)
+                    if suffix_ids[start:end] == content_ids:
+                        tool_observation_mask[start:end] = [1] * len(content_ids)
+
+        return tool_observation_mask
+
+    @staticmethod
+    def _get_tool_content_texts(content: Any) -> list[str]:
+        if isinstance(content, str):
+            return [content] if content else []
+        if isinstance(content, list):
+            # Multimodal tool responses are content blocks; only text blocks have token spans to mask.
+            texts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text = part.get("text")
+                    if text:
+                        texts.append(text)
+            return texts
+        raise TypeError(
+            f"Expected tool content to be a string or list of content blocks, got {type(content).__name__}."
+        )
+
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
         tool_calls = [completion[0].get("tool_calls") for completion in completions]
         idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
         tool_calls = [tool_calls[idx] for idx in idxs_with_tool]
         tool_mask = [[1] * len(ids) for ids in completion_ids]  # 0 for tool result tokens, 1 elsewhere
+        tool_observation_mask = (
+            [[0] * len(ids) for ids in completion_ids] if self.tool_observation_loss_weight > 0.0 else None
+        )
         # Collect images from multimodal tool responses for the forward pass
         tool_images = [[] for _ in completion_ids]
         tool_call_count = 0
@@ -1567,6 +1612,7 @@ class GRPOTrainer(_BaseTrainer):
 
             # Build token IDs by concatenation: prompt + completion + tool_suffix.
             prompt_completion_tool_ids = []
+            suffix_tool_observation_masks = []
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
                 # Extract trailing tool messages from completions
@@ -1577,6 +1623,8 @@ class GRPOTrainer(_BaseTrainer):
                     else:
                         break
                 suffix_ids = self._get_tool_suffix_ids(tool_messages)
+                if tool_observation_mask is not None:
+                    suffix_tool_observation_masks.append(self._get_tool_observation_mask(suffix_ids, tool_messages))
                 prompt_completion_tool_ids.append(
                     prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids
                 )
@@ -1606,6 +1654,10 @@ class GRPOTrainer(_BaseTrainer):
             prompt_completion_tool_ids = [
                 pct for pct, o in zip(prompt_completion_tool_ids, overlong, strict=True) if not o
             ]
+            if tool_observation_mask is not None:
+                suffix_tool_observation_masks = [
+                    mask for mask, o in zip(suffix_tool_observation_masks, overlong, strict=True) if not o
+                ]
             if not idxs_with_tool:
                 break  # all overlong, exit tool loop
 
@@ -1662,6 +1714,9 @@ class GRPOTrainer(_BaseTrainer):
                 post_tool_length = len(post_tool_ids[idx])
                 tool_length = prompt_completion_tool_length - prompt_length - completion_length
                 tool_mask[idx_with_tool] += [0] * tool_length + [1] * post_tool_length
+                if tool_observation_mask is not None:
+                    tool_observation_mask[idx_with_tool] += suffix_tool_observation_masks[idx]
+                    tool_observation_mask[idx_with_tool] += [0] * post_tool_length
                 if logprobs is not None:
                     logprobs[idx_with_tool] += [0.0] * tool_length + post_tool_logprobs[idx]
 
@@ -1687,7 +1742,16 @@ class GRPOTrainer(_BaseTrainer):
             tool_calls = [tool_call for tool_call in tool_calls if tool_call]
             iteration_num += 1
 
-        return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count, tool_images
+        return (
+            tool_mask,
+            completions,
+            completion_ids,
+            logprobs,
+            tool_call_count,
+            tool_failure_count,
+            tool_images,
+            tool_observation_mask,
+        )
 
     def _generate(self, prompts: list):
         device = self.accelerator.device
@@ -1712,13 +1776,20 @@ class GRPOTrainer(_BaseTrainer):
             if missing_keys:
                 missing_keys_list = sorted(missing_keys)
                 raise ValueError(f"rollout_func must return keys {missing_keys_list} in its output dict.")
-            extra_fields = {k: v for k, v in output.items() if k not in required_keys}
+            if self.tool_observation_loss_weight > 0.0 and "tool_observation_mask" not in output:
+                raise ValueError(
+                    "rollout_func must return `tool_observation_mask` when tool_observation_loss_weight is greater "
+                    "than 0."
+                )
+            tool_observation_mask = output.get("tool_observation_mask", None)
+            extra_fields = {k: v for k, v in output.items() if k not in required_keys and k != "tool_observation_mask"}
             prompt_ids, completion_ids, logprobs = output["prompt_ids"], output["completion_ids"], output["logprobs"]
             images = None
             multimodal_fields = {}
         else:
             prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
             completion_ids, logprobs = self._generate_single_turn(prompt_ids, images, multimodal_fields)
+            tool_observation_mask = None
             extra_fields = {}
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
@@ -1746,6 +1817,7 @@ class GRPOTrainer(_BaseTrainer):
                 tool_call_count,
                 tool_failure_count,
                 tool_images,
+                tool_observation_mask,
             ) = self._tool_call_loop(
                 prompts, prompt_ids, completion_ids, completions, logprobs, images, multimodal_fields
             )
@@ -1807,6 +1879,7 @@ class GRPOTrainer(_BaseTrainer):
             prompt_ids,
             completion_ids,
             tool_mask,
+            tool_observation_mask,
             completions,
             total_completion_tokens,
             logprobs,
@@ -1865,6 +1938,7 @@ class GRPOTrainer(_BaseTrainer):
             prompt_ids_list,
             completion_ids_list,
             tool_mask_list,
+            tool_observation_mask_list,
             completions,
             num_items_in_batch,
             sampling_per_token_logps_list,
@@ -1915,6 +1989,16 @@ class GRPOTrainer(_BaseTrainer):
             ).to(device=device)
         else:
             tool_mask = None
+        if tool_observation_mask_list is not None:
+            tool_observation_mask = [torch.tensor(mask) for mask in tool_observation_mask_list]
+            tool_observation_mask = pad(
+                tool_observation_mask,
+                padding_value=0,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            ).to(device=device)
+        else:
+            tool_observation_mask = None
 
         # If mask_truncated_completions is enabled, zero out truncated completions for attention and loss masking
         if self.mask_truncated_completions:
@@ -1925,6 +2009,8 @@ class GRPOTrainer(_BaseTrainer):
             # Also mask tool_mask for consistency in multi-turn training
             if tool_mask is not None:
                 tool_mask = tool_mask * (~is_truncated).unsqueeze(1).int()
+            if tool_observation_mask is not None:
+                tool_observation_mask = tool_observation_mask * (~is_truncated).unsqueeze(1).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
@@ -2312,6 +2398,8 @@ class GRPOTrainer(_BaseTrainer):
             output["num_images"] = num_images
         if tool_mask is not None:
             output["tool_mask"] = tool_mask
+        if tool_observation_mask is not None:
+            output["tool_observation_mask"] = tool_observation_mask
         return output
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -2613,6 +2701,14 @@ class GRPOTrainer(_BaseTrainer):
             loss = loss / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
+
+        if self.tool_observation_loss_weight > 0.0 and "tool_observation_mask" in inputs:
+            tool_observation_mask = (inputs["tool_observation_mask"] * completion_mask).to(per_token_logps.dtype)
+            tool_observation_token_count = tool_observation_mask.sum()
+            if tool_observation_token_count > 0:
+                tool_observation_loss = -(per_token_logps * tool_observation_mask).sum() / tool_observation_token_count
+                normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+                loss = loss + self.tool_observation_loss_weight * tool_observation_loss / normalizer
 
         # Log the metrics
         completion_token_count = mask.sum().clamp(min=1.0)

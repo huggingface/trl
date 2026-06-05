@@ -260,6 +260,9 @@ class GRPOConfig(_BaseConfig):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
             [DAPO](https://huggingface.co/papers/2503.14476) paper, this is a good practice for training stability.
+        tool_observation_loss_weight (`float`, *optional*, defaults to `0.0`):
+            Weight for the auxiliary tool observation prediction loss. When greater than zero, the trainer adds a
+            next-token prediction loss on tool observation tokens.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originates from the
@@ -749,6 +752,13 @@ class GRPOConfig(_BaseConfig):
             "a good practice for training stability."
         },
     )
+    tool_observation_loss_weight: float = field(
+        default=0.0,
+        metadata={
+            "help": "Weight for the auxiliary tool observation prediction loss. When greater than zero, the trainer "
+            "adds a next-token prediction loss on tool observation tokens."
+        },
+    )
     sync_ref_model: bool = field(
         default=False,
         metadata={
@@ -949,4 +959,9 @@ class GRPOConfig(_BaseConfig):
             raise ValueError(
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
+            )
+
+        if self.tool_observation_loss_weight < 0.0:
+            raise ValueError(
+                f"tool_observation_loss_weight must be non-negative, got {self.tool_observation_loss_weight}."
             )
