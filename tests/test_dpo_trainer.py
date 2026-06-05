@@ -1209,8 +1209,8 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            max_length=None,
-            per_device_train_batch_size=2,
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
             max_steps=3,
             use_liger_kernel=True,
             report_to="none",
