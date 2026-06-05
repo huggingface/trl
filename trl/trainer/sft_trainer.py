@@ -819,6 +819,13 @@ class SFTTrainer(_BaseTrainer):
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
         # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
         if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
+            # Warn about unsupported int4 quantization with device_map auto (see https://github.com/huggingface/trl/issues/4018)
+            if getattr(model, "is_loaded_in_4bit", False) and getattr(model, "hf_device_map", None) is not None:
+                warnings.warn(
+                    "Using 4-bit (int4) quantization with `device_map='auto'` may lead to meta-tensor errors. "
+                    "Consider using 8-bit quantization or manually specifying the device map.",
+                    UserWarning,
+                )
             for param in model.parameters():
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)

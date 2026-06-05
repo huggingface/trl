@@ -2298,3 +2298,31 @@ class TestSFTTrainerSlow(TrlTestCase):
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
         release_memory(trainer.model, trainer)
+
+    def test_int4_device_map_auto_warning(self):
+        """Test that a warning is raised when using int4 quantization with device_map='auto'."""
+        # Mock a model with is_loaded_in_4bit=True and hf_device_map set
+        mock_model = MagicMock()
+        mock_model.config = MagicMock()
+        mock_model.config.vocab_size = 1000
+        mock_model.config.model_type = "gpt2"
+        mock_model.is_loaded_in_4bit = True
+        mock_model.hf_device_map = {"": 0}
+        mock_model.parameters.return_value = []
+        mock_model.named_parameters.return_value = []
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_steps=2,
+        )
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:10]")
+
+        with pytest.warns(UserWarning, match="int4.*device_map.*auto"):
+            SFTTrainer(
+                model=mock_model,
+                args=training_args,
+                train_dataset=dataset,
+            )
