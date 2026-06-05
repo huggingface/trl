@@ -204,8 +204,9 @@ class _AsyncRolloutLoop:
         self.model_name = model_name
         self.dataset = dataset
         self._dataset_iter = iter(dataset)
-        for _ in range(dataset_start_index % len(dataset)):
-            next(self._dataset_iter)
+        if dataset_start_index > 0:
+            for _ in range(dataset_start_index % len(dataset)):
+                next(self._dataset_iter)
         self.reward_funcs = reward_funcs
         self.reward_func_names = [f.__name__ for f in reward_funcs]
         self.tokenizer = add_response_schema(processing_class)
