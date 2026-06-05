@@ -173,10 +173,10 @@ class TestDPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             "trl-internal-testing/tiny-GptOssForCausalLM",
             pytest.param(
-                "trl-internal-testing/tiny-NemotronHForCausalLM",
+                "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.7.0"),
-                    reason="NemotronH gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
+                    reason="Nemotron 3 gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
                 ),
             ),
         ],
