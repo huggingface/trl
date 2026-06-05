@@ -42,6 +42,7 @@ from trl.trainer.sft_trainer import (
     _chunked_cross_entropy_loss,
     _patch_chunked_ce_lm_head,
     dft_loss,
+    weighted_nll_loss,
 )
 
 from .testing_utils import (
@@ -69,6 +70,100 @@ if is_peft_available():
         TaskType,
         get_peft_model,
     )
+
+
+class TestWeightedNLLLoss(TrlTestCase):
+    def _make_outputs_labels(self, batch_size=2, seq_len=4, vocab_size=8, seed=0):
+        torch.manual_seed(seed)
+        logits = torch.randn(batch_size, seq_len, vocab_size)
+        outputs = MagicMock()
+        outputs.logits = logits
+        labels = torch.randint(0, vocab_size, (batch_size, seq_len))
+        return outputs, labels
+
+    def test_unit_weights_equals_nll(self):
+        """weighted_nll_loss with all-ones weights must match standard NLL."""
+        outputs, labels = self._make_outputs_labels()
+        weights = torch.ones(2)
+
+        wloss = weighted_nll_loss(outputs, labels, weights)
+
+        # Reference: mean NLL over all valid tokens
+        shift_logits = outputs.logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+        ref = F.cross_entropy(
+            shift_logits.reshape(-1, shift_logits.size(-1)),
+            shift_labels.reshape(-1),
+            ignore_index=-100,
+            reduction="mean",
+        )
+        torch.testing.assert_close(wloss, ref, atol=1e-5, rtol=1e-5)
+
+    def test_zero_weight_suppresses_sample(self):
+        """A sample with weight=0.0 should not contribute to the loss."""
+        outputs, labels = self._make_outputs_labels(batch_size=2)
+        # Keep only second sample (weight 0 for first, 1 for second)
+        weights_zero_first = torch.tensor([0.0, 1.0])
+        weights_second_only = torch.tensor([0.0, 1.0])
+
+        loss_a = weighted_nll_loss(outputs, labels, weights_zero_first)
+        loss_b = weighted_nll_loss(outputs, labels, weights_second_only)
+        torch.testing.assert_close(loss_a, loss_b, atol=1e-6, rtol=1e-6)
+
+    def test_negative_weight_inverts_gradient(self):
+        """Negative weights should produce negative loss (gradient inversion)."""
+        outputs, labels = self._make_outputs_labels(batch_size=1)
+        weights_pos = torch.tensor([1.0])
+        weights_neg = torch.tensor([-1.0])
+
+        loss_pos = weighted_nll_loss(outputs, labels, weights_pos)
+        loss_neg = weighted_nll_loss(outputs, labels, weights_neg)
+        torch.testing.assert_close(loss_pos, -loss_neg, atol=1e-6, rtol=1e-6)
+
+    def test_masked_tokens_excluded(self):
+        """Positions with label=-100 must not affect the loss."""
+        batch_size, seq_len, vocab_size = 1, 5, 4
+        torch.manual_seed(7)
+        logits = torch.randn(batch_size, seq_len, vocab_size)
+        outputs = MagicMock()
+        outputs.logits = logits
+
+        # Labels with and without masking — same valid tokens
+        labels_full = torch.tensor([[0, 1, 2, 1, 3]])
+        labels_masked = torch.tensor([[0, 1, 2, 1, -100]])  # last token masked
+        weights = torch.ones(batch_size)
+
+        loss_full = weighted_nll_loss(outputs, labels_full, weights)
+        loss_masked = weighted_nll_loss(outputs, labels_masked, weights)
+        # Masking one token changes the per-sample mean; they should differ
+        assert not torch.isclose(loss_full, loss_masked)
+
+    def test_num_items_in_batch_normalisation(self):
+        """When num_items_in_batch is provided the normalisation denominator changes."""
+        outputs, labels = self._make_outputs_labels()
+        weights = torch.ones(2)
+        n_tokens = 6
+
+        loss_no_nib = weighted_nll_loss(outputs, labels, weights)
+        loss_with_nib = weighted_nll_loss(outputs, labels, weights, num_items_in_batch=n_tokens)
+
+        # They should differ (different normalization denominators)
+        assert not torch.isclose(loss_no_nib, loss_with_nib)
+        # Both should be finite scalars
+        assert loss_no_nib.isfinite()
+        assert loss_with_nib.isfinite()
+
+    def test_weight_scaling_proportional(self):
+        """Doubling all weights (and dividing by 2) should give the same loss."""
+        outputs, labels = self._make_outputs_labels()
+        weights = torch.tensor([0.5, 1.5])
+
+        loss_ref = weighted_nll_loss(outputs, labels, weights)
+        loss_2x = weighted_nll_loss(outputs, labels, weights * 2)
+
+        # With default normalisation (/ sum_abs_weights), scaling all weights by 2
+        # cancels: (2w · loss) / (2 * sum|w|) == (w · loss) / sum|w|
+        torch.testing.assert_close(loss_ref, loss_2x, atol=1e-5, rtol=1e-5)
 
 
 class TestDFTLoss(TrlTestCase):
@@ -455,6 +550,38 @@ class TestSFTTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_weighted_nll_loss(self):
+        from datasets import Dataset
+
+        # Build a small dataset with a float 'weight' column
+        raw = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        weights = [1.0 if i % 2 == 0 else 0.5 for i in range(len(raw))]
+        dataset = raw.add_column("weight", weights)
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            loss_type="weighted_nll",
+            report_to="none",
+            eval_strategy="steps",
+            eval_steps=3,
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}

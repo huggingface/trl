@@ -104,6 +104,11 @@ class SFTConfig(_BaseConfig):
             - `"nll"`: standard negative log-likelihood (default).
             - `"dft"`: Dynamic Fine-Tuning, as described in
               [this paper](https://huggingface.co/papers/2508.05629).
+            - `"weighted_nll"`: per-sample weighted NLL. The dataset must contain a float ``"weight"`` column.
+              Positive weights reinforce the response proportionally; negative weights invert the gradient direction
+              (gently pushing the model away from the completion); zero suppresses the sample entirely. When all
+              weights are ``1.0`` the loss is numerically identical to ``"nll"``. Useful for mixed-quality datasets,
+              curriculum learning, or soft preference signals without a separate RL loop.
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
               in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`. Under
