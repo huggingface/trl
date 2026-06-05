@@ -1349,6 +1349,13 @@ class SFTTrainer(_BaseTrainer):
                         "multiple examples into one sequence, so per-example weights have no well-defined "
                         "meaning. Disable packing or use `loss_type='nll'`."
                     )
+                if self.padding_free:
+                    raise ValueError(
+                        "`loss_type='weighted_nll'` is not compatible with `padding_free=True`. "
+                        "Padding-free mode flattens the batch to a single row, so per-example weights "
+                        "cannot be broadcast to the right tokens. Disable padding-free or use "
+                        "`loss_type='nll'`."
+                    )
                 # Actual loss computation is handled in compute_loss; no patch needed here.
             elif args.loss_type == "chunked_nll":
                 # Same math as `"nll"` but the `lm_head` matmul is skipped on ignored tokens and the CE is computed in
