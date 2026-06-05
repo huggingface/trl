@@ -343,6 +343,14 @@ class A2POTrainer(_BaseTrainer):
         self._metrics[mode]["advantage"].append(target.mean().item())
         return loss
 
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
+        inputs = self._prepare_inputs(inputs)
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+            loss = loss.mean().detach()
+        return loss, None, None
+
     def train(self, *args, **kwargs):
         if self._optimal_values is None:
             logger.info("Running Stage 1: offline optimal value estimation...")
