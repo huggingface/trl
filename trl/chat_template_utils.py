@@ -327,6 +327,12 @@ llama3_1_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1.jinja").read_text(enco
 
 llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text(encoding="utf-8")
 
+nemotron_3_nano_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano.jinja").read_text(encoding="utf-8")
+
+nemotron_3_super_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_super.jinja").read_text(encoding="utf-8")
+
+nemotron_3_ultra_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_ultra.jinja").read_text(encoding="utf-8")
+
 phi3_chat_template = (_CHAT_TEMPLATES_DIR / "phi3.jinja").read_text(encoding="utf-8")
 
 phi3_5_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5.jinja").read_text(encoding="utf-8")
@@ -410,6 +416,13 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         qwen3_5_think_chat_template,
         qwen3_6_chat_template,
     ]:
+        tokenizer.response_schema = qwen3_5_schema
+    elif chat_template in [
+        nemotron_3_nano_chat_template,
+        nemotron_3_super_chat_template,
+        nemotron_3_ultra_chat_template,
+    ]:
+        # Nemotron 3 renders tool calls in the same Hermes-style <function=...>/<parameter=...> format as Qwen3.5.
         tokenizer.response_schema = qwen3_5_schema
     else:
         raise ValueError(
@@ -564,6 +577,18 @@ gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").
 
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
+nemotron_3_nano_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano_training.jinja").read_text(
+    encoding="utf-8"
+)
+
+nemotron_3_super_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_super_training.jinja").read_text(
+    encoding="utf-8"
+)
+
+nemotron_3_ultra_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_ultra_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 phi3_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_training.jinja").read_text(encoding="utf-8")
 
 phi3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5_training.jinja").read_text(encoding="utf-8")
@@ -691,6 +716,15 @@ def get_training_chat_template(
 
     if processing_class.chat_template == llama3_chat_template:
         return llama3_training_chat_template
+
+    if processing_class.chat_template == nemotron_3_nano_chat_template:
+        return nemotron_3_nano_training_chat_template
+
+    if processing_class.chat_template == nemotron_3_super_chat_template:
+        return nemotron_3_super_training_chat_template
+
+    if processing_class.chat_template == nemotron_3_ultra_chat_template:
+        return nemotron_3_ultra_training_chat_template
 
     if processing_class.chat_template == phi3_chat_template:
         return phi3_training_chat_template
