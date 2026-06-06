@@ -94,51 +94,29 @@ When using the teacher server:
 
 ### Expected dataset type
 
-The dataset should be formatted as a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language_modeling) dataset:
+The [`experimental.distillation.DistillationTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats, and accepts either [language modeling](dataset_formats#language_modeling) or [prompt-completion](dataset_formats#prompt-completion) datasets. The format is auto-detected per example. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ```python
+# Conversational language modeling (prompt + assistant completion)
 {"messages": [{"role": "user", "content": "What color is the sky?"},
               {"role": "assistant", "content": "It is blue."}]}
+
+# Standard prompt-completion
+{"prompt": "What color is the sky?",
+ "completion": "It is blue."}
 ```
 
-When using fully on-policy distillation (`lmbda=1.0`), the assistant turn can be omitted since the student will generate its own completions:
+When using fully on-policy distillation (`lmbda=1.0`), the completion can be omitted since the student will generate its own completions:
 
 ```python
+# Conversational prompt-only (no trailing assistant turn)
 {"messages": [{"role": "user", "content": "What color is the sky?"}]}
+
+# Standard prompt-only
+{"prompt": "What color is the sky?"}
 ```
 
-## Example script
-
-Use [`trl/experimental/distillation/distillation.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/distillation/distillation.py) to launch distillation training from the command line. The script supports full training, mixed on/off-policy, and LoRA via the standard `ModelConfig` flags.
-
-```bash
-# Full training (off-policy only, lmbda=0):
-python trl/experimental/distillation/distillation.py \
-    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
-    --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
-    --dataset_name trl-lib/chatbot_arena_completions \
-    --learning_rate 2e-5 \
-    --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 8 \
-    --lmbda 0.0 \
-    --output_dir distilled-model \
-    --num_train_epochs 1
-```
-
-```bash
-# Mixed on/off-policy (lmbda=0.5):
-python trl/experimental/distillation/distillation.py \
-    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
-    --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
-    --dataset_name trl-lib/chatbot_arena_completions \
-    --learning_rate 2e-5 \
-    --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 8 \
-    --lmbda 0.5 \
-    --beta 0.5 \
-    --output_dir distilled-model \
-    --num_train_epochs 1
-```
+Prompt-only examples require `lmbda=1.0` (fully on-policy), since off-policy distillation needs dataset completions.
 
 ## DistillationTrainer
 
