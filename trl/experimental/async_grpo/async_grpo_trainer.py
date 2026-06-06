@@ -396,6 +396,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if is_peft_model(model) and self.args.gradient_checkpointing:
             model.enable_input_require_grads()
 
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        quantization_config = model_init_kwargs.get("quantization_config")
+        is_qlora = quantization_config is not None and (
+            quantization_config.load_in_4bit or quantization_config.load_in_8bit
+        )
+        if is_qlora:
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data = param.data.to(torch.bfloat16)
+
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model_name)

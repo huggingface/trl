@@ -14,6 +14,7 @@
 
 import itertools
 import queue
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -196,6 +197,48 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_peft_quantized_trainable_params_cast_to_bfloat16(self):
+        from peft import LoraConfig
+
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        @dataclass
+        class DummyQuantizationConfig:
+            load_in_4bit: bool = True
+            load_in_8bit: bool = False
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            model_init_kwargs={"quantization_config": DummyQuantizationConfig()},
+            report_to="none",
+        )
+
+        import trl.experimental.async_grpo.async_grpo_trainer as async_grpo_trainer_module
+
+        original_create_model_from_path = async_grpo_trainer_module.create_model_from_path
+
+        def create_quantized_model(*args, **kwargs):
+            kwargs.pop("quantization_config")
+            return original_create_model_from_path(*args, **kwargs)
+
+        from unittest.mock import patch
+
+        with patch.object(async_grpo_trainer_module, "create_model_from_path", create_quantized_model):
+            trainer = AsyncGRPOTrainer(
+                model=model_id,
+                reward_funcs=dummy_reward_func,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+                rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=8),
+            )
+
+        for param in trainer.model.parameters():
+            if param.requires_grad:
+                assert param.dtype == torch.bfloat16
 
     @require_peft
     def test_peft_weight_metadata_excludes_adapters_and_modules_to_save(self):
