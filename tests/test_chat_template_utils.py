@@ -331,6 +331,9 @@ class TestSupportsToolCalling:
             # Silently drops both tool_calls and tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
             pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
+            # Olmo3 uses a bespoke function-calling schema (a `functions`/`function_calls` string on the
+            # message plus an `environment` role) instead of the standard `tools`/`tool_calls`/`tool`
+            # interface, so a standard tool-calling conversation is silently dropped.
             pytest.param(
                 "trl-internal-testing/tiny-Olmo3ForCausalLM",
                 id="olmo3",
