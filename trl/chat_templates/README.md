@@ -51,7 +51,7 @@ Original Llama 3.1 / 3.2 chat templates. Both render tool calls as a single bare
 
 ### `llava_next.jinja`
 
-Original Llava-Next chat template (as shipped by `llava-hf/llava-v1.6-mistral-7b-hf`). Renders multimodal `content` blocks in the LLaVA / Mistral `[INST] ... [/INST]` format. Does not support tool calling. (Plain Llava 1.5 is not stored here: its upstream template already ships `{% generation %}` markers, so no training patch is needed.)
+Original Llava-Next chat template (as shipped by `llava-hf/llava-v1.6-mistral-7b-hf`). Renders multimodal `content` blocks in the LLaVA / Mistral `[INST] ... [/INST]` format. Does not support tool calling.
 
 ### `nemotron_3_nano.jinja`
 
