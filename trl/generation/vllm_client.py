@@ -18,6 +18,7 @@ import copy
 import logging
 import socket
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from urllib.parse import urlparse
 
@@ -29,12 +30,16 @@ from transformers import is_torch_xpu_available
 from transformers.utils import get_json_schema
 from urllib3.util.retry import Retry
 
-from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
+from ..import_utils import is_openai_available, is_requests_available, is_vllm_ascend_available, is_vllm_available
 
 
 if is_requests_available():
     import requests
     from requests import ConnectionError
+
+
+if is_openai_available():
+    from openai import OpenAI
 
 
 if is_vllm_available():
@@ -48,19 +53,24 @@ if is_vllm_available():
 logger = logging.getLogger(__name__)
 
 
-def pil_to_base64(image):
+def pil_to_base64(image, format: str = "PNG") -> str:
     buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    img_bytes = buffer.getvalue()
-    return base64.b64encode(img_bytes).decode("utf-8")
+    image.save(buffer, format=format)
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+def pil_to_data_url(image, format: str = "PNG") -> str:
+    """Encode a PIL image as an OpenAI-style `image_url` data URI."""
+    return f"data:image/{format.lower()};base64,{pil_to_base64(image, format=format)}"
 
 
 class VLLMClient:
     """
-    A client class to interact with a vLLM server.
+    A client class to interact with a TRL vLLM server.
 
-    This class provides methods to generate completions, initialize and manage weight update groups, and update model
-    weights in a distributed setting. Before using it, start the vLLM server with `trl vllm-serve`.
+    Uses the OpenAI-compatible `/v1/completions` and `/v1/chat/completions` endpoints under the hood. The server also
+    exposes TRL-only side-channel endpoints (weight sync, prefix-cache reset, batched teacher logprobs) that this
+    client wraps.
 
     Args:
         base_url (`str`, *optional*):
@@ -75,6 +85,9 @@ class VLLMClient:
         connection_timeout (`float`, *optional*, defaults to `0.0`):
             Total timeout duration in seconds to wait for the server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
+        max_chat_workers (`int`, *optional*, defaults to `64`):
+            Maximum number of concurrent threads used to fan out batched chat requests. The server gathers concurrent
+            requests into a batched `vLLM.chat()` call, so a higher value here lets the server batch more aggressively.
 
     Examples:
         Run the vLLM server with the model `Qwen/Qwen2.5-7B`:
@@ -93,14 +106,7 @@ class VLLMClient:
 
         >>> client = VLLMClient()
         >>> client.generate(["Hello, AI!", "Tell me a joke"])
-        {'prompt_ids': [[9707, 11, 15235, 0],
-                        [40451, 752, 264, 21646]],
-         'completion_ids': [[2980, 498, 1492, 752, 448, 264, 13027, 8645, 30, 358, 2776, 4460, 311, 3270, 264, 2025],
-                            [911, 98072, 2142, 624, 45, 51426, 2142, 374, 279, 16396, 429, 4302, 702, 36988, 7290, 476]],
-         'logprobs': [[[-1.6612], [-0.0081], [-1.5189], [-0.0123], [-1.2045], [-0.6227], [-2.9791], [-2.8387], [-0.1267], [-0.0366], [-2.6528], [-0.3197], [-0.0001], [-1.8174], [-0.0251], [-1.473]],
-                      [[-0.018], [-10.7331], [-0.1605], [-0.891], [-3.7945], [-0.0127], [-0.3073], [-1.1648], [-1.8025], [-0.409], [-0.0256], [-1.6127], [-2.2935], [-4.1785], [-0.6531], [-0.2629]]],
-         'logprob_token_ids': [[[2980], [498], [1492], [752], [448], [264], [13027], [8645], [30], [358], [2776], [4460], [311], [3270], [264], [2025]],
-                               [[911], [98072], [2142], [624], [45], [51426], [2142], [374], [279], [16396], [429], [4302], [702], [36988], [7290], [476]]]}
+        {'prompt_ids': [[...], [...]], 'completion_ids': [[...], [...]], 'logprobs': None, 'logprob_token_ids': None}
 
         >>> from transformers import AutoModelForCausalLM
 
@@ -109,13 +115,13 @@ class VLLMClient:
         >>> client.update_model_params(model)
         ```
 
-        There are several ways to initialize the client:
+        Because the server is OpenAI-compatible, you can also use the official OpenAI SDK directly:
 
         ```python
-        VLLMClient(base_url="http://localhost:8000")
-        VLLMClient(base_url="http://192.168.1.100:8000")
-        VLLMClient(host="localhost", server_port=8000)
-        VLLMClient(host="192.168.1.100", server_port=8000)
+        >>> from openai import OpenAI
+
+        >>> client = OpenAI(base_url="http://localhost:8000/v1", api_key="EMPTY")
+        >>> client.chat.completions.create(model="Qwen/Qwen2.5-7B", messages=[{"role": "user", "content": "Hi"}])
         ```
     """
 
@@ -126,34 +132,31 @@ class VLLMClient:
         server_port: int = 8000,
         group_port: int = 51216,
         connection_timeout: float = 0.0,
+        max_chat_workers: int = 64,
     ):
         if not is_requests_available():
             raise ImportError("requests is not installed. Please install it with `pip install requests`.")
+        if not is_openai_available():
+            raise ImportError("openai is not installed. Please install it with `pip install openai`.")
         if not is_vllm_available():
             raise ImportError("vLLM is not installed. Please install it with `pip install trl[vllm]`.")
 
+        # requests session for TRL-only side-channel endpoints. The OpenAI SDK handles retries for /v1/* itself.
         self.session = requests.Session()
-
-        # Configure retries for HTTP requests made through this session.
-        # This is not strictly required for correctness, but it helps make training more robust to rare, transient
-        # failures (network hiccups, temporary 5xx errors, overloaded servers). Without this, such failures could cause
-        # an otherwise healthy training run to fail.
         retry_strategy = Retry(
-            total=5,  # global cap on the total number of retries across all failure types
-            connect=5,  # retry connection-level failures (DNS issues, refused connections, etc)
-            read=5,  # retry failures while reading the response after the connection was successfully established
-            status=3,  # retry a limited number of times when we receive certain HTTP error responses from the server
-            status_forcelist=[500, 502, 503],  # only retry on server-side errors that are usually temporary
-            backoff_factor=2,  # exponential backoff between retries (2s, 4s, 8s, ...)
-            allowed_methods=["POST", "GET"],  # allow POST as well, even though we're not sure it's safe here
+            total=5,
+            connect=5,
+            read=5,
+            status=3,
+            status_forcelist=[500, 502, 503],
+            backoff_factor=2,
+            allowed_methods=["POST", "GET"],
         )
-
         adapter = HTTPAdapter(max_retries=retry_strategy)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
 
         if base_url is not None:
-            # Parse the base_url to extract host and port
             parsed_url = urlparse(base_url)
             self.host = socket.gethostbyname(parsed_url.hostname)
             scheme = parsed_url.scheme or "http"
@@ -163,7 +166,19 @@ class VLLMClient:
             self.server_port = server_port
             self.base_url = f"http://{self.host}:{self.server_port}"
         self.group_port = group_port
+
         self.check_server(connection_timeout)  # check server and fail after timeout
+
+        # OpenAI client for /v1/* endpoints. `api_key` is required by the SDK but the server ignores it.
+        self._openai = OpenAI(base_url=f"{self.base_url}/v1", api_key="EMPTY", max_retries=5)
+
+        # Resolve the served model name once so callers don't have to pass it on every request.
+        self._model_name = self._openai.models.list().data[0].id
+
+        # Pool for fanning out concurrent /v1/chat/completions calls (one per conversation).
+        self._chat_pool = ThreadPoolExecutor(max_workers=max_chat_workers)
+
+        self.communicator = None
 
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
         """
@@ -176,7 +191,7 @@ class VLLMClient:
             total_timeout (`float`, *optional*, defaults to `0.0`):
                 Total timeout duration in seconds.
         """
-        url = f"{self.base_url}/health/"
+        url = f"{self.base_url}/health"
         start_time = time.time()  # Record the start time
 
         while True:
@@ -201,6 +216,28 @@ class VLLMClient:
             logger.info(f"Server is not up yet. Retrying in {retry_interval} seconds...")
             time.sleep(retry_interval)
 
+    # --------------------------------------------------------------------------------------------
+    # Generation — OpenAI-compatible endpoints
+    # --------------------------------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_choice_logprobs(choice: dict) -> tuple[list[list[float | None]] | None, list[list[int]] | None]:
+        """Extract TRL-format `(top_logprobs_values, top_logprobs_token_ids)` from a choice's logprobs payload.
+
+        Returns `(None, None)` when the choice carries no logprobs.
+        """
+        lp = choice.get("logprobs")
+        if not lp:
+            return None, None
+        # /v1/completions encodes them as flat fields, /v1/chat/completions packs them into `content` entries.
+        if isinstance(lp, dict) and "top_logprobs_values" in lp:
+            return lp.get("top_logprobs_values"), lp.get("top_logprobs_token_ids")
+        if isinstance(lp, dict) and "content" in lp and lp["content"] is not None:
+            values = [[entry["logprob"] for entry in pos["top_logprobs"]] for pos in lp["content"]]
+            token_ids = [[entry["token_id"] for entry in pos["top_logprobs"]] for pos in lp["content"]]
+            return values, token_ids
+        return None, None
+
     def generate(
         self,
         prompts: list[str] | list[list[int]],
@@ -217,87 +254,107 @@ class VLLMClient:
         generation_kwargs: dict | None = None,
     ) -> dict[str, list[list[int]]]:
         """
-        Generates model completions for the provided prompts.
+        Generates model completions for the provided prompts using `/v1/completions`.
 
         Args:
             prompts (`list[str]` or `list[list[int]]`):
                 List of text prompts or list of token ID lists for which the model will generate completions.
             images (`list[list[PIL.Image] | None]`, *optional*):
                 List of image lists for VLM support. Each element is a list of PIL images for the corresponding prompt,
-                or `None` if no images for that prompt.
+                or `None` if no images for that prompt. Passed as the `images` extension of `/v1/completions`.
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
             repetition_penalty (`float`, *optional*, defaults to `1.0`):
-                Parameter for repetition penalty. 1.0 means no penalty.
+                Parameter for repetition penalty. `1.0` means no penalty.
             temperature (`float`, *optional*, defaults to `1.0`):
                 Temperature parameter for sampling. Higher values increase diversity.
             top_p (`float`, *optional*, defaults to `1.0`):
-                Top-p sampling parameter.`1.0` means no truncation.
+                Top-p sampling parameter. `1.0` means no truncation.
             top_k (`int`, *optional*, defaults to `0`):
-                Top-k sampling parameter. `0` means no truncation.
+                Top-k sampling parameter. `0` (or `-1`) means no truncation.
             min_p (`float`, *optional*, defaults to `0.0`):
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each prompt.
             logprobs (`int` or `None`, *optional*, defaults to `0`):
-                Number of top logprobs to return per token. When 0, only the sampled token's logprob is returned. When
-                N>0, returns up to N+1 logprobs sorted by descending probability, because vLLM always includes the
-                sampled token's logprob (which may fall outside the top-N).
+                Number of top logprobs to return per token. When `0`, only the sampled token's logprob is returned.
+                When `N > 0`, returns up to `N+1` logprobs sorted by descending probability. When `None`, no logprobs
+                are requested.
             structured_outputs_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
-                Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
-                `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
-                will override them.
+                Additional generation parameters to pass to the vLLM `SamplingParams`. If it contains keys that
+                conflict with the other parameters, they will override them.
 
         Returns:
             `dict` with keys:
                 - `prompt_ids` (`list[list[int]]`):
-                    List of lists of token IDs representing the tokenized input prompts.
+                    Token IDs for each input prompt.
                 - `completion_ids` (`list[list[int]]`):
-                    List of lists of token IDs representing the model-generated completions for each prompt.
-                - `logprobs` (`list[list[list[float]]]`):
-                    Per-token logprobs of shape (num_sequences, seq_len, num_logprobs), sorted by descending
-                    probability.
-                - `logprob_token_ids` (`list[list[list[int]]]`):
+                    Token IDs for each generated completion (one per `prompt × n`).
+                - `logprobs` (`list[list[list[float]]]` or `None`):
+                    Per-token logprobs of shape `(num_sequences, seq_len, num_logprobs)`, sorted by descending
+                    probability. `None` if no logprobs were requested.
+                - `logprob_token_ids` (`list[list[list[int]]]` or `None`):
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
-        url = f"{self.base_url}/generate/"
-
-        # Convert PIL images to base64 strings. Each element is a list of images for the corresponding prompt,
-        # or None if no images for that prompt.
+        # Encode images (if any) as base64 strings for the `images` extension field.
+        encoded_images: list[list[str] | None] | None = None
         if images:
-            images = [
+            encoded_images = [
                 [pil_to_base64(img) for img in img_list] if img_list is not None else None for img_list in images
             ]
 
-        response = self.session.post(
-            url,
-            json={
-                "prompts": prompts,
-                "images": images,
-                "n": n,
-                "repetition_penalty": repetition_penalty,
-                "temperature": temperature,
-                "top_p": top_p,
-                "top_k": top_k,
-                "min_p": min_p,
-                "max_tokens": max_tokens,
-                "logprobs": logprobs,
-                "structured_outputs_regex": structured_outputs_regex,
-                "generation_kwargs": generation_kwargs or {},
-            },
+        extra_body: dict = {
+            "top_k": top_k,
+            "min_p": min_p,
+            "repetition_penalty": repetition_penalty,
+            "guided_regex": structured_outputs_regex,
+            "generation_kwargs": generation_kwargs or {},
+        }
+        if encoded_images is not None:
+            extra_body["images"] = encoded_images
+
+        # The openai SDK's `logprobs` is a count (int) for /v1/completions and bool for /v1/chat/completions.
+        response = self._openai.completions.create(
+            model=self._model_name,
+            prompt=prompts,
+            n=n,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            logprobs=logprobs,
+            extra_body=extra_body,
         )
-        if response.status_code == 200:
-            json_response = response.json()
-            return {
-                "prompt_ids": json_response["prompt_ids"],
-                "completion_ids": json_response["completion_ids"],
-                "logprobs": json_response["logprobs"],
-                "logprob_token_ids": json_response["logprob_token_ids"],
-            }
-        else:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+        data = response.model_dump()
+        choices = data["choices"]
+
+        # Server emits all `n` choices for prompt 0, then prompt 1, etc. With `len(prompts)` prompts and `n`
+        # completions each, the (prompt_idx, choice_idx) for `choices[k]` is `(k // n, k % n)`.
+        num_prompts = len(choices) // n
+        prompt_ids: list[list[int]] = []
+        completion_ids: list[list[int]] = []
+        all_logprobs: list[list[list[float | None]] | None] = []
+        all_logprob_token_ids: list[list[list[int]] | None] = []
+        any_logprobs = False
+        for prompt_idx in range(num_prompts):
+            prompt_ids.append(choices[prompt_idx * n]["prompt_token_ids"])
+            for choice_idx in range(n):
+                choice = choices[prompt_idx * n + choice_idx]
+                completion_ids.append(choice["token_ids"])
+                values, token_ids = self._extract_choice_logprobs(choice)
+                all_logprobs.append(values)
+                all_logprob_token_ids.append(token_ids)
+                if values is not None:
+                    any_logprobs = True
+
+        return {
+            "prompt_ids": prompt_ids,
+            "completion_ids": completion_ids,
+            "logprobs": all_logprobs if any_logprobs else None,
+            "logprob_token_ids": all_logprob_token_ids if any_logprobs else None,
+        }
 
     def chat(
         self,
@@ -317,101 +374,108 @@ class VLLMClient:
         chat_template: str | None = None,
     ) -> dict[str, list[list[int]]]:
         """
-        Generates model completions for the provided chat messages.
+        Generates model completions for the provided chat conversations using `/v1/chat/completions`.
+
+        One HTTP request is sent per conversation (OpenAI semantics); the server batches concurrent requests internally
+        so DP workers stay busy.
 
         Args:
             messages (`list[list[dict]]`):
-                List of message lists for which the model will generate completions. Each message is a dictionary with
-                keys like "role" and "content".
+                List of conversations. Each conversation is a list of message dicts with `"role"` / `"content"` keys.
+                Image parts may be provided either in OpenAI's standard form (`{"type": "image_url", "image_url":
+                {"url": "data:..."}}`) or as PIL parts (`{"type": "image_pil", "image_pil": <PIL.Image>}`); the latter
+                are encoded to data URIs.
             n (`int`, *optional*, defaults to `1`):
-                Number of completions to generate for each message list.
-            repetition_penalty (`float`, *optional*, defaults to `1.0`):
-                Parameter for repetition penalty. 1.0 means no penalty.
-            temperature (`float`, *optional*, defaults to `1.0`):
-                Temperature parameter for sampling. Higher values increase diversity.
-            top_p (`float`, *optional*, defaults to `1.0`):
-                Top-p sampling parameter.`1.0` means no truncation.
-            top_k (`int`, *optional*, defaults to `0`):
-                Top-k sampling parameter. `0` means no truncation.
-            min_p (`float`, *optional*, defaults to `0.0`):
-                Minimum probability for sampling.
-            max_tokens (`int`, *optional*, defaults to `16`):
-                Maximum number of tokens to generate for each message list.
-            logprobs (`int` or `None`, *optional*, defaults to `0`):
-                Number of top logprobs to return per token. When 0, only the sampled token's logprob is returned. When
-                N>0, returns up to N+1 logprobs sorted by descending probability, because vLLM always includes the
-                sampled token's logprob (which may fall outside the top-N).
+                Number of completions per conversation.
+            repetition_penalty, temperature, top_p, top_k, min_p, max_tokens, logprobs:
+                Sampling parameters; see [`generate`].
             structured_outputs_regex (`str`, *optional*):
-                Regular expression to guide the decoding process.
+                Regular expression to guide decoding.
             generation_kwargs (`dict`, *optional*):
-                Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
-                `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
-                will override them.
+                Additional generation parameters forwarded to `SamplingParams`.
             chat_template_kwargs (`dict`, *optional*):
-                Additional keyword arguments to customize the chat template used by the model.
+                Extra keyword arguments for the chat template.
             tools (`list[dict | Callable]`, *optional*):
-                List of tool functions available for tool calling during chat generation.
+                Tool functions / specs available for tool calling.
             chat_template (`str`, *optional*):
-                Template to use for structuring the chat. If not provided, the model's default chat template will be
-                used.
+                Chat template override (forwarded as the `chat_template` extra-body field).
 
         Returns:
-            `dict` with keys:
-                - `prompt_ids` (`list[list[int]]`):
-                    List of lists of token IDs representing the tokenized input messages.
-                - `completion_ids` (`list[list[int]]`):
-                    List of lists of token IDs representing the model-generated completions for each message list.
-                - `logprobs` (`list[list[list[float]]]`):
-                    Per-token logprobs of shape (num_sequences, seq_len, num_logprobs), sorted by descending
-                    probability.
-                - `logprob_token_ids` (`list[list[list[int]]]`):
-                    Token IDs corresponding to each logprob, same shape as `logprobs`.
+            `dict` with keys: `prompt_ids`, `completion_ids`, `logprobs`, `logprob_token_ids` — see [`generate`] for
+            shapes.
         """
-        if chat_template is not None:
-            raise NotImplementedError("Custom chat templates are not yet implemented in VLLMClient.chat().")
-
-        url = f"{self.base_url}/chat/"
-
-        # Convert PIL images to base64 strings
-        messages = copy.deepcopy(messages)  # avoid modifying the original messages
-        for message_list in messages:
-            for message in message_list:
+        # Convert PIL image parts to OpenAI's `image_url` form, leaving other parts untouched. Copy to avoid mutating
+        # the caller's structures.
+        messages = copy.deepcopy(messages)
+        for conversation in messages:
+            for message in conversation:
                 if isinstance(message["content"], list):
                     for part in message["content"]:
-                        if part["type"] == "image_pil":
-                            part["image_pil"] = pil_to_base64(part["image_pil"])
+                        if part.get("type") == "image_pil":
+                            part["type"] = "image_url"
+                            part["image_url"] = {"url": pil_to_data_url(part.pop("image_pil"))}
 
+        # Convert callable tools to JSON schemas (`get_json_schema` handles function signatures).
         if isinstance(tools, list) and len(tools) > 0:
             tools = [get_json_schema(tool) if callable(tool) else tool for tool in tools]
 
-        response = self.session.post(
-            url,
-            json={
-                "messages": messages,
-                "n": n,
-                "repetition_penalty": repetition_penalty,
-                "temperature": temperature,
-                "top_p": top_p,
-                "top_k": top_k,
-                "min_p": min_p,
-                "max_tokens": max_tokens,
-                "logprobs": logprobs,
-                "structured_outputs_regex": structured_outputs_regex,
-                "generation_kwargs": generation_kwargs or {},
-                "chat_template_kwargs": chat_template_kwargs or {},
-                "tools": tools,
-            },
-        )
-        if response.status_code == 200:
-            json_response = response.json()
-            return {
-                "prompt_ids": json_response["prompt_ids"],
-                "completion_ids": json_response["completion_ids"],
-                "logprobs": json_response["logprobs"],
-                "logprob_token_ids": json_response["logprob_token_ids"],
-            }
-        else:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        # OpenAI's chat completions `logprobs` is bool + `top_logprobs` int; map TRL's int convention.
+        logprobs_bool = logprobs is not None
+        top_logprobs = logprobs if logprobs and logprobs > 0 else None
+
+        extra_body: dict = {
+            "top_k": top_k,
+            "min_p": min_p,
+            "repetition_penalty": repetition_penalty,
+            "guided_regex": structured_outputs_regex,
+            "generation_kwargs": generation_kwargs or {},
+            "chat_template_kwargs": chat_template_kwargs or {},
+        }
+        if chat_template is not None:
+            extra_body["chat_template"] = chat_template
+
+        def _one(conversation):
+            response = self._openai.chat.completions.create(
+                model=self._model_name,
+                messages=conversation,
+                n=n,
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+                logprobs=logprobs_bool,
+                top_logprobs=top_logprobs,
+                tools=tools,
+                extra_body=extra_body,
+            )
+            return response.model_dump()
+
+        responses = list(self._chat_pool.map(_one, messages))
+
+        prompt_ids: list[list[int]] = []
+        completion_ids: list[list[int]] = []
+        all_logprobs: list[list[list[float | None]] | None] = []
+        all_logprob_token_ids: list[list[list[int]] | None] = []
+        any_logprobs = False
+        for response in responses:
+            prompt_ids.append(response["prompt_token_ids"])
+            for choice in response["choices"]:
+                completion_ids.append(choice["token_ids"])
+                values, token_ids = self._extract_choice_logprobs(choice)
+                all_logprobs.append(values)
+                all_logprob_token_ids.append(token_ids)
+                if values is not None:
+                    any_logprobs = True
+
+        return {
+            "prompt_ids": prompt_ids,
+            "completion_ids": completion_ids,
+            "logprobs": all_logprobs if any_logprobs else None,
+            "logprob_token_ids": all_logprob_token_ids if any_logprobs else None,
+        }
+
+    # --------------------------------------------------------------------------------------------
+    # Weight sync — TRL-only endpoints
+    # --------------------------------------------------------------------------------------------
 
     def init_communicator(self, device: torch.device | str | int = 0):
         """
@@ -423,7 +487,7 @@ class VLLMClient:
                 be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
         """
         # Get the world size from the server
-        url = f"{self.base_url}/get_world_size/"
+        url = f"{self.base_url}/world_size"
         response = requests.get(url)
         if response.status_code == 200:
             vllm_world_size = response.json()["world_size"]
@@ -434,7 +498,7 @@ class VLLMClient:
         self.rank = vllm_world_size  # the client's rank is the last process
 
         # Initialize weight update group
-        url = f"{self.base_url}/init_communicator/"
+        url = f"{self.base_url}/init_communicator"
         # Will simplify it after torch xpu 2.9 support get uuid.
         if is_torch_xpu_available():
             if hasattr(torch.xpu.get_device_properties(device), "uuid"):
@@ -497,7 +561,7 @@ class VLLMClient:
                 Tensor containing the updated weights.
         """
         dtype, shape = str(weights.dtype), tuple(weights.shape)
-        url = f"{self.base_url}/update_named_param/"
+        url = f"{self.base_url}/update_named_param"
         response = self.session.post(url, json={"name": name, "dtype": dtype, "shape": shape})
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
@@ -570,12 +634,10 @@ class VLLMClient:
                 - `logprob_token_ids` (`list[list[list[int]]]`):
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         if temperature <= 0:
             raise ValueError(f"temperature must be positive, got {temperature}")
 
-        url = f"{self.base_url}/get_sequence_logprobs/"
+        url = f"{self.base_url}/get_sequence_logprobs"
         response_format = "binary" if use_binary else "json"
 
         if chunk_size > 0 and len(sequences) > chunk_size:
@@ -721,7 +783,7 @@ class VLLMClient:
         """
         Resets the prefix cache for the model.
         """
-        url = f"{self.base_url}/reset_prefix_cache/"
+        url = f"{self.base_url}/reset_prefix_cache"
         response = self.session.post(url)
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
@@ -730,7 +792,7 @@ class VLLMClient:
         """
         Closes the weight update group and cleans up the communication group.
         """
-        url = f"{self.base_url}/close_communicator/"
+        url = f"{self.base_url}/close_communicator"
 
         try:
             response = self.session.post(url)
@@ -747,14 +809,12 @@ class VLLMClient:
 
 # Example usage
 if __name__ == "__main__":
-    from vllm import SamplingParams
-
     device = "xpu" if is_torch_xpu_available() else "cuda"
     client = VLLMClient()
     client.init_communicator(device=device)
 
     # Generate completions
-    responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())
+    responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32)
     print("Responses:", responses)  # noqa
 
     # Update model weights
