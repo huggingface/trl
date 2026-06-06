@@ -591,6 +591,7 @@ class TestGetTrainingChatTemplate:
             processing_class = AutoProcessor.from_pretrained(model_name)
 
         return processing_class
+
     def test_new_chat_template_is_prefix_preserving(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
         tokenizer.chat_template = get_training_chat_template(tokenizer)
