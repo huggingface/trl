@@ -521,6 +521,8 @@ class TestIsChatTemplatePrefixPreserving:
         ),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+        pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
+        pytest.param("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava_next"),
         pytest.param(
             "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
             id="nemotron_3_nano",
@@ -580,8 +582,12 @@ class TestIsChatTemplatePrefixPreserving:
     ],
 )
 class TestGetTrainingChatTemplate:
+    def _load(self, tokenizer_name):
+        self.is_vlm = "ForConditionalGeneration" in tokenizer_name
+        return AutoTokenizer.from_pretrained(tokenizer_name)
+
     def test_new_chat_template_is_prefix_preserving(self, tokenizer_name):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = self._load(tokenizer_name)
         tokenizer.chat_template = get_training_chat_template(tokenizer)
         # Prefix-preservation is only meaningful for templates that actually support tool messages — the check
         # itself renders one. Skip the assertion for tool-less templates (e.g. Gemma).
@@ -590,16 +596,22 @@ class TestGetTrainingChatTemplate:
         assert is_chat_template_prefix_preserving(tokenizer) is True
 
     def test_behavior_unchanged_single_user_no_generation_prompt(self, tokenizer_name):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = self._load(tokenizer_name)
         messages = [{"role": "user", "content": "What color is the sky?"}]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
         assert before == after
 
     def test_behavior_unchanged_single_user_with_generation_prompt(self, tokenizer_name):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = self._load(tokenizer_name)
         messages = [{"role": "user", "content": "What color is the sky?"}]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+
         before = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(
@@ -611,18 +623,21 @@ class TestGetTrainingChatTemplate:
         assert before == after
 
     def test_behavior_unchanged_single_user_and_final_assistant_plain_content(self, tokenizer_name):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = self._load(tokenizer_name)
         messages = [
             {"role": "user", "content": "What color is the sky?"},
             {"role": "assistant", "content": "It is blue."},
         ]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
         assert before == after
 
     def test_behavior_unchanged_final_assistant_with_reasoning_content(self, tokenizer_name):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = self._load(tokenizer_name)
         messages = [
             {"role": "user", "content": "What color is the sky?"},
             {
@@ -631,13 +646,16 @@ class TestGetTrainingChatTemplate:
                 "reasoning_content": "The sky appears blue due to Rayleigh scattering.",
             },
         ]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
         assert before == after
 
     def test_behavior_unchanged_final_assistant_with_existing_think_tags(self, tokenizer_name):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = self._load(tokenizer_name)
         messages = [
             {"role": "user", "content": "What color is the sky?"},
             {
@@ -645,18 +663,24 @@ class TestGetTrainingChatTemplate:
                 "content": "<think>\nThe sky scatters shorter wavelengths.\n</think>\n\nIt is blue.",
             },
         ]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
         assert before == after
 
     def test_behavior_unchanged_assistant_with_tool_calls(self, tokenizer_name):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = self._load(tokenizer_name)
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         messages = [
             {"role": "user", "content": "Multiply 3 by 4."},
             {"role": "assistant", "content": "I will call a tool.", "tool_calls": tool_calls},
         ]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+
         messages_before = copy.deepcopy(messages)
         if tokenizer_name == "trl-internal-testing/tiny-DeepseekV3ForCausalLM":
             # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
@@ -669,7 +693,7 @@ class TestGetTrainingChatTemplate:
         assert before == after
 
     def test_behavior_unchanged_with_tools_with_and_without_system_message(self, tokenizer_name):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = self._load(tokenizer_name)
         tools = [
             {
                 "type": "function",
@@ -688,13 +712,16 @@ class TestGetTrainingChatTemplate:
             }
         ]
         messages = [{"role": "user", "content": "Multiply 3 by 4."}]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+
         before = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, chat_template=new_chat_template)
         assert before == after
 
     def test_behavior_unchanged_with_tools_with_system_message(self, tokenizer_name):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = self._load(tokenizer_name)
         if not supports_tool_calling(tokenizer):
             pytest.skip("Template does not support tool calling; skipping tool_calls test.")
         tools = [
@@ -715,14 +742,20 @@ class TestGetTrainingChatTemplate:
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Multiply 3 by 4."},
         ]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+
         before = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, chat_template=new_chat_template)
         assert before == after
 
     def test_behavior_unchanged_generation_prompt_with_enable_thinking_false(self, tokenizer_name):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = self._load(tokenizer_name)
         messages = [{"role": "user", "content": "What color is the sky?"}]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+
         before = tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
@@ -737,11 +770,14 @@ class TestGetTrainingChatTemplate:
         assert before == after
 
     def test_assistant_masks(self, tokenizer_name):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = self._load(tokenizer_name)
         messages = [
             {"role": "user", "content": "What color is the sky?"},
             {"role": "assistant", "content": "It is blue."},
         ]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+
         chat_template = get_training_chat_template(tokenizer)
         result = tokenizer.apply_chat_template(
             messages, chat_template=chat_template, return_assistant_tokens_mask=True, return_dict=True
@@ -754,13 +790,16 @@ class TestGetTrainingChatTemplate:
         assert masks[-1] == 1
 
     def test_assistant_masks_multi_turn(self, tokenizer_name):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = self._load(tokenizer_name)
         messages = [
             {"role": "user", "content": "Hi"},
             {"role": "assistant", "content": "Hello!"},
             {"role": "user", "content": "Bye"},
             {"role": "assistant", "content": "Goodbye!"},
         ]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+
         chat_template = get_training_chat_template(tokenizer)
         result = tokenizer.apply_chat_template(
             messages, chat_template=chat_template, return_assistant_tokens_mask=True, return_dict=True

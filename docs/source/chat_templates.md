@@ -20,7 +20,9 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 ## Supported model families
 
-TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3, Gemma, Gemma3, GLM-4-MoE, GPT-OSS, Llama 3 / 3.1 / 3.2, Nemotron 3 (Nano, Super, Ultra), Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6.
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3, Gemma, Gemma3, GLM-4-MoE, GPT-OSS, Llama 3 / 3.1 / 3.2, Llava, Llava-Next, Nemotron 3 (Nano, Super, Ultra), Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6.
+
+Most of these ship a stored reference copy and, where needed, a patched training template (see below). A few are already training-compatible upstream and need neither — for example, **Llava (1.5)**, whose native template already includes `&#123;% generation %&#125;` markers and which has no tool calling. For such models [`get_training_chat_template`] returns `None` and TRL trains with the model's own template unchanged.
 
 ## Training templates
 
@@ -111,6 +113,12 @@ Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endge
 ### `llama3_training.jinja`
 
 Patched Llama 3 template. Diff vs `llama3.jinja`:
+
+Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `llava_next_training.jinja`
+
+Patched Llava-Next template. Diff vs `llava_next.jinja`:
 
 Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
