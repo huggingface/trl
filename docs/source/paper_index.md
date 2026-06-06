@@ -221,6 +221,30 @@ trainer = GRPOTrainer(
 )
 ```
 
+### Emergent Hierarchical Reasoning in LLMs through Reinforcement Learning (HICRA)
+
+**📜 Paper**: https://huggingface.co/papers/2509.03646
+
+HICRA (Hierarchy-Aware Credit Assignment) extends GRPO by amplifying the learning signal for *Strategic Grams* — high-level planning tokens (e.g., "let's try a different approach") that act as reasoning forks. For responses that are both correct and longer than average, HICRA scales up the advantage of high-entropy and planning tokens by a factor of `1 + α`, separating strategic planning from low-level execution and improving sample efficiency on mathematical reasoning tasks.
+
+```python
+from trl import HICRAConfig, HICRATrainer
+
+training_args = HICRAConfig(
+    use_hicra=True,
+    hicra_alpha=0.2,          # advantage amplification factor (α in the paper)
+    hicra_entropy_topk=0.3,   # top-k fraction used for entropy thresholding
+    use_planning_tokens=True,  # also amplify Strategic Gram tokens
+    loss_type="grpo",
+    beta=0.001,
+    num_generations=8,
+)
+trainer = HICRATrainer(
+    ...,
+    args=training_args,
+)
+```
+
 ### Dr. GRPO: Understanding R1-Zero-Like Training: A Critical Perspective
 
 **📜 Paper**: https://huggingface.co/papers/2503.20783
