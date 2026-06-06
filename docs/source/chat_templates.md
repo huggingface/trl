@@ -22,8 +22,6 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3, Gemma, Gemma3, GLM-4-MoE, GPT-OSS, Llama 3 / 3.1 / 3.2, Llava, Llava-Next, Nemotron 3 (Nano, Super, Ultra), Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6.
 
-Most of these ship a stored reference copy and, where needed, a patched training template (see below). A few are already training-compatible upstream and need neither — for example, **Llava (1.5)**, whose native template already includes `&#123;% generation %&#125;` markers and which has no tool calling. For such models [`get_training_chat_template`] returns `None` and TRL trains with the model's own template unchanged.
-
 ## Training templates
 
 Patched templates that fix training-specific issues. Swapped in at init when tools are enabled (GRPO) or when `assistant_only_loss=True` (SFT).
