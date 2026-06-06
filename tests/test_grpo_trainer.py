@@ -602,6 +602,33 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_init_reward_func_without_name(self):
+        # Test if trainer can handle callable reward functions without a __name__ attribute
+        dataset = Dataset.from_dict({"prompt": ["Hello", "World", "Goodbye"]})
+
+        class RewardFunc:
+            def __call__(self, completions, **kwargs):
+                return [float(len(completion)) for completion in completions]
+
+            def __str__(self):
+                return "custom_reward_func"
+
+        reward_func = RewardFunc()
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.reward_func_names == ["custom_reward_func"]
+
     def test_train_reward_func_conversational(self):
         # Test if trainer can handle reward function with conversational format
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")

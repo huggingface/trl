@@ -204,7 +204,13 @@ class _AsyncRolloutLoop:
         self.dataset = dataset
         self._dataset_iter = iter(dataset)
         self.reward_funcs = reward_funcs
-        self.reward_func_names = [f.__name__ for f in reward_funcs]
+        self.reward_func_names = []
+        for reward_func in reward_funcs:
+            try:
+                reward_func_name = reward_func.__name__
+            except AttributeError:
+                reward_func_name = str(reward_func)
+            self.reward_func_names.append(reward_func_name)
         self.tokenizer = add_response_schema(processing_class)
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
