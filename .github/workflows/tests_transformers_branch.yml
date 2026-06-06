@@ -28,7 +28,7 @@ jobs:
         shell: bash
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -82,7 +82,7 @@ jobs:
       CUDA_VISIBLE_DEVICES: "0,1"
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
