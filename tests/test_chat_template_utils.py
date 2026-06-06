@@ -510,7 +510,7 @@ class TestIsChatTemplatePrefixPreserving:
         pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
         pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
         pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
-        pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3"),
+        pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3", marks=require_vision),
         pytest.param(
             "trl-internal-testing/tiny-Glm4MoeForCausalLM",
             id="glm4moe",
@@ -521,8 +521,10 @@ class TestIsChatTemplatePrefixPreserving:
         ),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
-        pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
-        pytest.param("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava_next"),
+        pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
+        pytest.param(
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava_next", marks=require_vision
+        ),
         pytest.param(
             "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
             id="nemotron_3_nano",
@@ -549,35 +551,56 @@ class TestIsChatTemplatePrefixPreserving:
         ),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
-        pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl"),
+        pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl", marks=require_vision),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
-        pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5_vl"),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5_vl", marks=require_vision
+        ),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
-        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            id="qwen3_vl",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="Qwen3-VL was introduced in transformers-4.57.0",
+                ),
+            ],
+        ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
             id="qwen35-nothink",
-            marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.0.0"),
-                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
-            ),
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ],
         ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
             id="qwen35-think",
-            marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.0.0"),
-                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
-            ),
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ],
         ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
             id="qwen36",
-            marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.0.0"),
-                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
-            ),
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ],
         ),
     ],
 )
