@@ -582,10 +582,15 @@ class TestIsChatTemplatePrefixPreserving:
     ],
 )
 class TestGetTrainingChatTemplate:
-    def _load(self, tokenizer_name):
-        self.is_vlm = "ForConditionalGeneration" in tokenizer_name
-        return AutoTokenizer.from_pretrained(tokenizer_name)
+    def _load(self, model_name):
+        if "ForCausalLM" in model_name:
+            self.is_vlm = False
+            processing_class = AutoTokenizer.from_pretrained(model_name)
+        elif "ForConditionalGeneration" in model_name:
+            self.is_vlm = True
+            processing_class = AutoProcessor.from_pretrained(model_name)
 
+        return processing_class
     def test_new_chat_template_is_prefix_preserving(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
         tokenizer.chat_template = get_training_chat_template(tokenizer)
@@ -780,9 +785,11 @@ class TestGetTrainingChatTemplate:
 
         chat_template = get_training_chat_template(tokenizer)
         result = tokenizer.apply_chat_template(
-            messages, chat_template=chat_template, return_assistant_tokens_mask=True, return_dict=True
+            messages, chat_template=chat_template, return_assistant_tokens_mask=True, return_dict=True, tokenize=True
         )
         masks = result["assistant_masks"]
+        if self.is_vlm:  # VLM processors return batched output
+            masks = masks[0]
         assert 1 in masks
         # The first tokens (user turn) should not be masked
         assert masks[0] == 0
@@ -802,9 +809,11 @@ class TestGetTrainingChatTemplate:
 
         chat_template = get_training_chat_template(tokenizer)
         result = tokenizer.apply_chat_template(
-            messages, chat_template=chat_template, return_assistant_tokens_mask=True, return_dict=True
+            messages, chat_template=chat_template, return_assistant_tokens_mask=True, return_dict=True, tokenize=True
         )
         masks = result["assistant_masks"]
+        if self.is_vlm:  # VLM processors return batched output
+            masks = masks[0]
         # Should have two masked regions (two assistant turns): 0→1, 1→0, 0→1
         transitions = sum(1 for i in range(1, len(masks)) if masks[i] != masks[i - 1])
         assert transitions == 3
@@ -896,7 +905,7 @@ class TestParseResponse:
             messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
         ).input_ids
         text = processing_class.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids
-        if self.is_vlm:
+        if self.is_vlm:  # VLM processors return batched output
             prefix = prefix[0]
             text = text[0]
         response = text[len(prefix) :]
@@ -929,7 +938,7 @@ class TestParseResponse:
             messages[:1], add_generation_prompt=True, enable_thinking=True, tokenize=True, return_dict=True
         ).input_ids
         text = processing_class.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids
-        if self.is_vlm:
+        if self.is_vlm:  # VLM processors return batched output
             prefix = prefix[0]
             text = text[0]
         response = text[len(prefix) :]
@@ -962,7 +971,7 @@ class TestParseResponse:
             messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
         ).input_ids
         text = processing_class.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids
-        if self.is_vlm:
+        if self.is_vlm:  # VLM processors return batched output
             prefix = prefix[0]
             text = text[0]
         response = text[len(prefix) :]
@@ -992,7 +1001,7 @@ class TestParseResponse:
             messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
         ).input_ids
         text = processing_class.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids
-        if self.is_vlm:
+        if self.is_vlm:  # VLM processors return batched output
             prefix = prefix[0]
             text = text[0]
         response = text[len(prefix) :]
@@ -1023,7 +1032,7 @@ class TestParseResponse:
             messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
         ).input_ids
         text = processing_class.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids
-        if self.is_vlm:
+        if self.is_vlm:  # VLM processors return batched output
             prefix = prefix[0]
             text = text[0]
         response = text[len(prefix) :]
@@ -1059,7 +1068,7 @@ class TestParseResponse:
             messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
         ).input_ids
         text = processing_class.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids
-        if self.is_vlm:
+        if self.is_vlm:  # VLM processors return batched output
             prefix = prefix[0]
             text = text[0]
         response = text[len(prefix) :]
@@ -1100,7 +1109,7 @@ class TestParseResponse:
             messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
         ).input_ids
         text = processing_class.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids
-        if self.is_vlm:
+        if self.is_vlm:  # VLM processors return batched output
             prefix = prefix[0]
             text = text[0]
         response = text[len(prefix) :]
