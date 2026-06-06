@@ -15,6 +15,7 @@
 import gc
 import os
 import warnings
+from collections import defaultdict
 from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -157,6 +158,71 @@ class TestGetHighEntropyMask(TrlTestCase):
         entropy_mask = self.get_high_entropy_mask(entropies, mask, threshold=0.5)
         expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
+
+
+class TestGRPODPPODivergenceMask:
+    """Unit tests for the GRPO DPPO divergence mask with synthetic inputs."""
+
+    @staticmethod
+    def compute_divergence_mask(
+        current_logps,
+        sampling_logps,
+        advantages,
+        estimator_method,
+        epsilon=0.2,
+        epsilon_high=0.28,
+    ):
+        return GRPOTrainer.get_divergence_mask(
+            advantages=advantages,
+            per_token_logps=current_logps,
+            sampling_per_token_logps=sampling_logps,
+            delta_low=epsilon,
+            delta_high=epsilon_high,
+            estimator_method=estimator_method,
+        )
+
+    def test_tv_no_masking_within_threshold(self):
+        sampling_logps = torch.log(torch.tensor([[0.5, 0.3, 0.7]]))
+        current_logps = torch.log(torch.tensor([[0.51, 0.29, 0.71]]))
+        advantages = torch.tensor([[1.0]])
+
+        mask = self.compute_divergence_mask(current_logps, sampling_logps, advantages, "tv")
+
+        assert mask.shape == (1, 3)
+        assert (mask == 1.0).all()
+
+    def test_tv_masks_positive_advantage_high_divergence(self):
+        sampling_logps = torch.log(torch.tensor([[0.1]]))
+        current_logps = torch.log(torch.tensor([[0.5]]))
+        advantages = torch.tensor([[1.0]])
+
+        mask = self.compute_divergence_mask(
+            current_logps, sampling_logps, advantages, "tv", epsilon=0.01, epsilon_high=0.01
+        )
+
+        assert mask.item() == 0.0
+
+    def test_tv_masks_negative_advantage_low_divergence(self):
+        sampling_logps = torch.log(torch.tensor([[0.5]]))
+        current_logps = torch.log(torch.tensor([[0.1]]))
+        advantages = torch.tensor([[-1.0]])
+
+        mask = self.compute_divergence_mask(
+            current_logps, sampling_logps, advantages, "tv", epsilon=0.01, epsilon_high=0.01
+        )
+
+        assert mask.item() == 0.0
+
+    def test_kl_masks_positive_advantage_high_divergence(self):
+        sampling_logps = torch.log(torch.tensor([[0.1]]))
+        current_logps = torch.log(torch.tensor([[0.5]]))
+        advantages = torch.tensor([[1.0]])
+
+        mask = self.compute_divergence_mask(
+            current_logps, sampling_logps, advantages, "kl", epsilon=0.01, epsilon_high=0.01
+        )
+
+        assert mask.item() == 0.0
 
 
 class TestGRPORolloutDispatch:
@@ -311,6 +377,35 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize("loss_type", ["dppo_tv", "dppo_kl"])
+    def test_train_dppo_loss_types(self, loss_type):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=32,  # reduce the completion length to reduce memory usage
+            gradient_accumulation_steps=2,  # set to 2 to test than DAPO can operate with accumulated batch
+            loss_type=loss_type,
+            epsilon=0.15,
+            epsilon_high=0.15,
+            beta=0.0,
+            use_liger_kernel=False,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_train_with_eval(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")

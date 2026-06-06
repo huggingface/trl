@@ -2470,6 +2470,32 @@ class GRPOTrainer(_BaseTrainer):
 
         return phi_seq  # (B, 1)
 
+    @staticmethod
+    @torch.no_grad()
+    def get_divergence_mask(
+        advantages,
+        per_token_logps,
+        sampling_per_token_logps,
+        delta_low,
+        delta_high,
+        estimator_method,
+    ):
+        prob = torch.exp(per_token_logps)
+        sampling_prob = torch.exp(sampling_per_token_logps)
+        if estimator_method == "tv":
+            divergence = (prob - sampling_prob).abs()
+        elif estimator_method == "kl":
+            divergence = sampling_prob * (sampling_per_token_logps - per_token_logps) + (1 - sampling_prob) * (
+                torch.log1p(-sampling_prob.clamp(max=1 - 1e-7)) - torch.log1p(-prob.clamp(max=1 - 1e-7))
+            )
+
+        # Mask tokens where divergence > threshold AND policy moves away from trust region
+        invalid_pos = (divergence > delta_high) & (prob > sampling_prob)
+        invalid_neg = (divergence > delta_low) & (prob < sampling_prob)
+        mask = torch.where(advantages > 0, ~invalid_pos, ~invalid_neg)
+
+        return mask
+
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -2584,6 +2610,34 @@ class GRPOTrainer(_BaseTrainer):
                 lambda_neg=self.args.vespo_lambda_neg,
             )
             per_token_loss = -phi_seq * advantages * per_token_logps
+        elif self.loss_type == "dppo_tv":
+            sampling_per_token_logps = inputs.get("sampling_per_token_logps", old_per_token_logps)
+            divergence_mask = self.get_divergence_mask(
+                advantages=advantages,
+                per_token_logps=per_token_logps,
+                sampling_per_token_logps=sampling_per_token_logps,
+                delta_low=self.epsilon_low,
+                delta_high=self.epsilon_high,
+                estimator_method="tv",
+            )
+            log_ratio_clamped = torch.exp(
+                (per_token_logps - sampling_per_token_logps).clamp(max=math.log(20.0))
+            ).detach()
+            per_token_loss = -advantages * log_ratio_clamped * divergence_mask * per_token_logps
+        elif self.loss_type == "dppo_kl":
+            sampling_per_token_logps = inputs.get("sampling_per_token_logps", old_per_token_logps)
+            divergence_mask = self.get_divergence_mask(
+                advantages=advantages,
+                per_token_logps=per_token_logps,
+                sampling_per_token_logps=sampling_per_token_logps,
+                delta_low=self.epsilon_low,
+                delta_high=self.epsilon_high,
+                estimator_method="kl",
+            )
+            log_ratio_clamped = torch.exp(
+                (per_token_logps - sampling_per_token_logps).clamp(max=math.log(20.0))
+            ).detach()
+            per_token_loss = -advantages * log_ratio_clamped * divergence_mask * per_token_logps
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
@@ -2593,7 +2647,11 @@ class GRPOTrainer(_BaseTrainer):
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
 
-        if self.use_vllm and self.vllm_importance_sampling_correction and self.loss_type != "vespo":
+        if (
+            self.use_vllm
+            and self.vllm_importance_sampling_correction
+            and self.loss_type not in ["vespo", "dppo_tv", "dppo_kl"]
+        ):
             per_token_loss = per_token_loss * inputs["importance_sampling_ratio"]
 
         if self.beta != 0.0:
@@ -2612,7 +2670,7 @@ class GRPOTrainer(_BaseTrainer):
             loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
-        elif self.loss_type in ["cispo", "dapo", "vespo"]:
+        elif self.loss_type in ["cispo", "dapo", "vespo", "dppo_tv", "dppo_kl"]:
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
             loss = (per_token_loss * mask).sum() / normalizer
         elif self.loss_type == "luspo":

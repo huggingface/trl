@@ -642,28 +642,18 @@ training_args = GRPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2602.04879
 
-DPPO replaces PPO/GRPO's heuristic ratio-clipping with a principled trust region based on direct policy divergence estimates. PPO-style clipping masks tokens based on the probability ratio π/μ, which over-penalizes low-probability tokens and under-penalizes high-probability ones. DPPO instead masks based on direct approximations of policy divergence (TV or KL), ensuring updates stay within a theoretically grounded trust region. Four divergence approximations are supported: `binary_tv`, `binary_kl`, `topk_tv`, and `topk_kl`.
+DPPO replaces PPO/GRPO's heuristic ratio-clipping with a principled trust region based on direct policy divergence estimates. PPO-style clipping masks tokens based on the probability ratio π/μ, which over-penalizes low-probability tokens and under-penalizes high-probability ones. DPPO instead masks based on direct approximations of policy divergence (TV or KL), ensuring updates stay within a theoretically grounded trust region. Two divergence approximations are supported: `dppo_tv` for binary Total Variation, and `dppo_kl` for binary KL-Divergence. The binary approximations are computationally more efficient, introduce no new hyperparameter and have a similar performance compared to the top-K implementation (Section 7 in paper).
 
 ```python
-from trl.experimental.dppo import DPPOConfig, DPPOTrainer
+from trl import GRPOConfig
 
-training_args = DPPOConfig(
-    divergence_type="binary_tv",  # divergence approximation
-    divergence_topk=20,  # K for top-K divergence modes (Section 7 / Appendix G.2 of the paper)
+training_args = GRPOConfig(
+    loss_type="dppo_tv", # or 'dppo_kl' for KL approximation
     epsilon=0.15,  # δ_low threshold (Appendix F of the paper)
     epsilon_high=0.15,  # δ_high threshold (Appendix F of the paper)
-    clip_ratio_c=20.0,  # IS ratio upper bound C (Section 5.4 of the paper)
     beta=0.0,  # KL regularization coefficient
     use_vllm=True,
 )
-
-trainer = DPPOTrainer(
-    model="your-model",
-    reward_funcs=[...],
-    args=training_args,
-    train_dataset=dataset,
-)
-trainer.train()
 ```
 
 The official code [sail-sg/Stable-RL](https://github.com/sail-sg/Stable-RL)

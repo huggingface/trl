@@ -256,6 +256,12 @@ class GRPOConfig(_BaseConfig):
             - `"vespo"`: Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth,
               asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in
               the [VESPO paper](https://huggingface.co/papers/2602.10693).
+            - `"dppo_tv"`: Divergence Proximal Policy Optimization. Replaces ratio-based clipping with a direct
+              estimate of policy divergence using Total Variation, as introduced in the [Divergence Proximal Policy
+              Paper](https://huggingface.co/papers/2602.04879).
+            - `"dppo_kl"`: Divergence Proximal Policy Optimization. Replaces ratio-based clipping with a direct
+              estimate of policy divergence using KL-Divergence, as introduced in the [Divergence Proximal Policy
+              Paper](https://huggingface.co/papers/2602.04879).
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
