@@ -774,7 +774,15 @@ class TestGetTrainingChatTemplate:
         )
         assert before == after
 
-    def test_assistant_masks(self, tokenizer_name):
+    def test_assistant_masks(self, tokenizer_name, request):
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
+            request.node.add_marker(
+                pytest.mark.xfail(
+                    reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
+                    "through the processor path. It is not a supported training template.",
+                    strict=True,
+                )
+            )
         tokenizer = self._load(tokenizer_name)
         messages = [
             {"role": "user", "content": "What color is the sky?"},
@@ -796,7 +804,15 @@ class TestGetTrainingChatTemplate:
         # The last tokens (assistant turn ending with <|im_end|>) should be masked
         assert masks[-1] == 1
 
-    def test_assistant_masks_multi_turn(self, tokenizer_name):
+    def test_assistant_masks_multi_turn(self, tokenizer_name, request):
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
+            request.node.add_marker(
+                pytest.mark.xfail(
+                    reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
+                    "through the processor path. It is not a supported training template.",
+                    strict=True,
+                )
+            )
         tokenizer = self._load(tokenizer_name)
         messages = [
             {"role": "user", "content": "Hi"},
