@@ -106,6 +106,25 @@ class TestDataCollatorForPreference(TrlTestCase):
         )
         torch.testing.assert_close(result["margin"], torch.tensor([0.1, 0.2]))
 
+    @pytest.mark.parametrize(
+        "examples",
+        [
+            [
+                {"chosen_ids": [1, 2, 3], "rejected_ids": [4, 5]},
+                {"chosen_ids": [6, 7], "rejected_ids": [8], "margin": 0.2},
+            ],
+            [
+                {"chosen_ids": [1, 2, 3], "rejected_ids": [4, 5], "margin": 0.1},
+                {"chosen_ids": [6, 7], "rejected_ids": [8]},
+            ],
+        ],
+    )
+    def test_collate_rejects_mixed_margin_batches(self, examples):
+        collator = DataCollatorForPreference(pad_token_id=0)
+
+        with pytest.raises(ValueError, match="all examples or no examples"):
+            collator(examples)
+
 
 class TestRewardTrainer(TrlTestCase):
     def test_raises_error_when_model_num_labels_not_one(self):

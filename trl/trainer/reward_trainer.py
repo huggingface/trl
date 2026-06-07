@@ -201,7 +201,10 @@ class DataCollatorForPreference(DataCollatorMixin):
         # Convert to tensor
         chosen_ids = [torch.tensor(example["chosen_ids"]) for example in examples]
         rejected_ids = [torch.tensor(example["rejected_ids"]) for example in examples]
-        if "margin" in examples[0]:
+        has_margin = ["margin" in example for example in examples]
+        if any(has_margin) and not all(has_margin):
+            raise ValueError("Either all examples or no examples must include a `margin` field.")
+        if all(has_margin):
             margins = torch.tensor([example["margin"] for example in examples], dtype=torch.float)
         input_ids = chosen_ids + rejected_ids
         attention_mask = [torch.ones_like(ids) for ids in input_ids]
@@ -221,7 +224,7 @@ class DataCollatorForPreference(DataCollatorMixin):
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         )
-        if "margin" in examples[0]:
+        if all(has_margin):
             output["margin"] = margins
         return output
 
