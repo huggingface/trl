@@ -1638,11 +1638,11 @@ class SFTTrainer(_BaseTrainer):
             with torch.no_grad():
                 if "shift_labels" in inputs:
                     # When using CP or SP, labels are pre-shifted.
-                    shift_logits = outputs.logits.contiguous()
+                    shift_logits = outputs.logits
                     shift_labels = inputs["shift_labels"]
                 else:
-                    shift_logits = outputs.logits[..., :-1, :].contiguous()
-                    shift_labels = labels[..., 1:].contiguous()
+                    shift_logits = outputs.logits[..., :-1, :]
+                    shift_labels = labels[..., 1:]
 
                 # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
                 if (
