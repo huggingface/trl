@@ -14,11 +14,13 @@
 
 import argparse
 import base64
+import hmac
 import ipaddress
 import json
 import logging
 import math
 import os
+import socket
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -310,7 +312,7 @@ class ScriptArguments:
         },
     )
     api_key: str | None = field(
-        default=os.environ.get("TRL_VLLM_SERVER_API_KEY"),
+        default_factory=lambda: os.environ.get("TRL_VLLM_SERVER_API_KEY"),
         metadata={
             "help": "API key required for HTTP requests to the vLLM server. Can also be set with the "
             "TRL_VLLM_SERVER_API_KEY environment variable. Required when binding to a non-loopback host."
@@ -418,12 +420,21 @@ def chunk_list(lst: list, n: int) -> list[list]:
 
 
 def _is_loopback_host(host: str) -> bool:
-    if host in {"localhost", "127.0.0.1", "::1"}:
+    normalized_host = host.strip("[]").lower()
+    if normalized_host in {"localhost", "127.0.0.1", "::1"}:
         return True
     try:
-        return ipaddress.ip_address(host).is_loopback
+        return ipaddress.ip_address(normalized_host).is_loopback
     except ValueError:
+        pass
+
+    try:
+        addr_infos = socket.getaddrinfo(normalized_host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
         return False
+
+    resolved_addresses = {addr_info[4][0] for addr_info in addr_infos}
+    return bool(resolved_addresses) and all(ipaddress.ip_address(address).is_loopback for address in resolved_addresses)
 
 
 def _validate_auth_config(host: str, api_key: str | None) -> None:
@@ -524,8 +535,19 @@ def main(script_args: ScriptArguments):
         if script_args.api_key is None:
             return
 
-        expected_bearer = f"Bearer {script_args.api_key}"
-        if authorization == expected_bearer or x_trl_api_key == script_args.api_key:
+        expected_api_key = script_args.api_key
+        provided_bearer = None
+        if authorization is not None:
+            auth_parts = authorization.split(None, 1)
+            if len(auth_parts) == 2 and auth_parts[0].lower() == "bearer":
+                provided_bearer = auth_parts[1]
+
+        if (
+            provided_bearer is not None
+            and hmac.compare_digest(provided_bearer, expected_api_key)
+            or x_trl_api_key is not None
+            and hmac.compare_digest(x_trl_api_key, expected_api_key)
+        ):
             return
 
         raise HTTPException(status_code=401, detail="Invalid or missing TRL vLLM server API key")

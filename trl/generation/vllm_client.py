@@ -205,6 +205,18 @@ class VLLMClient:
                     logger.info("Server is up!")
                     return None
 
+                elapsed_time = time.time() - start_time
+                if response.status_code == 401:
+                    raise ConnectionError(
+                        f"The vLLM server at {self.base_url} rejected the health check with HTTP 401. "
+                        "Set the correct TRL_VLLM_SERVER_API_KEY or pass api_key to VLLMClient."
+                    )
+                if elapsed_time >= total_timeout:
+                    raise ConnectionError(
+                        f"The vLLM server at {self.base_url} returned HTTP {response.status_code} after "
+                        f"{total_timeout} seconds."
+                    )
+
             # Retry logic: wait before trying again
             logger.info(f"Server is not up yet. Retrying in {retry_interval} seconds...")
             time.sleep(retry_interval)
