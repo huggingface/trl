@@ -788,7 +788,8 @@ class GOLDTrainer(SFTTrainer):
         self.model_revision = (args.model_init_kwargs or {}).get("revision")
         dataset_sample = next(iter(train_dataset)) if train_dataset is not None else {}
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
+            model_id = model if isinstance(model, str) else get_config_model_id(model.config)
+            processing_class = AutoProcessor.from_pretrained(model_id)
             # simplified logic from SFTTrainer
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -827,7 +828,9 @@ class GOLDTrainer(SFTTrainer):
                 teacher_model_type = teacher_model.config.model_type
 
             # Check for cross-architecture VLM distillation
-            student_model_type = model.config.model_type if not isinstance(model, str) else None
+            student_model_type = (
+                AutoConfig.from_pretrained(model).model_type if isinstance(model, str) else model.config.model_type
+            )
             is_cross_architecture = student_model_type and teacher_model_type != student_model_type
             self._is_cross_architecture_vlm = is_cross_architecture
             if is_cross_architecture:
