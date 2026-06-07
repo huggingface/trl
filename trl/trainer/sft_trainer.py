@@ -290,16 +290,16 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         decoder_kwargs = {}
         if output_router_logits:
             decoder_kwargs["output_router_logits"] = True
-        # `self.base_model` gives the inner module (skipping `lm_head`) — text decoder for LMs, multimodal wrapper
+        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper
         # for VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
         # returns just the text stack and feeds image-placeholder IDs through it.
         # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `self.base_model is self` (re-runs `lm_head`).
         # Fall back to `self.model` there.
         if is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            decoder = self.model
+            backbone = self.model
         else:
-            decoder = self.base_model
-        outputs: BaseModelOutputWithPast = decoder(
+            backbone = self.base_model
+        outputs: BaseModelOutputWithPast = backbone(
             input_ids=input_ids, attention_mask=attention_mask, use_cache=False, **decoder_kwargs, **kwargs
         )
         hidden_states = outputs.last_hidden_state
@@ -1620,9 +1620,18 @@ class SFTTrainer(_BaseTrainer):
             inputs["return_token_accuracy"] = True
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
 
-        (loss, outputs) = super().compute_loss(
-            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
-        )
+        try:
+            (loss, outputs) = super().compute_loss(
+                model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+            )
+        except ValueError as e:
+            if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
+                raise ValueError(
+                    f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
+                    f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
+                    f"Please increase `max_length` or set it to `None` to disable truncation."
+                ) from e
+            raise
 
         # Compute entropy
         if self.args.loss_type == "chunked_nll":
@@ -1638,11 +1647,11 @@ class SFTTrainer(_BaseTrainer):
             with torch.no_grad():
                 if "shift_labels" in inputs:
                     # When using CP or SP, labels are pre-shifted.
-                    shift_logits = outputs.logits.contiguous()
+                    shift_logits = outputs.logits
                     shift_labels = inputs["shift_labels"]
                 else:
-                    shift_logits = outputs.logits[..., :-1, :].contiguous()
-                    shift_labels = labels[..., 1:].contiguous()
+                    shift_logits = outputs.logits[..., :-1, :]
+                    shift_labels = labels[..., 1:]
 
                 # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
                 if (
