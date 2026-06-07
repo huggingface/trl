@@ -1074,9 +1074,9 @@ class DPOTrainer(_BaseTrainer):
 
         input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
-        shift_labels = input_ids[..., 1:].contiguous()
-        shift_completion_mask = completion_mask[..., 1:].contiguous()
-        ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
+        shift_labels = input_ids[..., 1:]
+        shift_completion_mask = completion_mask[..., 1:]
+        ref_shift_logits = ref_outputs.logits[..., :-1, :]
         ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
         ref_per_token_logps[shift_completion_mask == 0] = 0.0
 
@@ -1182,9 +1182,9 @@ class DPOTrainer(_BaseTrainer):
 
         input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
-        shift_logits = outputs.logits[..., :-1, :].contiguous()
-        shift_labels = input_ids[..., 1:].contiguous()
-        shift_completion_mask = completion_mask[..., 1:].contiguous()
+        shift_logits = outputs.logits[..., :-1, :]
+        shift_labels = input_ids[..., 1:]
+        shift_completion_mask = completion_mask[..., 1:]
         per_token_logps = selective_log_softmax(shift_logits, shift_labels)
         per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
         if self.ld_alpha is None:
@@ -1219,7 +1219,7 @@ class DPOTrainer(_BaseTrainer):
                 else:
                     ref_outputs = self.ref_model(**model_kwargs)
 
-            ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
+            ref_shift_logits = ref_outputs.logits[..., :-1, :]
             ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
             ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
             if self.ld_alpha is None:
@@ -1488,10 +1488,19 @@ class DPOTrainer(_BaseTrainer):
         return (loss, outputs) if return_outputs else loss
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if self.use_liger_kernel:
-            return self._compute_loss_liger(model, inputs, return_outputs)
-        else:
-            return self._compute_loss(model, inputs, return_outputs)
+        try:
+            if self.use_liger_kernel:
+                return self._compute_loss_liger(model, inputs, return_outputs)
+            else:
+                return self._compute_loss(model, inputs, return_outputs)
+        except ValueError as e:
+            if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
+                raise ValueError(
+                    f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
+                    f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
+                    f"Please increase `max_length` or set it to `None` to disable truncation."
+                ) from e
+            raise
 
     # Override training step to add activation offloading context.
     def training_step(self, *args, **kwargs):

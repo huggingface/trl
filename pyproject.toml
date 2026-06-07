@@ -52,8 +52,9 @@ deepspeed = [
     "deepspeed>=0.14.4",
     "transformers!=5.1.0",  # see transformers#43780
 ]
-kernels = [
-    "transformers[kernels]",
+kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
+    "transformers[kernels]",  # transformers >= 5.1.0
+    "transformers[hub-kernels]",  # transformers < 5.1.0
 ]
 liger = [
     "liger-kernel>=0.8.0"
@@ -103,8 +104,9 @@ dev = [
     "joblib",
     # deepspeed
     "deepspeed>=0.14.4",
-    # kernels
-    "transformers[kernels]",
+    # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
+    "transformers[kernels]",  # transformers >= 5.1.0
+    "transformers[hub-kernels]",  # transformers < 5.1.0
     # liger
     "liger-kernel>=0.8.0",
     # openreward (requires Python 3.11+)

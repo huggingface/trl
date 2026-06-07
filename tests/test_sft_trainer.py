@@ -371,6 +371,13 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.7.0"),
+                    reason="Nemotron 3 gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
+                ),
+            ),
         ],
     )
     def test_train(self, model_id):
@@ -1095,6 +1102,7 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             padding_free=True,
+            max_length=None,  # padding-free without packing doesn't enforce max_length
             model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"},
             bf16=True,  # flash_attention_2 only supports bf16 and fp16
             report_to="none",
@@ -2274,6 +2282,13 @@ _CHUNKED_CE_MODEL_IDS = [
     "trl-internal-testing/tiny-LlamaForCausalLM-3",
     "trl-internal-testing/tiny-MistralForCausalLM-0.1",
     "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    pytest.param(
+        "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.3.0"),
+            reason="Nemotron 3 was introduced in transformers>=5.3.0",
+        ),
+    ),
     "trl-internal-testing/tiny-Phi3ForCausalLM",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",
