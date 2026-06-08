@@ -1174,28 +1174,39 @@ class KTOTrainer(_BaseTrainer):
         else:
             kl = torch.zeros(1).to(self.accelerator.device)
 
-        model_kwargs = {}
+        _non_model_keys = {
+            "completion_mask",
+            "KL_completion_input_ids",
+            "KL_completion_attention_mask",
+            "KL_completion_mask",
+            "KL_completion_token_type_ids",
+            "KL_completion_mm_token_type_ids",
+            "label",
+            "ref_logps",
+            "ref_KL_logps",
+        }
+        model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
+        model_kwargs["input_ids"] = model_kwargs.pop("completion_input_ids")
+        model_kwargs["attention_mask"] = model_kwargs.pop("completion_attention_mask")
+        model_kwargs["use_cache"] = False
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
-        # skip the lm head and get the last hidden state
-        base_model = model.get_decoder()
-        outputs = base_model(
-            batch["completion_input_ids"],
-            attention_mask=batch["completion_attention_mask"],
-            use_cache=False,
-            **model_kwargs,
-        )
+        # `base_model` gives the inner module (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
+        # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
+        # returns just the text stack and feeds image-placeholder IDs through it.
+        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
+        # Fall back to `.model` there.
+        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+            backbone, ref_backbone = model.model, self.ref_model.model
+        else:
+            backbone, ref_backbone = model.base_model, self.ref_model.base_model
+
+        outputs = backbone(**model_kwargs)
 
         # reference model
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            ref_base_model = self.ref_model.get_decoder()
-            ref_outputs = ref_base_model(
-                batch["completion_input_ids"],
-                attention_mask=batch["completion_attention_mask"],
-                use_cache=False,
-                **model_kwargs,
-            )
+            ref_outputs = ref_backbone(**{k: v for k, v in model_kwargs.items() if k != "output_router_logits"})
         lm_head = model.get_output_embeddings()
         ref_lm_head = self.ref_model.get_output_embeddings()
 
@@ -1317,6 +1328,7 @@ class KTOTrainer(_BaseTrainer):
             else:
                 ref_KL_logps = None
         else:
+            ref_model_kwargs = {k: v for k, v in model_kwargs.items() if k != "output_router_logits"}
             with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
                 if is_peft_model(self.model) and self.ref_model is None:
                     ref_model_unwrapped = self.accelerator.unwrap_model(self.model)
@@ -1324,16 +1336,10 @@ class KTOTrainer(_BaseTrainer):
                         ref_model_unwrapped, adapter_name="ref" if "ref" in ref_model_unwrapped.peft_config else None
                     ):
                         ref_KL_logps = self._compute_kl_logps(self.model, batch)
-                        ref_outputs = self.model(
-                            batch["completion_input_ids"],
-                            attention_mask=batch["completion_attention_mask"],
-                        )
+                        ref_outputs = self.model(**ref_model_kwargs)
                 else:
                     ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
-                    ref_outputs = self.ref_model(
-                        batch["completion_input_ids"],
-                        attention_mask=batch["completion_attention_mask"],
-                    )
+                    ref_outputs = self.ref_model(**ref_model_kwargs)
             ref_shift_logits = ref_outputs.logits[:, :-1, :].contiguous()
             ref_per_token_logps = selective_log_softmax(
                 ref_shift_logits, batch["completion_input_ids"][:, 1:].contiguous()
