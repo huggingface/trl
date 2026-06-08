@@ -213,8 +213,7 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
 
         if is_conversational(examples[0]):
             for example in examples:
-                img_list = example["images"] if images is not None else []
-                example["prompt"] = prepare_multimodal_messages(example["prompt"], images=img_list)
+                example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
                 example["completion"] = prepare_multimodal_messages(example["completion"])
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
