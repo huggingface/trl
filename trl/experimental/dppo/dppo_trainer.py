@@ -1338,8 +1338,9 @@ class DPPOTrainer(GRPOTrainer):
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
         mode = "train" if self.model.training else "eval"
-        normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
-        loss = (per_token_loss * mask).sum() / normalizer
+        # Average tokens within each prompt first, then average across prompts
+        per_prompt_loss = (per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)
+        loss = per_prompt_loss.mean()
 
         # Log metrics
         completion_token_count = mask.sum().clamp(min=1.0)
