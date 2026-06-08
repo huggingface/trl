@@ -51,6 +51,13 @@ class Encoding(str, Enum):
     NVCOMP_CASCADED = "nvcomp_cascaded"  # nvCOMP Cascaded delta+bitpack on the GPU (~1.3 B/elem)
 
 
+class UpdateKind(str, Enum):
+    """vLLM weight-update format (the ``update_kind`` field in the update_info sent to vLLM)."""
+
+    DENSE = "dense"
+    SPARSE_FLAT = "sparse_flat"
+
+
 def extract_sparse(
     param: torch.Tensor,
     mask: torch.Tensor,

@@ -36,6 +36,7 @@ from vllm.distributed.weight_transfer.factory import WeightTransferEngineFactory
 
 from .delta_codec import (
     Encoding,
+    UpdateKind,
     extract_sparse_batched,
     gap_delta_decode,
     gap_delta_encode,
@@ -88,12 +89,12 @@ def _decode_idx(raw: torch.Tensor, encoding: Encoding) -> torch.Tensor:
 
 
 @dataclass
-class DeltaWeightTransferInitInfo(WeightTransferInitInfo):
+class HFBucketWeightTransferInitInfo(WeightTransferInitInfo):
     pass
 
 
 @dataclass
-class DeltaWeightTransferUpdateInfo(WeightTransferUpdateInfo):
+class HFBucketWeightTransferUpdateInfo(WeightTransferUpdateInfo):
     """Per-sync info sent via ``/update_weights`` — just bucket coordinates + kind.
 
     Names and per-param nnz are read from the downloaded file, so ``num_updates_list`` is not required here (we
@@ -104,22 +105,24 @@ class DeltaWeightTransferUpdateInfo(WeightTransferUpdateInfo):
     filename: str = ""
 
     def __post_init__(self) -> None:
-        if self.update_kind not in ("dense", "sparse_flat"):
+        if self.update_kind not in (UpdateKind.DENSE, UpdateKind.SPARSE_FLAT):
             raise ValueError(f"Unsupported update_kind: {self.update_kind}")
 
 
-class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo, DeltaWeightTransferUpdateInfo]):
+class HFBucketWeightTransferEngine(
+    WeightTransferEngine[HFBucketWeightTransferInitInfo, HFBucketWeightTransferUpdateInfo]
+):
     """Weight transfer engine using an HF Storage Bucket as the data plane."""
 
-    init_info_cls = DeltaWeightTransferInitInfo
-    update_info_cls = DeltaWeightTransferUpdateInfo
+    init_info_cls = HFBucketWeightTransferInitInfo
+    update_info_cls = HFBucketWeightTransferUpdateInfo
 
-    def init_transfer_engine(self, init_info: DeltaWeightTransferInitInfo) -> None:
+    def init_transfer_engine(self, init_info: HFBucketWeightTransferInitInfo) -> None:
         pass
 
     def receive_weights(
         self,
-        update_info: DeltaWeightTransferUpdateInfo,
+        update_info: HFBucketWeightTransferUpdateInfo,
         load_weights: Callable[[list[tuple[str, torch.Tensor]]], None],
     ) -> None:
         """Anchor path: download full safetensors from the bucket and load them directly."""
@@ -140,7 +143,7 @@ class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo
 
     def receive_sparse_weights(
         self,
-        update_info: DeltaWeightTransferUpdateInfo,
+        update_info: HFBucketWeightTransferUpdateInfo,
         apply_patches: Callable[[list[SparseWeightPatch]], None],
     ) -> None:
         t0 = time.time()
@@ -182,7 +185,7 @@ class DeltaWeightTransferEngine(WeightTransferEngine[DeltaWeightTransferInitInfo
 
     @staticmethod
     def trainer_send_weights(iterator, trainer_args) -> None:
-        raise NotImplementedError("Use AsyncRolloutWorker.upload_weights / apply_weights instead")
+        raise NotImplementedError("Use WeightTransferClient.upload_patch / apply_patch instead")
 
     @staticmethod
     def upload(
@@ -284,15 +287,15 @@ def iter_sparse_patches(f) -> Iterator[tuple[str, torch.Tensor, torch.Tensor]]:
         yield name, idx, f.get_tensor(f"{name}.val")
 
 
-class DeltaWorkerExtension:
+class HFBucketWorkerExtension:
     """vLLM worker-extension hook (pass via ``--worker-extension-cls``).
 
     Required: ``--worker-extension-cls`` makes the vLLM *worker* process import this module, which runs the
-    ``register_engine`` call below so the ``"delta"`` backend exists in the worker (the factory registry is
+    ``register_engine`` call below so the ``"hf_bucket"`` backend exists in the worker (the factory registry is
     per-process)"""
 
     pass
 
 
-if "delta" not in WeightTransferEngineFactory._registry:
-    WeightTransferEngineFactory.register_engine("delta", DeltaWeightTransferEngine)
+if "hf_bucket" not in WeightTransferEngineFactory._registry:
+    WeightTransferEngineFactory.register_engine("hf_bucket", HFBucketWeightTransferEngine)

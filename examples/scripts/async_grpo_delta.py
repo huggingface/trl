@@ -13,22 +13,23 @@
 # limitations under the License.
 
 """
-AsyncGRPO with delta weight sync (Transport B: HF Storage Bucket + in-place sparse apply).
+AsyncGRPO with sparse weight sync over an HF Storage Bucket (`weight_sync_backend="bucket"`).
 
-Only changed bf16 weights are encoded as a sparse safetensors patch, uploaded to a bucket, and
-applied in place on vLLM via PR #40096 — no full-model broadcast, no vLLM-side snapshot.
+Same sparse delta as the default NCCL path (only the changed bf16 weights, recovered by inverting the AdamW step), but
+the patch is routed through an HF Storage Bucket instead of NCCL and applied in place on vLLM via PR #40096 — useful
+when the trainer and the vLLM server are not in the same NCCL world (e.g. cross-host). No full-model broadcast.
 
-Start the vLLM server with the `delta` backend + worker extension (registers the engine) and the
-`transformers` model impl (so vLLM's runtime param names match the trainer's HF names — every
-param is then addressable by the in-place sparse apply, no fuse/unfuse remap needed):
+Start the vLLM server with the `delta` backend + worker extension (registers the bucket engine) and the
+`transformers` model impl (so vLLM's runtime param names match the trainer's HF names — every param is then
+addressable by the in-place sparse apply, no fuse/unfuse remap needed):
 
 # VLLM_USE_V2_MODEL_RUNNER=0 is required: the in-place sparse apply (apply_sparse_weight_patches,
 # vLLM #40096) exists only on the V1 model runner. Without it the server picks V2 and every sparse
 # delta update fails (the dense anchors still work, so it silently degrades to anchor-only sync).
 CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 VLLM_USE_V2_MODEL_RUNNER=0 vllm serve Qwen/Qwen3-1.7B \
     --model-impl transformers \
-    --worker-extension-cls trl.experimental.async_grpo.delta_engine.DeltaWorkerExtension \
-    --weight-transfer-config '{"backend":"delta"}' \
+    --worker-extension-cls trl.experimental.async_grpo.delta_engine.HFBucketWorkerExtension \
+    --weight-transfer-config '{"backend":"hf_bucket"}' \
     --max-model-len 2560
 
 CUDA_VISIBLE_DEVICES=0 accelerate launch examples/scripts/async_grpo_delta.py
@@ -76,11 +77,11 @@ def main() -> None:
         # Qwen3 thinking traces blow past the completion cap on GSM8K (truncated -> no answer ->
         # zero reward); disable thinking so completions are short and accuracy_reward gets signal.
         chat_template_kwargs={"enable_thinking": False},
-        # --- delta weight sync (Transport B) ---
-        delta_sync_enabled=True,
-        delta_sync_repo_id="<your-hf-username>/async-grpo-delta-demo",  # set to a bucket you own
-        delta_sync_anchor_interval=20,  # full anchor every N syncs; sparse deltas in between
-        delta_sync_encoding="gap_delta",  # raw | gap_delta | nvcomp_cascaded
+        weight_sync_mode="sparse",  # default; only the changed bf16 weights are sent
+        weight_sync_backend="bucket",  # route the patch through a bucket instead of NCCL
+        weight_sync_bucket_id="<your-hf-username>/async-grpo-delta-demo",  # set to a bucket you own
+        weight_sync_anchor_interval=20,  # full anchor every N syncs; sparse deltas in between
+        weight_sync_encoding="gap_delta",  # raw | gap_delta | nvcomp_cascaded
     )
     trainer = AsyncGRPOTrainer(
         model="Qwen/Qwen3-1.7B",
