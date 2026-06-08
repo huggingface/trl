@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl[peft,quantization]",
-#     "transformers>=5.3.0",
+#     "transformers>=5.7.0",
 #     "trackio",
 #     "mamba_ssm==2.2.5",
 #     "causal_conv1d==1.5.2",
@@ -27,7 +27,7 @@ Fine-tune NVIDIA Nemotron 3 models with SFT.
 
 Prerequisites:
 
-    pip install "transformers>=5.3.0"
+    pip install "transformers>=5.7.0"
     pip install --no-build-isolation mamba_ssm==2.2.5
     pip install --no-build-isolation causal_conv1d==1.5.2
 
@@ -56,22 +56,16 @@ accelerate launch \
 """
 
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_peft_config
 
 
 def main(script_args, training_args, model_args):
-    # NemotronH does not support gradient checkpointing
-    training_args.gradient_checkpointing = False
-
-    # Load model
-    model_kwargs = dict(
+    training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
     )
-    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     # Load dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
@@ -97,7 +91,7 @@ def main(script_args, training_args, model_args):
 
     # Train model
     trainer = SFTTrainer(
-        model=model,
+        model=model_args.model_name_or_path,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=eval_dataset,

@@ -18,6 +18,8 @@
 # - The vision config expects `depth`/`num_heads` (not `num_hidden_layers`/`num_attention_heads`).
 # - Qwen3.5 has no published generation_config on the Hub yet.
 # - Qwen3.5 keeps some linear-attn weights in float32; we cast them back after the bfloat16 conversion.
+# - Sourced from Qwen/Qwen3.5-4B because its bundled tokenizer defaults to thinking enabled.
+#   Switching to a smaller Qwen3.5 release will flip that default.
 
 import torch
 from transformers import AutoConfig, AutoProcessor, Qwen3_5ForConditionalGeneration
@@ -28,7 +30,7 @@ from .._common import check_dtype_pattern, check_transformers_version, print_con
 TRANSFORMERS_VERSION = "5.2.0"
 check_transformers_version(TRANSFORMERS_VERSION)
 
-MODEL_ID = "Qwen/Qwen3.5-0.8B"
+MODEL_ID = "Qwen/Qwen3.5-4B"
 
 processor = AutoProcessor.from_pretrained(MODEL_ID)
 
@@ -61,4 +63,4 @@ for i, layer_type in enumerate(config.text_config.layer_types):
 smoke_test(model, processor)
 check_dtype_pattern(MODEL_ID, model)
 print_config_diff(MODEL_ID, model)
-push_to_hub(model, processor, None, "tiny")
+push_to_hub(model, processor, None, "tiny", "Think")
