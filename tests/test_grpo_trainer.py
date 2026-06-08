@@ -505,6 +505,29 @@ class TestGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    def test_liger_kernel_with_peft_lm_head_raises(self):
+        # The Liger fused GRPO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+        # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head (#4612).
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        with pytest.raises(ValueError, match="lm_head"):
+            GRPOTrainer(
+                model=model,
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"]),
+            )
+
+    @require_peft
     def test_train_peft_model(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
