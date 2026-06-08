@@ -563,6 +563,13 @@ class TestApplyChatTemplate(TrlTestCase):
                 reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
             ),
         ),
+        pytest.param(
+            "trl-internal-testing/tiny-Olmo3ForCausalLM",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 requires transformers>=4.57.0",
+            ),
+        ),
         "trl-internal-testing/tiny-Phi3ForCausalLM-3",
         "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
         "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",

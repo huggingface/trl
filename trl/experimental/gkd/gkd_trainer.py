@@ -285,7 +285,11 @@ class GKDTrainer(SFTTrainer):
 
         # Apply reduction
         if reduction == "batchmean":
-            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / jsd.size(0)
+            # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
+            # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
+            # so 0/1 == 0 with a valid grad path.
+            denom = mask.sum().clamp_min(1) if labels is not None else max(jsd.size(0), 1)
+            return jsd.sum() / denom
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":
