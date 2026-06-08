@@ -124,11 +124,7 @@ In a fully online, single-step setting (default),  \\( \frac{\pi_\theta(o_i \mid
 >
 > In other words, the only path the gradient takes into the policy is the importance-ratio term  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} \\), and the KL term does not backpropagate into the policy. 
 >
-> In contrast, GRPO  adds an explicit, differentiable KL term to its objective, computed on the fly with the current policy  \\( \pi_\theta \\):
->
-> \\( \mathcal{L}_{\text{GRPO}}(\theta) = -\frac{1}{\sum_{i=1}^G |o_i|} \sum_{i=1}^G \sum_{t=1}^{|o_i|} \left[ \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_\text{old}}(o_{i,t} \mid q, o_{i,< t})} \hat{A}_{i,t} - \beta \, \mathbb{D}_{\mathrm{KL}}\!\left[\pi_\theta \| \pi_{\text{ref}}\right] \right] \\)
->
-> so its gradient flows through both the ratio term and the KL penalty, whereas RLOO's flows through the ratio term alone.
+> In contrast, [GRPO](grpo_trainer) adds an explicit, differentiable KL term to its objective, computed on the fly with the current policy  \\( \pi_\theta \\), so its gradient flows through both the ratio term and the KL penalty.
 
 ## Logged metrics
 
