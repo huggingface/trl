@@ -345,6 +345,15 @@ class GRPOConfig(_BaseConfig):
 
             </Deprecated>
 
+        vllm_importance_sampling_cap:
+
+            <Deprecated version="1.6.0">
+
+            Parameter `vllm_importance_sampling_cap` is deprecated and will be removed in version v2.0.0. It will be
+            replaced by `vllm_importance_sampling_clip_max`.
+
+            </Deprecated>
+
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
     > - `logging_steps`: Defaults to `10` instead of `500`.
@@ -818,16 +827,6 @@ class GRPOConfig(_BaseConfig):
             "'sequence_mask'."
         },
     )
-
-    vllm_importance_sampling_cap: float | None = field(
-        default=None,
-        metadata={
-            "help": "Deprecated, use `vllm_importance_sampling_clip_max` instead. "
-            "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
-            "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
-        },
-    )
-
     vllm_importance_sampling_clip_max: float | None = field(
         default=3.0,
         metadata={
@@ -836,7 +835,6 @@ class GRPOConfig(_BaseConfig):
             "zero."
         },
     )
-
     vllm_importance_sampling_clip_min: float | None = field(
         default=None,
         metadata={
@@ -899,6 +897,14 @@ class GRPOConfig(_BaseConfig):
         metadata={
             "help": "Deprecated. It will be replaced by `transformers` continuous batching support in an upcoming "
             "release."
+        },
+    )
+    vllm_importance_sampling_cap: float | None = field(
+        default=None,
+        metadata={
+            "help": "Deprecated, use `vllm_importance_sampling_clip_max` instead. "
+            "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
+            "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
         },
     )
 
