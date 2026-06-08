@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from packaging.version import Version
 
 
-LIGER_KERNEL_MIN_VERSION = "0.7.0"
+LIGER_KERNEL_MIN_VERSION = "0.8.0"
 PACKAGE_DISTRIBUTION_MAPPING = importlib.metadata.packages_distributions()
 
 
@@ -78,16 +78,16 @@ def is_liger_kernel_available(min_version: str = LIGER_KERNEL_MIN_VERSION) -> bo
     return _liger_kernel_available and Version(_liger_kernel_version) >= Version(min_version)
 
 
-def is_llm_blender_available() -> bool:
-    return _is_package_available("llm_blender")
-
-
 def is_math_verify_available() -> bool:
     return _is_package_available("math_verify")
 
 
 def is_mergekit_available() -> bool:
     return _is_package_available("mergekit")
+
+
+def is_openreward_available() -> bool:
+    return _is_package_available("openreward")
 
 
 def is_pydantic_available() -> bool:
@@ -106,16 +106,17 @@ def is_uvicorn_available() -> bool:
     return _is_package_available("uvicorn")
 
 
-def is_vllm_available() -> bool:
+def is_vllm_available(min_version: str | None = None) -> bool:
     _vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
     if _vllm_available:
-        if not (Version("0.10.2") <= Version(_vllm_version) <= Version("0.12.0")):
+        if not (Version("0.12.0") <= Version(_vllm_version) <= Version("0.19.0")):
             warnings.warn(
-                "TRL currently supports vLLM versions: 0.10.2, 0.11.0, 0.11.1, 0.11.2, 0.12.0. You have version "
-                f"{_vllm_version} installed. We recommend installing a supported version to avoid compatibility "
-                "issues.",
+                f"TRL currently supports vLLM versions from 0.12.0 to 0.19.0. You have version {_vllm_version} "
+                "installed. We recommend installing a supported version to avoid compatibility issues.",
                 stacklevel=2,
             )
+        if min_version is not None and Version(_vllm_version) < Version(min_version):
+            return False
     return _vllm_available
 
 

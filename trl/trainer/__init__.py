@@ -44,6 +44,7 @@ _import_structure = {
         "get_kbit_device_map",
         "get_peft_config",
         "get_quantization_config",
+        "patch_chunked_lm_head",
     ],
 }
 
@@ -74,6 +75,7 @@ if TYPE_CHECKING:
         get_kbit_device_map,
         get_peft_config,
         get_quantization_config,
+        patch_chunked_lm_head,
     )
 else:
     import sys

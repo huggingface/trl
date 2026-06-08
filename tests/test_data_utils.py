@@ -34,7 +34,6 @@ from trl.data_utils import (
     pack_dataset,
     prepare_multimodal_messages,
     prepare_multimodal_messages_vllm,
-    truncate_dataset,
     unpair_preference_dataset,
 )
 
@@ -199,6 +198,71 @@ class TestPrepareMultimodalMessages:
                 "role": "user",
                 "content": [{"type": "text", "text": "What about the grass?"}],
             },
+        ]
+
+        assert messages == expected
+
+    def test_message_with_tool_calling_turns(self):
+        """Test that both the assistant tool call and the tool role turns messages are properly transformed."""
+        messages = [
+            {"role": "user", "content": "What's the weather like in New York?"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "tool",
+                        "function": {"name": "get_current_weather", "arguments": {"location": "New York"}},
+                    }
+                ],
+            },
+            {"role": "tool", "name": "get_current_weather", "content": "22.0"},
+            {"role": "assistant", "content": "The current weather in New York is 22.0 degrees Celsius."},
+        ]
+
+        messages = prepare_multimodal_messages(messages)
+
+        expected = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "What's the weather like in New York?"}],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "tool",
+                        "function": {"name": "get_current_weather", "arguments": {"location": "New York"}},
+                    }
+                ],
+            },
+            {"role": "tool", "name": "get_current_weather", "content": [{"type": "text", "text": "22.0"}]},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "The current weather in New York is 22.0 degrees Celsius."}],
+            },
+        ]
+
+        assert messages == expected
+
+    def test_prepared_image_blocks_without_new_images(self):
+        """Test that existing image payloads are preserved when no new images are provided."""
+        image = Image.new("RGB", (10, 10), color="blue")
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {"role": "assistant", "content": "It is blue."},
+        ]
+
+        messages = prepare_multimodal_messages(messages)
+
+        expected = [
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
         ]
 
         assert messages == expected
@@ -478,9 +542,53 @@ class TestApplyChatTemplate(TrlTestCase):
         "trl-internal-testing/tiny-LlamaForCausalLM-3",
         "trl-internal-testing/tiny-MistralForCausalLM-0.1",
         "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-        "trl-internal-testing/tiny-Phi3ForCausalLM",
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-super",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-ultra",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Olmo3ForCausalLM",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 requires transformers>=4.57.0",
+            ),
+        ),
+        "trl-internal-testing/tiny-Phi3ForCausalLM-3",
+        "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
         "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
         "trl-internal-testing/tiny-Qwen3ForCausalLM",
+        "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
     ]
 
     conversational_examples = [
@@ -647,7 +755,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -677,7 +785,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -710,7 +818,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -748,7 +856,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -788,7 +896,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -837,7 +945,7 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         }
         output = apply_chat_template(
             messages,
-            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
             reasoning_effort="low",
             model_identity="You are HuggingGPT.",
         )
@@ -1007,6 +1115,8 @@ class TestPackDatasetWrapped(TrlTestCase):
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples)
+        dataset = dataset.with_format("numpy", dtype="float32")
+        format = dataset.format
         seq_length = 3
         expected_output = {
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
@@ -1014,6 +1124,7 @@ class TestPackDatasetWrapped(TrlTestCase):
         }
         dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
         assert dataset.to_dict() == expected_output
+        assert format == dataset.format
 
     def test_with_iterable_dataset(self):
         examples = {
@@ -1021,6 +1132,8 @@ class TestPackDatasetWrapped(TrlTestCase):
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        dataset = dataset.with_format("numpy")
+        formatting = dataset._formatting
         seq_length = 3
         expected_output = {
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
@@ -1028,28 +1141,37 @@ class TestPackDatasetWrapped(TrlTestCase):
         }
         dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
         num_examples = len(examples[next(iter(examples))])
-        assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
+        assert next(iter(dataset.with_format(None).batch(batch_size=num_examples))) == expected_output
+        assert formatting == dataset._formatting
 
 
 class TestPackDatasetBfd(TrlTestCase):
-    def test_simple(self):
+    def test_with_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
         }
         dataset = Dataset.from_dict(examples)
+        dataset = dataset.with_format("numpy", dtype="float32")
+        format = dataset.format
         seq_length = 4
         expected_output = {
             "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
             "seq_lengths": [[4], [3, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        expected_format = dataset.format
         assert dataset.to_dict() == expected_output
+        assert "seq_lengths" in expected_format["columns"]
+        expected_format["columns"].remove("seq_lengths")
+        assert format == dataset.format
 
     def test_with_iterable_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
         }
         dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        dataset = dataset.with_format("numpy")
+        formatting = dataset._formatting
         seq_length = 4
         expected_output = {
             "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
@@ -1057,7 +1179,8 @@ class TestPackDatasetBfd(TrlTestCase):
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         num_examples = len(examples[next(iter(examples))])
-        assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
+        assert next(iter(dataset.with_format(None).batch(batch_size=num_examples))) == expected_output
+        assert formatting == dataset._formatting
 
     def test_with_overlong_0(self):
         examples = {
@@ -1069,7 +1192,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 5, 12]],
             "seq_lengths": [[4], [4], [2, 1, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd-requeue")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
         assert dataset.to_dict() == expected_output
 
     def test_with_overlong_two_coluns(self):
@@ -1084,7 +1207,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "col2": [[-1, 2, -3, 4], [-13, 14, -15, 16], [-7, 8, -9], [10, -11, 12], [-5, 6]],
             "seq_lengths": [[4], [4], [3], [3], [2]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd-requeue")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
         assert dataset.to_dict() == expected_output
 
     def test_with_non_power_of_2(self):
@@ -1097,10 +1220,10 @@ class TestPackDatasetBfd(TrlTestCase):
             "input_ids": [[1, 2, 3, 4, 5], [7, 8, 9, 10, 6], [11, 12, 13]],
             "seq_lengths": [[5], [4, 1], [3]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd-requeue")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
         assert dataset.to_dict() == expected_output
 
-    def test_default_no_requeue(self):
+    def test_default_no_split(self):
         """Test default 'bfd' strategy for SFT datasets (truncates overflow)."""
         examples = {
             "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10, 11], [12]],
@@ -1115,51 +1238,17 @@ class TestPackDatasetBfd(TrlTestCase):
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         assert dataset.to_dict() == expected_output
 
-
-class TestTruncateExamples(TrlTestCase):
-    def test_with_dataset(self):
+    def test_with_empty_sequences(self):
         examples = {
-            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+            "input_ids": [[1, 2], [], [3, 4, 5], [], [6]],
         }
         dataset = Dataset.from_dict(examples)
-        max_length = 2
+        seq_length = 4
         expected_output = {
-            "input_ids": [[1, 2], [4, 5], [8]],
-            "attention_mask": [[0, 1], [0, 0], [1]],
+            "input_ids": [[3, 4, 5, 6], [1, 2]],
+            "seq_lengths": [[3, 1], [2]],
         }
-        dataset = truncate_dataset(dataset, max_length)
-        assert dataset.to_dict() == expected_output
-
-    def test_with_iterable_dataset(self):
-        examples = {
-            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
-        }
-        dataset = Dataset.from_dict(examples).to_iterable_dataset()
-        max_length = 2
-        expected_output = {
-            "input_ids": [[1, 2], [4, 5], [8]],
-            "attention_mask": [[0, 1], [0, 0], [1]],
-        }
-        dataset = truncate_dataset(dataset, max_length)
-        num_examples = len(examples[next(iter(examples))])
-        assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
-
-    def test_with_extra_column(self):
-        examples = {
-            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
-            "my_column": ["a", "b", "c"],
-        }
-        dataset = Dataset.from_dict(examples)
-        max_length = 2
-        expected_output = {
-            "input_ids": [[1, 2], [4, 5], [8]],
-            "attention_mask": [[0, 1], [0, 0], [1]],
-            "my_column": ["a", "b", "c"],
-        }
-        dataset = truncate_dataset(dataset, max_length)
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
         assert dataset.to_dict() == expected_output
 
 

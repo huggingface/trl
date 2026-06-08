@@ -13,16 +13,15 @@
 # limitations under the License.
 
 import sys
+from argparse import ArgumentParser
 
-from ..scripts.utils import TrlParser
-from .accelerate_config import resolve_accelerate_config_argument
 from .commands import get_commands
 from .commands.base import Command, CommandContext
 
 
-def _build_parser(commands: list[Command]) -> TrlParser:
-    parser = TrlParser(prog="TRL CLI", usage="trl", allow_abbrev=False)
-    subparsers = parser.add_subparsers(help="available commands", dest="command", parser_class=TrlParser)
+def _build_parser(commands: list[Command]) -> ArgumentParser:
+    parser = ArgumentParser(prog="trl", allow_abbrev=False)
+    subparsers = parser.add_subparsers(help="available commands", dest="command")
 
     for command in commands:
         command.register(subparsers)
@@ -37,17 +36,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser(commands)
     argv = list(sys.argv[1:] if argv is None else argv)
 
-    args, launch_args = parser.parse_args_and_config(args=argv, return_remaining_strings=True)
+    args, _ = parser.parse_known_args(argv)
     command_name = getattr(args, "command", None)
     if command_name is None:
         parser.print_help()
         return 0
 
     command = commands_by_name[command_name]
-    if command.uses_accelerate:
-        launch_args = resolve_accelerate_config_argument(launch_args)
-
-    context = CommandContext(parser=parser, argv=argv, launch_args=launch_args)
+    context = CommandContext(argv=argv)
     return command.run(args, context)
 
 

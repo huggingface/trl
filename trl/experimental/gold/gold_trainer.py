@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import random
 import textwrap
-import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
+from functools import partial
+from itertools import takewhile
 from typing import Any, Optional
 
 import torch
@@ -26,10 +26,10 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState
-from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
+from accelerate.utils import DistributedType, broadcast_object_list, gather_object
 from datasets import Dataset, IterableDataset
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from transformers import AutoTokenizer, TrainerCallback, TrainerControl, TrainerState, is_bitsandbytes_available
+from torch.utils.data import DataLoader
+from transformers import AutoTokenizer, TrainerCallback
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
@@ -38,23 +38,30 @@ from transformers.integrations.integration_utils import is_wandb_available
 from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.trainer_utils import EvalPrediction
-from transformers.utils import (
-    is_flash_attn_2_available,
-    is_liger_kernel_available,
-    is_peft_available,
-    is_rich_available,
-)
+from transformers.trainer_utils import EvalPrediction, seed_worker
+from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available, is_rich_available
 
-from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset, truncate_dataset
+from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset
 from ...extras.profiling import profiling_decorator
-from ...generation.vllm_client import VLLMClient
+from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
-from ...models.utils import unwrap_model_for_generation
+from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
-from ...trainer.utils import create_model_from_path, disable_dropout_in_model, ensure_master_addr_port, pad
-from ..utils import DataCollatorForChatML, empty_cache
+from ...trainer.utils import (
+    RepeatSampler,
+    create_model_from_path,
+    disable_dropout_in_model,
+    pad,
+    split_tensor_dict,
+)
+from ..utils import (
+    DataCollatorForChatML,
+    empty_cache,
+    encode_with_byte_offsets,
+    pad_byte_offsets,
+    piece_byte_len,
+)
 from .gold_config import GOLDConfig
 
 
@@ -64,9 +71,6 @@ if is_peft_available():
 if is_wandb_available():
     import wandb
 
-if is_vllm_available():
-    from vllm import LLM, SamplingParams
-    from vllm.sampling_params import StructuredOutputsParams
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
@@ -76,9 +80,6 @@ if is_rich_available():
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
-
-if is_bitsandbytes_available():
-    import bitsandbytes as bnb
 
 
 def print_prompt_completions_sample_uld(
@@ -164,34 +165,48 @@ def build_teacher_inputs_from_texts(
     tokenizer: PreTrainedTokenizerBase,
     prompt_texts: list[str],
     completion_texts: list[str],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
-    """Tokenize teacher prompts/completions and produce tensors ready for GOLD loss."""
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Tokenize teacher prompts/completions and produce tensors ready for GOLD loss.
+
+    Returns ``(input_ids, labels, attention_mask, byte_offsets)``. ``byte_offsets`` is a ``[batch, seq, 2]`` tensor of
+    UTF-8 byte ``(start, end)`` for each token: prompt and padding positions are filled with ``(0, 0)``; completion
+    tokens carry offsets relative to the corresponding ``completion_text``; the appended EOS gets ``(content_len,
+    content_len)``. Byte offsets are derived from the fast tokenizer's char offsets via ``encode_with_byte_offsets``.
+    """
 
     pad_token_id = tokenizer.pad_token_id
     eos_token_id = tokenizer.eos_token_id
+    backend = tokenizer.backend_tokenizer
 
     prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
-    completion_token_ids = tokenizer(completion_texts, add_special_tokens=False)["input_ids"]
+    completion_encs = encode_with_byte_offsets(backend, completion_texts, add_special_tokens=False)
 
     sequences: list[torch.Tensor] = []
     attention_masks: list[torch.Tensor] = []
     labels_list: list[torch.Tensor] = []
-    prompt_lengths: list[int] = []
+    offsets_list: list[list[tuple[int, int]]] = []
 
-    for prompt_ids, completion_ids in zip(prompt_token_ids, completion_token_ids, strict=True):
+    for prompt_ids, (enc_ids, enc_offs), completion_text in zip(
+        prompt_token_ids, completion_encs, completion_texts, strict=True
+    ):
         # Remove trailing EOS from prompt so completions can extend cleanly
         if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
             prompt_ids = prompt_ids[:-1]
 
-        prompt_lengths.append(len(prompt_ids))
-        sequence = list(prompt_ids)
-        sequence.extend(completion_ids)
+        completion_ids = list(enc_ids)
+        completion_offs = list(enc_offs)
+        content_len = len(completion_text.encode("utf-8"))
+
+        sequence = list(prompt_ids) + completion_ids
+        offsets = [(0, 0)] * len(prompt_ids) + completion_offs
         if eos_token_id is not None:
             sequence.append(eos_token_id)
+            offsets.append((content_len, content_len))
 
         seq_tensor = torch.tensor(sequence, dtype=torch.long)
         sequences.append(seq_tensor)
         attention_masks.append(torch.ones_like(seq_tensor))
+        offsets_list.append(offsets)
 
         labels = seq_tensor.clone()
         labels[: len(prompt_ids)] = -100
@@ -218,9 +233,13 @@ def build_teacher_inputs_from_texts(
                 last_idx = valid.nonzero(as_tuple=True)[0][-1]
                 teacher_attention_mask[row, last_idx + 1 :] = False
 
-    teacher_prompt_length = max(prompt_lengths) if prompt_lengths else 0
+    target_len = teacher_input_ids.size(1)
+    teacher_byte_offsets = torch.stack(
+        [pad_byte_offsets(offs, target_len, padding_side="right") for offs in offsets_list],
+        dim=0,
+    )
 
-    return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_prompt_length
+    return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_byte_offsets
 
 
 class ULDLoss(nn.Module):
@@ -258,7 +277,15 @@ class ULDLoss(nn.Module):
             self._initialize_vocabulary_mapping()
 
     def __call__(
-        self, student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+        self,
+        student_logits,
+        teacher_logits,
+        student_labels,
+        teacher_labels,
+        student_input_ids,
+        teacher_input_ids,
+        student_byte_offsets=None,
+        teacher_byte_offsets=None,
     ):
         """
         Compute ULD loss with GKD trainer interface.
@@ -270,6 +297,10 @@ class ULDLoss(nn.Module):
             teacher_labels: Teacher target labels [batch_size, seq_len]
             student_input_ids: Student input token IDs [batch_size, seq_len]
             teacher_input_ids: Teacher input token IDs [batch_size, seq_len]
+            student_byte_offsets: Per-token UTF-8 byte offsets ``[batch, seq, 2]``
+                from the data collator (relative to the rendered chat-template message). Required.
+            teacher_byte_offsets: Per-sample list of completion-relative byte
+                offsets (one list per batch item) from ``build_teacher_inputs_from_texts``. Required.
 
         Returns:
             Total loss (cross-entropy + distillation)
@@ -286,7 +317,14 @@ class ULDLoss(nn.Module):
 
         # Compute distillation loss using ULD approximation
         distillation_loss = self._compute_distillation_loss(
-            student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+            student_logits,
+            teacher_logits,
+            student_labels,
+            teacher_labels,
+            student_input_ids,
+            teacher_input_ids,
+            student_byte_offsets=student_byte_offsets,
+            teacher_byte_offsets=teacher_byte_offsets,
         )
 
         return crossentropy_loss + distillation_loss
@@ -324,7 +362,15 @@ class ULDLoss(nn.Module):
             self.mapping_tensor = self.mapping_tensor.to(self.device)
 
     def _compute_distillation_loss(
-        self, student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+        self,
+        student_logits,
+        teacher_logits,
+        student_labels,
+        teacher_labels,
+        student_input_ids,
+        teacher_input_ids,
+        student_byte_offsets=None,
+        teacher_byte_offsets=None,
     ):
         """
         Compute the Universal Logit Distillation loss with token mapping.
@@ -372,26 +418,29 @@ class ULDLoss(nn.Module):
             student_probs = F.softmax(student_answer_logits / self.student_temperature, dim=-1)
             teacher_probs = F.softmax(teacher_answer_logits / self.teacher_temperature, dim=-1)
 
-            # Get token IDs for mapping (always use actual input_ids)
+            # Pass actual input_ids so split-token groups can multiply conditional probabilities.
             student_token_ids = student_input_ids[i, student_start : student_start + student_size].tolist()
             teacher_token_ids = teacher_input_ids[i, teacher_start : teacher_start + teacher_size].tolist()
 
             if self.use_extended_uld:
-                # Build alignment groups directly from token ids using greedy text matching
-                student_alignment_groups, teacher_alignment_groups = self._build_alignment_groups_from_ids(
-                    student_token_ids, teacher_token_ids
-                )
+                if student_byte_offsets is None or teacher_byte_offsets is None:
+                    raise ValueError("Byte offsets are required when `use_extended_uld=True`.")
 
-                # Merge student probabilities using student alignment groups
-                # Pass student_token_ids to enable corrected conditional probability merging
+                # Both sides are completion-relative, so plain slicing gives a shared byte coordinate system.
+                s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
+                t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
+                student_groups, teacher_groups = self._align_by_byte_offsets(s_answer, t_answer)
+                # Drop degenerate pairs where either side is empty — e.g. teacher's trailing zero-width EOS at
+                # ``(content_len, content_len)`` paired with an empty student group merges to a zero distribution
+                # and inflates the loss (only reachable when ``skip_teacher_eos=False``).
+                paired = [(sg, tg) for sg, tg in zip(student_groups, teacher_groups, strict=False) if sg and tg]
+                student_groups = [sg for sg, _ in paired]
+                teacher_groups = [tg for _, tg in paired]
                 student_aligned = self._merge_probabilities_with_alignment_groups(
-                    student_probs, student_alignment_groups, student_token_ids
+                    student_probs, student_groups, student_token_ids
                 )
-
-                # Merge teacher probabilities using teacher alignment groups
-                # Pass teacher_token_ids to enable corrected conditional probability merging
                 teacher_aligned = self._merge_probabilities_with_alignment_groups(
-                    teacher_probs, teacher_alignment_groups, teacher_token_ids
+                    teacher_probs, teacher_groups, teacher_token_ids
                 )
             else:
                 min_length = min(len(student_token_ids), len(teacher_token_ids))
@@ -425,100 +474,30 @@ class ULDLoss(nn.Module):
         distillation_loss = torch.stack(distillation_losses).mean()
         return self.distillation_weight * distillation_loss
 
-    def _build_alignment_groups_from_ids(self, student_token_ids, teacher_token_ids):
+    @staticmethod
+    def _align_by_byte_offsets(s_offsets, t_offsets):
         """
-        Build alignment groups using a greedy substring-equality algorithm on decoded token pieces.
-
-        Args:
-            student_token_ids: List[int]
-            teacher_token_ids: List[int]
-
-        Returns:
-            Tuple[List[List[int]], List[List[int]]]: student and teacher alignment groups
+        Walk both byte-offset arrays, advancing the side whose current token ends earlier. A group closes when both
+        sides reach the same byte boundary — the points where the two tokenizers agree on a split.
         """
-
-        def to_canonical_pieces(tok, ids):
-            pieces = []
-            prev = ""
-            for k in range(len(ids)):
-                # IMPORTANT: Do NOT skip special tokens - we need to align them too
-                cur = tok.decode(ids[: k + 1], skip_special_tokens=False, clean_up_tokenization_spaces=False)
-                # Extract the incremental addition (may include spaces/ZWJ/etc.)
-                pieces.append(cur[len(prev) :])
-                prev = cur
-            return pieces
-
-        s_pieces = to_canonical_pieces(self.student_tokenizer, student_token_ids)
-        t_pieces = to_canonical_pieces(self.teacher_tokenizer, teacher_token_ids)
-
-        i = j = 0
-        s_buf = t_buf = ""
-        s_group = []
-        t_group = []
-        s_groups = []
-        t_groups = []
-
-        def flush():
-            if s_group and t_group:
-                s_groups.append(s_group.copy())
-                t_groups.append(t_group.copy())
-
-        # Greedily accumulate pieces until substrings match, then flush
-        while i < len(s_pieces) or j < len(t_pieces):
-            if s_buf == t_buf and s_buf != "":
-                flush()
-                s_buf = t_buf = ""
-                s_group = []
-                t_group = []
-                continue
-
-            if s_buf == "" and i < len(s_pieces):
-                s_buf += s_pieces[i]
-                s_group.append(i)
-                i += 1
-                continue
-            if t_buf == "" and j < len(t_pieces):
-                t_buf += t_pieces[j]
-                t_group.append(j)
-                j += 1
-                continue
-
-            if len(s_buf) <= len(t_buf):
-                if i < len(s_pieces):
-                    s_buf += s_pieces[i]
-                    s_group.append(i)
-                    i += 1
-                elif j < len(t_pieces):
-                    t_buf += t_pieces[j]
-                    t_group.append(j)
-                    j += 1
+        s_groups, t_groups = [], []
+        s_start = t_start = s = t = 0
+        n_s, n_t = len(s_offsets), len(t_offsets)
+        while s < n_s and t < n_t:
+            s_end, t_end = s_offsets[s][1], t_offsets[t][1]
+            if s_end < t_end:
+                s += 1
+            elif s_end > t_end:
+                t += 1
             else:
-                if j < len(t_pieces):
-                    t_buf += t_pieces[j]
-                    t_group.append(j)
-                    j += 1
-                elif i < len(s_pieces):
-                    s_buf += s_pieces[i]
-                    s_group.append(i)
-                    i += 1
-
-        # Flush any remainder if both sides accumulated something
-        if s_buf == t_buf and s_group and t_group:
-            flush()
-        elif s_group or t_group:
-            # Handle remaining unmatched tokens by forcing a flush
-            # This ensures both sides have the same number of alignment groups
-            if s_group or t_group:
-                # Ensure both groups have content (even if empty list)
-                if not s_group:
-                    s_group = []
-                if not t_group:
-                    t_group = []
-                # Force flush even if buffers don't match
-                if s_group or t_group:
-                    s_groups.append(s_group.copy() if s_group else [])
-                    t_groups.append(t_group.copy() if t_group else [])
-
+                s += 1
+                t += 1
+                s_groups.append(list(range(s_start, s)))
+                t_groups.append(list(range(t_start, t)))
+                s_start, t_start = s, t
+        if s < n_s or t < n_t:
+            s_groups.append(list(range(s_start, n_s)))
+            t_groups.append(list(range(t_start, n_t)))
         return s_groups, t_groups
 
     def _merge_probabilities_with_alignment_groups(self, probs, alignment_groups, token_ids=None):
@@ -741,26 +720,6 @@ class ULDLoss(nn.Module):
         return answers_index, answers_size
 
 
-class GOLDVLLMSyncCallback(TrainerCallback):
-    """Sync the model weights to vLLM after training steps when it's safe to do so."""
-
-    def __init__(self, trainer):
-        self.trainer = trainer
-
-    def on_step_end(self, args, state: TrainerState, control: TrainerControl, **kwargs):
-        """Sync weights after training step when DeepSpeed is stable."""
-        if (
-            self.trainer.use_vllm
-            and state.global_step != self.trainer._last_vllm_sync_step
-            and state.global_step % self.trainer.vllm_sync_frequency == 0
-        ):
-            # Check if this is a step where gradients are synchronized
-            # This happens at the end of gradient accumulation cycles
-            if hasattr(self.trainer.accelerator, "sync_gradients") and self.trainer.accelerator.sync_gradients:
-                self.trainer._move_model_to_vllm()
-                self.trainer._last_vllm_sync_step = state.global_step
-
-
 class GOLDTrainer(SFTTrainer):
     _tag_names = ["trl", "gold"]
     _name = "GOLD"
@@ -796,10 +755,7 @@ class GOLDTrainer(SFTTrainer):
         peft_config: Optional["PeftConfig"] = None,
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
-        self.model_revision = getattr(args, "student_model_revision", None)
-        if isinstance(model, str) and self.model_revision is not None:
-            args.model_init_kwargs = args.model_init_kwargs or {}
-            args.model_init_kwargs.setdefault("revision", self.model_revision)
+        self.model_revision = (args.model_init_kwargs or {}).get("revision")
 
         # Respect a user-provided data_collator; otherwise, provide a ChatML collator that
         if data_collator is None:
@@ -813,8 +769,11 @@ class GOLDTrainer(SFTTrainer):
                 ignore_index=-100,
                 temperature=args.temperature,
                 compiled=False,
+                weight_hard_loss=0.0,
+                weight_soft_loss=1.0,
             )
             self.use_liger_gkd_loss = True
+            self._forward_redirection = _ForwardRedirection()
 
         if args.teacher_model_init_kwargs is None:
             teacher_model_init_kwargs = {}
@@ -824,10 +783,10 @@ class GOLDTrainer(SFTTrainer):
             )
         else:
             teacher_model_init_kwargs = args.teacher_model_init_kwargs
-            teacher_model_init_kwargs["torch_dtype"] = (
-                teacher_model_init_kwargs["torch_dtype"]
-                if teacher_model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, teacher_model_init_kwargs["torch_dtype"])
+            teacher_model_init_kwargs["dtype"] = (
+                teacher_model_init_kwargs["dtype"]
+                if teacher_model_init_kwargs["dtype"] in ["auto", None]
+                else getattr(torch, teacher_model_init_kwargs["dtype"])
             )
 
         if args.use_uld_loss and args.teacher_tokenizer_name_or_path is None:
@@ -840,8 +799,8 @@ class GOLDTrainer(SFTTrainer):
 
         if isinstance(teacher_model, str):
             init_kwargs = dict(teacher_model_init_kwargs)
-            if "torch_dtype" in init_kwargs and "dtype" not in init_kwargs:
-                init_kwargs["dtype"] = init_kwargs.pop("torch_dtype")
+            if args.teacher_model_revision is not None:
+                init_kwargs.setdefault("revision", args.teacher_model_revision)
             teacher_model = create_model_from_path(teacher_model, **init_kwargs)
         self.use_uld_loss = args.use_uld_loss
         self.teacher_tokenizer = None
@@ -869,7 +828,7 @@ class GOLDTrainer(SFTTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
         if not args.use_uld_loss:
-            teacher_model.resize_token_embeddings(self.model.config.vocab_size)
+            teacher_model.resize_token_embeddings(self.model.config.get_text_config().vocab_size)
 
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
@@ -881,6 +840,7 @@ class GOLDTrainer(SFTTrainer):
         self.temperature = args.temperature
         self.top_p = args.top_p
         self.seq_kd = args.seq_kd
+        self.num_generations = args.num_generations
 
         # Track per-step loss statistics for on/off-policy batches (used in logging)
         self._on_policy_loss_total = 0.0
@@ -888,13 +848,17 @@ class GOLDTrainer(SFTTrainer):
         self._on_policy_step_equiv = 0.0
         self._off_policy_step_equiv = 0.0
 
+        # Buffering for rollouts across gradient accumulation steps
+        self._buffered_inputs = None
+        self._buffered_on_policy = None
+        self._buffered_text_logs = None
+        self._step = 0
+
         # Hybrid ULD matched/unmatched accumulators (logged every step when ULD hybrid is used)
         self._matched_sum = 0.0
         self._unmatched_sum = 0.0
         self._matched_step_eq = 0.0
         self._unmatched_step_eq = 0.0
-
-        self.use_transformers_paged = args.use_transformers_paged or False
 
         self.uld_loss_fn = None
         if self.use_uld_loss:
@@ -931,7 +895,7 @@ class GOLDTrainer(SFTTrainer):
         self.num_completions_to_print = args.num_completions_to_print
         # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
         # final optimization step.
-        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.steps_per_generation
+        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.gradient_accumulation_steps
         self._textual_logs = {
             "prompt": deque(maxlen=maxlen),
             "completion": deque(maxlen=maxlen),
@@ -946,85 +910,34 @@ class GOLDTrainer(SFTTrainer):
                     "vLLM is not available and use_vllm is set to True. Please install vLLM with "
                     "`pip install vllm` to use it."
                 )
-            self.vllm_mode = args.vllm_mode
-            self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size
-            self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization
-            self.vllm_enable_sleep_mode = args.vllm_enable_sleep_mode
-            if self.vllm_mode == "server":
-                if self.accelerator.is_main_process:
-                    self.vllm_client = VLLMClient(
-                        host=args.vllm_server_host,
-                        server_port=args.vllm_server_port,
-                        connection_timeout=args.vllm_server_timeout,
-                    )
-                    self.vllm_client.init_communicator()
-            elif self.vllm_mode == "colocate":
-                student_model_name_or_path = self.model_name_or_path
-
-                # Make sure tensor_parallel_size divides world size evenly
-                if not self.accelerator.num_processes % self.vllm_tensor_parallel_size == 0:
-                    raise ValueError(
-                        f"vllm_tensor_parallel_size ({self.vllm_tensor_parallel_size}) must divide world size "
-                        f"({self.accelerator.num_processes}) evenly."
-                    )
-
-                if self.vllm_tensor_parallel_size > 1:
-                    # Create subgroups of ranks for TP
-                    self.vllm_tp_group, _ = torch.distributed.new_subgroups_by_enumeration(
-                        [
-                            list(
-                                range(
-                                    i * self.vllm_tensor_parallel_size,
-                                    (i + 1) * self.vllm_tensor_parallel_size,
-                                )
-                            )
-                            for i in range(self.accelerator.num_processes // self.vllm_tensor_parallel_size)
-                        ]
-                    )
-
-                # vLLM requires the environment variables to be set for distributed training.
-                os.environ["RANK"] = str(self.accelerator.process_index)
-                os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
-                os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
-                ensure_master_addr_port()
-
-                vllm_quantization = None
-                if is_bitsandbytes_available():
-                    for _, module in model.named_modules():
-                        if isinstance(module, bnb.nn.Linear4bit):
-                            vllm_quantization = "bitsandbytes"
-                            break
-                        elif isinstance(module, bnb.nn.Linear8bitLt):
-                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
-
-                self.vllm_engine = LLM(
-                    model=student_model_name_or_path,
-                    revision=self.model_revision,
-                    tensor_parallel_size=self.vllm_tensor_parallel_size,
-                    gpu_memory_utilization=self.vllm_gpu_memory_utilization,
-                    max_num_seqs=self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps,
-                    max_model_len=args.max_length,
-                    distributed_executor_backend="external_launcher",
-                    # Feed identical seed for tp groups to ensure sampling results are the same across workers
-                    seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
-                    enable_sleep_mode=self.vllm_enable_sleep_mode,
-                    quantization=vllm_quantization,
-                )
-
-                if self.vllm_enable_sleep_mode:
-                    self.vllm_engine.sleep(level=2)
-
-                # When using vLLM, the main process is responsible for loading the model weights. This can cause process
-                # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
-                # synchronize all processes after vLLM has been fully initialized.
-                self.accelerator.wait_for_everyone()
-            else:
-                raise ValueError(f"Unknown vllm_mode: {self.vllm_mode}")
-            self.vllm_structured_outputs_regex = args.vllm_structured_outputs_regex
+            self.vllm_generation = VLLMGeneration(
+                model=self.model,
+                accelerator=self.accelerator,
+                is_fsdp_enabled=self.is_fsdp_enabled,
+                processing_class=self.processing_class,
+                mode=args.vllm_mode,
+                structured_outputs_regex=args.vllm_structured_outputs_regex,
+                server_base_url=args.vllm_server_base_url,
+                server_host=args.vllm_server_host,
+                server_port=args.vllm_server_port,
+                group_port=args.vllm_group_port,
+                server_timeout=args.vllm_server_timeout,
+                tensor_parallel_size=args.vllm_tensor_parallel_size,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                max_model_length=args.vllm_max_model_length or args.max_length,
+                max_num_seqs=args.per_device_train_batch_size * args.gradient_accumulation_steps,
+                enable_sleep_mode=args.vllm_enable_sleep_mode,
+                model_impl=args.vllm_model_impl,
+                repetition_penalty=getattr(args, "repetition_penalty", 1.0),
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                min_p=getattr(args, "min_p", 0.0),
+                max_completion_length=args.max_completion_length,
+                logprobs=None,
+            )
             self.vllm_sync_frequency = args.vllm_sync_frequency
-            self._last_vllm_sync_step = -1
-
-            self.add_callback(GOLDVLLMSyncCallback(self))
+            self._last_vllm_sync_step = -self.vllm_sync_frequency
 
     def _set_signature_columns_if_needed(self):
         super()._set_signature_columns_if_needed()
@@ -1036,6 +949,8 @@ class GOLDTrainer(SFTTrainer):
             "tools",
             "original_prompt_text",
             "original_completion_text",
+            "byte_offsets",
+            "completion_mask",
         ]
         if self._signature_columns is None:
             self._signature_columns = required_columns
@@ -1043,6 +958,379 @@ class GOLDTrainer(SFTTrainer):
             for column in required_columns:
                 if column not in self._signature_columns:
                     self._signature_columns.append(column)
+
+    def _get_train_sampler(self, dataset=None):
+        if dataset is None:
+            dataset = self.train_dataset
+        return RepeatSampler(
+            data_source=dataset,
+            mini_repeat_count=self.num_generations,
+            batch_size=self.args.generation_batch_size * self.accelerator.num_processes,
+            repeat_count=self.args.gradient_accumulation_steps,
+            shuffle=True,
+            seed=self.args.seed,
+        )
+
+    def get_train_dataloader(self):
+        """
+        Override Trainer.get_train_dataloader to load one generation batch per optimizer window.
+
+        The dataloader yields local batches of size `per_device_train_batch_size * gradient_accumulation_steps`. The
+        `RepeatSampler` (with `repeat_count=gradient_accumulation_steps`) ensures each generation batch is sampled
+        `gradient_accumulation_steps` times so Trainer's loop iterates the correct number of times. Only the first
+        batch in each window triggers `_fill_buffer`; the rest are ignored by `_prepare_inputs`.
+        """
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+
+        train_dataset = self.train_dataset
+        data_collator = self.data_collator
+        if is_datasets_available() and isinstance(train_dataset, Dataset):
+            train_dataset = self._remove_unused_columns(train_dataset, description="training")
+        else:
+            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
+
+        dataloader_params = {
+            "batch_size": self._train_batch_size * self.args.gradient_accumulation_steps,
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "persistent_workers": self.args.dataloader_persistent_workers,
+        }
+
+        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["sampler"] = self._get_train_sampler()
+            dataloader_params["drop_last"] = self.args.dataloader_drop_last
+            dataloader_params["worker_init_fn"] = partial(
+                seed_worker,
+                num_workers=self.args.dataloader_num_workers,
+                rank=self.args.process_index,
+            )
+            if self.args.dataloader_num_workers > 0:
+                dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+
+        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+
+    @profiling_decorator
+    def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
+        if not self.model.training:
+            return generation_batch
+
+        buffer_steps = self.args.gradient_accumulation_steps
+        if self._step % buffer_steps == 0 or self._buffered_inputs is None:
+            self._fill_buffer(generation_batch, buffer_steps)
+
+        slice_idx = self._step % buffer_steps
+        inputs = self._buffered_inputs[slice_idx]
+        self._step += 1
+        return inputs
+
+    @staticmethod
+    def _build_sequence_batch(
+        new_input_ids: torch.Tensor,
+        prompt_lengths: torch.Tensor,
+        pad_token_id: int | None,
+        attention_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build attention mask and labels from full sequences and prompt lengths."""
+        prompt_lengths = prompt_lengths.to(device=new_input_ids.device, dtype=torch.long)
+        positions = torch.arange(new_input_ids.shape[1], device=new_input_ids.device).unsqueeze(0)
+        completion_mask = positions >= prompt_lengths.unsqueeze(1)
+
+        if attention_mask is not None:
+            new_attention_mask = attention_mask.to(device=new_input_ids.device, dtype=new_input_ids.dtype)
+        else:
+            new_attention_mask = torch.ones_like(new_input_ids)
+            if pad_token_id is not None:
+                new_attention_mask[new_input_ids == pad_token_id] = 0
+
+        new_labels = torch.full_like(new_input_ids, -100)
+        new_labels[completion_mask & new_attention_mask.bool()] = new_input_ids[
+            completion_mask & new_attention_mask.bool()
+        ]
+        if attention_mask is None and pad_token_id is not None:
+            new_labels[new_input_ids == pad_token_id] = -100
+
+        return new_attention_mask, new_labels
+
+    def _maybe_add_completion_byte_offsets(self, updated_slice: dict[str, torch.Tensor | Any]) -> None:
+        """Attach completion-relative byte offsets to on-policy ULD batches.
+
+        Derived from the sampled ids via ``piece_byte_len`` (no decode→re-encode round-trip).
+        """
+        if not (
+            self.use_uld_loss
+            and self.teacher_tokenizer is not None
+            and self.uld_loss_fn is not None
+            and self.uld_loss_fn.use_extended_uld
+        ):
+            return
+
+        new_input_ids = updated_slice["input_ids"]
+        new_labels = updated_slice["labels"]
+        seq_len = new_input_ids.shape[1]
+
+        rows: list[list[tuple[int, int]]] = []
+        for row_ids, row_labels in zip(new_input_ids.cpu().tolist(), new_labels.cpu().tolist(), strict=True):
+            offs: list[tuple[int, int]] = [(0, 0)] * seq_len
+            cumulative = 0
+            for pos, (tid, label) in enumerate(zip(row_ids, row_labels, strict=True)):
+                if label == -100:
+                    continue
+                nb = piece_byte_len(self.processing_class.convert_ids_to_tokens([tid])[0])
+                offs[pos] = (cumulative, cumulative + nb)
+                cumulative += nb
+            rows.append(offs)
+        updated_slice["byte_offsets"] = torch.tensor(rows, dtype=torch.long, device=new_input_ids.device)
+
+    @profiling_decorator
+    def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any], buffer_steps: int):
+        slices = split_tensor_dict(generation_batch, buffer_steps)
+
+        if self.accelerator.is_main_process:
+            on_policy_flags = [random.random() <= self.lmbda for _ in range(buffer_steps)]
+        else:
+            on_policy_flags = [False] * buffer_steps
+
+        on_policy_flags = broadcast_object_list(on_policy_flags, from_process=0)
+        on_policy_indices = [i for i, flag in enumerate(on_policy_flags) if flag]
+
+        self._buffered_inputs = [None] * buffer_steps
+        self._buffered_on_policy = on_policy_flags
+        self._buffered_text_logs = [None] * buffer_steps
+
+        for i, flag in enumerate(on_policy_flags):
+            if not flag:
+                slice_inputs = slices[i]
+
+                if (
+                    self.use_uld_loss
+                    and self.teacher_tokenizer is not None
+                    and ("original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs)
+                ):
+                    raise ValueError(
+                        "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
+                        "Use the default DataCollatorForChatML (or a collator that emits these fields) so the "
+                        "teacher tokenizer has source text to align against."
+                    )
+                if (
+                    self.use_uld_loss
+                    and self.teacher_tokenizer is not None
+                    and self.uld_loss_fn.use_extended_uld
+                    and "byte_offsets" not in slice_inputs
+                ):
+                    raise ValueError(
+                        "Off-policy batch missing `byte_offsets`. Use the default DataCollatorForChatML or set "
+                        "`use_extended_uld=False`."
+                    )
+
+                self._buffered_inputs[i] = slice_inputs
+
+        if on_policy_indices:
+            self._generate_on_policy_for_slices(slices, on_policy_indices)
+
+    @profiling_decorator
+    def _generate_on_policy_for_slices(
+        self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]
+    ):
+        prompt_ids_list = []
+        local_slice_indices = []
+        for slice_idx in on_policy_indices:
+            slice_inputs = slices[slice_idx]
+            prompt_attention_mask = slice_inputs.get("prompt_attention_mask")
+            for prompt_idx, prompt in enumerate(slice_inputs["prompts"]):
+                if prompt_attention_mask is not None:
+                    prompt = prompt[prompt_attention_mask[prompt_idx].bool()]
+                prompt_ids_list.append(prompt.tolist())
+                local_slice_indices.append(slice_idx)
+
+        prompts_text = self.processing_class.batch_decode(
+            prompt_ids_list,
+            skip_special_tokens=True,
+        )
+
+        if not self.use_vllm:
+            self._generate_non_vllm_for_slices(slices, on_policy_indices)
+            return
+
+        if (
+            self.state.global_step != self._last_vllm_sync_step
+            and self.state.global_step >= self._last_vllm_sync_step + self.vllm_sync_frequency
+        ):
+            self.vllm_generation.sync_weights()
+            self._last_vllm_sync_step = self.state.global_step
+
+        _, completion_ids, _, _ = self.vllm_generation.generate(
+            prompts=prompt_ids_list,
+            images=None,
+            num_generations=self.num_generations,
+        )
+
+        self._process_completions_to_buffer(
+            slices,
+            on_policy_indices,
+            local_slice_indices,
+            completion_ids,
+            prompt_ids_list,
+            prompts_text,
+            self.generation_config.max_new_tokens,
+        )
+
+    def _generate_non_vllm_for_slices(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
+        """Fallback generation without vLLM (uses model.generate per slice)."""
+        with unwrap_model_for_generation(
+            self.model,
+            self.accelerator,
+            generation_kwargs=self.generation_kwargs,
+        ) as unwrapped_model:
+            for slice_idx in on_policy_indices:
+                slice_inputs = slices[slice_idx]
+                result = self.generate_on_policy_outputs(
+                    unwrapped_model,
+                    slice_inputs,
+                    self.generation_config,
+                    self.processing_class.pad_token_id,
+                )
+                new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
+
+                updated_slice = dict(slice_inputs)
+                updated_slice["input_ids"] = new_input_ids
+                updated_slice["attention_mask"] = new_attention_mask
+                updated_slice["labels"] = new_labels
+                updated_slice["original_prompt_text"] = prompt_texts
+                updated_slice["original_completion_text"] = completion_texts
+                self._maybe_add_completion_byte_offsets(updated_slice)
+
+                self._buffered_inputs[slice_idx] = updated_slice
+                self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
+
+    def _process_completions_to_buffer(
+        self,
+        slices: list[dict[str, torch.Tensor | Any]],
+        on_policy_indices: list[int],
+        local_slice_indices: list[int],
+        completion_ids: list,
+        prompt_ids_list: list[list[int]],
+        prompts_text: list[str],
+        max_completion_length: int,
+    ):
+        """
+        Process vLLM completions and update buffered inputs for on-policy slices.
+        """
+        device = self.accelerator.device
+        pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
+
+        slice_completions = {idx: [] for idx in on_policy_indices}
+        slice_prompt_ids = {idx: [] for idx in on_policy_indices}
+        slice_prompts = {idx: [] for idx in on_policy_indices}
+
+        for i, slice_idx in enumerate(local_slice_indices):
+            slice_completions[slice_idx].append(completion_ids[i])
+            slice_prompt_ids[slice_idx].append(prompt_ids_list[i])
+            slice_prompts[slice_idx].append(prompts_text[i])
+
+        for slice_idx in on_policy_indices:
+            slice_inputs = slices[slice_idx]
+            completion_ids_for_slice = slice_completions[slice_idx]
+            prompt_ids_for_slice = slice_prompt_ids[slice_idx]
+            prompt_txts = slice_prompts[slice_idx]
+
+            prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
+            truncated_prompt_ids = []
+            prompt_attention_masks = []
+            truncation_side = getattr(self.processing_class, "truncation_side", "right")
+            for prompt_ids in prompt_ids_for_slice:
+                if prompt_max_length and len(prompt_ids) > prompt_max_length:
+                    if truncation_side == "left":
+                        prompt_ids = prompt_ids[-prompt_max_length:]
+                    else:
+                        prompt_ids = prompt_ids[:prompt_max_length]
+                prompt_tensor = torch.tensor(prompt_ids, device=device, dtype=torch.long)
+                truncated_prompt_ids.append(prompt_tensor)
+                prompt_attention_masks.append(torch.ones(len(prompt_ids), device=device, dtype=torch.long))
+
+            prompt_ids = pad(truncated_prompt_ids, padding_side="left", padding_value=pad_token_id)
+            prompt_attention_mask = pad(prompt_attention_masks, padding_side="left", padding_value=0)
+
+            # Decode the truncated prompt so the teacher conditions on the same context the student saw.
+            # `clean_up_tokenization_spaces=False` matches the completion decode below so byte counts stay aligned.
+            prompt_txts_with_special = self.processing_class.batch_decode(
+                [ids.tolist() for ids in truncated_prompt_ids],
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
+
+            completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids_for_slice]
+            completion_ids_for_text: list[list[int]] = []
+            padded_completion_ids_list = []
+            completion_attention_masks = []
+            for completion_tensor in completion_ids_tensors:
+                if len(completion_tensor) > max_completion_length:
+                    truncated_completion_tensor = completion_tensor[:max_completion_length]
+                    padded_completion_ids_list.append(truncated_completion_tensor)
+                    completion_ids_for_text.append(truncated_completion_tensor.tolist())
+                    completion_attention_masks.append(
+                        torch.ones(len(truncated_completion_tensor), device=device, dtype=torch.long)
+                    )
+                elif len(completion_tensor) < max_completion_length:
+                    padding_needed = max_completion_length - len(completion_tensor)
+                    padded_tensor = torch.cat(
+                        [
+                            completion_tensor,
+                            torch.full(
+                                (padding_needed,),
+                                pad_token_id,
+                                device=device,
+                                dtype=completion_tensor.dtype,
+                            ),
+                        ]
+                    )
+                    padded_completion_ids_list.append(padded_tensor)
+                    completion_ids_for_text.append(completion_tensor.tolist())
+                    completion_attention_masks.append(
+                        torch.cat(
+                            [
+                                torch.ones(len(completion_tensor), device=device, dtype=torch.long),
+                                torch.zeros(padding_needed, device=device, dtype=torch.long),
+                            ]
+                        )
+                    )
+                else:
+                    padded_completion_ids_list.append(completion_tensor)
+                    completion_ids_for_text.append(completion_tensor.tolist())
+                    completion_attention_masks.append(
+                        torch.ones(len(completion_tensor), device=device, dtype=torch.long)
+                    )
+
+            completion_ids_padded = torch.stack(padded_completion_ids_list)
+            completion_attention_mask = torch.stack(completion_attention_masks)
+
+            new_input_ids = torch.cat([prompt_ids, completion_ids_padded], dim=1)
+            new_attention_mask = torch.cat([prompt_attention_mask, completion_attention_mask], dim=1)
+            prompt_lengths = torch.full((prompt_ids.shape[0],), prompt_ids.shape[1], device=device)
+            new_attention_mask, new_labels = self._build_sequence_batch(
+                new_input_ids,
+                prompt_lengths,
+                pad_token_id,
+                attention_mask=new_attention_mask,
+            )
+
+            completion_texts = self.processing_class.batch_decode(
+                completion_ids_for_text,
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
+
+            updated_slice = dict(slice_inputs)
+            updated_slice["input_ids"] = new_input_ids
+            updated_slice["attention_mask"] = new_attention_mask
+            updated_slice["labels"] = new_labels
+            updated_slice["original_prompt_text"] = prompt_txts_with_special
+            updated_slice["original_completion_text"] = completion_texts
+            self._maybe_add_completion_byte_offsets(updated_slice)
+
+            self._buffered_inputs[slice_idx] = updated_slice
+            self._buffered_text_logs[slice_idx] = (prompt_txts, completion_texts)
 
     def _prepare_dataset(
         self,
@@ -1053,24 +1341,21 @@ class GOLDTrainer(SFTTrainer):
         formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
-        """
-        Override dataset preparation to preserve original text for cross-tokenizer distillation and ensure
-        attention_mask is always added for DataCollatorForChatML compatibility.
-        """
-        # Check if dataset is already processed
+        """Preserve original text fields for ULD when needed."""
         column_names = list(next(iter(dataset)).keys())
         is_processed = "input_ids" in column_names
 
-        # Use our enhanced dataset preparation for:
-        # 1. ULD loss with cross-tokenizer (need original text preservation)
-        # 2. Any unprocessed dataset (need attention_mask for DataCollatorForChatML)
+        if packing and self.use_uld_loss and self.teacher_tokenizer is not None:
+            raise ValueError(
+                "Packing is not supported with cross-tokenizer ULD because byte-offset alignment is defined per "
+                "prompt/completion example."
+            )
+
         if not is_processed or (self.use_uld_loss and self.teacher_tokenizer is not None):
-            # For unprocessed datasets, use our enhanced tokenization
             return self._prepare_dataset_with_original_text(
                 dataset, processing_class, args, packing, formatting_func, dataset_name
             )
 
-        # Use parent implementation for all other cases
         return super()._prepare_dataset(dataset, processing_class, args, packing, formatting_func, dataset_name)
 
     def _prepare_dataset_with_original_text(
@@ -1111,7 +1396,7 @@ class GOLDTrainer(SFTTrainer):
                 **map_kwargs,
             )
 
-            # Apply the chat template if needed and preserve original text
+            # Add EOS token if needed: non-conversational only
             first_example = next(iter(dataset))
             if not is_conversational(first_example):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -1135,131 +1420,117 @@ class GOLDTrainer(SFTTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset (preserving original text)"
 
-            def tokenize_with_original_text(example, processing_class, dataset_text_field, assistant_only_loss):
-                """Modified tokenization function that preserves original text."""
+            def tokenize_with_original_text(example, processing_class, dataset_text_field, max_length):
+                """Emit input_ids, attention_mask, byte_offsets, completion_mask, and the original prompt/completion
+                text. Byte offsets and input_ids come from a single ``encode_with_byte_offsets`` call."""
+                backend = processing_class.backend_tokenizer
                 result = {}
 
                 if "prompt" in example:  # prompt-completion case
-                    # Store original text
-                    result["original_prompt_text"] = example["prompt"]
-                    result["original_completion_text"] = example["completion"]
-
                     if is_conversational(example):
-                        prompt_ids = processing_class.apply_chat_template(
-                            example["prompt"], return_dict=False, **example.get("chat_template_kwargs", {})
+                        prompt_text = processing_class.apply_chat_template(
+                            example["prompt"],
+                            add_generation_prompt=True,
+                            tokenize=False,
+                            **example.get("chat_template_kwargs", {}),
                         )
-                        prompt_completion_ids = processing_class.apply_chat_template(
+                        full_text = processing_class.apply_chat_template(
                             example["prompt"] + example["completion"],
-                            return_dict=False,
+                            tokenize=False,
                             **example.get("chat_template_kwargs", {}),
                         )
-                    else:
-                        prompt_ids = processing_class(text=example["prompt"]).input_ids
-                        prompt_completion_ids = processing_class(
-                            text=example["prompt"] + example["completion"]
-                        ).input_ids
-
-                    # Check if the tokenized prompt starts with the tokenized prompt+completion
-                    if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                        warnings.warn(
-                            "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
-                            "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                            "token handling. Verify that the tokenizer is processing text consistently.",
-                            stacklevel=2,
+                        prompt_text = "".join(
+                            x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt_text, full_text, strict=False))
                         )
-
-                    # Create a completion mask
-                    completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                    result.update(
-                        {
-                            "input_ids": prompt_completion_ids,
-                            "completion_mask": completion_mask,
-                            "attention_mask": [1] * len(prompt_completion_ids),  # Add attention mask
-                        }
-                    )
-
-                else:  # language modeling or conversational case
-                    if is_conversational(example):
-                        # For conversational data (ChatML), extract prompt and completion properly
-                        messages = example["messages"]
-
-                        # Extract user and assistant messages separately
-                        user_messages = [msg for msg in messages if msg["role"] != "assistant"]
-                        assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
-
-                        if user_messages and assistant_messages:
-                            # Apply chat template to get the prompt (everything up to assistant)
+                        completion_text = full_text[len(prompt_text) :]
+                    else:
+                        prompt_text = example["prompt"]
+                        completion_text = example["completion"]
+                        full_text = prompt_text + completion_text
+                    result["original_prompt_text"] = prompt_text
+                    result["original_completion_text"] = completion_text
+                elif is_conversational(example):
+                    messages = example["messages"]
+                    assistant_indices = [idx for idx, msg in enumerate(messages) if msg["role"] == "assistant"]
+                    if assistant_indices:
+                        completion_idx = assistant_indices[-1]
+                        prompt_messages = messages[:completion_idx]
+                        full_messages = messages[: completion_idx + 1]
+                        if prompt_messages:
                             prompt_text = processing_class.apply_chat_template(
-                                user_messages,
-                                add_generation_prompt=True,  # add assistant prompt
+                                prompt_messages,
+                                add_generation_prompt=True,
                                 tokenize=False,
                                 **example.get("chat_template_kwargs", {}),
                             )
-
-                            # Get the full conversation with assistant response
-                            full_text = processing_class.apply_chat_template(
-                                messages,
-                                add_generation_prompt=False,
-                                tokenize=False,
-                                **example.get("chat_template_kwargs", {}),
-                            )
-
-                            # Extract completion as everything after the prompt
-                            # This ensures we capture any extra tokens (like <think> tags) that the template adds
-                            if full_text.startswith(prompt_text):
-                                completion_text = full_text[len(prompt_text) :]
-                            else:
-                                # Fallback: use assistant content + EOS
-                                assistant_content = assistant_messages[0]["content"]
-                                completion_text = (
-                                    assistant_content + processing_class.eos_token
-                                    if hasattr(processing_class, "eos_token")
-                                    else assistant_content
-                                )
-
-                            # Store original text for cross-tokenizer distillation
-                            result["original_prompt_text"] = prompt_text
-                            result["original_completion_text"] = completion_text
                         else:
-                            # Fallback: use empty prompt and full text as completion
-                            full_text = processing_class.apply_chat_template(
-                                messages, tokenize=False, **example.get("chat_template_kwargs", {})
-                            )
-                            result["original_prompt_text"] = ""
-                            result["original_completion_text"] = full_text
-
-                        # Process the conversation normally
-                        processed = processing_class.apply_chat_template(
-                            example["messages"],
-                            return_dict=True,
-                            return_assistant_tokens_mask=assistant_only_loss,
+                            prompt_text = ""
+                        full_text = processing_class.apply_chat_template(
+                            full_messages,
+                            add_generation_prompt=False,
+                            tokenize=False,
                             **example.get("chat_template_kwargs", {}),
                         )
-                        if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
-                            raise RuntimeError(
-                                "You're using `assistant_only_loss=True`, but at least one example has no "
-                                "assistant tokens. This usually means the tokenizer's chat template doesn't "
-                                "generate assistant masks — it may be missing the `{% generation %}` tag. Please "
-                                "check the template and ensure it's correctly configured to support assistant "
-                                "masking."
-                            )
-                        result.update({k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed})
-                        # Add attention_mask if not already present
-                        if "attention_mask" not in result:
-                            result["attention_mask"] = [1] * len(result["input_ids"])
-                    else:
-                        # For regular language modeling, store the full text as completion and empty prompt
-                        result["original_prompt_text"] = ""
-                        result["original_completion_text"] = example.get(dataset_text_field, example.get("text", ""))
-
-                        tokenized = processing_class(text=example[dataset_text_field])
-                        result.update(
-                            {
-                                "input_ids": tokenized.input_ids,
-                                "attention_mask": getattr(tokenized, "attention_mask", [1] * len(tokenized.input_ids)),
-                            }
+                        prompt_text = "".join(
+                            x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt_text, full_text, strict=False))
                         )
+                        completion_text = full_text[len(prompt_text) :]
+                        result["original_prompt_text"] = prompt_text
+                        result["original_completion_text"] = completion_text
+                    else:
+                        full_text = processing_class.apply_chat_template(
+                            messages, tokenize=False, **example.get("chat_template_kwargs", {})
+                        )
+                        prompt_text = ""
+                        result["original_prompt_text"] = ""
+                        result["original_completion_text"] = full_text
+                else:
+                    text = example.get(dataset_text_field, example.get("text", ""))
+                    prompt_text = ""
+                    full_text = text
+                    result["original_prompt_text"] = ""
+                    result["original_completion_text"] = text
 
+                # Single backend call: ids and char-derived byte offsets from the same encoding,
+                # so input_ids[i] is described by full_offs[i] without any boundary slop.
+                [(input_ids, full_offs)] = encode_with_byte_offsets(backend, [full_text], add_special_tokens=False)
+                prompt_byte_len = len(prompt_text.encode("utf-8"))
+                completion_start = next(
+                    (idx for idx, (s, _) in enumerate(full_offs) if s >= prompt_byte_len),
+                    len(input_ids),
+                )
+                # Completion-relative: prompt positions zeroed, completion offsets shifted to
+                # the assistant content's first byte (matches build_teacher_inputs_from_texts).
+                byte_offsets = [(0, 0)] * completion_start + [
+                    (s - prompt_byte_len, e - prompt_byte_len) for s, e in full_offs[completion_start:]
+                ]
+
+                # Keep the last `max_length` tokens (the completion end). `completion_mask` tracks the
+                # boundary so it survives truncation without re-tokenizing the prompt.
+                if max_length is not None and len(input_ids) > max_length:
+                    drop = len(input_ids) - max_length
+                    input_ids = input_ids[drop:]
+                    byte_offsets = byte_offsets[drop:]
+                    completion_start = max(0, completion_start - drop)
+                    # If truncation ate into the completion, rebase the kept completion offsets so they're
+                    # relative to the new (truncated) `original_completion_text` the teacher will re-encode.
+                    if completion_start < len(byte_offsets):
+                        base = byte_offsets[completion_start][0]
+                        if base > 0:
+                            byte_offsets = byte_offsets[:completion_start] + [
+                                (s - base, e - base) for s, e in byte_offsets[completion_start:]
+                            ]
+                    # Resync the strings the teacher will re-encode with the ids the student kept.
+                    decode = partial(
+                        processing_class.decode, skip_special_tokens=False, clean_up_tokenization_spaces=False
+                    )
+                    result["original_prompt_text"] = decode(input_ids[:completion_start])
+                    result["original_completion_text"] = decode(input_ids[completion_start:])
+
+                result["input_ids"] = input_ids
+                result["attention_mask"] = [1] * len(input_ids)
+                result["byte_offsets"] = byte_offsets
+                result["completion_mask"] = [0] * completion_start + [1] * (len(input_ids) - completion_start)
                 return result
 
             dataset = dataset.map(
@@ -1267,12 +1538,14 @@ class GOLDTrainer(SFTTrainer):
                 fn_kwargs={
                     "processing_class": processing_class,
                     "dataset_text_field": args.dataset_text_field,
-                    "assistant_only_loss": args.assistant_only_loss,
+                    "max_length": args.max_length,
                 },
                 **map_kwargs,
             )
 
-            # Pack or truncate
+            # Pack if requested. Truncation already happened in `tokenize_with_original_text`, keeping
+            # the completion end — so the generic front-truncating `truncate_dataset` is intentionally
+            # not applied here (it would drop the completion).
             if packing:
                 if args.max_length is None:
                     raise ValueError("When packing is enabled, `max_length` can't be `None`.")
@@ -1285,10 +1558,6 @@ class GOLDTrainer(SFTTrainer):
 
                 dataset = dataset.select_columns(columns_to_select)
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
-            elif args.max_length is not None:
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
-                dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
 
             if args.use_liger_kernel:
                 required_columns = {
@@ -1296,9 +1565,10 @@ class GOLDTrainer(SFTTrainer):
                     "attention_mask",
                     "position_ids",
                     "completion_mask",
-                    "assistant_masks",
+                    "messages",
                     "original_prompt_text",
                     "original_completion_text",
+                    "byte_offsets",
                 }
                 dataset = dataset.select_columns(required_columns.intersection(dataset.column_names))
 
@@ -1376,7 +1646,11 @@ class GOLDTrainer(SFTTrainer):
 
         # Apply reduction
         if reduction == "batchmean":
-            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / jsd.size(0)
+            # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
+            # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
+            # so 0/1 == 0 with a valid grad path.
+            denom = mask.sum().clamp_min(1) if labels is not None else max(jsd.size(0), 1)
+            return jsd.sum() / denom
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":
@@ -1386,33 +1660,17 @@ class GOLDTrainer(SFTTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if self.use_uld_loss and self.teacher_tokenizer is not None:
-            if "original_prompt_text" in inputs and "original_completion_text" in inputs:
-                prompt_texts = inputs["original_prompt_text"]
-                completion_texts = inputs["original_completion_text"]
-                full_texts = [p + c for p, c in zip(prompt_texts, completion_texts, strict=True)]
-            else:
-                # Fallback: decode student input_ids (current approach)
-                # WARNING: This may not work perfectly for cross-tokenizer distillation
-                full_sequences = inputs["input_ids"]
-                full_texts = self.processing_class.batch_decode(full_sequences, skip_special_tokens=False)
-
-                # Try to split prompt/completion using original prompt length
-                prompt_lengths = inputs["prompts"].shape[1]
-                prompt_texts = self.processing_class.batch_decode(inputs["prompts"], skip_special_tokens=False)
-                completion_texts = [
-                    full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
-                ]
+            # Both DataCollatorForChatML and the on-policy generation path attach these
+            # fields, so cross-tokenizer ULD never has to round-trip through batch_decode.
+            prompt_texts = inputs["original_prompt_text"]
+            completion_texts = inputs["original_completion_text"]
 
             (
                 teacher_input_ids,
                 teacher_labels,
                 teacher_attention_mask,
-                teacher_prompt_length,
-            ) = build_teacher_inputs_from_texts(
-                self.teacher_tokenizer,
-                prompt_texts,
-                completion_texts,
-            )
+                teacher_completion_byte_offsets,
+            ) = build_teacher_inputs_from_texts(self.teacher_tokenizer, prompt_texts, completion_texts)
 
             teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
             teacher_labels = teacher_labels.to(self.accelerator.device)
@@ -1430,27 +1688,14 @@ class GOLDTrainer(SFTTrainer):
                     input_ids=teacher_input_ids,
                     attention_mask=teacher_attention_mask,
                 )
-
-            # These are not used for ULD loss but are needed if JSD loss were to be used in this branch
-            student_prompt_length = inputs["prompts"].shape[1]
-            shifted_student_logits = outputs_student.logits[:, student_prompt_length - 1 : -1, :]
-            shifted_teacher_logits = outputs_teacher.logits[:, teacher_prompt_length - 1 : -1, :]
-            shifted_labels = inputs["labels"][:, student_prompt_length:]
         else:
             if self.use_liger_gkd_loss:
-                # Forward only through the base models (avoid lm_head to save memory)
+                # Forward only through the base models (avoid lm_head to save memory).
+                # Route through the DDP/FSDP wrapper via _forward_redirection so that
+                # DDP.forward() is called and prepare_for_backward() fires correctly.
                 unwrapped_student = self.accelerator.unwrap_model(model)
-                if hasattr(unwrapped_student, "get_decoder") and unwrapped_student.get_decoder() is not None:
-                    base_student = unwrapped_student.get_decoder()
-                else:
-                    base_student = getattr(
-                        unwrapped_student, getattr(unwrapped_student, "base_model_prefix", "model"), unwrapped_student
-                    )
-
-                student_outputs = base_student(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
-                    use_cache=False,
+                student_outputs = self._forward_redirection(
+                    model, unwrapped_student, self._liger_student_forward, unwrapped_student, inputs
                 )
 
                 self.teacher_model.eval()
@@ -1468,25 +1713,23 @@ class GOLDTrainer(SFTTrainer):
                         use_cache=False,
                     )
 
-                # hidden states (shifted)
                 student_hidden = student_outputs.last_hidden_state[:, :-1]
                 teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
 
-                # Release full outputs to free memory
                 del student_outputs, teacher_outputs
 
-                # labels mask and labels (shifted)
+                student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
+                teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
+
                 labels_mask = inputs["labels"] != -100
                 masked_input_ids = torch.where(
                     labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100)
                 )
-                true_labels = masked_input_ids[:, 1:].contiguous()
+                true_labels = masked_input_ids[:, 1:].contiguous().reshape(-1)
 
-                # heads
                 student_head = unwrapped_student.get_output_embeddings()
                 teacher_head = unwrapped_teacher.get_output_embeddings()
 
-                # liger fused jsd loss
                 loss = self.liger_jsd_loss(
                     student_input=student_hidden,
                     student_weight=student_head.weight,
@@ -1497,10 +1740,8 @@ class GOLDTrainer(SFTTrainer):
                     teacher_bias=getattr(teacher_head, "bias", None),
                 )
 
-                # Release hidden states after loss computation
                 del student_hidden, teacher_hidden, true_labels
             else:
-                # Original behavior for same tokenizer or when teacher_tokenizer is not provided
                 outputs_student = model(
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
@@ -1522,46 +1763,34 @@ class GOLDTrainer(SFTTrainer):
                     teacher_logits=shifted_teacher_logits,
                     labels=shifted_labels,
                     beta=self.beta,
+                    temperature=self.temperature,
                 )
 
-        if self.use_uld_loss:
-            student_input_ids = inputs["input_ids"]
-
-            # Use the *teacher* labels created above, not the student's.
-            teacher_labels_for_loss = teacher_labels if "teacher_labels" in locals() else inputs["labels"]
-            teacher_input_ids_for_loss = teacher_input_ids if "teacher_input_ids" in locals() else inputs["input_ids"]
-
-            # Create properly masked student labels (fixing batch size > 1 issue)
+        if self.use_uld_loss and self.teacher_tokenizer is not None:
             student_labels = inputs["labels"].clone()
-            if hasattr(self.processing_class, "pad_token_id") and self.processing_class.pad_token_id is not None:
+            if self.processing_class.pad_token_id is not None:
                 student_labels[student_labels == self.processing_class.pad_token_id] = -100
-
-            # Also mask pad tokens in teacher labels for consistency
-            if (
-                hasattr(self, "teacher_tokenizer")
-                and hasattr(self.teacher_tokenizer, "pad_token_id")
-                and self.teacher_tokenizer.pad_token_id is not None
-            ):
+            if self.teacher_tokenizer.pad_token_id is not None:
                 teacher_labels[teacher_labels == self.teacher_tokenizer.pad_token_id] = -100
+
+            student_byte_offsets = inputs.get("byte_offsets")
+            if self.uld_loss_fn.use_extended_uld and student_byte_offsets is None:
+                raise ValueError("Input batches must include `byte_offsets` when `use_extended_uld=True`.")
 
             loss = self.uld_loss_fn(
                 student_logits=outputs_student.logits,
                 teacher_logits=outputs_teacher.logits,
                 student_labels=student_labels,
-                teacher_labels=teacher_labels_for_loss,
-                student_input_ids=student_input_ids,
-                teacher_input_ids=teacher_input_ids_for_loss,
+                teacher_labels=teacher_labels,
+                student_input_ids=inputs["input_ids"],
+                teacher_input_ids=teacher_input_ids,
+                student_byte_offsets=student_byte_offsets,
+                teacher_byte_offsets=teacher_completion_byte_offsets,
             )
 
-            # If ULD hybrid mode produced per-step matched/unmatched components, accumulate them for logging.
-            # Use gradient_accumulation_steps to mirror Trainer's windowing behavior.
             if hasattr(self.uld_loss_fn, "last_matched_loss") and hasattr(self.uld_loss_fn, "last_unmatched_loss"):
-                try:
-                    ga = max(1, int(self.args.gradient_accumulation_steps))
-                except Exception:
-                    ga = 1
+                ga = max(1, int(self.args.gradient_accumulation_steps))
                 step_eq = 1.0 / ga
-                # read scalar values for logging
                 matched_val = (
                     self.uld_loss_fn.last_matched_loss.item()
                     if self.uld_loss_fn.last_matched_loss is not None
@@ -1584,35 +1813,14 @@ class GOLDTrainer(SFTTrainer):
 
     def generate_on_policy_outputs(self, model, inputs, generation_config, pad_token_id=None):
         # Generate output with respect to the prompt only
-        if self.use_transformers_paged:
-            previous_attn = self.model.config._attn_implementation
-            if is_flash_attn_2_available():
-                model.config._attn_implementation = "paged_attention"
-            else:
-                model.config._attn_implementation = "sdpa_paged"
-            prompt_mask = inputs.get("prompt_attention_mask")
-            prompts_tensor = inputs["prompts"]
-            if prompt_mask is not None:
-                prompt_sequences = [
-                    row[mask.bool()].detach().cpu().tolist()
-                    for row, mask in zip(prompts_tensor, prompt_mask, strict=True)
-                ]
-            else:
-                prompt_sequences = [row.detach().cpu().tolist() for row in prompts_tensor]
-            generated_outputs = model.generate_batch(prompt_sequences, generation_config=generation_config)
-            model.config._attn_implementation = previous_attn
-
-            completion_ids = [output.generated_tokens for output in generated_outputs.values()]
-            generated_tokens = torch.stack([torch.tensor(ids, device=model.device) for ids in completion_ids])
-        else:
-            generated_outputs = model.generate(
-                input_ids=inputs["prompts"],
-                attention_mask=inputs.get("prompt_attention_mask", None),
-                generation_config=generation_config,
-                return_dict_in_generate=True,
-            )
-            # Get the generated token IDs
-            generated_tokens = generated_outputs.sequences
+        generated_outputs = model.generate(
+            input_ids=inputs["prompts"],
+            attention_mask=inputs.get("prompt_attention_mask", None),
+            generation_config=generation_config,
+            return_dict_in_generate=True,
+        )
+        # Get the generated token IDs
+        generated_tokens = generated_outputs.sequences
 
         batch_size = generated_tokens.size(0)
         device = generated_tokens.device
@@ -1620,31 +1828,12 @@ class GOLDTrainer(SFTTrainer):
         prompt_mask = inputs.get("prompt_attention_mask")
         pad_token_id = pad_token_id if pad_token_id is not None else self.processing_class.pad_token_id
 
-        if prompt_mask is not None:
-            prompt_lengths = prompt_mask.sum(dim=1).to(torch.long)
-        else:
-            if pad_token_id is not None:
-                prompt_lengths = (inputs["prompts"] != pad_token_id).sum(dim=1).to(torch.long)
-            else:
-                prompt_lengths = torch.full(
-                    (batch_size,),
-                    inputs["prompts"].shape[1],
-                    dtype=torch.long,
-                    device=device,
-                )
+        # model.generate() returns full sequences (prompt + completion), so completions start
+        # after the full padded prompt width.
+        prompt_lengths = torch.full((batch_size,), inputs["prompts"].shape[1], dtype=torch.long, device=device)
 
         new_input_ids = generated_tokens
-        new_attention_mask = torch.ones_like(new_input_ids)
-        if pad_token_id is not None:
-            new_attention_mask[new_input_ids == pad_token_id] = 0
-
-        new_labels = torch.full_like(new_input_ids, -100)
-        for idx in range(batch_size):
-            length = int(prompt_lengths[idx].item())
-            new_labels[idx, length:] = new_input_ids[idx, length:]
-
-        if pad_token_id is not None:
-            new_labels[new_input_ids == pad_token_id] = -100
+        new_attention_mask, new_labels = self._build_sequence_batch(new_input_ids, prompt_lengths, pad_token_id)
 
         prompt_texts = []
         completion_texts = []
@@ -1663,6 +1852,7 @@ class GOLDTrainer(SFTTrainer):
                 )
             )
             completion_tokens = new_input_ids[idx, length:]
+            completion_tokens = completion_tokens[new_labels[idx, length:] != -100]
             completion_texts.append(
                 self.processing_class.decode(
                     completion_tokens.tolist(),
@@ -1673,275 +1863,38 @@ class GOLDTrainer(SFTTrainer):
 
         return new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts
 
-    @profiling_decorator
-    def _generate_on_policy_outputs_vllm(self, inputs, generation_config, pad_token_id=None):
-        device = self.accelerator.device
-
-        # Decode prompts for vLLM (without special tokens - vLLM expects clean text)
-        prompts_text_for_vllm = self.processing_class.batch_decode(
-            inputs["prompts"],
-            skip_special_tokens=True,
-            # clean_up_tokenization_spaces=False # Keep this commented unless specific issues arise
-        )
-        # Remove padding token text if it appears, as vLLM expects clean prompts
-        if self.processing_class.pad_token:
-            prompts_text_for_vllm = [p.replace(self.processing_class.pad_token, "") for p in prompts_text_for_vllm]
-
-        # Also decode prompts WITH special tokens for ULD loss computation
-        prompts_text_with_special = self.processing_class.batch_decode(
-            inputs["prompts"],
-            skip_special_tokens=False,
-        )
-
-        # system_prompt = "Please reason step by step, and put your final answer within \\boxed{}."
-        # target_system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
-        # prompts_text = [p.replace(target_system_prompt, system_prompt) for p in prompts_text]
-        # Add system prompt to prompts
-
-        max_completion_length = generation_config.max_new_tokens
-        temperature = generation_config.temperature
-        # vLLM uses top_k=-1 for no top_k, transformers uses 0 or None.
-        top_k = generation_config.top_k if generation_config.top_k and generation_config.top_k > 0 else -1
-        # top_p, repetition_penalty, min_p are not directly in generation_config, get from trainer args
-        top_p = self.args.top_p if hasattr(self.args, "top_p") else 1.0
-        repetition_penalty = self.args.repetition_penalty if hasattr(self.args, "repetition_penalty") else 1.0
-        min_p = self.args.min_p if hasattr(self.args, "min_p") else 0.0
-
-        if self.vllm_mode == "server":
-            all_prompts_text = gather_object(prompts_text_for_vllm)
-            if self.accelerator.is_main_process:
-                completion_ids = self.vllm_client.generate(
-                    prompts=all_prompts_text,
-                    n=1,  # In GKD, we generate 1 completion per prompt from student
-                    repetition_penalty=repetition_penalty,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    min_p=min_p,
-                    max_tokens=max_completion_length,
-                    structured_outputs_regex=self.vllm_structured_outputs_regex,
-                )["completion_ids"]
-            else:
-                completion_ids = [None] * len(all_prompts_text)
-            completion_ids = broadcast_object_list(completion_ids, from_process=0)
-            process_slice = slice(
-                self.accelerator.process_index * len(prompts_text_for_vllm),
-                (self.accelerator.process_index + 1) * len(prompts_text_for_vllm),
-            )
-            completion_ids = completion_ids[process_slice]
-        elif self.vllm_mode == "colocate":
-            if self.vllm_structured_outputs_regex:
-                structured_outputs = StructuredOutputsParams(
-                    backend="outlines", regex=self.vllm_structured_outputs_regex
-                )
-            else:
-                structured_outputs = None
-            sampling_params = SamplingParams(
-                n=1,
-                repetition_penalty=repetition_penalty,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-                min_p=min_p,
-                max_tokens=max_completion_length,
-                structured_outputs=structured_outputs,
-            )
-
-            if hasattr(self, "vllm_tp_group") and self.vllm_tensor_parallel_size > 1:
-                # Gather prompts from all ranks in the TP group and flatten.
-                # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
-                orig_size = len(prompts_text_for_vllm)
-                gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
-                torch.distributed.all_gather_object(gathered_prompts, prompts_text_for_vllm, group=self.vllm_tp_group)
-                all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
-            else:
-                all_prompts_text = prompts_text_for_vllm
-
-            all_outputs = self.vllm_engine.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
-            completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
-
-            if hasattr(self, "vllm_tp_group") and self.vllm_tensor_parallel_size > 1:
-                # Slice completions for this rank within its TP group.
-                # Each rank generates all outputs — we keep only our share.
-                local_rank_in_group = torch.distributed.get_rank(group=self.vllm_tp_group)
-                tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
-                completion_ids = completion_ids[tp_slice]
-
-            if self.vllm_enable_sleep_mode:
-                self.vllm_engine.sleep(level=2)
+    def _liger_student_forward(self, student, inputs):
+        """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
+        if hasattr(student, "get_decoder") and student.get_decoder() is not None:
+            decoder = student.get_decoder()
         else:
-            raise ValueError(f"Unknown vllm_mode: {self.vllm_mode}")
+            decoder = getattr(student, getattr(student, "base_model_prefix", "model"), student)
+        return decoder(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            use_cache=False,
+        )
 
-        # We need to combine prompt and completion for new_input_ids
-        # Tokenize prompts again to get prompt_ids on the correct device and format
-        # Use prompts_text_for_vllm (without special tokens) for tokenization since vLLM expects clean text
-        # Ensure add_special_tokens=False as vLLM typically handles prompts as raw text
-        # Calculate max_length for prompts, ensuring it's positive
-        prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
-        prompt_tokenized = self.processing_class(
-            prompts_text_for_vllm,
-            return_tensors="pt",
-            padding="longest",
-            truncation=True if prompt_max_length else False,
-            max_length=prompt_max_length,
-            add_special_tokens=False,
-        ).to(device)
-        prompt_ids = prompt_tokenized.input_ids
+    def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
+        if not self.use_liger_gkd_loss:
+            return nullcontext()
 
-        completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids]
-        # Manually pad/truncate completions to max_completion_length length before using pad function
-        padded_completion_ids_list = []
-        for completion_tensor in completion_ids_tensors:
-            if len(completion_tensor) > max_completion_length:
-                # Truncate if longer than max_completion_length
-                padded_completion_ids_list.append(completion_tensor[:max_completion_length])
-            elif len(completion_tensor) < max_completion_length:
-                # Pad if shorter than max_completion_length
-                padding_needed = max_completion_length - len(completion_tensor)
-                padded_tensor = torch.cat(
-                    [
-                        completion_tensor,
-                        torch.full((padding_needed,), pad_token_id, device=device, dtype=completion_tensor.dtype),
-                    ]
-                )
-                padded_completion_ids_list.append(padded_tensor)
-            else:
-                # Already the right length
-                padded_completion_ids_list.append(completion_tensor)
-
-        # Now all tensors are the same length, so we can stack them
-        padded_completion_ids = torch.stack(padded_completion_ids_list)
-
-        # Ensure prompt_ids and padded_completion_ids are 2D
-        if prompt_ids.ndim == 1:
-            prompt_ids = prompt_ids.unsqueeze(0)
-        if padded_completion_ids.ndim == 1:
-            padded_completion_ids = padded_completion_ids.unsqueeze(0)
-
-        new_input_ids = torch.cat([prompt_ids, padded_completion_ids], dim=1)
-
-        new_attention_mask = torch.ones_like(new_input_ids, device=device)
-        new_labels = new_input_ids.clone()
-
-        if pad_token_id is not None:
-            new_labels[new_labels == pad_token_id] = -100
-            new_attention_mask[new_input_ids == pad_token_id] = 0
-
-        # Mask prompt tokens in labels
-        prompt_lengths = prompt_ids.shape[1]
-        new_labels[:, :prompt_lengths] = -100
-
-        # IMPORTANT: Preserve original text for cross-tokenizer ULD loss
-        # Use prompts_text_with_special (with special tokens) for ULD loss computation
-        # Extract completion texts from the generated completion IDs
-        completion_texts = []
-        for comp_ids in completion_ids:
-            completion_text = self.processing_class.decode(comp_ids, skip_special_tokens=False)
-            completion_texts.append(completion_text)
-
-        return new_input_ids, new_attention_mask, new_labels, prompts_text_with_special, completion_texts
-
-    def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
-        """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with student vLLM."""
-        if visited is None:
-            visited = set()
-
-        for child_name, child_module in module.named_children():
-            child_prefix = f"{prefix}.{child_name}" if prefix else child_name
-            # recurse into the child
-            self._sync_fsdp_params_to_vllm(child_module, prefix=child_prefix, visited=visited)
-
-        if isinstance(module, FSDP):
-            with FSDP.summon_full_params(module, recurse=False, writeback=False):
-                for param_name, param in module.named_parameters():
-                    full_name = f"{prefix}.{param_name}" if prefix else param_name
-                    for extra in ("_fsdp_wrapped_module.", "_checkpoint_wrapped_module."):
-                        full_name = full_name.replace(extra, "")
-
-                    if full_name in visited:
-                        continue  # skip FSDP subtrees already traversed
-                    visited.add(full_name)
-
-                    if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                        self.vllm_client.update_named_param(full_name, param.data)
-                    elif self.vllm_mode == "colocate":
-                        llm_model = self.vllm_engine.llm_engine.model_executor.driver_worker.model_runner.model
-                        llm_model.load_weights([(full_name, param.data)])
-
-    def _move_model_to_vllm(self):
-        """Synchronize student model weights to vLLM engine."""
-        # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-        if zero_stage_3:
-            import deepspeed
+        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
+            return nullcontext()
 
-            gather_if_zero3 = deepspeed.zero.GatheredParameters
-        else:
-            gather_if_zero3 = nullcontext
+        import deepspeed
 
-        if self.vllm_mode == "colocate" and self.vllm_enable_sleep_mode:
-            empty_cache()
-            self.vllm_engine.wake_up(tags=["weights"])
-            # Work around for https://github.com/vllm-project/vllm/issues/29341
-            self.vllm_engine.collective_rpc("reload_weights")
-
-        if is_peft_model(self.model):
-            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
-            # merging adapters in a sharded manner is not supported.
-            with gather_if_zero3(list(self.model.parameters())):
-                self.model.merge_adapter()
-
-                # Update vLLM weights while parameters are gathered
-                if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
-                    # Update vLLM weights while parameters are gathered
-                    # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    self._sync_fsdp_params_to_vllm(self.model)
-                else:
-                    # DeepSpeed ZeRO-3 with PEFT
-                    for name, param in self.model.named_parameters():
-                        # When using PEFT, we need to recover the original parameter name and discard some parameters
-                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        if self.model.prefix in name:
-                            continue
-                        # When module to save, remove its prefix and discard the original module
-                        if "original_module" in name:
-                            continue
-                        name = name.replace("modules_to_save.default.", "")
-
-                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.vllm_mode == "colocate":
-                            llm_model = self.vllm_engine.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
-                # Unmerge adapters while parameters are still gathered
-                self.model.unmerge_adapter()
-                # Parameters will automatically be repartitioned when exiting the context
-        else:
-            # For non-PEFT models, simply gather (if needed) and update each parameter individually.
-            if self.is_fsdp_enabled:
-                # use memory-efficient post-order traversal for FSDP
-                self._sync_fsdp_params_to_vllm(self.model)
-            else:
-                # For DeepSpeed ZeRO-3, gather each parameter individually like GRPO trainer
-                for name, param in self.model.named_parameters():
-                    with gather_if_zero3([param]):
-                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.vllm_mode == "colocate":
-                            llm_model = self.vllm_engine.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
-
-        # Reset cache on vLLM
-        if self.vllm_mode == "server" and self.accelerator.is_main_process:
-            self.vllm_client.reset_prefix_cache()
-        elif self.vllm_mode == "colocate":
-            self.vllm_engine.reset_prefix_cache()
-
-    def _wake_vllm_if_needed(self):
-        if self.vllm_mode == "colocate" and self.vllm_enable_sleep_mode:
-            empty_cache()
-            self.vllm_engine.wake_up(tags=["kv_cache"])
+        unwrapped_student = self.accelerator.unwrap_model(model)
+        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
+        student_head = unwrapped_student.get_output_embeddings()
+        teacher_head = unwrapped_teacher.get_output_embeddings()
+        params = [student_head.weight, teacher_head.weight]
+        if student_head.bias is not None:
+            params.append(student_head.bias)
+        if teacher_head.bias is not None:
+            params.append(teacher_head.bias)
+        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
 
     @profiling_decorator
     def training_step(
@@ -1954,47 +1907,25 @@ class GOLDTrainer(SFTTrainer):
         `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
         the offline original inputs.
         """
+        buffer_steps = self.args.gradient_accumulation_steps
+
+        # Keep lm_head gathered across forward+backward for Liger + ZeRO-3.
+        with self._get_liger_zero3_lm_head_gather_ctx(model):
+            loss = super().training_step(model, inputs, num_items_in_batch)
+
+        slice_idx = (self._step - 1) % buffer_steps
+
         on_policy = False
-        if random.random() <= self.lmbda:
-            on_policy = True
-            if self.use_vllm:
-                self._wake_vllm_if_needed()
-                result = self._generate_on_policy_outputs_vllm(
-                    inputs, self.generation_config, self.processing_class.pad_token_id
-                )
-                new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
-            else:
-                with (
-                    unwrap_model_for_generation(
-                        model,
-                        self.accelerator,
-                        generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
-                    ) as unwrapped_model
-                ):
-                    result = self.generate_on_policy_outputs(
-                        unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
-                    )
-                    new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
+        if self._buffered_on_policy is not None and slice_idx < len(self._buffered_on_policy):
+            on_policy = self._buffered_on_policy[slice_idx]
 
-            inputs["input_ids"] = new_input_ids
-            inputs["attention_mask"] = new_attention_mask
-            inputs["labels"] = new_labels
-
-            # CRITICAL: Preserve original text for cross-tokenizer ULD loss
-            # This ensures both off-policy (dataset) and on-policy (generated) samples
-            # can use proper text-based alignment for different tokenizers
-            inputs["original_prompt_text"] = prompt_texts
-            inputs["original_completion_text"] = completion_texts
-
-            # Log prompt and completion texts
+        if on_policy and self._buffered_text_logs is not None and self._buffered_text_logs[slice_idx] is not None:
+            prompt_texts, completion_texts = self._buffered_text_logs[slice_idx]
             self._textual_logs["prompt"].extend(gather_object(prompt_texts))
             self._textual_logs["completion"].extend(gather_object(completion_texts))
 
-        loss = super().training_step(model, inputs, num_items_in_batch)
-
         loss_scalar = float(loss.detach())
-        ga = max(1, int(self.args.gradient_accumulation_steps))
-        step_equiv = 1.0 / ga
+        step_equiv = 1.0 / self.args.gradient_accumulation_steps
 
         if on_policy:
             self._on_policy_loss_total += loss_scalar
@@ -2010,7 +1941,6 @@ class GOLDTrainer(SFTTrainer):
 
         if mode == "train":
             device = self.accelerator.device if hasattr(self.accelerator, "device") else torch.device("cpu")
-            # include matched/unmatched accumulators for distributed reduction
             vec = torch.tensor(
                 [
                     self._on_policy_loss_total,
@@ -2026,7 +1956,6 @@ class GOLDTrainer(SFTTrainer):
                 device=device,
             )
 
-            # Sum across processes so we mirror Trainer's distributed reduction
             if (
                 getattr(self.accelerator, "distributed_type", DistributedType.NO) != DistributedType.NO
                 and dist.is_available()
@@ -2045,20 +1974,16 @@ class GOLDTrainer(SFTTrainer):
                 unmatched_eq,
             ) = vec.tolist()
 
-            # Compute category averages over the *same window* as Trainer's logs
-            # (avoid div-by-zero if, e.g., no on-policy steps in the window)
             if on_eq > 0:
                 logs["on_policy_loss"] = round(on_sum / on_eq, 4)
             if off_eq > 0:
                 logs["off_policy_loss"] = round(off_sum / off_eq, 4)
 
-            # matched/unmatched averaged over same logging window (if present)
             if matched_eq > 0:
                 logs["matched_loss"] = round(matched_sum / matched_eq, 4)
             if unmatched_eq > 0:
                 logs["unmatched_loss"] = round(unmatched_sum / unmatched_eq, 4)
 
-            # Reset window accumulators after logging (just like Trainer resets its window)
             self._on_policy_loss_total = self._off_policy_loss_total = 0.0
             self._on_policy_step_equiv = self._off_policy_step_equiv = 0.0
             self._matched_sum = self._unmatched_sum = 0.0
@@ -2069,7 +1994,7 @@ class GOLDTrainer(SFTTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
@@ -2090,7 +2015,7 @@ class GOLDTrainer(SFTTrainer):
                 import pandas as pd
 
                 table = {
-                    "step": [str(self.state.global_step)] * len(self._textual_logs["prompt"]),
+                    "step": [self.state.global_step] * len(self._textual_logs["prompt"]),
                     "prompt": self._textual_logs["prompt"],
                     "completion": self._textual_logs["completion"],
                 }

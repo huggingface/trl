@@ -59,58 +59,27 @@ python trl/scripts/dpo.py \
 """
 
 import argparse
-import os
-
-import torch
-from accelerate import logging
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM
-
-from trl import (
-    DatasetMixtureConfig,
-    DPOConfig,
-    DPOTrainer,
-    ModelConfig,
-    ScriptArguments,
-    TrlParser,
-    get_dataset,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
-)
-
-
-logger = logging.get_logger(__name__)
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args, dataset_args):
-    ################
-    # Model
-    ###################
-    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
-    model_kwargs = dict(
+    from accelerate import logging
+    from datasets import load_dataset
+
+    from trl import DPOTrainer, get_dataset, get_kbit_device_map, get_peft_config, get_quantization_config
+
+    logger = logging.get_logger(__name__)
+
+    training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
-        dtype=dtype,
+        dtype=model_args.dtype,
     )
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
-        model_kwargs["quantization_config"] = quantization_config
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-    )
-    peft_config = get_peft_config(model_args)
-    if script_args.ignore_bias_buffers:
-        # torch distributed hack
-        model._ddp_params_and_buffers_to_ignore = [
-            name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
-        ]
+        training_args.model_init_kwargs["device_map"] = get_kbit_device_map()
+        training_args.model_init_kwargs["quantization_config"] = quantization_config
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
@@ -130,23 +99,26 @@ def main(script_args, training_args, model_args, dataset_args):
 
     # Initialize the DPO trainer
     trainer = DPOTrainer(
-        model,
+        model=model_args.model_name_or_path,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        peft_config=peft_config,
+        peft_config=get_peft_config(model_args),
     )
+
+    if script_args.ignore_bias_buffers:
+        import torch
+
+        # torch distributed hack
+        trainer.model._ddp_params_and_buffers_to_ignore = [
+            name for name, buffer in trainer.model.named_buffers() if buffer.dtype == torch.bool
+        ]
 
     # Train the model
     trainer.train()
 
     # Log training complete
     trainer.accelerator.print("✅ Training completed.")
-
-    if training_args.eval_strategy != "no":
-        metrics = trainer.evaluate()
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
 
     # Save and push to Hub
     trainer.save_model(training_args.output_dir)
@@ -157,21 +129,18 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
-def make_parser(subparsers: argparse._SubParsersAction | None = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
+    from trl import DatasetMixtureConfig, DPOConfig, ModelConfig, ScriptArguments, TrlParser
+
     dataclass_types = (ScriptArguments, DPOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("dpo", help="Run the DPO training script", dataclass_types=dataclass_types)
     else:
-        parser = TrlParser(dataclass_types)
+        parser = TrlParser(dataclass_types, prog=prog)
     return parser
 
 
 if __name__ == "__main__":
     parser = make_parser()
-    # When using the trl cli, this script may be run with additional arguments, corresponding accelerate arguments.
-    # To ensure that their parsing does not interfere with the script arguments, parse the arguments with
-    # `return_remaining_strings=True`, then ignore the remaining strings.
-    script_args, training_args, model_args, dataset_args, _ = parser.parse_args_and_config(
-        return_remaining_strings=True
-    )
+    script_args, training_args, model_args, dataset_args = parser.parse_args_and_config(fail_with_unknown_args=False)
     main(script_args, training_args, model_args, dataset_args)

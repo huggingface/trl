@@ -5,8 +5,12 @@
     title: Installation
   - local: quickstart
     title: Quickstart
+  - local: usage_stats
+    title: Usage Stats Collection
   title: Getting started
 - sections:
+  - local: chat_templates
+    title: Chat Templates
   - local: dataset_formats
     title: Dataset Formats
   - local: paper_index
@@ -47,6 +51,10 @@
     title: Kernels Hub
   - local: liger_kernel_integration
     title: Liger Kernel
+  - local: openenv
+    title: OpenEnv
+  - local: openreward
+    title: OpenReward
   - local: peft_integration
     title: PEFT
   - local: ptt_integration
@@ -74,8 +82,6 @@
       title: Chat Template Utilities
     - local: data_utils
       title: Data Utilities
-    - local: model_utils
-      title: Model Utilities
     - local: script_utils
       title: Script Utilities
     title: Utilities
@@ -83,20 +89,22 @@
     title: Callbacks
   - local: rewards
     title: Reward Functions
-  - local: others
-    title: Others
   title: API
 - sections:
   - local: experimental_overview
     title: Experimental Overview
-  - local: openenv
-    title: OpenEnv Integration
-  - local: bema_for_reference_model # Sorted alphabetically
+  - local: a2po_trainer # Sorted alphabetically
+    title: A2PO
+  - local: async_grpo_trainer
+    title: Asynchronous GRPO
+  - local: bema_for_reference_model
     title: BEMA for Reference Model
   - local: bco_trainer
     title: BCO
   - local: cpo_trainer
     title: CPO
+  - local: distillation_trainer
+    title: Distillation
   - local: gfpo
     title: GFPO
   - local: gkd_trainer
@@ -107,8 +115,6 @@
     title: GRPO With Replay Buffer
   - local: gspo_token
     title: GSPO-token
-  - local: judges
-    title: Judges
   - local: kto_trainer
     title: KTO 
   - local: merge_model_callback
@@ -117,8 +123,6 @@
     title: MiniLLM
   - local: nash_md_trainer
     title: Nash-MD
-  - local: nemo_gym
-    title: NeMo Gym
   - local: online_dpo_trainer
     title: Online DPO
   - local: orpo_trainer
@@ -129,8 +133,14 @@
     title: PPO
   - local: prm_trainer
     title: PRM
-  - local: winrate_callback
-    title: WinRateCallback
+  - local: sdft_trainer
+    title: SDFT
+  - local: sdpo_trainer
+    title: SDPO
+  - local: ssd_trainer
+    title: SSD
+  - local: tpo_trainer
+    title: TPO
   - local: xpo_trainer
     title: XPO
   title: Experimental

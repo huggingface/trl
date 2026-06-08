@@ -11,7 +11,9 @@ on:
 env:
   TQDM_DISABLE: 1
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  PYTORCH_ALLOC_CONF: "expandable_segments:True"
 
 jobs:
   tests_transformers_branch:
@@ -26,7 +28,7 @@ jobs:
         shell: bash
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -38,8 +40,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@v8.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -49,8 +50,9 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install ".[dev]"
-          uv pip install -U git+https://github.com/huggingface/transformers.git@${{ inputs.transformers_ref }}
+          uv pip install -U \
+            ".[dev]" \
+            "transformers @ git+https://github.com/huggingface/transformers.git@${{ inputs.transformers_ref }}"
 
       - name: Test with pytest
         run: |
@@ -80,7 +82,7 @@ jobs:
       CUDA_VISIBLE_DEVICES: "0,1"
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -92,8 +94,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@v8.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -103,8 +104,9 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install ".[dev]"
-          uv pip install -U git+https://github.com/huggingface/transformers.git@${{ inputs.transformers_ref }}
+          uv pip install -U \
+            ".[dev]" \
+            "transformers @ git+https://github.com/huggingface/transformers.git@${{ inputs.transformers_ref }}"
 
       - name: Run distributed smoke tests
         run: |

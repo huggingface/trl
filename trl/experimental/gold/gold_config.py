@@ -12,16 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
-
-from transformers import TrainingArguments
 
 from ...trainer.sft_config import SFTConfig
 
 
 @dataclass
 class GOLDConfig(SFTConfig):
+    # docstyle-ignore
     r"""
     Configuration class for [`GOLDTrainer`].
 
@@ -29,6 +29,8 @@ class GOLDConfig(SFTConfig):
     please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
 
     Args:
+        > Parameters that control generation and the training loop
+
         temperature (`float`, *optional*, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         lmbda (`float`, *optional*, defaults to `0.5`):
@@ -39,13 +41,16 @@ class GOLDConfig(SFTConfig):
             beta is `0.0`, the loss is the KL divergence. When beta is `1.0`, the loss is the Inverse KL Divergence.
         max_completion_length (`int`, *optional*, defaults to `128`):
             Maximum number of tokens to generate per completion.
-        teacher_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
+        teacher_model_name_or_path (`str`, *optional*):
             Model name or path of the teacher model. If `None`, the teacher model will be the same as the model being
             trained.
-        teacher_model_init_kwargs (`dict[str, Any]]` or `None`, *optional*, defaults to `None`):
+        teacher_model_revision (`str` or `None`, *optional*, defaults to `None`):
+            Model revision of the teacher model (e.g., branch name, tag, or commit hash). If `None`, the default
+            revision is used.
+        teacher_model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
-        teacher_tokenizer_name_or_path (`str` or `None`, *optional*, defaults to `None`):
+        teacher_tokenizer_name_or_path (`str`, *optional*):
             Tokenizer name or path for the teacher model. If None when using ULD loss, will use the same tokenizer as
             the student model (not recommended for cross-tokenizer distillation).
         disable_dropout (`bool`, *optional*, defaults to `True`):
@@ -53,6 +58,13 @@ class GOLDConfig(SFTConfig):
         seq_kd (`bool`, *optional*, defaults to `False`):
             Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
             teacher-generated output).
+        num_generations (`int`, *optional*, defaults to `1`):
+            Number of generations per prompt. Each prompt is repeated this many times in the generation batch.
+        generation_batch_size (`int` or `None`, *optional*, defaults to `None`):
+            Number of unique prompts per worker per optimizer step. If `None`, it is computed from
+            `(per_device_train_batch_size * gradient_accumulation_steps) // num_generations`.
+        > Parameters that control the ULD loss
+
         use_uld_loss (`bool`, *optional*, defaults to `False`):
             Whether to use Universal Logit Distillation (ULD) loss instead of Generalized Jensen-Shannon Divergence
             loss.
@@ -68,9 +80,11 @@ class GOLDConfig(SFTConfig):
             Whether to skip EOS token for student in ULD loss computation.
         uld_skip_teacher_eos (`bool`, *optional*, defaults to `True`):
             Whether to skip EOS token for teacher in ULD loss computation.
+        > Parameters that control vLLM integration
+
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed.
-        vllm_mode (`str`, *optional*, defaults to `"server"`):
+        vllm_mode (`str`, *optional*, defaults to `"colocate"`):
             Mode for student vLLM integration. Either `"server"` (connect to a running TRL vLLM server) or `"colocate"`
             (run vLLM in the same process).
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
@@ -84,17 +98,32 @@ class GOLDConfig(SFTConfig):
             to set this to a low value if the student and teacher models share the same GPU.
         vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Tensor parallel size for the colocated student vLLM engine (if `vllm_mode="colocate"`).
-        vllm_structured_outputs_regex (`str` or `None`, *optional*, defaults to `None`):
+        vllm_structured_outputs_regex (`str`, *optional*):
             Regex for vLLM structured outputs for the student model.
+        vllm_server_base_url (`str`, *optional*):
+            Base URL for the vLLM server (e.g., `"http://localhost:8001"`). If provided, `vllm_server_host` and
+            `vllm_server_port` are ignored.
+        vllm_group_port (`int`, *optional*, defaults to `51216`):
+            Port for the vLLM weight-update group (NCCL communicator). Unless the port is occupied, there is no need to
+            change it.
+        vllm_max_model_length (`int`, *optional*):
+            Maximum model sequence length for the colocated vLLM engine when `vllm_mode="colocate"`. Defaults to the
+            model's maximum context length.
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation backend to use in vLLM. Use `"vllm"` (default) or `"transformers"`.
         vllm_sync_frequency (`int`, *optional*, defaults to `1`):
             Frequency (in training steps) to synchronize student model weights to vLLM engine. Set to 1 to sync after
             every step.
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
             Enable vLLM sleep mode to offload student weights/cache during the optimizer step. Keeps GPU memory usage
             low, but waking the engine adds host–device transfer latency.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `learning_rate`: Defaults to `1e-7` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
+    _VALID_DICT_FIELDS = SFTConfig._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -140,12 +169,6 @@ class GOLDConfig(SFTConfig):
         default=128,
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
-    student_model_revision: str = field(
-        default="main",
-        metadata={
-            "help": "Revision of the student model to use. If not specified, the default revision of the model will be used."
-        },
-    )
     teacher_model_name_or_path: str | None = field(
         default=None,
         metadata={
@@ -153,7 +176,14 @@ class GOLDConfig(SFTConfig):
             "model being trained."
         },
     )
-    teacher_model_init_kwargs: dict[str, Any] | None = field(
+    teacher_model_revision: str | None = field(
+        default=None,
+        metadata={
+            "help": "Model revision of the teacher model (e.g., branch name, tag, or commit hash). If `None`, the "
+            "default revision is used."
+        },
+    )
+    teacher_model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
@@ -178,10 +208,17 @@ class GOLDConfig(SFTConfig):
             "FT on teacher-generated output)."
         },
     )
-    steps_per_generation: int | None = field(
+    num_generations: int = field(
+        default=1,
+        metadata={
+            "help": "Number of generations per prompt. Increasing this will decrease the number of unique prompts per optimization step."
+        },
+    )
+    generation_batch_size: int | None = field(
         default=None,
         metadata={
-            "help": "Number of optimization steps per generation. If `None`, it defaults to gradient_accumulation_steps."
+            "help": "Number of unique prompts per worker per optimizer step. "
+            "If None, computed from (per_device_train_batch_size * gradient_accumulation_steps) // num_generations."
         },
     )
 
@@ -260,25 +297,21 @@ class GOLDConfig(SFTConfig):
         metadata={"help": "Whether to skip EOS token for teacher in ULD loss computation."},
     )
 
-    # transformers paged attention
-    use_transformers_paged: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
-            "`transformers` paged implementation will be used for generation instead of the default padded "
-            "implementation."
-        },
-    )
-
     # vLLM parameters
     use_vllm: bool = field(
         default=False,
         metadata={"help": "Whether to use vLLM for generating completions. Requires `vllm` to be installed."},
     )
     vllm_mode: str = field(
-        default="server",
+        default="colocate",
         metadata={
             "help": 'Mode for vLLM integration. Either "server" (connect to a running TRL vLLM server) or "colocate" (run vLLM in the same process).'
+        },
+    )
+    vllm_server_base_url: str | None = field(
+        default=None,
+        metadata={
+            "help": 'Base URL for the vLLM server (e.g., "http://localhost:8001"). If provided, vllm_server_host and vllm_server_port are ignored.'
         },
     )
     vllm_server_host: str = field(
@@ -293,6 +326,10 @@ class GOLDConfig(SFTConfig):
         default=240.0,
         metadata={"help": 'Timeout (in seconds) for connecting to the vLLM server when `vllm_mode="server"`.'},
     )
+    vllm_group_port: int = field(
+        default=51216,
+        metadata={"help": "Port for the vLLM weight-update group (NCCL communicator)."},
+    )
     vllm_gpu_memory_utilization: float = field(
         default=0.9,
         metadata={
@@ -302,6 +339,16 @@ class GOLDConfig(SFTConfig):
     vllm_tensor_parallel_size: int = field(
         default=1,
         metadata={"help": 'Tensor parallel size for the colocated vLLM engine when `vllm_mode="colocate"`.'},
+    )
+    vllm_max_model_length: int | None = field(
+        default=None,
+        metadata={
+            "help": 'Maximum model sequence length for the colocated vLLM engine when `vllm_mode="colocate"`. Defaults to the model\'s maximum context length.'
+        },
+    )
+    vllm_model_impl: str = field(
+        default="vllm",
+        metadata={"help": 'Model implementation backend to use in vLLM. Use "vllm" (default) or "transformers".'},
     )
     vllm_structured_outputs_regex: str | None = field(
         default=None,
@@ -364,18 +411,12 @@ class GOLDConfig(SFTConfig):
     hub_model_revision: str | None = field(
         default="main", metadata={"help": "The Hub model branch to push the model to."}
     )
-    num_completions_to_print: int = field(default=5, metadata={"help": "Number of completions to print."})
     overwrite_hub_revision: bool = field(default=False, metadata={"help": "Whether to overwrite the Hub revision."})
     push_to_hub_revision: bool = field(default=False, metadata={"help": "Whether to push to a Hub revision/branch."})
-    trl_project: str = field(
-        default="smollm3",
-        metadata={
-            "help": "The TRL project to use for evaluation. This is used to determine the path to the evaluation script."
-        },
-    )
 
     def __post_init__(self):
         super().__post_init__()
+
         # check lmbda and beta are in the range [0, 1]
         if self.lmbda < 0.0 or self.lmbda > 1.0:
             raise ValueError("lmbda must be in the range [0.0, 1.0].")
@@ -389,8 +430,29 @@ class GOLDConfig(SFTConfig):
                 f"to leave room for the prompt. Consider increasing max_length or reducing max_completion_length."
             )
 
-        if self.steps_per_generation is None:
-            self.steps_per_generation = self.gradient_accumulation_steps
+        if self.num_generations < 1:
+            raise ValueError(f"num_generations must be at least 1, got {self.num_generations}.")
+        local_sequence_batch_size = self.per_device_train_batch_size * self.gradient_accumulation_steps
+        if self.generation_batch_size is None:
+            self.generation_batch_size = local_sequence_batch_size // self.num_generations
+        if self.generation_batch_size < 1:
+            raise ValueError(
+                f"generation_batch_size must be at least 1. Got generation_batch_size={self.generation_batch_size}."
+            )
+        if self.generation_batch_size * self.num_generations != local_sequence_batch_size:
+            raise ValueError(
+                "generation_batch_size and num_generations must exactly partition the local optimizer-step batch. "
+                "Expected generation_batch_size * num_generations == per_device_train_batch_size * "
+                f"gradient_accumulation_steps, got {self.generation_batch_size} * {self.num_generations} != "
+                f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
+            )
+        if self.num_generations > 1 and self.lmbda < 1.0:
+            warnings.warn(
+                f"num_generations={self.num_generations} with lmbda={self.lmbda} means off-policy batches include "
+                f"{self.num_generations} copies of each sample; consider lmbda=1.0 when num_generations > 1.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Validate ULD parameters
         if self.use_uld_loss:

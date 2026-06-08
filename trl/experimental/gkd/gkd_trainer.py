@@ -33,10 +33,10 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils import ModelOutput, is_liger_kernel_available, is_peft_available
 
 from ...models import prepare_deepspeed
-from ...models.utils import unwrap_model_for_generation
+from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import disable_dropout_in_model
 from ..utils import DataCollatorForChatML, empty_cache
@@ -143,13 +143,17 @@ class GKDTrainer(SFTTrainer):
         # Liger fused GKD loss (JSD)
         self.use_liger_gkd_loss = False
         if args.use_liger_kernel:
+            # Match the non-Liger path: pure JSD (no hard CE component) and no temperature
+            # scaling, since `generalized_jsd_loss` is called without a `temperature` argument.
             self.liger_jsd_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
-                temperature=args.temperature,
                 compiled=False,
+                weight_hard_loss=0.0,
+                weight_soft_loss=1.0,
             )
             self.use_liger_gkd_loss = True
+            self._forward_redirection = _ForwardRedirection()
 
         super().__init__(
             model,
@@ -260,9 +264,9 @@ class GKDTrainer(SFTTrainer):
         else:
             # Compute the log of the mixture distribution
             # log(a + b) = log(exp(log(a)) + exp(log(b))) -> for mixture
-            beta = torch.tensor(beta, dtype=student_log_probs.dtype)
+            beta = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
             mixture_log_probs = torch.logsumexp(
-                torch.stack([student_log_probs + torch.log(1 - beta), teacher_log_probs + torch.log(beta)]),
+                torch.stack([student_log_probs + torch.log1p(-beta), teacher_log_probs + torch.log(beta)]),
                 dim=0,
             )
 
@@ -281,7 +285,11 @@ class GKDTrainer(SFTTrainer):
 
         # Apply reduction
         if reduction == "batchmean":
-            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / jsd.size(0)
+            # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
+            # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
+            # so 0/1 == 0 with a valid grad path.
+            denom = mask.sum().clamp_min(1) if labels is not None else max(jsd.size(0), 1)
+            return jsd.sum() / denom
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":
@@ -291,19 +299,12 @@ class GKDTrainer(SFTTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if self.use_liger_gkd_loss:
-            # Forward only through the base models (avoid lm_head to save memory)
+            # Forward only through the base models (avoid lm_head to save memory).
+            # Route through the DDP/FSDP wrapper via _forward_redirection so that
+            # DDP.forward() is called and prepare_for_backward() fires correctly.
             unwrapped_student = self.accelerator.unwrap_model(model)
-            if hasattr(unwrapped_student, "get_decoder") and unwrapped_student.get_decoder() is not None:
-                base_student = unwrapped_student.get_decoder()
-            else:
-                base_student = getattr(
-                    unwrapped_student, getattr(unwrapped_student, "base_model_prefix", "model"), unwrapped_student
-                )
-
-            student_outputs = base_student(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                use_cache=False,
+            student_outputs = self._forward_redirection(
+                model, unwrapped_student, self._liger_student_forward, unwrapped_student, inputs
             )
 
             self.teacher_model.eval()
@@ -325,8 +326,8 @@ class GKDTrainer(SFTTrainer):
             student_hidden = student_outputs.last_hidden_state[:, :-1]
             teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
 
-            # Release full outputs to free memory
-            del student_outputs, teacher_outputs
+            # Release teacher outputs; keep student_outputs for return_outputs
+            del teacher_outputs
 
             # labels mask and labels (shifted)
             labels_mask = inputs["labels"] != -100
@@ -355,6 +356,11 @@ class GKDTrainer(SFTTrainer):
 
             # Release hidden states after loss computation
             del student_hidden, teacher_hidden, true_labels
+            empty_cache()
+            if return_outputs:
+                return (loss, ModelOutput(logits=None, last_hidden_state=student_outputs.last_hidden_state))
+            else:
+                return loss
         else:
             # compute student output
             student_outputs = model(
@@ -390,6 +396,18 @@ class GKDTrainer(SFTTrainer):
         # Return loss
         return (loss, student_outputs) if return_outputs else loss
 
+    def _liger_student_forward(self, student, inputs):
+        """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
+        if hasattr(student, "get_decoder") and student.get_decoder() is not None:
+            decoder = student.get_decoder()
+        else:
+            decoder = getattr(student, getattr(student, "base_model_prefix", "model"), student)
+        return decoder(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            use_cache=False,
+        )
+
     @staticmethod
     def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None):
         # Generate output with respect to the prompt-only
@@ -423,10 +441,10 @@ class GKDTrainer(SFTTrainer):
         `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
         the original inputs.
         """
-        if self.seq_kd:
+        if random.random() <= self.lmbda:
             with (
                 unwrap_model_for_generation(
-                    self.teacher_model,
+                    model,
                     self.accelerator,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                 ) as unwrapped_model
@@ -437,10 +455,10 @@ class GKDTrainer(SFTTrainer):
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
-        if random.random() <= self.lmbda:
+        elif self.seq_kd:
             with (
                 unwrap_model_for_generation(
-                    model,
+                    self.teacher_model,
                     self.accelerator,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                 ) as unwrapped_model

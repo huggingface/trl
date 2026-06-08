@@ -74,7 +74,7 @@ class TestBCOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -111,7 +111,7 @@ class TestBCOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -210,7 +210,6 @@ class TestBCOTrainer(TrlTestCase):
             "is_encoder_decoder": trainer.is_encoder_decoder,
             "tokenizer": trainer.processing_class,
             "max_length": trainer.max_length,
-            "truncation_mode": trainer.truncation_mode,
         }
         processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs)
         assert processed_dataset["prompt"][:] == dataset["prompt"][:]
@@ -250,7 +249,7 @@ class TestBCOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -299,7 +298,7 @@ class TestBCOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -336,7 +335,7 @@ class TestBCOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             if "lora" in n:
                 new_param = trainer.model.get_parameter(n)
@@ -382,7 +381,7 @@ class TestBCOTrainer(TrlTestCase):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         training_args = BCOConfig(
             output_dir=self.tmp_dir,
@@ -394,7 +393,7 @@ class TestBCOTrainer(TrlTestCase):
             model=model,
             args=training_args,
             processing_class=tokenizer,
-            train_dataset=dataset["train"],
+            train_dataset=dataset,
             peft_config=lora_config,
         )
 

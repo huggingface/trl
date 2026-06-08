@@ -14,7 +14,7 @@ This post-training method was contributed by [Michael Noukhovitch](https://huggi
 
 ## Quick start
 
-This example demonstrates how to train a model using the online DPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and [`experimental.judges.PairRMJudge`] as a judge. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
+This example demonstrates how to train a model using the online DPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and the [trl-lib/Qwen2-0.5B-Reward](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) reward model. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
@@ -28,18 +28,17 @@ Below is the script to train the model:
 ```python
 # train_online_dpo.py
 from datasets import load_dataset
-from trl.experimental.judges import PairRMJudge
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-judge = PairRMJudge()
+reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
 train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
 training_args = OnlineDPOConfig(output_dir="Qwen2-0.5B-OnlineDPO")
 trainer = OnlineDPOTrainer(
-    model=model, judge=judge, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
+    model=model, reward_funcs=reward_model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
 )
 trainer.train()
 ```
@@ -70,27 +69,6 @@ Online DPO only requires a [prompt-only dataset](dataset_formats#prompt-only) (u
 
 ## Usage tips
 
-### Use a reward model
-
-Instead of a judge, you can chose to use a reward model -- see [Reward Bench](https://huggingface.co/spaces/allenai/reward-bench) for a leaderboard of public models you can use. Below is a code example showing how to replace a judge with the [trl-lib/Qwen2-0.5B-Reward](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) model:
-
-```diff
-- from trl.experimental.judges import PairRMJudge
-+ from transformers import AutoModelForSequenceClassification
-
-- judge = PairRMJudge()
-+ reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
-+ reward_tokenizer = AutoTokenizer.from_pretrained("trl-lib/Qwen2-0.5B-Reward")
-
-  trainer = OnlineDPOTrainer(
-      ...
--     judge=judge,
-+     reward_funcs=reward_model,
-+     reward_processing_class=reward_tokenizer,
-      ...
-  )
-```
-
 ### Encourage EOS token generation
 
 When using a reward model, we may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`experimental.online_dpo.OnlineDPOConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`experimental.online_dpo.OnlineDPOConfig`]:
@@ -101,7 +79,7 @@ training_args = OnlineDPOConfig(..., max_new_tokens=128, missing_eos_penalty=1.0
 
 ### Logging Completions
 
-To better understand your model’s behavior during training, you can log sample completions periodically using the [`LogCompletionsCallback`].
+To better understand your model's behavior during training, you can log sample completions periodically using the [`LogCompletionsCallback`].
 
 ```python
 trainer = OnlineDPOTrainer(..., eval_dataset=eval_dataset)
@@ -122,10 +100,10 @@ To test the online DPO script with the [Qwen2.5 0.5B model](https://huggingface.
 ```bash
 python examples/scripts/dpo_online.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
-    --judge pair_rm \
+    --reward_model_path trl-lib/Qwen2-0.5B-Reward \
     --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 5.0e-7 \
-    --output_dir Qwen2.5-0.5B-Online-DPO-PairRM \
+    --output_dir Qwen2.5-0.5B-Online-DPO \
     --warmup_steps 0.1 \
     --push_to_hub
 ```
@@ -213,48 +191,6 @@ Checkpoints and experiment tracking are available at:
 
 * [🤗 Model checkpoints](https://huggingface.co/collections/trl-lib/online-dpo-66acd3fa38a331a9cd457b07)
 * [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/reports/Online-DPO-experiments-for-TL-DR-summarisation--Vmlldzo5MTczMDU0)
-
-To evaluate, we use [vLLM](https://github.com/vllm-project/vllm) to load the checkpoints and GPT-4o mini as a judge model to evaluate the generated TL;DR against the reference TL;DR.
-For more information on how to use judges, see [Judges](judges).
-
-```bash
-$ python examples/scripts/evals/judge_tldr.py --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft --judge_model gpt-4o-mini --num_examples 1000
-Model win rate: 33.00%
-python examples/scripts/evals/judge_tldr.py --model_name_or_path trl-lib/pythia-6.9b-deduped-tldr-sft --judge_model gpt-4o-mini --num_examples 1000
-Model win rate: 41.50%
-python examples/scripts/evals/judge_tldr.py --model_name_or_path trl-lib/pythia-1b-deduped-tldr-online-dpo --judge_model gpt-4o-mini --num_examples 1000
-Model win rate: 62.60%
-python examples/scripts/evals/judge_tldr.py --model_name_or_path trl-lib/pythia-6.9b-deduped-tldr-online-dpo --judge_model gpt-4o-mini --num_examples 1000
-Model win rate: 74.20%
-```
-
-We can then plot the RLHF scaling chart.
-
-```python
-import matplotlib.pyplot as plt
-
-results = {
-    "SFT": {1.0e9: 0.21, 2.8e9: 0.27, 6.9e9: 0.316},
-    "online-dpo": {1.0e9: 0.542, 2.8e9: 0.746, 6.9e9: 0.796},
-    "offline-dpo": {1.0e9: 0.422, 2.8e9: 0.517, 6.9e9: 0.701},
-}
-
-
-plt.plot(results["SFT"].keys(), results["SFT"].values(), label="SFT", marker="o")
-plt.plot(results["online-dpo"].keys(), results["online-dpo"].values(), label="Online-dpo with RM judge", marker="o")
-plt.plot(results["offline-dpo"].keys(), results["offline-dpo"].values(), label="Offline-dpo", marker="o")
-plt.axhline(y=0.5, color="black", linestyle="-.", label="Human reference summary")
-plt.xscale("log")
-plt.xlabel("Model size")
-plt.ylabel("Win rate against reference summaries\n(according to GPT-4-0613)")
-plt.title("DPO scaling by model size")
-plt.legend()
-plt.xlim(5e8, 1.2e10)
-plt.xticks([1e9, 3e9, 1e10], ["1B", "3B", "10B"])
-plt.grid(True, which="both", ls="--", c="0.7")
-plt.tight_layout()
-plt.show()
-```
 
 The online DPO checkpoint gets increasingly more win rate as we scale up the model sizes. This is a good sign that the online DPO implementation is working as intended.
 

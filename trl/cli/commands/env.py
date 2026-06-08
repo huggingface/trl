@@ -14,7 +14,6 @@
 
 from argparse import Namespace
 
-from ...scripts.env import print_env
 from .base import Command, CommandContext
 
 
@@ -28,5 +27,7 @@ class EnvCommand(Command):
         subparsers.add_parser(self.name, help=self.help_text)
 
     def run(self, args: Namespace, context: CommandContext) -> int:
+        from ...scripts.env import print_env
+
         print_env()
         return 0

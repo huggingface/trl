@@ -17,7 +17,7 @@ This post-training method was contributed by [Kashif Rasul](https://huggingface.
 
 ## Quick start
 
-This example demonstrates how to train a model using the XPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and [`experimental.judges.PairRMJudge`] as a judge. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
+This example demonstrates how to train a model using the XPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and the [trl-lib/Qwen2-0.5B-Reward](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) reward model. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
 <iframe
   src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
   frameborder="0"
@@ -30,18 +30,17 @@ Below is the script to train the model:
 ```python
 # train_xpo.py
 from datasets import load_dataset
-from trl.experimental.judges import PairRMJudge
 from trl.experimental.xpo import XPOConfig, XPOTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-judge = PairRMJudge()
+reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
 train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
 training_args = XPOConfig(output_dir="Qwen2-0.5B-XPO")
 trainer = XPOTrainer(
-    model=model, judge=judge, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
+    model=model, reward_funcs=reward_model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
 )
 trainer.train()
 ```
@@ -70,27 +69,6 @@ XPO requires a [prompt-only dataset](dataset_formats#prompt-only). The [`experim
 
 ## Usage tips
 
-### Use a reward model
-
-Instead of a judge, you can chose to use a reward model -- see [Reward Bench](https://huggingface.co/spaces/allenai/reward-bench) for a leaderboard of public models you can use. Below is a code example showing how to replace a judge with the [trl-lib/Qwen2-0.5B-Reward](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) model:
-
-```diff
-- from trl.experimental.judges import PairRMJudge
-+ from transformers import AutoModelForSequenceClassification
-
-- judge = PairRMJudge()
-+ reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
-
-  trainer = XPOTrainer(
-      ...
--     judge=judge,
-+     reward_funcs=reward_model,
-  )
-```
-
-> [!WARNING]
-> Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
-
 ### Encourage EOS token generation
 
 When using a reward model, we may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`experimental.xpo.XPOConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`experimental.xpo.XPOConfig`]:
@@ -99,9 +77,12 @@ When using a reward model, we may want the model to generate completions within 
 training_args = XPOConfig(..., max_new_tokens=128, missing_eos_penalty=1.0)
 ```
 
+> [!WARNING]
+> Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
+
 ### Logging Completions
 
-To better understand your model’s behavior during training, you can log sample completions periodically using the [`LogCompletionsCallback`].
+To better understand your model's behavior during training, you can log sample completions periodically using the [`LogCompletionsCallback`].
 
 ```python
 trainer = XPOTrainer(..., eval_dataset=eval_dataset)
@@ -122,10 +103,10 @@ To test the XPO script with the [Qwen2.5 0.5B model](https://huggingface.co/trl-
 ```bash
 python examples/scripts/xpo.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
-    --judge pair_rm \
+    --reward_model_path trl-lib/Qwen2-0.5B-Reward \
     --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 5.0e-7 \
-    --output_dir Qwen2.5-0.5B-XPO-PairRM \
+    --output_dir Qwen2.5-0.5B-XPO \
     --warmup_steps 0.1 \
     --push_to_hub
 ```

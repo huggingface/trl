@@ -12,38 +12,61 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 from argparse import Namespace
-from collections.abc import Callable
 
-from ..accelerate_launcher import launch_training_script
 from .base import Command, CommandContext
+
+
+def _subtract_subsequence(lst: list[str], subseq: list[str]) -> list[str]:
+    """Return lst with the ordered subsequence subseq removed."""
+    sub_iter = iter(subseq)
+    current = next(sub_iter, None)
+    result = []
+    for item in lst:
+        if current is not None and item == current:
+            current = next(sub_iter, None)
+        else:
+            result.append(item)
+    return result
 
 
 class TrainingCommand(Command):
     """
     Generic CLI command that launches a training script with accelerate.
 
+    The script `trl/scripts/<name>.py` must expose a `make_parser()` function.
+
     Parameters:
         name (`str`):
-            CLI subcommand name.
-        script_name (`str`):
-            Script filename under `trl/scripts`.
-        make_parser (`Callable`):
-            Function registering the command parser into the subparsers object.
+            CLI subcommand name (e.g. `"dpo"`).
     """
 
-    def __init__(self, name: str, script_name: str, make_parser: Callable):
-        super().__init__(name=name, help_text=f"Run the {name} training script", uses_accelerate=True)
-        self._script_name = script_name
-        self._make_parser = make_parser
+    def __init__(self, name: str):
+        super().__init__(name=name, help_text=f"Run the {name} training script")
 
     def register(self, subparsers) -> None:
-        self._make_parser(subparsers)
+        subparsers.add_parser(self.name, help=self.help_text, add_help=False)
 
     def run(self, args: Namespace, context: CommandContext) -> int:
+        from ..accelerate_config import resolve_accelerate_config_argument
+        from ..accelerate_launcher import launch_training_script
+
+        module = importlib.import_module(f"...scripts.{self.name}", package=__package__)
+        all_args = context.argv_after(self.name)
+        parser = module.make_parser(prog=f"trl {self.name}")
+
+        # Handles -h (exits). Returns config_remaining and cli_remaining separately.
+        # cli_remaining is an ordered subsequence of all_args; config_remaining is not.
+        *_, config_remaining, cli_remaining = parser.parse_args_and_config(
+            all_args, return_remaining_strings=True, separate_remaining_strings=True
+        )
+        launch_args = resolve_accelerate_config_argument(config_remaining + cli_remaining)
+        training_script_args = _subtract_subsequence(all_args, cli_remaining)
+
         launch_training_script(
-            script_name=self._script_name,
-            launch_args=context.launch_args,
-            training_script_args=context.argv_after(self.name),
+            script_name=f"{self.name}.py",
+            launch_args=launch_args,
+            training_script_args=training_script_args,
         )
         return 0
