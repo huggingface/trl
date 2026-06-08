@@ -21,6 +21,7 @@ from ...trainer.sft_config import SFTConfig
 
 @dataclass
 class GOLDConfig(SFTConfig):
+    # docstyle-ignore
     r"""
     Configuration class for [`GOLDTrainer`].
 
@@ -28,6 +29,8 @@ class GOLDConfig(SFTConfig):
     please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
 
     Args:
+        > Parameters that control generation and the training loop
+
         temperature (`float`, *optional*, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         lmbda (`float`, *optional*, defaults to `0.5`):
@@ -60,6 +63,8 @@ class GOLDConfig(SFTConfig):
         generation_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Number of unique prompts per worker per optimizer step. If `None`, it is computed from
             `(per_device_train_batch_size * gradient_accumulation_steps) // num_generations`.
+        > Parameters that control the ULD loss
+
         use_uld_loss (`bool`, *optional*, defaults to `False`):
             Whether to use Universal Logit Distillation (ULD) loss instead of Generalized Jensen-Shannon Divergence
             loss.
@@ -75,6 +80,8 @@ class GOLDConfig(SFTConfig):
             Whether to skip EOS token for student in ULD loss computation.
         uld_skip_teacher_eos (`bool`, *optional*, defaults to `True`):
             Whether to skip EOS token for teacher in ULD loss computation.
+        > Parameters that control vLLM integration
+
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed.
         vllm_mode (`str`, *optional*, defaults to `"colocate"`):
@@ -110,6 +117,10 @@ class GOLDConfig(SFTConfig):
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
             Enable vLLM sleep mode to offload student weights/cache during the optimizer step. Keeps GPU memory usage
             low, but waking the engine adds host–device transfer latency.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `learning_rate`: Defaults to `1e-7` instead of `5e-5`.
     """
 
     _VALID_DICT_FIELDS = SFTConfig._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]

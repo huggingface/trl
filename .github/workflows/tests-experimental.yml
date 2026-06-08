@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6.0.2
       - name: Set up Python 3.13
         uses: actions/setup-python@v6
         with:
@@ -41,7 +41,7 @@ jobs:
         shell: bash
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v6

@@ -56,7 +56,6 @@ from trl import GRPOConfig, GRPOTrainer
 # Based on the Open-R1 recipe for Qwen-7B
 training_args = GRPOConfig(
     learning_rate=4.0e-5,
-    max_prompt_length=4096,
     max_completion_length=32768, # Support for long Chain-of-Thought
     num_generations=16,          # Sample 16 outputs per prompt for group relative advantage
     beta=0.001,                  # KL coefficient
@@ -1729,8 +1728,7 @@ training_args = SDPOConfig(
     distillation_mode="topk_logits",       # Explicitly select top-K logit distillation
     distillation_topk=100,                 # Required for top-K logit distillation
     distillation_is_clip=2.0,              # Importance sampling clipping
-    distillation_weight=1.0,               # Weight for self-distillation loss
-    sdpo_policy_loss_mode="distillation_only",
+    distillation_weight=1.0,               # Convex weight: (1-w)*policy + w*distillation; 1.0 = pure distillation
     use_successful_as_teacher=True,        # Use successful rollouts as teacher
     teacher_model_kind="ema",              # Supported: "base", "live", "ema"
     teacher_update_rate=0.05,              # EMA update rate
