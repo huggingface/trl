@@ -97,6 +97,7 @@ from .utils import (
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
@@ -577,18 +578,15 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_liger_kernel and is_peft_model(model):
             # The Liger fused GRPO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head is
             # targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base weight
-            # and the trainable LoRA `lora_A`/`lora_B` deltas live in separate submodules that Liger never sees. The
-            # head adapter would silently receive no gradient, so the model trains as if `lm_head` were frozen. Fail
-            # loudly rather than train a silently-frozen head.
+            # and the trainable adapter parameters live in separate submodules that Liger never sees. The head adapter
+            # would silently receive no gradient, so the model trains as if `lm_head` were frozen. Fail loudly rather
+            # than train a silently-frozen head.
             output_embeddings = model.get_output_embeddings()
-            if output_embeddings is not None and any(
-                hasattr(output_embeddings, attr) for attr in ("lora_A", "lora_B")
-            ):
+            if isinstance(output_embeddings, BaseTunerLayer):
                 raise ValueError(
                     "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The Liger "
-                    "fused GRPO loss reads `lm_head.weight` directly, so the LoRA delta on the head is ignored and "
-                    "never trained. Either remove `'lm_head'` from your LoRA `target_modules`, or set "
-                    "`use_liger_kernel=False`."
+                    "fused GRPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and never "
+                    "trained. Either remove `'lm_head'` from your `target_modules`, or set `use_liger_kernel=False`."
                 )
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile

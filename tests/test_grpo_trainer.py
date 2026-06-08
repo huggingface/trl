@@ -510,14 +510,7 @@ class TestGRPOTrainer(TrlTestCase):
         # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head (#4612).
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
-            use_liger_kernel=True,
-            report_to="none",
-        )
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
         with pytest.raises(ValueError, match="lm_head"):
             GRPOTrainer(
                 model=model,
