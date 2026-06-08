@@ -12,8 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .self_distillation_config import SelfDistillationConfig
-from .self_distillation_mixin import SelfDistillationMixin
-
-
-__all__ = ["SelfDistillationConfig", "SelfDistillationMixin"]
+from .a2po_config import A2POConfig
+from .a2po_trainer import A2POTrainer

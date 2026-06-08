@@ -371,6 +371,13 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.7.0"),
+                    reason="Nemotron 3 gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
+                ),
+            ),
         ],
     )
     def test_train(self, model_id):
@@ -378,6 +385,34 @@ class TestSFTTrainer(TrlTestCase):
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "config_name",
+        [
+            "standard_language_modeling",
+            "conversational_language_modeling",
+            "standard_prompt_completion",
+            "conversational_prompt_completion",
+        ],
+    )
+    def test_train_dataset_format(self, config_name):
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -1087,7 +1122,7 @@ class TestSFTTrainer(TrlTestCase):
     @require_kernels
     @pytest.mark.skipif(
         not is_ampere_or_newer() and torch_device != "xpu",
-        reason="Flash attention 2 requires Ampere or newer GPU, or XPU",
+        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -2276,6 +2311,13 @@ _CHUNKED_CE_MODEL_IDS = [
     "trl-internal-testing/tiny-LlamaForCausalLM-3",
     "trl-internal-testing/tiny-MistralForCausalLM-0.1",
     "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    pytest.param(
+        "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.3.0"),
+            reason="Nemotron 3 was introduced in transformers>=5.3.0",
+        ),
+    ),
     "trl-internal-testing/tiny-Phi3ForCausalLM",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",

@@ -18,7 +18,7 @@ import queue
 import textwrap
 import time
 from collections import defaultdict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -35,6 +35,7 @@ from trl.trainer.utils import pad, patch_chunked_lm_head
 
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
+from .weight_transfer import WeightTransferClient
 
 
 logger = get_logger(__name__)
@@ -53,14 +54,34 @@ EnvironmentFactory = Callable[[], _SupportsReset]
 
 
 class RolloutWorkerProtocol(Protocol):
+    """Interface a rollout worker must implement to be passed as `rollout_worker` to [`AsyncGRPOTrainer`].
+
+    The default [`AsyncRolloutWorker`] spawns a CUDA-free child process and scores completions with the trainer's
+    `reward_funcs`. Implement this protocol to plug in a custom rollout/scoring backend instead — for example, one that
+    runs reward models on their own GPUs.
+
+    Attributes:
+        rollout_buffer (`queue.Queue`):
+            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it.
+    """
+
     rollout_buffer: queue.Queue
 
-    def start(self) -> None: ...
-    def stop(self) -> None: ...
-    def pause(self) -> None: ...
-    def resume(self) -> None: ...
-    def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None: ...
-    def update_model_version(self, version: int) -> None: ...
+    def start(self) -> None:
+        """Begin producing rollouts. Called once on train begin, after the initial weight sync."""
+        ...
+
+    def stop(self) -> None:
+        """Stop the worker and release its resources. Called on train end."""
+        ...
+
+    def update_model_version(self, version: int) -> None:
+        """Tell the worker which policy version is now live, so it can tag or discard stale samples."""
+        ...
+
+    def check_health(self, stale_after_s: float) -> None:
+        """Raise if the worker has crashed or stopped producing within `stale_after_s` seconds."""
+        ...
 
 
 class StepIntervalCallback(TrainerCallback):
@@ -77,24 +98,65 @@ class StepIntervalCallback(TrainerCallback):
             self.fn()
 
 
+class _InitialWeightSyncCallback(TrainerCallback):
+    """Idempotent: NCCL group setup + cold weight sync to vLLM on train begin."""
+
+    def __init__(self, trainer: "AsyncGRPOTrainer"):
+        self._trainer = trainer
+        self._fired = False
+
+    def on_train_begin(self, _args, _state, _control, **_kwargs):
+        if self._fired:
+            return
+        self._fired = True
+        if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
+            self._trainer.weight_transfer.init_weight_transfer()
+        self._trainer._sync_weight()
+
+
+class _StartRolloutWorkerCallback(TrainerCallback):
+    """Idempotent: starts the rollout worker. Must be registered AFTER `_InitialWeightSyncCallback`."""
+
+    def __init__(self, trainer: "AsyncGRPOTrainer"):
+        self._trainer = trainer
+        self._fired = False
+
+    def on_train_begin(self, _args, _state, _control, **_kwargs):
+        if self._fired:
+            return
+        self._fired = True
+        if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker is not None:
+            self._trainer.rollout_worker.start()
+
+
 class RolloutQueueDataset(torch.utils.data.IterableDataset):
-    def __init__(self, rollout_queue, model_version_fn, max_staleness=3, timeout=120.0):
+    def __init__(
+        self,
+        rollout_queue,
+        model_version_fn,
+        check_health_fn,
+        stale_after_s,
+        max_staleness=3,
+        poll_interval_s=5.0,
+    ):
         self.queue = rollout_queue
         self.model_version_fn = model_version_fn
+        self.check_health_fn = check_health_fn
+        self.stale_after_s = stale_after_s
         self.max_staleness = max_staleness
-        self.timeout = timeout
+        self.poll_interval_s = poll_interval_s
 
     def __iter__(self):
         while True:
             t0 = time.time()
-            qsize = self.queue.qsize()
-            if qsize == 0:
+            if self.queue.qsize() == 0:
                 logger.info("queue empty, waiting for rollout samples...")
             try:
-                sample = self.queue.get(timeout=self.timeout)
+                sample = self.queue.get(timeout=self.poll_interval_s)
             except queue.Empty:
-                logger.warning(f"Rollout queue empty for {self.timeout}s, stopping epoch")
-                return  # StopIteration ends epoch
+                # Returning here would broadcast None through accelerate's dispatch loop.
+                self.check_health_fn(self.stale_after_s)
+                continue
             queue_wait_time_s = time.time() - t0
             if queue_wait_time_s > 1.0:
                 logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={self.queue.qsize()})")
@@ -211,6 +273,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
               function](#using-a-custom-reward-function).
             - A list of reward functions, where each item is a reward function as described above. Rewards from all
               functions are summed.
+
+            Unlike [`GRPOTrainer`], rewards are computed in a spawned child process, so each reward function (along
+            with `tools` and `environment_factory`) must be picklable: use a module-level function,
+            `functools.partial`, or a callable class instance — lambdas and closures will fail at startup. The child
+            process also runs with `CUDA_VISIBLE_DEVICES=""`, so a GPU-backed reward model runs on CPU (slow), not the
+            trainer's GPU.
         args ([`AsyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -352,7 +420,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
+                # Weight transfer is also expected to be wired by the test fixture (or left as None
+                # if the stub doesn't sync to a real vLLM).
                 self.rollout_worker = rollout_worker
+                self.weight_transfer = None
             else:
                 # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
                 # DTensor.shape returns the global shape without triggering any all-gather.
@@ -363,6 +434,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     weight_names.append(name)
                     weight_dtype_names.append(str(param.dtype).split(".")[-1])
                     weight_shapes.append(list(param.shape))
+                self.weight_transfer = WeightTransferClient(
+                    vllm_server_url=self.args.vllm_server_base_url,
+                    server_timeout=self.args.vllm_server_timeout,
+                    weight_update_info={
+                        "names": weight_names,
+                        "dtype_names": weight_dtype_names,
+                        "shapes": weight_shapes,
+                        "packed": True,
+                        "is_checkpoint_format": True,
+                    },
+                )
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=model_name,
                     dataset=train_dataset,
@@ -377,21 +459,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     max_tokens=self.args.max_completion_length,
                     temperature=self.args.temperature,
                     request_timeout=self.args.request_timeout,
-                    server_timeout=self.args.vllm_server_timeout,
                     chat_template_kwargs=self.args.chat_template_kwargs,
                     max_tool_calling_iterations=self.args.max_tool_calling_iterations,
                     log_completions=self.args.log_completions,
                     num_completions_to_print=self.args.num_completions_to_print,
-                    weight_names=weight_names,
-                    weight_dtype_names=weight_dtype_names,
-                    weight_shapes=weight_shapes,
                 )
+            # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
             self.rollout_queue = None
             self.rollout_worker = None
+            self.weight_transfer = None
 
-        # Add callbacks
+        # Add callbacks. Registration order matters: weight sync first, then worker start.
+        self.add_callback(_InitialWeightSyncCallback(self))
+        self.add_callback(_StartRolloutWorkerCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
 
     def get_train_dataloader(self) -> DataLoader:
@@ -399,8 +481,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             dataset = RolloutQueueDataset(
                 rollout_queue=self.rollout_queue,
                 model_version_fn=lambda: self.model_version,
+                check_health_fn=self.rollout_worker.check_health,
+                stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
-                timeout=self.args.vllm_server_timeout,
             )
         else:
             dataset = _EmptyIterableDataset()
@@ -521,12 +604,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
             device = completion_mask.device
             n_samples = torch.tensor(completion_mask.shape[0], dtype=torch.float32, device=device)
             if keys:
-                local_sums = torch.stack([sample_metrics[k].to(device).sum() for k in keys])
-                stats = torch.cat([local_sums, n_samples.unsqueeze(0)])
+                # nan-aware per key: unscorable samples carry NaN, so a plain .sum() would poison the whole metric.
+                local_sums = torch.stack([torch.nansum(sample_metrics[k].to(device)) for k in keys])
+                local_counts = torch.stack(
+                    [(~torch.isnan(sample_metrics[k].to(device))).sum().to(torch.float32) for k in keys]
+                )
+                stats = torch.cat([local_sums, local_counts])
                 stats = self.accelerator.reduce(stats, reduction="sum")
-                global_sums, global_n_samples = stats[:-1], stats[-1]
-                for k, global_sum in zip(keys, global_sums, strict=True):
-                    self._metrics["train"][k].append((global_sum / global_n_samples).item())
+                n = len(keys)
+                global_sums, global_counts = stats[:n], stats[n:]
+                for k, global_sum, global_count in zip(keys, global_sums, global_counts, strict=True):
+                    metric = (global_sum / global_count).item() if global_count > 0 else float("nan")
+                    self._metrics["train"][k].append(metric)
 
             completion_length = completion_mask.sum(dim=1).float()
             length_stats = torch.stack([completion_length.sum(), n_samples])
@@ -581,8 +670,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def _sync_weight(self):
         t0 = time.time()
         logger.info("Weight sync: pausing vLLM...")
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.pause()
+        if self.accelerator.is_main_process and self.weight_transfer:
+            self.weight_transfer.pause()
         t_pause = time.time()
         logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
 
@@ -590,8 +679,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         t_barrier = time.time()
 
         logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.send_weights(self._streaming_iter())
+        if self.accelerator.is_main_process and self.weight_transfer:
+            self.weight_transfer.send_weights(self._streaming_iter())
         else:
             # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
             for _ in self._streaming_iter():
@@ -601,24 +690,22 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.accelerator.wait_for_everyone()
 
         logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.resume()
+        if self.accelerator.is_main_process:
+            if self.weight_transfer:
+                self.weight_transfer.resume()
             self.model_version += 1
-            self.rollout_worker.update_model_version(self.model_version)
+            if self.rollout_worker:
+                self.rollout_worker.update_model_version(self.model_version)
         weight_sync_time_s = time.time() - t0
         self._metrics["train"]["weight_sync_time_s"].append(weight_sync_time_s)
         logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
 
     def _inner_training_loop(self, *args, **kwargs):
-        # Start the rollout worker here (not in __init__) so that checkpoint loading in Trainer.train()
-        # has already restored the model weights. The sequence is: start worker thread → wait for NCCL
-        # init → sync weights to vLLM → begin generation. This ensures vLLM always uses the current
-        # policy before producing any samples (matters for resumed runs, harmless for fresh ones).
-        self._sync_weight()
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.start()
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
-            if self.accelerator.is_main_process and self.rollout_worker:
-                self.rollout_worker.stop()
+            if self.accelerator.is_main_process:
+                if self.rollout_worker:
+                    self.rollout_worker.stop()
+                if self.weight_transfer:
+                    self.weight_transfer.destroy()

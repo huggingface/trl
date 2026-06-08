@@ -34,7 +34,7 @@ uv pip install git+https://huggingface.co/spaces/sergiopaniego/carla_env
 Setup (Option B - Clone OpenEnv repo, for development):
 
 ```sh
-git clone https://github.com/meta-pytorch/OpenEnv.git
+git clone https://github.com/huggingface/OpenEnv.git
 cd OpenEnv/envs/carla_env
 uv pip install -e .
 ```
