@@ -545,6 +545,13 @@ class KTOTrainer(_BaseTrainer):
                 "models, all data processing is performed on the fly rather than upfront. "
                 "Set `precompute_ref_log_probs=False`."
             )
+        if self._is_vision_dataset and ("chosen" in dataset_sample or "rejected" in dataset_sample):
+            raise ValueError(
+                "Vision datasets must be in unpaired format with `completion` and `label` columns. "
+                "Paired format (`chosen`/`rejected`) is not supported for vision datasets because "
+                "iterating over the full dataset to unpair it would be too expensive for large image "
+                "collections. Unpair your dataset first: `dataset = unpair_preference_dataset(dataset)`."
+            )
 
         # Data collator
         calculate_kl = args.loss_type not in ["apo_zero_unpaired"]
