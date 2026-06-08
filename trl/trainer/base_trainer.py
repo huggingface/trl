@@ -39,6 +39,7 @@ _TELEMETRY_TRAINERS = {
     "RLOOTrainer",
     "SFTTrainer",
     # Experimental
+    "A2POTrainer",
     "AsyncGRPOTrainer",
     "BCOTrainer",
     "CPOTrainer",
