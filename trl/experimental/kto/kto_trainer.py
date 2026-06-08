@@ -323,8 +323,10 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
                 kl_mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, kl_completion_mm_token_type_ids), dim=1)
 
             if has_tti and has_mm_tti:
-                kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids, kl_mm_token_type_ids = flush_left(
-                    kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids, kl_mm_token_type_ids
+                kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids, kl_mm_token_type_ids = (
+                    flush_left(
+                        kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids, kl_mm_token_type_ids
+                    )
                 )
             elif has_tti:
                 kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids = flush_left(
