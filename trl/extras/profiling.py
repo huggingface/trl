@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable
 
 from transformers import Trainer
-from transformers.integrations import is_mlflow_available, is_wandb_available
+from transformers.integrations import is_mlflow_available, is_trackio_available, is_wandb_available
 
 
 if is_wandb_available():
@@ -26,19 +26,22 @@ if is_wandb_available():
 if is_mlflow_available():
     import mlflow
 
+if is_trackio_available():
+    import trackio
+
 
 class ProfilingContext:
     """
     Context manager for profiling code blocks with configurable logging.
 
-    This class handles timing of code execution and logging metrics to various backends (Weights & Biases, MLflow)
+    This class handles timing of code execution and logging metrics to various backends (Weights & Biases, MLflow, Trackio)
     without being coupled to the Trainer class.
 
     Args:
         name (`str`):
             Name of the profiling context. Used in the metric name.
         report_to (`list` of `str`):
-            List of integrations to report metrics to (e.g., ["wandb", "mlflow"]).
+            List of integrations to report metrics to (e.g., ["wandb", "mlflow", "trackio"]).
         is_main_process (`bool`, *optional*, defaults to `True`):
             Whether this is the main process in distributed training. Metrics are only logged from the main process.
         step (`int` or `None`, *optional*):
@@ -120,6 +123,10 @@ class ProfilingContext:
         # Log to MLflow if configured
         if "mlflow" in self.report_to and is_mlflow_available() and mlflow.active_run() is not None:
             mlflow.log_metrics(metrics, step=self.step)
+
+        # Log to Trackio if configured
+        if "trackio" in self.report_to and is_trackio_available():
+            trackio.log(metrics, step=self.step)
 
 
 def profiling_context(trainer: Trainer, name: str) -> ProfilingContext:
