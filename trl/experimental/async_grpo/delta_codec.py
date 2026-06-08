@@ -83,28 +83,39 @@ def extract_sparse(
 
 def extract_sparse_batched(
     items: list[tuple[str, torch.Tensor, torch.Tensor]],
+    max_chunk_numel: int = 256_000_000,
 ) -> list[tuple[str, torch.Tensor, torch.Tensor]]:
-    """Batched [`extract_sparse`] over many params with a single ``nonzero``.
-
-    ``nonzero`` forces a device→host sync (its output size is data-dependent), so the per-param loop costs one sync per
-    param. This concatenates all flattened masks, runs **one** ``nonzero`` over the whole set, then splits the global
-    positions back per param with ``searchsorted`` on the cumulative sizes — collapsing ~N syncs into 2 (the
-    ``nonzero`` and one boundary D2H). Indices are returned local to each param's flat space (ready for that param's
-    ``index_copy_``).
-
-    All tensors must be on the same device. (Transient cost: a concatenated full-size bool mask — fine for the model
-    sizes here; very large models should shard, see the multi-file TODO.)
+    """Batched [`extract_sparse`] over many params, chunked to bound the ``nonzero`` buffer.
 
     Args:
         items (`list[tuple[str, torch.Tensor, torch.Tensor]]`):
             ``(name, tensor, mask)`` triples; ``mask`` is the per-param boolean change mask.
+        max_chunk_numel (`int`, *optional*, defaults to `256_000_000`):
+            Cap on the total element count concatenated per ``nonzero``.
 
     Returns:
         `list[tuple[str, torch.Tensor, torch.Tensor]]`: ``(name, int32 local indices, values)`` per input param, in
         input order.
     """
-    if not items:
-        return []
+    out: list[tuple[str, torch.Tensor, torch.Tensor]] = []
+    chunk: list[tuple[str, torch.Tensor, torch.Tensor]] = []
+    chunk_numel = 0
+    for item in items:
+        n = item[1].numel()
+        if chunk and chunk_numel + n > max_chunk_numel:
+            out.extend(_extract_sparse_chunk(chunk))
+            chunk, chunk_numel = [], 0
+        chunk.append(item)
+        chunk_numel += n
+    if chunk:
+        out.extend(_extract_sparse_chunk(chunk))
+    return out
+
+
+def _extract_sparse_chunk(
+    items: list[tuple[str, torch.Tensor, torch.Tensor]],
+) -> list[tuple[str, torch.Tensor, torch.Tensor]]:
+    """One batched extraction: a single ``nonzero`` over the concatenated masks, split back per param."""
     device = items[0][1].device
     flats = [tensor.detach().reshape(-1) for _, tensor, _ in items]
     sizes = torch.tensor([f.numel() for f in flats], device=device)
