@@ -411,6 +411,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         is_qlora = quantization_config is not None and (
             quantization_config.load_in_4bit or quantization_config.load_in_8bit
         )
+        self._is_qlora = is_qlora
         if is_qlora:
             for param in model.parameters():
                 if param.requires_grad:
@@ -739,6 +740,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
             yield name, full
 
     def _sync_weight(self):
+        if is_peft_model(self.model) and self._is_qlora and self.is_fsdp_enabled:
+            if self.accelerator.state.fsdp_plugin.fsdp_version == 2:
+                raise ValueError(
+                    "AsyncGRPO QLoRA with FSDP2 is not supported with the current full-weight sync path. "
+                    "PEFT bitsandbytes merge_adapter() cannot merge DTensor-sharded bnb weights. Use dense LoRA with "
+                    "FSDP2, QLoRA without FSDP2, or an adapter-only vLLM LoRA sync path. See "
+                    "https://github.com/huggingface/accelerate/issues/3874."
+                )
+
         t0 = time.time()
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process and self.weight_transfer:

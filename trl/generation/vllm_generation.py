@@ -436,6 +436,14 @@ class VLLMGeneration:
                 llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                 llm_model.load_weights([(name, param)])
 
+    def _is_bnb_quantized_model(self) -> bool:
+        if not is_bitsandbytes_available():
+            return False
+        for _, module in self.model.named_modules():
+            if isinstance(module, (bnb.nn.Linear4bit, bnb.nn.Linear8bitLt)):
+                return True
+        return False
+
     def sync_weights(self):
         """Synchronize model weights to vLLM.
 
@@ -463,6 +471,14 @@ class VLLMGeneration:
             gather_if_zero3 = nullcontext
 
         if is_peft_model(model):
+            if is_fsdp_enabled and accelerator.state.fsdp_plugin.fsdp_version == 2 and self._is_bnb_quantized_model():
+                raise ValueError(
+                    "GRPO QLoRA with FSDP2 is not supported with the current full-weight sync path. PEFT "
+                    "bitsandbytes merge_adapter() cannot merge DTensor-sharded bnb weights. Use dense LoRA with "
+                    "FSDP2, QLoRA without FSDP2, or an adapter-only vLLM LoRA sync path. See "
+                    "https://github.com/huggingface/accelerate/issues/3874."
+                )
+
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
             # merging adapters in a sharded manner is not supported.
             # TODO: does this work with FSDP?
@@ -473,8 +489,7 @@ class VLLMGeneration:
                 if is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
                     # Update vLLM weights while parameters are gathered
                     # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    fsdp_plugin = getattr(accelerator.state, "fsdp_plugin", None)
-                    fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
+                    fsdp_version = accelerator.state.fsdp_plugin.fsdp_version
                     if fsdp_version == 1:
                         self._sync_fsdp1_params_to_vllm(model)  # use memory-efficient post-order traversal for FSDP
                     elif fsdp_version == 2:
@@ -503,8 +518,7 @@ class VLLMGeneration:
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
             if is_fsdp_enabled:
-                fsdp_plugin = getattr(accelerator.state, "fsdp_plugin", None)
-                fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
+                fsdp_version = accelerator.state.fsdp_plugin.fsdp_version
                 if fsdp_version == 1:
                     self._sync_fsdp1_params_to_vllm(model)  # use memory-efficient post-order traversal for FSDP
                 elif fsdp_version == 2:
