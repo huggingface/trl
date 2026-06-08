@@ -187,6 +187,13 @@ class TestDPOTrainer(TrlTestCase):
                     reason="Nemotron 3 gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Olmo3ForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="Olmo 3 requires transformers>=4.57.0",
+                ),
+            ),
         ],
     )
     def test_train(self, model_id):
