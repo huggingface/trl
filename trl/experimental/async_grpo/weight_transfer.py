@@ -97,8 +97,6 @@ class WeightTransfer(ABC):
     def destroy(self) -> None:  # noqa: B027 - intentional no-op default; NCCL overrides, bucket needs none
         """Tear down the transport (rank 0 only). Default: nothing to do."""
 
-    # --- shared vLLM HTTP plumbing ---
-
     def _wait_for_server_ready_sync(self, timeout_s: float | None = None, poll_interval_s: float = 2.0) -> None:
         timeout_s = timeout_s if timeout_s is not None else self.server_timeout
         logger.info(f"Waiting for vLLM server at {self.vllm_server_url} ...")
@@ -243,13 +241,26 @@ class NCCLWeightTransfer(WeightTransfer):
     def _send_sparse(self, iterator) -> None:
         """Sparse delta broadcast (kernel format, applied in place via ``index_copy_`` on vLLM). Changed
         ``(int32 flat-index, bf16 value)`` pairs are extracted on the GPU; the per-param counts go to vLLM as
-        ``num_updates_list`` so it can pre-allocate the receive buffers, then each patch is broadcast in that order."""
-        items = [(name, tensor, mask) for name, tensor, mask in iterator]
-        shape_by_name = {name: list(tensor.shape) for name, tensor, _ in items}
-        patches = extract_sparse_batched(items)  # [(name, int32 local flat indices, values)] on device
-        # Values must match the dtype vLLM allocates for the receive buffer; the served policy is bf16.
-        patches = [(name, idx.contiguous(), vals.to(torch.bfloat16).contiguous()) for name, idx, vals in patches]
-        names = [name for name, _, _ in patches]
+        ``num_updates_list`` so it can pre-allocate the receive buffers, then each patch is broadcast in that order.
+
+        Extraction runs in **bounded chunks**: the iterator yields one ``full_tensor()``-gathered param at a time, and
+        we keep only its sparse payload (~1% of the param) before dropping the dense tensor. So rank 0 never holds the
+        whole gathered model at once — essential under FSDP2 at large scale, where the full model is tens of GB.
+        """
+        # patches: (name, int32 indices, bf16 values, shape) — only the sparse payload is retained across chunks.
+        patches: list[tuple] = []
+        chunk: list[tuple] = []
+        chunk_numel = 0
+        for name, tensor, mask in iterator:
+            chunk.append((name, tensor, mask))
+            chunk_numel += tensor.numel()
+            if chunk_numel >= 256_000_000:
+                patches.extend(self._extract_chunk(chunk))
+                chunk, chunk_numel = [], 0  # drop the chunk's dense gathered tensors
+        if chunk:
+            patches.extend(self._extract_chunk(chunk))
+
+        names = [name for name, _, _, _ in patches]
         if not names:  # nothing changed this step -> vLLM rejects an empty sparse update; skip
             logger.debug("[weight_sync] sparse NCCL: no changed params, skipping transfer")
             return
@@ -257,8 +268,8 @@ class NCCLWeightTransfer(WeightTransfer):
             "update_kind": UpdateKind.SPARSE_FLAT,
             "names": names,
             "dtype_names": ["bfloat16"] * len(names),
-            "shapes": [shape_by_name[name] for name in names],
-            "num_updates_list": [int(idx.numel()) for _, idx, _ in patches],
+            "shapes": [shape for _, _, _, shape in patches],
+            "num_updates_list": [int(idx.numel()) for _, idx, _, _ in patches],
             "packed": False,
         }
         self._post_vllm("/start_weight_update", {"is_checkpoint_format": False})
@@ -269,11 +280,21 @@ class NCCLWeightTransfer(WeightTransfer):
         )
         t_update.start()
         NCCLWeightTransferEngine.trainer_send_sparse_weights(
-            iterator=(SparseWeightPatch(name=name, indices=idx, values=vals) for name, idx, vals in patches),
+            iterator=(SparseWeightPatch(name=name, indices=idx, values=vals) for name, idx, vals, _ in patches),
             trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, src=0, packed=False),
         )
         t_update.join()
         self._post_vllm("/finish_weight_update", {})
+
+    @staticmethod
+    def _extract_chunk(chunk) -> list[tuple]:
+        """Extract ``(name, int32 indices, bf16 values, shape)`` for a chunk of ``(name, full, mask)`` triples.
+        Values are cast to bf16 to match the dtype vLLM allocates for the receive buffer (the served policy is bf16)."""
+        shape_by_name = {name: list(tensor.shape) for name, tensor, _ in chunk}
+        return [
+            (name, idx.contiguous(), vals.to(torch.bfloat16).contiguous(), shape_by_name[name])
+            for name, idx, vals in extract_sparse_batched(chunk)
+        ]
 
     def destroy(self) -> None:
         if self.model_update_group is None:
@@ -298,6 +319,7 @@ class BucketWeightTransfer(WeightTransfer):
         super().__init__(*args, **kwargs)
         self._bucket_id = bucket_id
         self._encoding = encoding
+        self._pending: PendingPatch | None = None
 
     def init(self, accelerator) -> None:
         if not accelerator.is_main_process:
@@ -367,8 +389,6 @@ class BucketWeightTransfer(WeightTransfer):
         # download, otherwise a read-timeout would retry into a re-download.
         self._post_vllm("/update_weights", {"update_info": pending}, retries=5, timeout=1800)
         self._post_vllm("/finish_weight_update", {})
-
-    _pending: PendingPatch | None = None
 
 
 def make_weight_transfer(
