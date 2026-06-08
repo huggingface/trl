@@ -46,6 +46,14 @@ if is_peft_available():
 
 logger = get_logger(__name__)
 
+
+def _safe_qsize(q) -> int:
+    try:
+        return q.qsize()
+    except NotImplementedError:
+        return -1
+
+
 # A reward function is a callable that returns a list of floats (the rewards). The callable receives prompts,
 # completions, and additional arguments from the trainer (refer to the trainer's source for details). To ensure forward
 # compatibility, it should accept **kwargs.
@@ -155,7 +163,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
     def __iter__(self):
         while True:
             t0 = time.time()
-            if self.queue.qsize() == 0:
+            if _safe_qsize(self.queue) == 0:
                 logger.info("queue empty, waiting for rollout samples...")
             try:
                 sample = self.queue.get(timeout=self.poll_interval_s)
@@ -165,8 +173,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 continue
             queue_wait_time_s = time.time() - t0
             if queue_wait_time_s > 1.0:
-                logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={self.queue.qsize()})")
-
+                logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={_safe_qsize(self.queue)})")
             staleness = self.model_version_fn() - sample.model_version
             if staleness > self.max_staleness:
                 logger.info(f"dropping stale sample (staleness={staleness}, max={self.max_staleness})")
