@@ -86,10 +86,29 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
     aux_loss: torch.Tensor | None = None
 
 
+def _maybe_gather_lm_head_ctx(w, b):
+    # Allgather ZeRO-3 partitioned `lm_head` weight/bias for the chunked matmul. No-op if not ZeRO-3, or if the
+    # param is already gathered (tied embeddings: `embed_tokens` shares the weight and keeps it `AVAILABLE`, so
+    # partitioning on our exit would collide with its active-submodule tracking).
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+
+    if not is_deepspeed_zero3_enabled():
+        return contextlib.nullcontext()
+
+    import deepspeed
+    from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+
+    params = [w] if b is None else [w, b]
+    if all(p.ds_status == ZeroParamStatus.AVAILABLE for p in params):
+        return contextlib.nullcontext()
+    return deepspeed.zero.GatheredParameters(params)
+
+
 def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
-    logits = h.float() @ w.float().t()
-    if b is not None:
-        logits = logits + b.float()
+    with _maybe_gather_lm_head_ctx(w, b):
+        logits = h.float() @ w.float().t()
+        if b is not None:
+            logits = logits + b.float()
     if logit_scale != 1.0:
         logits = logits * logit_scale
     if final_logit_softcapping is not None:
@@ -179,9 +198,10 @@ def _chunked_cross_entropy_loss(
         # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
         # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
         # FSDP gradient sync doesn't hang on a missing param.
-        loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
-        if lm_head_bias is not None:
-            loss = loss + lm_head_bias.float().sum() * 0.0
+        with _maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+            loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
+            if lm_head_bias is not None:
+                loss = loss + lm_head_bias.float().sum() * 0.0
         return loss, correct, entropy_sum, n_valid_tensor
 
     loss = hidden.new_zeros((), dtype=torch.float32)
@@ -270,16 +290,16 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         decoder_kwargs = {}
         if output_router_logits:
             decoder_kwargs["output_router_logits"] = True
-        # `self.base_model` gives the inner module (skipping `lm_head`) — text decoder for LMs, multimodal wrapper
+        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper
         # for VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
         # returns just the text stack and feeds image-placeholder IDs through it.
         # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `self.base_model is self` (re-runs `lm_head`).
         # Fall back to `self.model` there.
         if is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            decoder = self.model
+            backbone = self.model
         else:
-            decoder = self.base_model
-        outputs: BaseModelOutputWithPast = decoder(
+            backbone = self.base_model
+        outputs: BaseModelOutputWithPast = backbone(
             input_ids=input_ids, attention_mask=attention_mask, use_cache=False, **decoder_kwargs, **kwargs
         )
         hidden_states = outputs.last_hidden_state
@@ -1122,7 +1142,7 @@ class SFTTrainer(_BaseTrainer):
             if not use_flash_attention:
                 logger.warning(
                     "Padding-free training is enabled, but the attention implementation is not set to a supported "
-                    "flash attention variant. Padding-free training flattens batches into a single sequence, and only "
+                    "Flash Attention variant. Padding-free training flattens batches into a single sequence, and only "
                     "the following implementations are known to reliably support this: "
                     f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to "
                     "unexpected behavior. To ensure compatibility, set `attn_implementation` in the model "
@@ -1182,7 +1202,7 @@ class SFTTrainer(_BaseTrainer):
 
         if args.packing and args.packing_strategy in {"bfd", "bfd_split"} and not use_flash_attention:
             logger.warning(
-                "You are using packing, but the attention implementation is not set to a supported flash attention "
+                "You are using packing, but the attention implementation is not set to a supported Flash Attention "
                 "variant. Packing gathers multiple samples into a single sequence, and only the following "
                 f"implementations are known to reliably support this: {', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. "
                 "Using other implementations may lead to cross-contamination between samples. To avoid this, either "
@@ -1600,9 +1620,18 @@ class SFTTrainer(_BaseTrainer):
             inputs["return_token_accuracy"] = True
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
 
-        (loss, outputs) = super().compute_loss(
-            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
-        )
+        try:
+            (loss, outputs) = super().compute_loss(
+                model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+            )
+        except ValueError as e:
+            if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
+                raise ValueError(
+                    f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
+                    f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
+                    f"Please increase `max_length` or set it to `None` to disable truncation."
+                ) from e
+            raise
 
         # Compute entropy
         if self.args.loss_type == "chunked_nll":
@@ -1618,11 +1647,11 @@ class SFTTrainer(_BaseTrainer):
             with torch.no_grad():
                 if "shift_labels" in inputs:
                     # When using CP or SP, labels are pre-shifted.
-                    shift_logits = outputs.logits.contiguous()
+                    shift_logits = outputs.logits
                     shift_labels = inputs["shift_labels"]
                 else:
-                    shift_logits = outputs.logits[..., :-1, :].contiguous()
-                    shift_labels = labels[..., 1:].contiguous()
+                    shift_logits = outputs.logits[..., :-1, :]
+                    shift_labels = labels[..., 1:]
 
                 # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
                 if (
@@ -1632,15 +1661,24 @@ class SFTTrainer(_BaseTrainer):
                     shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
                 per_token_entropy = entropy_from_logits(shift_logits)
+                predictions = shift_logits.argmax(dim=-1)
                 mask = shift_labels != -100
+
                 entropy_sum = (per_token_entropy * mask).sum()
                 total_tokens = mask.sum()
+                correct_predictions = (predictions == shift_labels) & mask
+                correct_tokens = correct_predictions.sum()
 
                 # Gather counts across ranks and weight-average
                 entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
                 total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
+                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
                 entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
+
+                total_sum = total_tokens.sum()
+                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
             self._metrics[mode]["entropy"].append(entropy)
+            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
@@ -1669,46 +1707,6 @@ class SFTTrainer(_BaseTrainer):
                     "not be logged. This is unexpected; please report it to the liger-kernel repository.",
                     stacklevel=2,
                 )
-        else:
-            # Compute accuracy from logits using argmax (traditional method)
-            with torch.no_grad():
-                if "shift_labels" in inputs:
-                    # When using CP or SP, labels are pre-shifted. We must use these (and cannot manually shift) because:
-                    # - The first discarded token from inputs["labels"] actually belongs to process n-1
-                    # - The last logits require the label from process n+1
-                    shift_logits = outputs.logits.contiguous()
-                    shift_labels = inputs["shift_labels"]
-                else:
-                    shift_logits = outputs.logits[..., :-1, :].contiguous()
-                    shift_labels = labels[..., 1:].contiguous()
-
-                # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
-                if (
-                    self.num_virtual_tokens > 0
-                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
-                ):
-                    shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
-
-                # Get predictions
-                predictions = shift_logits.argmax(dim=-1)
-
-                # Create mask for non-padding tokens (assuming ignore_index is -100)
-                mask = shift_labels != -100
-
-                # Calculate accuracy only on non-padding tokens
-                correct_predictions = (predictions == shift_labels) & mask
-                total_tokens = mask.sum()
-                correct_tokens = correct_predictions.sum()
-
-                # Gather the correct_tokens and total_tokens across all processes
-                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-                total_tokens = self.accelerator.gather_for_metrics(total_tokens)
-
-                # Compute the mean token accuracy and log it
-                total_sum = total_tokens.sum()
-                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-                self._metrics[mode]["mean_token_accuracy"].append(accuracy)
-
         # Log auxiliary loss if enabled (applies to both Liger and non-Liger)
         if self.aux_loss_enabled:
             aux_loss = outputs.aux_loss
