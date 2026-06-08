@@ -142,10 +142,9 @@ class TestSDPOTrainer(TrlTestCase):
             generation_batch_size=2,
             num_generations=2,
             max_completion_length=3,
-            sdpo_policy_loss_mode="distillation_only",
             distillation_mode="full_logits",
             distillation_is_clip=None,
-            distillation_weight=0.7,
+            distillation_weight=1.0,
         )
 
         ref_trainer = SDPOTrainer(
