@@ -227,70 +227,70 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
             padding=True,
             padding_side="left",
             return_tensors=self.return_tensors,
-            add_special_tokens=False,
+            add_special_tokens=False,  # to avoid adding the BOS twice, see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
         processed_completions = self.processor(
             text=completions,
             padding=True,
             padding_side="right",
             return_tensors=self.return_tensors,
-            add_special_tokens=False,
+            add_special_tokens=False,  # to avoid adding the BOS twice, see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
 
-        # Assemble prompt (left-padded) + completion (right-padded)
-        prompt_ids = processed_prompts["input_ids"]
-        prompt_mask = processed_prompts["attention_mask"]
-        completion_ids = processed_completions["input_ids"]
-        completion_mask = processed_completions["attention_mask"]
-
+        # Concatenate prompts and completions
+        prompt_ids, prompt_mask = processed_prompts["input_ids"], processed_prompts["attention_mask"]
+        completion_ids, completion_mask = processed_completions["input_ids"], processed_completions["attention_mask"]
         input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
-        seq_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
+        completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
 
-        # Extract token-type tensors before any flush (local refs survive dict mutation below)
         has_tti = "token_type_ids" in processed_prompts
         has_mm_tti = "mm_token_type_ids" in processed_prompts
 
         if has_tti:  # special case for Gemma
-            prompt_tti = processed_prompts["token_type_ids"]
-            completion_tti = processed_completions.get("token_type_ids", torch.zeros_like(completion_ids))
-            token_type_ids = torch.cat((prompt_tti, completion_tti), dim=1)
+            prompt_token_type_ids = processed_prompts["token_type_ids"]
+            completion_token_type_ids = processed_completions["token_type_ids"]
+            token_type_ids = torch.cat((prompt_token_type_ids, completion_token_type_ids), dim=1)
         if has_mm_tti:  # special case for Qwen2.5-VL
-            prompt_mm_tti = processed_prompts["mm_token_type_ids"]
-            mm_token_type_ids = torch.cat((prompt_mm_tti, torch.zeros_like(completion_ids)), dim=1)
+            prompt_mm_token_type_ids = processed_prompts["mm_token_type_ids"]
+            completion_mm_token_type_ids = processed_completions.get(
+                "mm_token_type_ids", torch.zeros_like(completion_ids)
+            )
+            mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, completion_mm_token_type_ids), dim=1)
 
-        # Flush left to remove prompt's leading padding from the concatenated sequences
+        # Flush left to reduce padding
         if has_tti and has_mm_tti:
-            attention_mask, input_ids, seq_mask, token_type_ids, mm_token_type_ids = flush_left(
-                attention_mask, input_ids, seq_mask, token_type_ids, mm_token_type_ids
+            attention_mask, input_ids, completion_mask, token_type_ids, mm_token_type_ids = flush_left(
+                attention_mask, input_ids, completion_mask, token_type_ids, mm_token_type_ids
             )
         elif has_tti:
-            attention_mask, input_ids, seq_mask, token_type_ids = flush_left(
-                attention_mask, input_ids, seq_mask, token_type_ids
+            attention_mask, input_ids, completion_mask, token_type_ids = flush_left(
+                attention_mask, input_ids, completion_mask, token_type_ids
             )
         elif has_mm_tti:
-            attention_mask, input_ids, seq_mask, mm_token_type_ids = flush_left(
-                attention_mask, input_ids, seq_mask, mm_token_type_ids
+            attention_mask, input_ids, completion_mask, mm_token_type_ids = flush_left(
+                attention_mask, input_ids, completion_mask, mm_token_type_ids
             )
         else:
-            attention_mask, input_ids, seq_mask = flush_left(attention_mask, input_ids, seq_mask)
+            attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
 
+        # Truncate if necessary
         if self.max_length is not None:
             input_ids = input_ids[:, : self.max_length]
             attention_mask = attention_mask[:, : self.max_length]
-            seq_mask = seq_mask[:, : self.max_length]
+            completion_mask = completion_mask[:, : self.max_length]
             if has_tti:
                 token_type_ids = token_type_ids[:, : self.max_length]
             if has_mm_tti:
                 mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
 
-        # Build output — start from processed_prompts to carry pixel_values, image_grid_thw, etc.
+        # Build the output dictionary
         output = processed_prompts
         output.pop("input_ids", None)
         output.pop("attention_mask", None)
         output["completion_input_ids"] = input_ids
         output["completion_attention_mask"] = attention_mask
-        output["completion_mask"] = seq_mask
+        output["completion_mask"] = completion_mask
         if has_tti:
             output["token_type_ids"] = token_type_ids
         if has_mm_tti:
@@ -305,41 +305,45 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
                 padding=True,
                 padding_side="right",
                 return_tensors=self.return_tensors,
-                add_special_tokens=False,
+                add_special_tokens=False,  # to avoid adding the BOS twice, see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
             )
             kl_ids = processed_kl["input_ids"]
             kl_mask = processed_kl["attention_mask"]
 
             kl_input_ids = torch.cat((prompt_ids, kl_ids), dim=1)
             kl_attention_mask = torch.cat((prompt_mask, kl_mask), dim=1)
-            kl_seq_mask = torch.cat((torch.zeros_like(prompt_mask), kl_mask), dim=1)
+            kl_completion_mask = torch.cat((torch.zeros_like(prompt_mask), kl_mask), dim=1)
 
             # Build KL token-type tensors using the original (pre-flush) prompt tensors
             if has_tti:
-                kl_tti = processed_kl.get("token_type_ids", torch.zeros_like(kl_ids))
-                kl_token_type_ids = torch.cat((prompt_tti, kl_tti), dim=1)
+                kl_completion_token_type_ids = processed_kl.get("token_type_ids", torch.zeros_like(kl_ids))
+                kl_token_type_ids = torch.cat((prompt_token_type_ids, kl_completion_token_type_ids), dim=1)
             if has_mm_tti:
-                kl_mm_token_type_ids = torch.cat((prompt_mm_tti, torch.zeros_like(kl_ids)), dim=1)
+                kl_completion_mm_token_type_ids = processed_kl.get("mm_token_type_ids", torch.zeros_like(kl_ids))
+                kl_mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, kl_completion_mm_token_type_ids), dim=1)
 
             if has_tti and has_mm_tti:
-                kl_attention_mask, kl_input_ids, kl_seq_mask, kl_token_type_ids, kl_mm_token_type_ids = flush_left(
-                    kl_attention_mask, kl_input_ids, kl_seq_mask, kl_token_type_ids, kl_mm_token_type_ids
+                kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids, kl_mm_token_type_ids = flush_left(
+                    kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids, kl_mm_token_type_ids
                 )
             elif has_tti:
-                kl_attention_mask, kl_input_ids, kl_seq_mask, kl_token_type_ids = flush_left(
-                    kl_attention_mask, kl_input_ids, kl_seq_mask, kl_token_type_ids
+                kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids = flush_left(
+                    kl_attention_mask, kl_input_ids, kl_completion_mask, kl_token_type_ids
                 )
             elif has_mm_tti:
-                kl_attention_mask, kl_input_ids, kl_seq_mask, kl_mm_token_type_ids = flush_left(
-                    kl_attention_mask, kl_input_ids, kl_seq_mask, kl_mm_token_type_ids
+                kl_attention_mask, kl_input_ids, kl_completion_mask, kl_mm_token_type_ids = flush_left(
+                    kl_attention_mask, kl_input_ids, kl_completion_mask, kl_mm_token_type_ids
                 )
             else:
-                kl_attention_mask, kl_input_ids, kl_seq_mask = flush_left(kl_attention_mask, kl_input_ids, kl_seq_mask)
+                kl_attention_mask, kl_input_ids, kl_completion_mask = flush_left(
+                    kl_attention_mask, kl_input_ids, kl_completion_mask
+                )
 
+            # Truncate if necessary
             if self.max_length is not None:
                 kl_input_ids = kl_input_ids[:, : self.max_length]
                 kl_attention_mask = kl_attention_mask[:, : self.max_length]
-                kl_seq_mask = kl_seq_mask[:, : self.max_length]
+                kl_completion_mask = kl_completion_mask[:, : self.max_length]
                 if has_tti:
                     kl_token_type_ids = kl_token_type_ids[:, : self.max_length]
                 if has_mm_tti:
@@ -347,7 +351,7 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
 
             output["KL_completion_input_ids"] = kl_input_ids
             output["KL_completion_attention_mask"] = kl_attention_mask
-            output["KL_completion_mask"] = kl_seq_mask
+            output["KL_completion_mask"] = kl_completion_mask
             if has_tti:
                 output["KL_completion_token_type_ids"] = kl_token_type_ids
             if has_mm_tti:
