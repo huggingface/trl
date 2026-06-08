@@ -202,16 +202,14 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        # Normalize "image" → "images"
         if "image" in examples[0]:
             for example in examples:
                 example["images"] = [example.pop("image")]
-
         images = [example["images"] for example in examples]
+        # Transformers requires at least one image in the batch, otherwise it throws an error
         if all(img_list == [] for img_list in images):
             images = None
-
-        if is_conversational(examples[0]):
+        if is_conversational(examples[0]):  # conversational case
             for example in examples:
                 example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
                 example["completion"] = prepare_multimodal_messages(example["completion"])
@@ -284,7 +282,7 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
                 mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
 
         # Build the output dictionary
-        output = processed_prompts
+        output = processed_prompts  # we take processed_prompts because it contains the images
         output.pop("input_ids", None)
         output.pop("attention_mask", None)
         output["completion_input_ids"] = input_ids
