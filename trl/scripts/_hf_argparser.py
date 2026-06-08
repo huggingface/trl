@@ -51,17 +51,18 @@ def string_to_bool(v):
 
 
 def _accept_none(inner: Callable[[str], Any]) -> Callable[[str], Any]:
-    """Wrap a type converter so the literal string `'None'` parses to Python `None`.
+    """Wrap a type converter so `'none'` and `'null'` (case-insensitive) parse to Python `None`.
 
-    Used for `T | None` fields so they can be set to `None` from the CLI (argparse's `type=int` rejects `'None'`). Only
-    the exact spelling `'None'` is recognized.
+    Used for `T | None` fields so they can be set to `None` from the CLI (argparse's `type=int` rejects `'None'`).
+    Mirrors the case-insensitive convention of [`string_to_bool`].
     """
 
     def parse(v: str) -> Any:
-        if v == "None":
+        if v.lower() in ("none", "null"):
             return None
         return inner(v)
 
+    parse.__name__ = getattr(inner, "__name__", "value")  # so argparse error messages keep the inner type name
     return parse
 
 
@@ -205,7 +206,10 @@ class HfArgumentParser(ArgumentParser):
                     field.type.__args__[0] if isinstance(None, field.type.__args__[1]) else field.type.__args__[1]
                 )
                 origin_type = getattr(field.type, "__origin__", field.type)
-                accepts_none = True
+                # Enable the `'none'`/`'null'` sentinel only when the inner type can't possibly accept those as
+                # legitimate string values (i.e. anything non-str). For str-typed fields, `'none'` may be a real
+                # value — e.g. `report_to`, whose CLI string `'none'` means "no integrations" downstream.
+                accepts_none = field.type is not str
 
         # A variable to store kwargs for a boolean field, if needed
         # so that we can init a `no_*` complement argument (see below)
