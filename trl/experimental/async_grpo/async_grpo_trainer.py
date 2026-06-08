@@ -672,14 +672,28 @@ class AsyncGRPOTrainer(_BaseTrainer):
         params one at a time: for FSDP2 (DTensor), ``full_tensor()`` all-gathers just this param across FSDP ranks then
         frees it once the generator advances — avoiding materializing the full model. All ranks must walk this
         identically so the ``full_tensor()`` collectives line up.
+
+        Under FSDP2 the change mask is itself a DTensor sharded exactly like the param (it is reconstructed from the
+        per-shard AdamW moments), so it is gathered to the global shape alongside the param. The skip decision uses
+        ``mask.any()``, which all-reduces for a DTensor and is therefore identical on every rank — keeping the
+        ``full_tensor()`` collectives that follow aligned.
         """
         device = self.accelerator.device
         masks = self._change_detector._validated_masks if (sparse and self._change_detector is not None) else {}
         for name, param in self.model.named_parameters():
             name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
-            mask = masks.get(name) if sparse else None
-            if sparse and (mask is None or not mask.any()):
-                continue  # unchanged param -> not in this delta
+            if sparse:
+                mask = masks.get(name)
+                if mask is None:
+                    continue  # param never stepped -> not in this delta (consistent across ranks)
+                # Gather the per-shard mask to the global shape first, so `.any()` runs on a plain tensor (DTensor
+                # has no sharding strategy for the reduction) and lines up with `full` below.
+                if isinstance(mask, DTensor):
+                    mask = mask.full_tensor()
+                if not bool(mask.any()):
+                    continue  # unchanged param -> not in this delta
+            else:
+                mask = None
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)

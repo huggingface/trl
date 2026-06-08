@@ -28,6 +28,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 
 import torch
+from torch.distributed._tensor import DTensor
 
 from .delta_codec import Encoding
 
@@ -115,7 +116,12 @@ class AdamWInversionChangeDetector:
         The reconstruction is rounded to bf16 before the comparison: an unchanged bf16 weight differs from its fp32
         reconstruction by a sub-ULP residual, so an fp32 comparison would flag ~every element — the bf16 round makes
         the mask track the actual bf16 changes (sparse). Params that have never stepped (no optimizer state) are
-        omitted. Runs entirely on each param's device.
+        omitted.
+
+        Under FSDP2 ``p`` and its moments are DTensors. The reconstruction + comparison run on the **local shards**
+        (the AdamW step is elementwise, so it inverts shard-locally — and ``aten.ne`` has no DTensor sharding
+        strategy), then the mask is re-wrapped as a DTensor with the param's placement so the trainer can
+        ``full_tensor()`` it. Runs entirely on each param's device.
         """
         self._validated_masks.clear()
         for group in self.optimizer.param_groups:
@@ -126,8 +132,18 @@ class AdamWInversionChangeDetector:
                 state = self.optimizer.state.get(p)
                 if not state:  # never stepped (e.g. frozen / no grad) -> nothing changed
                     continue
-                theta_old = _adamw_reconstruct_pre_step(p, state, group)
-                self._validated_masks[name] = p != theta_old.to(torch.bfloat16)
+                is_dtensor = isinstance(p, DTensor)
+                p_local = p.to_local() if is_dtensor else p
+                local_state = {
+                    "step": state["step"],
+                    "exp_avg": state["exp_avg"].to_local() if is_dtensor else state["exp_avg"],
+                    "exp_avg_sq": state["exp_avg_sq"].to_local() if is_dtensor else state["exp_avg_sq"],
+                }
+                theta_old = _adamw_reconstruct_pre_step(p_local, local_state, group)
+                mask = p_local != theta_old.to(torch.bfloat16)
+                if is_dtensor:
+                    mask = DTensor.from_local(mask, p.device_mesh, p.placements)
+                self._validated_masks[name] = mask
         return self._validated_masks
 
 
