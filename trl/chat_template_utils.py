@@ -563,6 +563,72 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase
     return ids2[: len(ids1)] == ids1
 
 
+def is_chat_template_stop_token_trained(
+    processing_class: PreTrainedTokenizerBase | ProcessorMixin, chat_template: str | None = None
+) -> bool:
+    """
+    Check whether the chat template includes an assistant turn's end-of-turn token in the loss mask.
+
+    Prefix preservation guarantees that earlier turns render identically, but not that the token the model must emit to
+    *end* its turn is part of the loss. Some templates attribute an assistant turn's end-of-turn token to the message
+    that follows it, so when masking with `return_assistant_tokens_mask=True` that token falls outside the assistant
+    span and the model is never trained to stop. This renders a single assistant turn and checks that the masked span
+    ends on an end-of-turn token rather than on content.
+
+    The template must define `{% generation %}` / `{% endgeneration %}` markers (see [`get_training_chat_template`]),
+    otherwise the assistant mask is empty and this returns `False`.
+
+    Args:
+        processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
+            Tokenizer or processor instance to check.
+        chat_template (`str`, *optional*):
+            Chat template to check. Defaults to the one attached to `processing_class`.
+
+    Returns:
+        `bool`:
+            `True` if the assistant turn's end-of-turn token is included in the loss mask, `False` otherwise.
+    """
+    messages = [
+        {"role": "user", "content": "dummy"},
+        {"role": "assistant", "content": "dummy"},
+    ]
+    is_vlm = isinstance(processing_class, ProcessorMixin)
+    if is_vlm:
+        from PIL import Image
+
+        dummy_image = Image.new("RGB", (8, 8))
+        messages = prepare_multimodal_messages(messages, images=[dummy_image])
+
+    try:
+        output = processing_class.apply_chat_template(
+            messages,
+            tokenize=True,
+            return_dict=True,
+            return_assistant_tokens_mask=True,
+            chat_template=chat_template,
+        )
+    except (TypeError, ValueError):
+        return False
+
+    input_ids = output["input_ids"]
+    assistant_masks = output["assistant_masks"]
+    if is_vlm:
+        input_ids = input_ids[0]
+        assistant_masks = assistant_masks[0]
+
+    # The model stops by emitting an end-of-turn token, which is part of the added vocabulary rather than produced by
+    # the base tokenizer's merges. Ignoring trailing whitespace, the last masked token must be that terminator; if it
+    # is plain content, the end-of-turn token was attributed to the following message and is never trained.
+    tokenizer = getattr(processing_class, "tokenizer", processing_class)
+    added_ids = set(tokenizer.get_added_vocab().values())
+    masked_ids = [token_id for token_id, masked in zip(input_ids, assistant_masks, strict=False) if masked]
+    for token_id in reversed(masked_ids):
+        if tokenizer.decode([token_id]).strip() == "":
+            continue
+        return token_id in added_ids
+    return False
+
+
 cohere_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere_training.jinja").read_text(encoding="utf-8")
 
 cohere2_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2_training.jinja").read_text(encoding="utf-8")

@@ -25,6 +25,7 @@ from trl.chat_template_utils import (
     add_response_schema,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
+    is_chat_template_stop_token_trained,
     parse_response,
     supports_tool_calling,
 )
@@ -513,6 +514,48 @@ class TestIsChatTemplatePrefixPreserving:
         assert is_chat_template_prefix_preserving(processor) is True
 
 
+class TestIsChatTemplateStopTokenTrained:
+    def test_stop_token_trained(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        # The assistant turn is closed by <|im_end|> inside the generation span, so the end-of-turn token is masked
+        # in and the model is trained to stop.
+        # docstyle-ignore
+        tokenizer.chat_template = textwrap.dedent(r"""
+        {%- for message in messages %}
+        {%- if message.role == 'user' %}
+            {{- '<|im_start|>user\n' + message.content + '<|im_end|>\n' }}
+        {%- elif message.role == 'assistant' %}
+            {{- '<|im_start|>assistant\n' }}
+            {%- generation %}{{- message.content + '<|im_end|>' }}{%- endgeneration %}
+            {{- '\n' }}
+        {%- endif %}
+        {%- endfor %}
+        {%- if add_generation_prompt %}
+            {{- '<|im_start|>assistant\n' }}
+        {%- endif %}""")
+        assert is_chat_template_stop_token_trained(tokenizer) is True
+
+    def test_stop_token_not_trained(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        # GLM-style: the assistant's end-of-turn token is emitted as the prefix of the following message, so the
+        # generation span covers content only and the model is never trained to stop.
+        # docstyle-ignore
+        tokenizer.chat_template = textwrap.dedent(r"""
+        {%- for message in messages %}
+        {%- if message.role == 'user' %}
+            {{- '<|im_start|>user\n' + message.content + '<|im_end|>\n' }}
+        {%- elif message.role == 'assistant' %}
+            {{- '<|im_start|>assistant\n' }}
+            {%- generation %}{{- message.content }}{%- endgeneration %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+        {%- endfor %}
+        {%- if add_generation_prompt %}
+            {{- '<|im_start|>assistant\n' }}
+        {%- endif %}""")
+        assert is_chat_template_stop_token_trained(tokenizer) is False
+
+
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
@@ -634,6 +677,27 @@ class TestGetTrainingChatTemplate:
         if not supports_tool_calling(tokenizer):
             pytest.skip("Template does not support tool calling; prefix-preservation check is not applicable.")
         assert is_chat_template_prefix_preserving(tokenizer) is True
+
+    def test_new_chat_template_trains_stop_token(self, tokenizer_name, request):
+        # Known failures, marked as strict xfail rather than skip so that CI flags them (and gains coverage) as soon
+        # as the underlying template or processor is fixed.
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # GLM closes the assistant turn with the next role marker (<|user|>/<|observation|>) rather than a
+            # dedicated end-of-turn token, so the terminator is attributed to the following message and falls
+            # outside the loss mask — the model is never trained to stop.
+            reason = f"{tokenizer_name}: end-of-turn token is not included in the loss mask"
+            request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason))
+        elif tokenizer_name in (
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ):
+            reason = f"{tokenizer_name}: processor does not propagate the assistant tokens mask"
+            request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason))
+        tokenizer = self._load(tokenizer_name)
+        chat_template = get_training_chat_template(tokenizer)
+        assert is_chat_template_stop_token_trained(tokenizer, chat_template=chat_template) is True
 
     def test_behavior_unchanged_single_user_no_generation_prompt(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
