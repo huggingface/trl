@@ -680,14 +680,8 @@ class TestGetTrainingChatTemplate:
 
     def test_new_chat_template_trains_stop_token(self, tokenizer_name, request):
         # Known failures, marked as strict xfail rather than skip so that CI flags them (and gains coverage) as soon
-        # as the underlying template or processor is fixed.
-        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
-            # GLM closes the assistant turn with the next role marker (<|user|>/<|observation|>) rather than a
-            # dedicated end-of-turn token, so the terminator is attributed to the following message and falls
-            # outside the loss mask — the model is never trained to stop.
-            reason = f"{tokenizer_name}: end-of-turn token is not included in the loss mask"
-            request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason))
-        elif tokenizer_name in (
+        # as the underlying processor is fixed.
+        if tokenizer_name in (
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",

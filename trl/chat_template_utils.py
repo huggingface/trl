@@ -572,8 +572,8 @@ def is_chat_template_stop_token_trained(
     Prefix preservation guarantees that earlier turns render identically, but not that the token the model must emit to
     *end* its turn is part of the loss. Some templates attribute an assistant turn's end-of-turn token to the message
     that follows it, so when masking with `return_assistant_tokens_mask=True` that token falls outside the assistant
-    span and the model is never trained to stop. This renders a single assistant turn and checks that the masked span
-    ends on an end-of-turn token rather than on content.
+    span and the model is never trained to stop. This renders an assistant turn followed by a user message and checks
+    that the assistant's masked span ends on an end-of-turn token rather than on content.
 
     The template must define `{% generation %}` / `{% endgeneration %}` markers (see [`get_training_chat_template`]),
     otherwise the assistant mask is empty and this returns `False`.
@@ -588,9 +588,12 @@ def is_chat_template_stop_token_trained(
         `bool`:
             `True` if the assistant turn's end-of-turn token is included in the loss mask, `False` otherwise.
     """
+    # The assistant turn is followed by a user message because some templates never terminate the final assistant
+    # turn; the boundary with the next message is where the end-of-turn token must be attributed.
     messages = [
         {"role": "user", "content": "dummy"},
         {"role": "assistant", "content": "dummy"},
+        {"role": "user", "content": "dummy"},
     ]
     is_vlm = isinstance(processing_class, ProcessorMixin)
     if is_vlm:
@@ -619,7 +622,7 @@ def is_chat_template_stop_token_trained(
     # The model stops by emitting an end-of-turn token, which is part of the added vocabulary rather than produced by
     # the base tokenizer's merges. Ignoring trailing whitespace, the last masked token must be that terminator; if it
     # is plain content, the end-of-turn token was attributed to the following message and is never trained.
-    tokenizer = getattr(processing_class, "tokenizer", processing_class)
+    tokenizer = processing_class.tokenizer if is_vlm else processing_class
     added_ids = set(tokenizer.get_added_vocab().values())
     masked_ids = [token_id for token_id, masked in zip(input_ids, assistant_masks, strict=False) if masked]
     for token_id in reversed(masked_ids):
