@@ -140,7 +140,7 @@ class AdamWInversionChangeDetector:
                     "exp_avg_sq": state["exp_avg_sq"].to_local() if is_dtensor else state["exp_avg_sq"],
                 }
                 theta_old = _adamw_reconstruct_pre_step(p_local, local_state, group)
-                mask = p_local != theta_old.to(torch.bfloat16)
+                mask = p_local.to(torch.bfloat16) != theta_old.to(torch.bfloat16)
                 if is_dtensor:
                     mask = DTensor.from_local(mask, p.device_mesh, p.placements)
                 self._validated_masks[name] = mask
