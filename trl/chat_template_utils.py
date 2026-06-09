@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
 import warnings
 from pathlib import Path
 from typing import TypeVar
@@ -23,6 +24,14 @@ from .data_utils import prepare_multimodal_messages
 
 
 _CHAT_TEMPLATES_DIR = Path(__file__).parent / "chat_templates"
+
+
+def has_generation_markers(chat_template: str) -> bool:
+    """
+    Check whether the chat template defines `{% generation %}` markers, accounting for whitespace-trim variants such as
+    `{%- generation %}` and `{%- generation -%}`.
+    """
+    return re.search(r"\{%-?\s*generation\s*-?%\}", chat_template) is not None
 
 
 def clone_chat_template(
@@ -763,7 +772,7 @@ def get_training_chat_template(
     # First check if patching is needed. Prefix-preservation only matters when the template actually supports tools
     # (the check itself renders a tool message), so skip it otherwise.
     prefix_ok = not supports_tool_calling(processing_class) or is_chat_template_prefix_preserving(processing_class)
-    if prefix_ok and "{% generation %}" in processing_class.chat_template:
+    if prefix_ok and has_generation_markers(processing_class.chat_template):
         return None  # No patching needed
 
     if processing_class.chat_template == cohere_chat_template:

@@ -47,7 +47,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..chat_template_utils import clone_chat_template, get_training_chat_template
+from ..chat_template_utils import clone_chat_template, get_training_chat_template, has_generation_markers
 from ..data_utils import (
     apply_chat_template,
     is_conversational,
@@ -1217,7 +1217,7 @@ class SFTTrainer(_BaseTrainer):
 
         # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers
         # if the current template doesn't already have them.
-        if args.assistant_only_loss and "{% generation %}" not in processing_class.chat_template:
+        if args.assistant_only_loss and not has_generation_markers(processing_class.chat_template):
             self.chat_template = get_training_chat_template(processing_class)
         else:
             self.chat_template = None
