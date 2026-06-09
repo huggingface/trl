@@ -1093,11 +1093,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
         return logprobs
 
-    def training_step(
-        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
-    ) -> torch.Tensor:
-        model.train()
-
+    def _compute_loss(self, model: nn.Module, inputs: dict[str, torch.Tensor | Any]) -> torch.Tensor:
         prompts = inputs["prompt"]
         batch_size = len(prompts)
 
@@ -1275,6 +1271,19 @@ class OnlineDPOTrainer(_BaseTrainer):
         self.stats["rewards/accuracies"].append(accuracy.float().mean().item())
         self.stats["beta"].append(self.beta)
 
+        return loss
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        if return_outputs:
+            raise ValueError("The OnlineDPOTrainer does not support returning outputs")
+        return self._compute_loss(model, inputs)
+
+    def training_step(
+        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
+    ) -> torch.Tensor:
+        model.train()
+        loss = self.compute_loss(model, inputs, num_items_in_batch=num_items_in_batch)
+
         if (
             self.args.torch_empty_cache_steps is not None
             and self.state.global_step % self.args.torch_empty_cache_steps == 0
@@ -1293,6 +1302,15 @@ class OnlineDPOTrainer(_BaseTrainer):
         self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
+
+    # Online DPO batches contain prompts rather than model-ready labels, so Trainer's default prediction path cannot
+    # evaluate them directly. Reuse the policy loss without running the training-only backward pass.
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+            loss = loss.mean().detach()
+        return loss, None, None
 
     # Same as Trainer._maybe_log_save_evaluate but log our metrics
     def _maybe_log_save_evaluate(
