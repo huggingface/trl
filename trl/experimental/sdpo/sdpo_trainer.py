@@ -1269,7 +1269,7 @@ class SDPOTrainer(_BaseTrainer):
         the teacher's own top-k support (the server cannot score the student's top-k indices).
         """
         # Buffered batches are reused across optimizer steps (`num_iterations > 1`), so the server weights can lag the
-        # live student; re-sync before scoring. Runs before the early return below since the sync is collective.
+        # live student; re-sync before scoring.
         if self.state.global_step != self._last_loaded_step:
             self.vllm_generation.sync_weights()
             self._last_loaded_step = self.state.global_step
@@ -1294,30 +1294,36 @@ class SDPOTrainer(_BaseTrainer):
         )
 
         mode = "train" if model.training else "eval"
-        if loss_mask.sum() == 0:
-            self._log_self_distillation_metric(mode, 0.0)
-            return student_logits.sum() * 0.0
-
+        # No early return for an all-masked rank: the gathers below are collective, so every rank must run the full
+        # path (the masked reductions resolve to a zero loss on such a rank).
         teacher = self._get_teacher_token_logprobs_from_server(inputs, logits_to_keep)
         # Padding positions come back as `-inf`; the masked-out positions are neutralized to finite values below so the
         # divergence does not leak `+inf` through them (mirrors the distillation trainer).
         required = loss_mask.bool()
         student_per_token_logps = selective_log_softmax(student_logits, completion_ids)
 
+        teacher_per_token_logps = teacher["actual_logprobs"]
+        if (required & ~torch.isfinite(teacher_per_token_logps)).any():
+            raise ValueError("Teacher server returned no logprob for a required completion token.")
+        teacher_per_token_logps = torch.where(
+            required, teacher_per_token_logps, torch.zeros_like(teacher_per_token_logps)
+        )
+
+        # Mean realized-token logprob gap between the local student and the context-conditioned teacher on the server.
+        # It shrinks as distillation progresses; a sudden jump points at a weight-sync or numerics problem.
+        abs_diff = ((student_per_token_logps.detach() - teacher_per_token_logps).abs() * loss_mask).sum() / (
+            loss_mask.sum().clamp(min=1.0)
+        )
+        self._metrics[mode]["self_distillation/server_logprob_abs_diff"].append(
+            self.accelerator.gather(abs_diff).mean().item()
+        )
+
         if self.args.distillation_mode == "sampled_token":
-            teacher_per_token_logps = teacher["actual_logprobs"]
-            if (required & ~torch.isfinite(teacher_per_token_logps)).any():
-                raise ValueError("Teacher server returned no logprob for a required completion token.")
-            teacher_per_token_logps = torch.where(
-                required, teacher_per_token_logps, torch.zeros_like(teacher_per_token_logps)
-            )
             # Reverse-KL token-level objective, matching `compute_sampled_token_self_distillation_loss`.
             per_token_loss = (student_per_token_logps - teacher_per_token_logps).detach() * student_per_token_logps
         else:
             teacher_topk_logps = teacher["topk_logprobs"]
             teacher_topk_ids = teacher["topk_token_ids"]
-            if (required & ~torch.isfinite(teacher_topk_logps[..., 0])).any():
-                raise ValueError("Teacher server returned no logprob for a required completion token.")
             # Project the student onto the teacher's top-k support, then renormalize (or add a tail bucket) before the
             # divergence, matching `compute_topk_self_distillation_loss` on the teacher's support.
             keep = required.unsqueeze(-1)
