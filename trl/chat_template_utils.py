@@ -619,7 +619,7 @@ def is_chat_template_stop_token_trained(
             return_assistant_tokens_mask=True,
             chat_template=chat_template,
         )
-    except (TypeError, ValueError):
+    except (TemplateError, TypeError, ValueError):
         return False
 
     input_ids = output["input_ids"]

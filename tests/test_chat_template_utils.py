@@ -556,6 +556,11 @@ class TestIsChatTemplateStopTokenTrained:
         {%- endif %}""")
         assert is_chat_template_stop_token_trained(tokenizer) is False
 
+    def test_template_error_returns_false(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        tokenizer.chat_template = "{{ raise_exception('probe rejected') }}"
+        assert is_chat_template_stop_token_trained(tokenizer) is False
+
 
 @pytest.mark.parametrize(
     "tokenizer_name",
