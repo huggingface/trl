@@ -134,7 +134,6 @@ class TestSDFTTrainer(TrlTestCase):
             "completion_mask": torch.tensor([[1, 1, 0], [1, 1, 1]], device=device),
             "teacher_input_ids": torch.tensor([[20, 21, 22, 14, 15, 16], [23, 24, 25, 17, 18, 19]], device=device),
             "teacher_attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]], device=device),
-            "self_distillation_mask": torch.tensor([1.0, 0.0], device=device),
         }
 
         ref_trainer.model.eval()

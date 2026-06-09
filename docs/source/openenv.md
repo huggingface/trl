@@ -1,8 +1,8 @@
 # OpenEnv Integration for Training LLMs with Environments
 
-[OpenEnv](https://github.com/meta-pytorch/OpenEnv) is an open-source framework for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It provides standardized APIs for environment interaction and supports running environments as backend servers (via WebSocket or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/openenv-environment-hub).
+[OpenEnv](https://github.com/huggingface/OpenEnv) is an open-source framework for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It provides standardized APIs for environment interaction and supports running environments as backend servers (via WebSocket or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/openenv-environment-hub).
 
-This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv itself, see the [OpenEnv docs](https://meta-pytorch.org/OpenEnv/).
+This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv itself, see the [OpenEnv docs](https://huggingface.co/docs/openenv).
 
 > [!NOTE]
 > You can explore ready-to-use example [scripts](example_overview#openenv-scripts) and [notebooks](example_overview#openenv-notebooks) in the Examples Overview.
@@ -26,18 +26,18 @@ pip install "openenv-textarena @ git+https://huggingface.co/spaces/openenv/wordl
 pip install "openenv-openspiel-env @ git+https://huggingface.co/spaces/openenv/openspiel_env"
 ```
 
-This installs the **environment client** (e.g., `EchoEnv`) that communicates with the remote environment server via WebSocket, along with the action/observation models and all required dependencies (including `openenv-core`).
+This installs the **environment client** (e.g., `EchoEnv`) that communicates with the remote environment server via WebSocket, along with the action/observation models and all required dependencies (including `openenv`).
 
 > [!TIP]
 > You can find the install command for any environment on its HF Space page. Click the **⋮ (three dots)** menu and select **"Use this Space"** to see the install instructions.
 
 > [!TIP]
-> You can also install the core package from PyPI with `pip install "openenv-core[core]>=0.2.1"`, but note that environment-specific dependencies may need to be installed separately.
+> You can also install the core package from PyPI with `pip install "openenv[core]>=0.3.1"`, but note that environment-specific dependencies may need to be installed separately.
 
 For development, you can clone the OpenEnv repo and install locally:
 
 ```bash
-git clone https://github.com/meta-pytorch/OpenEnv.git
+git clone https://github.com/huggingface/OpenEnv.git
 cd OpenEnv/envs/echo_env
 pip install -e .
 ```
@@ -53,7 +53,7 @@ pip install -e .
 
 ## Quick start
 
-The fastest way to understand the integration is a complete example. The [echo.py](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/echo.py) script trains a model with the [Echo environment](https://meta-pytorch.org/OpenEnv/environments/echo.html), which rewards completions based on their text length:
+The fastest way to understand the integration is a complete example. The [echo.py](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/echo.py) script trains a model with the [Echo environment](https://huggingface.co/docs/openenv/environments/echo), which rewards completions based on their text length:
 
 ```python
 from datasets import Dataset
@@ -211,7 +211,7 @@ If episodes are being cut short (model stops mid-game), this is likely the cause
 
 ## Advanced example: Wordle
 
-Let's train a model to play [Wordle](https://www.nytimes.com/games/wordle/index.html) using the [`TextArena`](https://meta-pytorch.org/OpenEnv/environments/textarena.html) environment. This demonstrates multi-turn interaction, cumulative feedback handling, and episode termination via exceptions.
+Let's train a model to play [Wordle](https://www.nytimes.com/games/wordle/index.html) using the [`TextArena`](https://huggingface.co/docs/openenv/environments/textarena) environment. This demonstrates multi-turn interaction, cumulative feedback handling, and episode termination via exceptions.
 
 > [!NOTE]
 > You can explore the notebook version of this example in [the OpenEnv Wordle GRPO example](https://github.com/huggingface/trl/blob/main/examples/notebooks/openenv_wordle_grpo.ipynb).
@@ -549,7 +549,7 @@ Then connect:
 env = EchoEnv(base_url="http://0.0.0.0:8001")
 ```
 
-For more details, see the [OpenEnv catalog](https://meta-pytorch.org/OpenEnv/environments.html).
+For more details, see the [OpenEnv catalog](https://huggingface.co/docs/openenv/environments).
 
 </hfoption>
 
@@ -559,7 +559,7 @@ For more details, see the [OpenEnv catalog](https://meta-pytorch.org/OpenEnv/env
 
 The best way to explore the current catalog of maintained environments is by visiting the official OpenEnv [catalog](https://huggingface.co/collections/openenv/environment-hub).
 
-To create your own environment, check out the guide on [Building Your Own Environment with OpenEnv](https://meta-pytorch.org/OpenEnv/auto_getting_started/plot_03_building_environments.html). Environments are tightly integrated with the Hub, so you can push new environments for the community to reuse.
+To create your own environment, check out the guide on [Building Your Own Environment with OpenEnv](https://huggingface.co/docs/openenv/getting_started/environment-builder). Environments are tightly integrated with the Hub, so you can push new environments for the community to reuse.
 
 ## Server concurrency
 
