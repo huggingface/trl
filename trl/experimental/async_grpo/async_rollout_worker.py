@@ -18,6 +18,7 @@ import multiprocessing as mp
 import os
 import pickle
 import queue
+import re
 import threading
 import time
 import traceback
@@ -259,10 +260,10 @@ class _AsyncRolloutLoop:
 
         # A prefix-preserving template can still attribute the assistant's end-of-turn token to the next message,
         # leaving it out of the loss mask so the model is never trained to stop. Warn if the template we resolved
-        # has that issue. The check only applies to templates with `{% generation %}` markers; without them the
-        # assistant mask is empty and the check is meaningless.
+        # has that issue. The check only applies to templates with `{% generation %}` markers (matched with their
+        # whitespace-trim variants); without them the assistant mask is empty and the check is meaningless.
         chat_template = self.chat_template or self.tokenizer.chat_template
-        if "{% generation %}" in chat_template and not is_chat_template_stop_token_trained(
+        if re.search(r"\{%-?\s*generation\s*-?%\}", chat_template) and not is_chat_template_stop_token_trained(
             self.tokenizer, chat_template=chat_template
         ):
             logger.warning(
