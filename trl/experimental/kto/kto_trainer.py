@@ -1402,9 +1402,18 @@ class KTOTrainer(_BaseTrainer):
         return (loss, outputs) if return_outputs else loss
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if self.use_liger_kernel:
-            return self._compute_loss_liger(model, inputs, return_outputs)
-        return self._compute_loss(model, inputs, return_outputs)
+        try:
+            if self.use_liger_kernel:
+                return self._compute_loss_liger(model, inputs, return_outputs)
+            return self._compute_loss(model, inputs, return_outputs)
+        except ValueError as e:
+            if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
+                raise ValueError(
+                    f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
+                    f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
+                    f"Please increase `max_length` or set it to `None` to disable truncation."
+                ) from e
+            raise
 
     def _get_train_sampler(self, train_dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
         if self.calculate_KL and Version(transformers.__version__) < Version("5.2.0"):
