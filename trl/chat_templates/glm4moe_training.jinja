@@ -58,7 +58,7 @@ For each function call, output the function name and arguments within the follow
 {{ visible_text(m.content) }}
 {{- '/nothink' if (enable_thinking is defined and not enable_thinking and not visible_text(m.content).endswith("/nothink")) else '' -}}
 {%- elif m.role == 'assistant' -%}
-<|assistant|>
+{{- '<|assistant|>' if loop.first or messages[loop.index0 - 1].role != 'assistant' }}
 {%- set reasoning_content = '' %}
 {%- set content = visible_text(m.content) %}
 {%- if m.reasoning_content is string %}

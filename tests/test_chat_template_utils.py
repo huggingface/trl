@@ -17,6 +17,7 @@ import textwrap
 
 import pytest
 import transformers
+from jinja2 import TemplateError
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoProcessor, AutoTokenizer
 
@@ -731,6 +732,39 @@ class TestGetTrainingChatTemplate:
 
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_consecutive_assistant_messages(self, tokenizer_name):
+        if tokenizer_name in (
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+            "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+        ):
+            pytest.skip(
+                "The original template renders think tags only for the last assistant message, so the training "
+                "template (which renders them for every assistant message to preserve prefixes) intentionally "
+                "differs on consecutive assistant messages."
+            )
+        tokenizer = self._load(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": "Let me think."},
+            {"role": "assistant", "content": "It is blue."},
+            {"role": "user", "content": "Are you sure?"},
+        ]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+
+        new_chat_template = get_training_chat_template(tokenizer)
+        try:
+            before = tokenizer.apply_chat_template(messages, tokenize=False)
+        except TemplateError:
+            # Some templates reject non-alternating roles; the training template must reject them too.
+            with pytest.raises(TemplateError):
+                tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+            return
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
         assert before == after
 
