@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from datasets import Dataset, load_dataset
-from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
 
 from trl.experimental.gold import GOLDConfig
 from trl.experimental.gold import gold_trainer as gold_trainer_module
@@ -34,6 +34,8 @@ from trl.experimental.utils import (
     pad_byte_offsets,
 )
 from trl.trainer.utils import RepeatSampler, identity
+
+from ..testing_utils import require_liger_kernel
 
 
 @pytest.fixture(scope="module")
@@ -2864,6 +2866,114 @@ def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
         num_generations=1,
         use_vllm=False,
         use_uld_loss=False,
+        log_completions=False,
+        save_strategy="no",
+        eval_strategy="no",
+        logging_strategy="no",
+        dataloader_drop_last=True,
+    )
+
+    trainer = GOLDTrainer(
+        model=student,
+        teacher_model=teacher,
+        args=args,
+        train_dataset=vlm_dataset,
+        processing_class=processor,
+    )
+    train_output = trainer.train()
+    assert torch.isfinite(torch.tensor(train_output.training_loss))
+
+
+_TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+
+
+@pytest.mark.slow
+@require_liger_kernel
+def test_jsd_liger_text_train_step_smoke(tmp_path):
+    """Text same-family (tiny Llama → tiny Llama) runs one off-policy JSD step with the fused Liger loss.
+
+    Exercises the `LigerFusedLinearJSDLoss` path end-to-end (`_liger_backbone` student + teacher forwards, fused
+    lm_head matmul) and asserts the resulting training loss is finite.
+    """
+    from datasets import load_dataset
+
+    try:
+        student = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
+        teacher = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
+        tokenizer = AutoTokenizer.from_pretrained(_TINY_LLAMA)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train[:3]")
+    except Exception as exc:  # pragma: no cover - network/environment dependent
+        pytest.skip(f"tiny Llama / zen assets unavailable: {exc}")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    args = GOLDConfig(
+        output_dir=str(tmp_path),
+        report_to="none",
+        bf16=True,
+        max_steps=1,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=1,
+        max_completion_length=8,
+        max_length=512,
+        lmbda=0.0,
+        beta=0.5,
+        temperature=1.0,
+        num_generations=1,
+        use_vllm=False,
+        use_uld_loss=False,
+        use_liger_kernel=True,
+        log_completions=False,
+        save_strategy="no",
+        eval_strategy="no",
+        logging_strategy="no",
+        dataloader_drop_last=True,
+    )
+
+    trainer = GOLDTrainer(
+        model=student,
+        teacher_model=teacher,
+        args=args,
+        train_dataset=dataset,
+        processing_class=tokenizer,
+    )
+    train_output = trainer.train()
+    assert torch.isfinite(torch.tensor(train_output.training_loss))
+
+
+@pytest.mark.slow
+@require_liger_kernel
+def test_vlm_jsd_liger_same_family_train_step_smoke(tmp_path, vlm_dataset):
+    """Same-family VLM (tiny Qwen3-VL → tiny Qwen3-VL) runs one off-policy JSD step with the fused Liger loss.
+
+    Proves the VLM Liger path: `_liger_backbone` routes through `base_model` (so image features are injected) for both
+    student and teacher, image kwargs reach the backbone forwards, and the fused JSD loss is finite.
+    """
+    try:
+        student = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
+        teacher = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
+        processor = AutoProcessor.from_pretrained(_TINY_QWEN3_VL)
+    except Exception as exc:  # pragma: no cover - network/environment dependent
+        pytest.skip(f"tiny Qwen3-VL assets unavailable: {exc}")
+    if processor.tokenizer.pad_token is None:
+        processor.tokenizer.pad_token = processor.tokenizer.eos_token
+
+    args = GOLDConfig(
+        output_dir=str(tmp_path),
+        report_to="none",
+        bf16=True,
+        max_steps=1,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=1,
+        max_completion_length=8,
+        max_length=_VLM_SMOKE_MAX_LENGTH,
+        lmbda=0.0,
+        beta=0.5,
+        temperature=1.0,
+        num_generations=1,
+        use_vllm=False,
+        use_uld_loss=False,
+        use_liger_kernel=True,
         log_completions=False,
         save_strategy="no",
         eval_strategy="no",

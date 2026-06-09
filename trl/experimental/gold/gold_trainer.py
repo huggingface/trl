@@ -26,9 +26,11 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState
-from accelerate.utils import DistributedType, broadcast_object_list, gather_object
+from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from torch.utils.data import DataLoader
 from transformers import AutoConfig, AutoProcessor, AutoTokenizer, TrainerCallback
 from transformers.data.data_collator import DataCollator
@@ -877,9 +879,14 @@ class GOLDTrainer(SFTTrainer):
         # Liger fused GKD loss (JSD)
         self.use_liger_gkd_loss = False
         if args.use_liger_kernel:
-            if self._is_vlm:
+            # The fused Liger JSD loss requires student and teacher to share a vocabulary, while ULD loss exists
+            # precisely for the cross-tokenizer case — the two cannot be combined.
+            if args.use_uld_loss:
                 raise ValueError(
-                    "Liger kernel is not yet supported for vision-language models. Please set `use_liger_kernel=False`."
+                    "`use_liger_kernel=True` cannot be combined with `use_uld_loss=True`. The fused Liger JSD loss "
+                    "requires the student and teacher to share a vocabulary, whereas ULD loss handles the "
+                    "cross-tokenizer case. Either set `use_uld_loss=False` (if your student and teacher are from the "
+                    "same family and the standard JSD loss applies), or set `use_liger_kernel=False`."
                 )
             self.liger_jsd_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
@@ -2417,19 +2424,13 @@ class GOLDTrainer(SFTTrainer):
 
                 self.teacher_model.eval()
                 unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-                if hasattr(unwrapped_teacher, "get_decoder") and unwrapped_teacher.get_decoder() is not None:
-                    base_teacher = unwrapped_teacher.get_decoder()
-                else:
-                    base_teacher = getattr(
-                        unwrapped_teacher,
-                        getattr(unwrapped_teacher, "base_model_prefix", "model"),
-                        unwrapped_teacher,
-                    )
+                base_teacher = self._liger_backbone(unwrapped_teacher)
                 with torch.no_grad():
                     teacher_outputs = base_teacher(
                         input_ids=inputs["input_ids"],
                         attention_mask=inputs["attention_mask"],
                         use_cache=False,
+                        **student_forward_kwargs,
                     )
 
                 student_hidden = student_outputs.last_hidden_state[:, :-1]
@@ -2603,16 +2604,28 @@ class GOLDTrainer(SFTTrainer):
             completion_texts,
         )
 
+    def _liger_backbone(self, unwrapped_model: nn.Module) -> nn.Module:
+        """Return the lm_head-free backbone used by the Liger JSD path (skips lm_head to save memory).
+
+        `base_model` gives the backbone — text decoder for LMs, multimodal wrapper for VLMs (so vision-token injection
+        runs before the text decoder). `get_decoder()` won't do: on VLMs it returns just the text stack and feeds
+        image-placeholder IDs through it. Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is
+        self` (re-runs `lm_head`); fall back to `.model` there.
+        """
+        if is_peft_model(unwrapped_model):
+            unwrapped_model = unwrapped_model.base_model.model
+        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+            return unwrapped_model.model
+        return unwrapped_model.base_model
+
     def _liger_student_forward(self, student, inputs):
-        """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
-        if hasattr(student, "get_decoder") and student.get_decoder() is not None:
-            decoder = student.get_decoder()
-        else:
-            decoder = getattr(student, getattr(student, "base_model_prefix", "model"), student)
-        return decoder(
+        """Backbone forward used by the Liger JSD path (skips lm_head to save memory)."""
+        backbone = self._liger_backbone(student)
+        return backbone(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
             use_cache=False,
+            **self._get_model_forward_kwargs(inputs),
         )
 
     def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
