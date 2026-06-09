@@ -32,7 +32,8 @@ class ProfilingContext:
     Context manager for profiling code blocks with configurable logging.
 
     This class handles timing of code execution and logging metrics to various backends (Weights & Biases, MLflow)
-    without being coupled to the Trainer class.
+    without being coupled to the Trainer class. However, if the trainer is provided, profiling will use the
+    trainer's logging callbacks for support for any existing logging integration (e.g. trackio, comet, etc.).
 
     Args:
         name (`str`):
@@ -45,6 +46,8 @@ class ProfilingContext:
             Training step to associate with the logged metrics.
         metric_prefix (`str`, *optional*, defaults to `"profiling/Time taken"`):
             Prefix for the metric name in logs.
+        trainer (`~transformers.Trainer` or `None`, *optional*):
+            If a trainer is provided, will use the trainer's logging callbacks
 
     Example:
     ```python
@@ -79,6 +82,7 @@ class ProfilingContext:
         is_main_process: bool = True,
         step: int | None = None,
         metric_prefix: str = "profiling/Time taken",
+        trainer: Trainer | None = None,
     ):
         self.name = name
         self.report_to = report_to
@@ -86,6 +90,7 @@ class ProfilingContext:
         self.step = step
         self.metric_prefix = metric_prefix
         self._start_time = None
+        self.trainer = trainer
 
     def __enter__(self):
         """Start timing when entering the context."""
@@ -113,13 +118,15 @@ class ProfilingContext:
         metric_name = f"{self.metric_prefix}: {self.name}"
         metrics = {metric_name: duration}
 
-        # Log to Weights & Biases if configured
-        if "wandb" in self.report_to and is_wandb_available() and wandb.run is not None:
-            wandb.log(metrics)
+        if self.trainer is not None:
+            self.trainer.log(metrics)
+        else:
+            if "wandb" in self.report_to and is_wandb_available() and wandb.run is not None:
+                wandb.log(metrics)
 
-        # Log to MLflow if configured
-        if "mlflow" in self.report_to and is_mlflow_available() and mlflow.active_run() is not None:
-            mlflow.log_metrics(metrics, step=self.step)
+            # Log to MLflow if configured
+            if "mlflow" in self.report_to and is_mlflow_available() and mlflow.active_run() is not None:
+                mlflow.log_metrics(metrics, step=self.step)
 
 
 def profiling_context(trainer: Trainer, name: str) -> ProfilingContext:
@@ -161,6 +168,7 @@ def profiling_context(trainer: Trainer, name: str) -> ProfilingContext:
         report_to=trainer.args.report_to,
         is_main_process=trainer.accelerator.is_main_process,
         step=step,
+        trainer=trainer,
     )
 
 
