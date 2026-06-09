@@ -46,7 +46,7 @@ from ...data_utils import (
 from ...extras.profiling import profiling_context, profiling_decorator
 from ...models import unwrap_model_for_generation
 from ...models.utils import disable_gradient_checkpointing
-from ...trainer.grpo_trainer import EnvironmentFactory, GRPOTrainer, RewardFunc, RolloutFunc
+from ...trainer.grpo_trainer import EnvironmentFactory, GRPOTrainer, RewardFunc, RolloutFunc, _compute_kl
 from ...trainer.utils import (
     entropy_from_logits,
     nanstd,
@@ -1332,9 +1332,7 @@ class DPPOTrainer(GRPOTrainer):
         # KL divergence with reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
+            per_token_kl = _compute_kl(ref_per_token_logps - per_token_logps, self.args.kl_log_ratio_clip)
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
         mode = "train" if self.model.training else "eval"

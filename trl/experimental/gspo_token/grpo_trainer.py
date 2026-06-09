@@ -15,6 +15,7 @@
 import torch
 
 from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
+from ...trainer.grpo_trainer import _compute_kl
 from ...trainer.utils import nanmax, nanmin
 
 
@@ -50,9 +51,7 @@ class GRPOTrainer(_GRPOTrainer):
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
+            per_token_kl = _compute_kl(ref_per_token_logps - per_token_logps, self.args.kl_log_ratio_clip)
 
         # Compute the loss
         advantages = inputs["advantages"]

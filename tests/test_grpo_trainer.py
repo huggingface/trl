@@ -39,6 +39,7 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.import_utils import is_liger_kernel_available
+from trl.trainer.grpo_trainer import _compute_kl
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
@@ -238,6 +239,72 @@ class TestGRPORolloutDispatch:
 
 
 class TestGRPOTrainer(TrlTestCase):
+    def test_kl_log_ratio_clip_helper(self):
+        log_ratio = torch.tensor([1000.0])
+
+        assert torch.isinf(_compute_kl(log_ratio))
+        assert torch.isfinite(_compute_kl(log_ratio, 20.0))
+
+    def test_kl_log_ratio_clip(self):
+        def compute_loss(kl_log_ratio_clip):
+            trainer = object.__new__(GRPOTrainer)
+            trainer._get_per_token_logps_and_entropies = lambda *args, **kwargs: (
+                torch.zeros((1, 1), requires_grad=True),
+                torch.zeros((1, 1)),
+            )
+            trainer.top_entropy_quantile = 1.0
+            trainer.off_policy_mask_threshold = None
+            trainer.importance_sampling_level = "token"
+            trainer.beta = 0.1
+            trainer.args = SimpleNamespace(
+                delta=None,
+                kl_log_ratio_clip=kl_log_ratio_clip,
+                use_bias_correction_kl=False,
+            )
+            trainer.loss_type = "grpo"
+            trainer.epsilon_low = 0.2
+            trainer.epsilon_high = 0.2
+            trainer.use_vllm = False
+            trainer.vllm_importance_sampling_correction = False
+            trainer.current_gradient_accumulation_steps = 1
+            trainer.max_completion_length = 1
+            trainer.accelerator = SimpleNamespace(num_processes=1, gather=lambda value: value)
+            trainer._metrics = {
+                "train": {
+                    "kl": [],
+                    "entropy": [],
+                    "clip_ratio/low_mean": [],
+                    "clip_ratio/low_min": [],
+                    "clip_ratio/high_mean": [],
+                    "clip_ratio/high_max": [],
+                    "clip_ratio/region_mean": [],
+                }
+            }
+            model = SimpleNamespace(training=True)
+            trainer.model = model
+            inputs = {
+                "prompt_ids": torch.tensor([[1]]),
+                "prompt_mask": torch.tensor([[1]]),
+                "completion_ids": torch.tensor([[2]]),
+                "completion_mask": torch.tensor([[1.0]]),
+                "advantages": torch.tensor([0.0]),
+                "old_per_token_logps": torch.tensor([[0.0]]),
+                "ref_per_token_logps": torch.tensor([[1000.0]]),
+            }
+            return trainer._compute_loss(model, inputs)
+
+        assert torch.isinf(compute_loss(None))
+        assert torch.isfinite(compute_loss(20.0))
+
+    @pytest.mark.parametrize("value", [0.0, -1.0])
+    def test_kl_log_ratio_clip_must_be_positive(self, value):
+        with pytest.raises(ValueError, match="kl_log_ratio_clip must be greater than 0"):
+            GRPOConfig(output_dir=self.tmp_dir, kl_log_ratio_clip=value, use_cpu=True)
+
+    def test_kl_log_ratio_clip_is_not_supported_with_liger(self):
+        with pytest.raises(ValueError, match="kl_log_ratio_clip is not supported with use_liger_kernel=True"):
+            GRPOConfig(output_dir=self.tmp_dir, kl_log_ratio_clip=20.0, use_cpu=True, use_liger_kernel=True)
+
     def test_init_minimal(self):
         # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

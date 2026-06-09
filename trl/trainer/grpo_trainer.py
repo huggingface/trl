@@ -123,6 +123,12 @@ RewardFunc = str | PreTrainedModel | Callable[..., list[float | None]]
 RolloutFunc = Callable[[list[str], "GRPOTrainer"], dict[str, Any]]
 
 
+def _compute_kl(log_ratio: torch.Tensor, log_ratio_clip: float | None = None) -> torch.Tensor:
+    if log_ratio_clip is not None:
+        log_ratio = torch.clamp(log_ratio, max=log_ratio_clip)
+    return torch.exp(log_ratio) - log_ratio - 1
+
+
 class _SupportsReset(Protocol):
     def reset(self, **kwargs) -> str | None: ...
 
@@ -2547,9 +2553,7 @@ class GRPOTrainer(_BaseTrainer):
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
+            per_token_kl = _compute_kl(ref_per_token_logps - per_token_logps, self.args.kl_log_ratio_clip)
             # Importance sampling correction for the KL divergence
             if self.args.use_bias_correction_kl:
                 per_token_kl = per_token_kl * coef_1
