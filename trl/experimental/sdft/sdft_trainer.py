@@ -917,6 +917,138 @@ class SDFTTrainer(_BaseTrainer):
         )
         return loss
 
+    def _compute_server_distillation_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
+        """Distillation loss with teacher logprobs served by the vLLM generation server (`teacher_model_kind='live'`).
+
+        The student is forwarded locally (grad) for its logits; the teacher logprobs are fetched from the server (no
+        local teacher forward). `sampled_token` distills the realized token (reverse KL); `topk_logits` distills over
+        the teacher's own top-k support (the server cannot score the student's top-k indices).
+        """
+        # Buffered batches are reused across optimizer steps (`num_iterations > 1`), so the server weights can lag the
+        # live student; re-sync before scoring. Runs before the early return below since the sync is collective.
+        if self.state.global_step != self._last_loaded_step:
+            self.vllm_generation.sync_weights()
+            self._last_loaded_step = self.state.global_step
+
+        completion_ids = inputs["completion_ids"]
+        completion_mask = inputs["completion_mask"]
+        logits_to_keep = completion_ids.size(1)
+
+        # SDFT skips the first few completion tokens in the distillation loss to suppress teacher-prompt artifacts.
+        loss_mask = completion_mask
+        if self.num_loss_tokens_to_skip > 0:
+            token_positions = torch.arange(completion_mask.size(1), device=completion_mask.device).unsqueeze(0)
+            loss_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
+
+        student_input_ids = torch.cat([inputs["prompt_ids"], completion_ids], dim=1)
+        student_attention_mask = torch.cat([inputs["prompt_mask"], completion_mask], dim=1)
+        student_logits = self._forward_logits(
+            model=model,
+            input_ids=student_input_ids,
+            attention_mask=student_attention_mask,
+            logits_to_keep=logits_to_keep,
+        )
+
+        mode = "train" if model.training else "eval"
+        if loss_mask.sum() == 0:
+            self._log_self_distillation_metric(mode, 0.0)
+            return student_logits.sum() * 0.0
+
+        teacher = self._get_teacher_token_logprobs_from_server(inputs, logits_to_keep)
+        # Padding positions come back as `-inf`; the masked-out positions are neutralized to finite values below so the
+        # divergence does not leak `+inf` through them (mirrors the distillation trainer).
+        required = loss_mask.bool()
+        student_per_token_logps = selective_log_softmax(student_logits, completion_ids)
+
+        if self.args.distillation_mode == "sampled_token":
+            teacher_per_token_logps = teacher["actual_logprobs"]
+            if (required & ~torch.isfinite(teacher_per_token_logps)).any():
+                raise ValueError("Teacher server returned no logprob for a required completion token.")
+            teacher_per_token_logps = torch.where(
+                required, teacher_per_token_logps, torch.zeros_like(teacher_per_token_logps)
+            )
+            # Reverse-KL token-level objective, matching `compute_sampled_token_self_distillation_loss`.
+            per_token_loss = (student_per_token_logps - teacher_per_token_logps).detach() * student_per_token_logps
+        else:
+            teacher_topk_logps = teacher["topk_logprobs"]
+            teacher_topk_ids = teacher["topk_token_ids"]
+            if (required & ~torch.isfinite(teacher_topk_logps[..., 0])).any():
+                raise ValueError("Teacher server returned no logprob for a required completion token.")
+            # Project the student onto the teacher's top-k support, then renormalize (or add a tail bucket) before the
+            # divergence, matching `compute_topk_self_distillation_loss` on the teacher's support.
+            keep = required.unsqueeze(-1)
+            student_topk_logps = torch.gather(
+                torch.log_softmax(student_logits, dim=-1), dim=-1, index=teacher_topk_ids
+            )
+            student_topk_logps = torch.where(keep, student_topk_logps, torch.zeros_like(student_topk_logps))
+            teacher_topk_logps = torch.where(keep, teacher_topk_logps, torch.zeros_like(teacher_topk_logps))
+            if self.args.distillation_add_tail:
+                student_topk_logps = add_tail_bucket(student_topk_logps)
+                teacher_topk_logps = add_tail_bucket(teacher_topk_logps)
+            else:
+                student_topk_logps = student_topk_logps - torch.logsumexp(student_topk_logps, dim=-1, keepdim=True)
+                teacher_topk_logps = teacher_topk_logps - torch.logsumexp(teacher_topk_logps, dim=-1, keepdim=True)
+            per_token_loss = compute_divergence(student_topk_logps, teacher_topk_logps, self.args.distillation_alpha)
+
+        old_per_token_logps = inputs.get("old_per_token_logps")
+        if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
+            per_token_loss = apply_importance_sampling_clipping(
+                per_token_loss, student_per_token_logps, old_per_token_logps, self.args.distillation_is_clip
+            )
+
+        loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
+        loss = loss.mean()
+        mean_distill_loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
+        self._log_self_distillation_metric(mode, self.accelerator.gather(mean_distill_loss).mean().item())
+        return loss
+
+    def _get_teacher_token_logprobs_from_server(
+        self, inputs: TrainingBatch, logits_to_keep: int
+    ) -> dict[str, torch.Tensor]:
+        """Per-token teacher logprobs from the vLLM server.
+
+        Returns a dict with `actual_logprobs` (`(B, T)`, the realized-token logprob for reverse KL) and `topk_logprobs`
+        / `topk_token_ids` (`(B, T, K)`, the teacher's top-k support for top-k logit distillation). Completions are
+        right-padded, so server values fill the leading positions of each row and the trailing padding keeps the `-inf`
+        / `0` sentinels (neutralized by the caller).
+        """
+        import numpy as np
+
+        teacher_input_ids = inputs["teacher_input_ids"]
+        teacher_attention_mask = inputs["teacher_attention_mask"]
+        device = teacher_input_ids.device
+        batch_size = teacher_input_ids.size(0)
+        prompt_attention_mask = teacher_attention_mask[:, : teacher_attention_mask.size(1) - logits_to_keep]
+        if self.args.distillation_mode == "topk_logits" and self.args.distillation_topk is None:
+            raise ValueError("`distillation_mode='topk_logits'` requires `distillation_topk` to be set.")
+        top_logprobs = self.args.distillation_topk if self.args.distillation_mode == "topk_logits" else 1
+
+        sequences, prompt_lengths, _ = build_teacher_request_inputs(
+            teacher_input_ids, teacher_attention_mask, prompt_attention_mask
+        )
+        result = self.teacher_client.get_sequence_logprobs(
+            sequences=sequences,
+            prompt_lengths=prompt_lengths,
+            top_logprobs=top_logprobs,
+            temperature=self.temperature,
+        )
+
+        actual = np.full((batch_size, logits_to_keep), float("-inf"), dtype=np.float32)
+        topk = np.full((batch_size, logits_to_keep, top_logprobs), float("-inf"), dtype=np.float32)
+        topk_ids = np.zeros((batch_size, logits_to_keep, top_logprobs), dtype=np.int64)
+        for i in range(batch_size):
+            seq_actual = result["actual_logprobs"][i]
+            n = min(len(seq_actual), logits_to_keep)
+            if n:
+                actual[i, :n] = np.array(seq_actual, dtype=np.float32)[:n, 0]
+                topk[i, :n] = np.array(result["logprobs"][i], dtype=np.float32)[:n]
+                topk_ids[i, :n] = np.array(result["logprob_token_ids"][i], dtype=np.int64)[:n]
+        return {
+            "actual_logprobs": torch.from_numpy(actual).to(device),
+            "topk_logprobs": torch.from_numpy(topk).to(device),
+            "topk_token_ids": torch.from_numpy(topk_ids).to(device),
+        }
+
     def _compute_teacher_student_logits(
         self,
         model,
@@ -1166,127 +1298,3 @@ class SDFTTrainer(_BaseTrainer):
         logs = {**logs, **metrics}
         super().log(logs, start_time)
         self._metrics[mode].clear()
-
-    def _compute_server_distillation_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
-        """Distillation loss with teacher logprobs served by the vLLM generation server (`teacher_model_kind='live'`).
-
-        The student is forwarded locally (grad) for its logits; the teacher logprobs are fetched from the server (no
-        local teacher forward). `sampled_token` distills the realized token (reverse KL); `topk_logits` distills over
-        the teacher's own top-k support (the server cannot score the student's top-k indices).
-        """
-        completion_ids = inputs["completion_ids"]
-        completion_mask = inputs["completion_mask"]
-        logits_to_keep = completion_ids.size(1)
-
-        # SDFT skips the first few completion tokens in the distillation loss to suppress teacher-prompt artifacts.
-        loss_mask = completion_mask
-        if self.num_loss_tokens_to_skip > 0:
-            token_positions = torch.arange(completion_mask.size(1), device=completion_mask.device).unsqueeze(0)
-            loss_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
-
-        student_input_ids = torch.cat([inputs["prompt_ids"], completion_ids], dim=1)
-        student_attention_mask = torch.cat([inputs["prompt_mask"], completion_mask], dim=1)
-        student_logits = self._forward_logits(
-            model=model,
-            input_ids=student_input_ids,
-            attention_mask=student_attention_mask,
-            logits_to_keep=logits_to_keep,
-        )
-
-        mode = "train" if model.training else "eval"
-        if loss_mask.sum() == 0:
-            self._log_self_distillation_metric(mode, 0.0)
-            return student_logits.sum() * 0.0
-
-        teacher = self._get_teacher_token_logprobs_from_server(inputs, logits_to_keep)
-        # Padding positions come back as `-inf`; the masked-out positions are neutralized to finite values below so the
-        # divergence does not leak `+inf` through them (mirrors the distillation trainer).
-        required = loss_mask.bool()
-        student_per_token_logps = selective_log_softmax(student_logits, completion_ids)
-
-        if self.args.distillation_mode == "sampled_token":
-            teacher_per_token_logps = teacher["actual_logprobs"]
-            if (required & ~torch.isfinite(teacher_per_token_logps)).any():
-                raise ValueError("Teacher server returned no logprob for a required completion token.")
-            teacher_per_token_logps = torch.where(
-                required, teacher_per_token_logps, torch.zeros_like(teacher_per_token_logps)
-            )
-            # Reverse-KL token-level objective, matching `compute_sampled_token_self_distillation_loss`.
-            per_token_loss = (student_per_token_logps - teacher_per_token_logps).detach() * student_per_token_logps
-        else:
-            teacher_topk_logps = teacher["topk_logprobs"]
-            teacher_topk_ids = teacher["topk_token_ids"]
-            if (required & ~torch.isfinite(teacher_topk_logps[..., 0])).any():
-                raise ValueError("Teacher server returned no logprob for a required completion token.")
-            # Project the student onto the teacher's top-k support, then renormalize (or add a tail bucket) before the
-            # divergence, matching `compute_topk_self_distillation_loss` on the teacher's support.
-            keep = required.unsqueeze(-1)
-            student_topk_logps = torch.gather(
-                torch.log_softmax(student_logits, dim=-1), dim=-1, index=teacher_topk_ids
-            )
-            student_topk_logps = torch.where(keep, student_topk_logps, torch.zeros_like(student_topk_logps))
-            teacher_topk_logps = torch.where(keep, teacher_topk_logps, torch.zeros_like(teacher_topk_logps))
-            if self.args.distillation_add_tail:
-                student_topk_logps = add_tail_bucket(student_topk_logps)
-                teacher_topk_logps = add_tail_bucket(teacher_topk_logps)
-            else:
-                student_topk_logps = student_topk_logps - torch.logsumexp(student_topk_logps, dim=-1, keepdim=True)
-                teacher_topk_logps = teacher_topk_logps - torch.logsumexp(teacher_topk_logps, dim=-1, keepdim=True)
-            per_token_loss = compute_divergence(student_topk_logps, teacher_topk_logps, self.args.distillation_alpha)
-
-        old_per_token_logps = inputs.get("old_per_token_logps")
-        if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
-            per_token_loss = apply_importance_sampling_clipping(
-                per_token_loss, student_per_token_logps, old_per_token_logps, self.args.distillation_is_clip
-            )
-
-        loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
-        loss = loss.mean()
-        mean_distill_loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
-        self._log_self_distillation_metric(mode, self.accelerator.gather(mean_distill_loss).mean().item())
-        return loss
-
-    def _get_teacher_token_logprobs_from_server(
-        self, inputs: TrainingBatch, logits_to_keep: int
-    ) -> dict[str, torch.Tensor]:
-        """Per-token teacher logprobs from the vLLM server.
-
-        Returns a dict with `actual_logprobs` (`(B, T)`, the realized-token logprob for reverse KL) and `topk_logprobs`
-        / `topk_token_ids` (`(B, T, K)`, the teacher's top-k support for top-k logit distillation). Completions are
-        right-padded, so server values fill the leading positions of each row and the trailing padding keeps the `-inf`
-        / `0` sentinels (neutralized by the caller).
-        """
-        import numpy as np
-
-        teacher_input_ids = inputs["teacher_input_ids"]
-        teacher_attention_mask = inputs["teacher_attention_mask"]
-        device = teacher_input_ids.device
-        batch_size = teacher_input_ids.size(0)
-        prompt_attention_mask = teacher_attention_mask[:, : teacher_attention_mask.size(1) - logits_to_keep]
-        top_logprobs = self.args.distillation_topk if self.args.distillation_mode == "topk_logits" else 1
-
-        sequences, prompt_lengths, _ = build_teacher_request_inputs(
-            teacher_input_ids, teacher_attention_mask, prompt_attention_mask
-        )
-        result = self.teacher_client.get_sequence_logprobs(
-            sequences=sequences,
-            prompt_lengths=prompt_lengths,
-            top_logprobs=top_logprobs,
-            temperature=self.temperature,
-        )
-
-        actual = np.full((batch_size, logits_to_keep), float("-inf"), dtype=np.float32)
-        topk = np.full((batch_size, logits_to_keep, top_logprobs), float("-inf"), dtype=np.float32)
-        topk_ids = np.zeros((batch_size, logits_to_keep, top_logprobs), dtype=np.int64)
-        for i in range(batch_size):
-            seq_actual = result["actual_logprobs"][i]
-            n = min(len(seq_actual), logits_to_keep)
-            if n:
-                actual[i, :n] = np.array(seq_actual, dtype=np.float32)[:n, 0]
-                topk[i, :n] = np.array(result["logprobs"][i], dtype=np.float32)[:n]
-                topk_ids[i, :n] = np.array(result["logprob_token_ids"][i], dtype=np.int64)[:n]
-        return {
-            "actual_logprobs": torch.from_numpy(actual).to(device),
-            "topk_logprobs": torch.from_numpy(topk).to(device),
-            "topk_token_ids": torch.from_numpy(topk_ids).to(device),
-        }
