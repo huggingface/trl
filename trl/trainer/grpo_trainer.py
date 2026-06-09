@@ -46,6 +46,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
+    EvalPrediction,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -215,6 +216,32 @@ class GRPOTrainer(_BaseTrainer):
             [`~transformers.AutoTokenizer.from_pretrained`]. For elements in `reward_funcs` that are custom reward
             functions (not [`~transformers.PreTrainedModel`]), the corresponding entries in `reward_processing_classes`
             are ignored.
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
+            Function called after each evaluation pass to compute additional metrics. It receives an
+            [`~transformers.EvalPrediction`] whose `predictions` field contains the generated text completions as a
+            list of strings (or list of message dicts in conversational format), and whose `label_ids` field contains a
+            `(N, R)` float tensor of per-function reward scores, where `N` is the number of completions and `R` is the
+            number of reward functions. The function must return a `dict` mapping metric names to scalar values. Unlike
+            [`DPOTrainer`], predictions here are raw text, not logit tensors. Example:
+
+            ```python
+            def compute_metrics(eval_pred):
+                completions = eval_pred.predictions  # list of strings
+                rewards = eval_pred.label_ids  # tensor of shape (N, R)
+                correct = [1 if "answer" in c else 0 for c in completions]
+                return {"exact_match": sum(correct) / len(correct)}
+
+
+            trainer = GRPOTrainer(
+                model=model,
+                reward_funcs=reward_func,
+                args=training_args,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                compute_metrics=compute_metrics,
+            )
+            trainer.train()
+            ```
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -276,6 +303,7 @@ class GRPOTrainer(_BaseTrainer):
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
@@ -647,6 +675,7 @@ class GRPOTrainer(_BaseTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
+            compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
             # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
@@ -755,6 +784,9 @@ class GRPOTrainer(_BaseTrainer):
         # Buffers for user-logged data from reward functions, flushed after gathering
         self._pending_extra_logs = defaultdict(list)
         self._pending_metrics = defaultdict(list)
+        # Buffers for compute_metrics: accumulated across eval batches, flushed in log()
+        self._completions_for_compute_metrics = []
+        self._rewards_for_compute_metrics = None
 
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
@@ -2321,6 +2353,22 @@ class GRPOTrainer(_BaseTrainer):
             output["num_images"] = num_images
         if tool_mask is not None:
             output["tool_mask"] = tool_mask
+
+        # Accumulate completions and per-function rewards for compute_metrics. Each eval batch appends
+        # to the buffers; log() drains them once per eval cycle after all batches have run.
+        if mode == "eval" and self.compute_metrics is not None:
+            # gather_object is a collective: must be called on all processes, returns full list everywhere
+            all_completions = gather_object(completions)
+            if self.accelerator.is_main_process:
+                self._completions_for_compute_metrics.extend(all_completions)
+                # rewards_per_func is already globally gathered (line ~1316); use it directly
+                if self._rewards_for_compute_metrics is None:
+                    self._rewards_for_compute_metrics = rewards_per_func.cpu()
+                else:
+                    self._rewards_for_compute_metrics = torch.cat(
+                        [self._rewards_for_compute_metrics, rewards_per_func.cpu()], dim=0
+                    )
+
         return output
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -2695,6 +2743,17 @@ class GRPOTrainer(_BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
+        # Call compute_metrics with completions and rewards buffered across all eval batches.
+        if mode == "eval" and self.compute_metrics is not None and self._completions_for_compute_metrics:
+            eval_pred = EvalPrediction(
+                predictions=self._completions_for_compute_metrics,
+                label_ids=self._rewards_for_compute_metrics,
+            )
+            custom_metrics = self.compute_metrics(eval_pred)
+            metrics.update({f"eval_{key}": val for key, val in custom_metrics.items()})
+            self._completions_for_compute_metrics = []
+            self._rewards_for_compute_metrics = None
+            
         logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
