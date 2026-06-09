@@ -34,8 +34,8 @@ class ProfilingContext:
     """
     Context manager for profiling code blocks with configurable logging.
 
-    This class handles timing of code execution and logging metrics to various backends (Weights & Biases, MLflow, Trackio)
-    without being coupled to the Trainer class.
+    This class handles timing of code execution and logging metrics to various backends (Weights & Biases, MLflow,
+    Trackio) without being coupled to the Trainer class.
 
     Args:
         name (`str`):
