@@ -1001,3 +1001,25 @@ class GRPOConfig(_BaseConfig):
                     UserWarning,
                     stacklevel=2,
                 )
+
+        if (
+            self.vllm_importance_sampling_clip_min is not None
+            and self.vllm_importance_sampling_clip_max is not None
+            and self.vllm_importance_sampling_clip_min > self.vllm_importance_sampling_clip_max
+        ):
+            raise ValueError(
+                f"vllm_importance_sampling_clip_min ({self.vllm_importance_sampling_clip_min}) must be less than or "
+                f"equal to vllm_importance_sampling_clip_max ({self.vllm_importance_sampling_clip_max})."
+            )
+
+        if (
+            self.vllm_importance_sampling_correction
+            and self.vllm_importance_sampling_mode in ("token_truncate", "sequence_truncate")
+            and self.vllm_importance_sampling_clip_min is None
+            and self.vllm_importance_sampling_clip_max is None
+        ):
+            raise ValueError(
+                "vllm_importance_sampling_clip_min and vllm_importance_sampling_clip_max cannot both be None when "
+                "using vllm_importance_sampling_correction=True. "
+                "To disable importance sampling correction, set vllm_importance_sampling_correction=False."
+            )
