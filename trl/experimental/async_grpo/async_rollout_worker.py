@@ -76,7 +76,7 @@ class RolloutGroup:
     tool_mask: list[list[int]]
     tool_call_counts: list[int]
     tool_failure_counts: list[int]
-    environments: list[object]  # per-completion env snapshots (env-based rewards); empty when no environment_factory
+    environments: list[object]
     model_version: int
     queued_at: float = 0.0
 

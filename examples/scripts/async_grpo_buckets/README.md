@@ -45,10 +45,6 @@ hf auth login   # needs write access to create the bucket + (for Option 1) deplo
 The vLLM side needs a build with sparse weight transfer (vllm-project/vllm#40096); the Space Dockerfile installs it
 from the nightly index. Locally, install the same nightly (see the repo's `dev_delta_v2/INSTALL.md`).
 
----
-
-## Option 1 — fully remote inference (vLLM on an HF Space)
-
 ### Step 1 — deploy the vLLM inference Space (GPU)
 
 ```sh
@@ -82,25 +78,6 @@ CUDA_VISIBLE_DEVICES=0 python examples/scripts/async_grpo_buckets/async_grpo_buc
 ```
 
 The bucket (`<your-username>/wordle-deltas`) is created automatically on the first sync.
-
----
-
-## Option 2 — local vLLM (single node, for testing the bucket path)
-
-```sh
-# Terminal 1 — vLLM with the bucket backend (transformers impl + V1 runner for the in-place sparse apply)
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 VLLM_USE_V2_MODEL_RUNNER=0 vllm serve Qwen/Qwen3-1.7B \
-    --model-impl transformers \
-    --worker-extension-cls trl.experimental.async_grpo.delta_engine.HFBucketWorkerExtension \
-    --weight-transfer-config '{"backend":"hf_bucket"}' \
-    --max-model-len 8192 --gpu-memory-utilization 0.8 --logprobs-mode processed_logprobs
-
-# Terminal 2 — training
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/async_grpo_buckets/async_grpo_buckets.py \
-    --model Qwen/Qwen3-1.7B \
-    --vllm-server-url http://localhost:8000 \
-    --weight-sync-bucket-id <your-username>/wordle-deltas
-```
 
 ## Notes
 
