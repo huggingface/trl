@@ -108,6 +108,16 @@ $$
 $$
 
 where  \\(\text{clip}(\cdot, 1 - \epsilon, 1 + \epsilon) \\) ensures that updates do not deviate excessively from the reference policy by bounding the policy ratio between  \\( 1 - \epsilon \\) and  \\( 1 + \epsilon \\).
+
+Below is a compact visual guide showing where exactly clipping happens, depending on whether the advantage is positive or negative:
+
+![GRPO clipping](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/grpo_clipping.png)
+
+Intuitively, the clipped objective behaves as follows:
+- When the advantage is positive  \\( A > 0 \\), we want to increase the probability of the chosen action. If the current policy already makes the action substantially more likely than the old policy did, i.e.  \\( \pi_{\theta} > (1 + \epsilon) \pi_{\theta_{\text{old}}} \\), the ratio is clipped and the gradient becomes 0, so we don't over-reinforce that action. Otherwise, we increase its probability under the current policy.
+- Conversely, when the advantage is negative  \\( A < 0 \\), we want to decrease the probability of the chosen action. If the current policy already makes the action substantially less likely than the old policy did, i.e.  \\( \pi_{\theta} < (1 - \epsilon) \pi_{\theta_{\text{old}}} \\), the ratio is clipped and the gradient becomes 0, so we don't over-suppress that action. Otherwise, we decrease its probability under the current policy.
+
+
 When  \\( \mu = 1 \\) (default in TRL), the clipped surrogate objective simplifies to the original objective.
 
 #### Loss Types
