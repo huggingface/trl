@@ -187,7 +187,7 @@ class _AsyncRolloutLoop:
         failed_event: MPEvent,
         exception_info_queue: MPQueue,
         tools: list[Callable] | None = None,
-        environment_factory: Callable[[], object] | None = None,
+        environment_factory: Callable[[], object] | dict[str, Callable[[], object]] | None = None,
         num_generations: int = 8,
         max_inflight_tasks: int = 128,
         queue_maxsize: int = 0,
@@ -224,30 +224,54 @@ class _AsyncRolloutLoop:
         self.num_completions_to_print = num_completions_to_print
         self.vllm_server_url = vllm_server_url.rstrip("/")
 
-        self.environments = None
-        environment_methods = [[] for _ in range(max_inflight_tasks)]
-        if environment_factory is not None:
-            self.environments = [environment_factory() for _ in range(max_inflight_tasks)]
-            for i, environment in enumerate(self.environments):
+        tools = tools or []
+        self._standalone_tools = tools  # tools that are not bound to an environment
+
+        # Normalize `environment_factory` to a `{name: factory}` mapping. A single callable is the special case of one
+        # unnamed (`None`) environment shared by every example; a dict maps the `environment` field of each example to
+        # its factory. `_multi_environment` records which case we are in: only then is the `environment` field read.
+        self._multi_environment = isinstance(environment_factory, dict)
+        if environment_factory is None:
+            self.environment_factories = None
+        elif self._multi_environment:
+            self.environment_factories = environment_factory
+        else:
+            self.environment_factories = {None: environment_factory}
+
+        if self.environment_factories is not None:
+            # Probe one instance of each environment to validate its `reset` method and extract its tool methods, used
+            # to render the per-example tool schema in the prompt. Instances are pooled and reused (reset) across
+            # rollouts; the probe seeds the pool so it is not wasted. The pool grows only when more concurrent instances
+            # of an environment are needed than have been created so far, preserving the "construct once, reset often"
+            # contract even when rollouts mix environments.
+            self._env_tools = {}  # {environment name: tools exposed when this environment is selected}
+            self._environment_pool = {}  # {environment name: list of reusable instances}
+            for name, factory in self.environment_factories.items():
+                instance = factory()
                 has_reset = False
-                for name, member in inspect.getmembers(environment, predicate=inspect.ismethod):
-                    if name == "reset":
+                methods = []
+                for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                    if member_name == "reset":
                         has_reset = True
-                    elif not name.startswith("_"):
-                        environment_methods[i].append(member)
+                    elif not member_name.startswith("_"):
+                        methods.append(member)
                 if not has_reset:
                     raise ValueError(
-                        "Each environment instance returned by `environment_factory` must define `reset`."
+                        "Each environment instance returned by `environment_factory` must define a callable `reset`."
                     )
+                self._env_tools[name] = tools + methods
+                self._environment_pool[name] = [instance]
+            # Union of every environment's tools, used only to decide whether a training chat template is needed.
+            self.tools = list(tools)
+            for env_tools in self._env_tools.values():
+                self.tools += [tool for tool in env_tools if tool not in self.tools]
+        else:
+            self.tools = tools
 
-        base_tools = tools or []
-        self._sync_tool_dicts = [{} for _ in range(max_inflight_tasks)]
-        for i in range(max_inflight_tasks):
-            for tool in base_tools + (environment_methods[i] if self.environments is not None else []):
-                if inspect.iscoroutinefunction(tool):
-                    raise ValueError("Asynchronous tools are not supported yet.")
-                self._sync_tool_dicts[i][tool.__name__] = tool
-        self.tools = base_tools + (environment_methods[0] if self.environments is not None else [])
+        # The async worker can't await tools in its tool loop, so asynchronous tools are not supported.
+        for tool in self.tools:
+            if inspect.iscoroutinefunction(tool):
+                raise ValueError("Asynchronous tools are not supported yet.")
 
         # The chat template must be prefix-preserving in multi-turn training; if the tokenizer's
         # template isn't, swap in a training-safe one.
@@ -302,7 +326,7 @@ class _AsyncRolloutLoop:
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         pending_groups: dict[int, RolloutGroup] = {}
         pending_completed: dict[int, int] = {}
-        inflight_tasks: dict[asyncio.Task, tuple[int, int]] = {}
+        inflight_tasks: dict[asyncio.Task, tuple[int, int, Any, object]] = {}
         free_slots = set(range(self.max_inflight_tasks))
         work_iter = self._repeat_iterator()
 
@@ -313,13 +337,17 @@ class _AsyncRolloutLoop:
                 self._heartbeat_value.value = time.time()
                 while free_slots and not stop_event.is_set():
                     group_id, row = next(work_iter)
+                    # The environment is the same for all generations of a group; only its tools are exposed in the
+                    # example's prompt. When there are no environments, every example shares the standalone tools.
+                    name = row["environment"] if self._multi_environment else None
+                    tools = self._env_tools[name] if self.environment_factories is not None else self.tools
                     if group_id not in pending_groups:
                         prompt = row["prompt"]
                         prompt_ids = self.tokenizer.apply_chat_template(
                             prompt,
                             return_dict=False,
                             add_generation_prompt=True,
-                            tools=self.tools or None,  # `or None`: Llama bug: renders tool boilerplate for tools=[]
+                            tools=tools or None,  # `or None`: Llama bug: renders tool boilerplate for tools=[]
                             chat_template=self.chat_template,
                             **self.chat_template_kwargs,
                         )
@@ -343,13 +371,31 @@ class _AsyncRolloutLoop:
                         pending_completed[group_id] = 0
 
                     slot = free_slots.pop()
-                    if self.environments is not None:
-                        self.environments[slot].reset(**row)
+                    # Draw a reusable environment instance for this rollout (creating one only if the pool is exhausted)
+                    # and reset it; it is returned to the pool when the task completes. `environment` is a control field
+                    # in multi-environment mode, so it is not forwarded to `reset`.
+                    environment = None
+                    if self.environment_factories is not None:
+                        pool = self._environment_pool[name]
+                        environment = pool.pop() if pool else self.environment_factories[name]()
+                        reset_kwargs = (
+                            {k: v for k, v in row.items() if k != "environment"} if self._multi_environment else row
+                        )
+                        environment.reset(**reset_kwargs)
+                    # Build this rollout's tool dict: the standalone tools plus the methods of its environment.
+                    methods = []
+                    if environment is not None:
+                        methods = [
+                            member
+                            for member_name, member in inspect.getmembers(environment, predicate=inspect.ismethod)
+                            if member_name != "reset" and not member_name.startswith("_")
+                        ]
+                    tool_dict = {tool.__name__: tool for tool in self._standalone_tools + methods}
 
                     task = asyncio.create_task(
-                        self._generate_one(pending_groups[group_id].prompt, tool_dict=self._sync_tool_dicts[slot])
+                        self._generate_one(pending_groups[group_id].prompt, tool_dict=tool_dict, tools=tools)
                     )
-                    inflight_tasks[task] = (group_id, slot)
+                    inflight_tasks[task] = (group_id, slot, name, environment)
 
                 if not inflight_tasks:
                     if stop_event.is_set():
@@ -362,8 +408,10 @@ class _AsyncRolloutLoop:
                     continue
 
                 for task in done:
-                    group_id, slot = inflight_tasks.pop(task)
+                    group_id, slot, name, environment = inflight_tasks.pop(task)
                     free_slots.add(slot)
+                    if environment is not None:
+                        self._environment_pool[name].append(environment)
                     if task.exception() is not None:
                         raise task.exception()
 
@@ -481,7 +529,7 @@ class _AsyncRolloutLoop:
             group_id += 1
 
     async def _generate_one(
-        self, prompt: Messages, tool_dict: dict[str, Callable]
+        self, prompt: Messages, tool_dict: dict[str, Callable], tools: list[Callable]
     ) -> tuple[list[dict[str, str]], list[int], list[float], list[int], int, int]:
         completion, completion_ids, completion_logprobs, tool_mask = [], [], [], []
         tool_call_count = 0
@@ -492,7 +540,7 @@ class _AsyncRolloutLoop:
             prompt,
             return_dict=False,
             add_generation_prompt=True,
-            tools=self.tools or None,
+            tools=tools or None,
             chat_template=self.chat_template,
             **self.chat_template_kwargs,
         )
