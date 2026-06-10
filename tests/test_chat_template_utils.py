@@ -684,6 +684,64 @@ class TestGetTrainingChatTemplate:
             pytest.skip("Template does not support tool calling; prefix-preservation check is not applicable.")
         assert is_chat_template_prefix_preserving(tokenizer) is True
 
+    @pytest.mark.parametrize("append_role", ["user", "system"])
+    def test_new_chat_template_is_prefix_preserving_for_appended_role(self, tokenizer_name, append_role, request):
+        # Multi-turn rollouts can append user or system messages mid-conversation, and the same prefix-preservation
+        # property applies per role. Templates that reject a role outright are skipped (failing loud is safe);
+        # templates that silently rewrite earlier turns are known breaks, marked as strict xfail so CI flags them as
+        # soon as a template gains the surface. None are fixable byte-identically: the rewrites are inherent to the
+        # original templates.
+        known_breaks = {
+            ("trl-internal-testing/tiny-GptOssForCausalLM", "user"): (
+                "appending demotes the final assistant turn and rewrites its <|return|> terminator to <|end|>"
+            ),
+            ("trl-internal-testing/tiny-GptOssForCausalLM", "system"): (
+                "appending demotes the final assistant turn and rewrites its <|return|> terminator to <|end|>"
+            ),
+            ("trl-internal-testing/tiny-Phi3ForCausalLM-3", "user"): (
+                "the final render carries a trailing eos token that appending removes"
+            ),
+            ("trl-internal-testing/tiny-Phi3ForCausalLM-3", "system"): (
+                "the final render carries a trailing eos token that appending removes"
+            ),
+            ("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", "user"): (
+                "the final render carries a trailing eos token that appending removes"
+            ),
+            ("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", "system"): (
+                "the final render carries a trailing eos token that appending removes"
+            ),
+            ("trl-internal-testing/tiny-Cohere2ForCausalLM", "system"): (
+                "the system message is hoisted into the developer preamble at the front of the render"
+            ),
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", "system"): (
+                "the system message is hoisted to the front of the render"
+            ),
+            ("trl-internal-testing/tiny-LlavaForConditionalGeneration", "user"): (
+                "the role markers are plain text, and the trailing space merges with them under BPE"
+            ),
+            ("trl-internal-testing/tiny-LlavaForConditionalGeneration", "system"): (
+                "the role markers are plain text, and the trailing space merges with them under BPE"
+            ),
+            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", "user"): (
+                "the role markers are plain text, and the trailing space merges with them under BPE"
+            ),
+            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", "system"): (
+                "the role markers are plain text, and the trailing space merges with them under BPE"
+            ),
+        }
+        reason = known_breaks.get((tokenizer_name, append_role))
+        if reason:
+            request.node.add_marker(pytest.mark.xfail(strict=True, reason=f"{tokenizer_name}: {reason}"))
+        tokenizer = self._load(tokenizer_name)
+        chat_template = get_training_chat_template(tokenizer)
+        if chat_template is not None:
+            tokenizer.chat_template = chat_template
+        try:
+            preserved = is_chat_template_prefix_preserving(tokenizer, append_role=append_role)
+        except TemplateError:
+            pytest.skip(f"Template does not support appending a {append_role} message.")
+        assert preserved is True
+
     def test_new_chat_template_trains_stop_token(self, tokenizer_name, request):
         # Known failures, marked as strict xfail rather than skip so that CI flags them (and gains coverage) as soon
         # as the underlying processor is fixed.
