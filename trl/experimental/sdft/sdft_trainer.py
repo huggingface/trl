@@ -965,8 +965,9 @@ class SDFTTrainer(_BaseTrainer):
             required, teacher_per_token_logps, torch.zeros_like(teacher_per_token_logps)
         )
 
-        # Mean realized-token logprob gap between the local student and the context-conditioned teacher on the server.
-        # It shrinks as distillation progresses; a sudden jump points at a weight-sync or numerics problem.
+        # Diagnostic for disagreement between local student scores and server teacher scores on realized tokens.
+        # Sudden jumps can indicate stale server weights or numerical drift.
+        
         abs_diff = ((student_per_token_logps.detach() - teacher_per_token_logps).abs() * loss_mask).sum() / (
             loss_mask.sum().clamp(min=1.0)
         )
