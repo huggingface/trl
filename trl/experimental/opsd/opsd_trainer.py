@@ -54,6 +54,7 @@ from ...trainer.utils import (
     split_tensor_dict,
     use_adapter,
 )
+from ..teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 from ..utils import prepare_peft_model
 from .loss_utils import (
     add_tail_bucket,
@@ -64,7 +65,6 @@ from .loss_utils import (
     compute_topk_self_distillation_loss,
 )
 from .opsd_config import OPSDConfig
-from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 
 
 if is_peft_available():
@@ -917,6 +917,9 @@ class OPSDTrainer(_BaseTrainer):
         # live student; re-sync before scoring.
         if self.state.global_step != self._last_loaded_step:
             self.vllm_generation.sync_weights()
+            # Only the main process pushes weights to the server, so hold every rank here until the push completes;
+            # otherwise non-main ranks could score against half-updated weights.
+            self.accelerator.wait_for_everyone()
             self._last_loaded_step = self.state.global_step
 
         completion_ids = inputs["completion_ids"]
@@ -935,8 +938,6 @@ class OPSDTrainer(_BaseTrainer):
         )
 
         mode = "train" if model.training else "eval"
-        # No early return for an all-masked rank: the gathers below are collective, so every rank must run the full
-        # path (the masked reductions resolve to a zero loss on such a rank).
         teacher = self._get_teacher_token_logprobs_from_server(inputs, logits_to_keep)
         # Padding positions come back as `-inf`; the masked-out positions are neutralized to finite values below so the
         # divergence does not leak `+inf` through them (mirrors the distillation trainer).
@@ -950,8 +951,8 @@ class OPSDTrainer(_BaseTrainer):
             required, teacher_per_token_logps, torch.zeros_like(teacher_per_token_logps)
         )
 
-        # Mean realized-token logprob gap between the local student and the context-conditioned teacher on the server.
-        # It shrinks as distillation progresses; a sudden jump points at a weight-sync or numerics problem.
+        # Diagnostic for disagreement between local student scores and server teacher scores on realized tokens.
+        # Sudden jumps can indicate stale server weights or numerical drift.
         abs_diff = ((student_per_token_logps.detach() - teacher_per_token_logps).abs() * loss_mask).sum() / (
             loss_mask.sum().clamp(min=1.0)
         )
