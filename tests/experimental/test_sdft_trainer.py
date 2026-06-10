@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import MagicMock
-
 import pytest
 import torch
 from datasets import Dataset
@@ -21,7 +19,6 @@ from transformers import TrainerCallback
 from transformers.utils import is_peft_available
 
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
-from trl.experimental.sdft.loss_utils import add_tail_bucket, compute_divergence
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_torch_accelerator
 
@@ -51,6 +48,18 @@ class SelfDistillationCaptureCallback(TrainerCallback):
         self.generation_batch_build_count += 1
 
 
+class RecordingTeacherClient:
+    """Stands in for the vLLM server client and records scoring requests."""
+
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def get_sequence_logprobs(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+
 class TestSDFTTrainer(TrlTestCase):
     @staticmethod
     def _trainable_param_snapshot(model):
@@ -62,7 +71,6 @@ class TestSDFTTrainer(TrlTestCase):
             not torch.allclose(previous_param, model.get_parameter(name), rtol=1e-12, atol=1e-12)
             for name, previous_param in previous_trainable_params.items()
         )
-
 
     def test_train(self):
         dataset = Dataset.from_dict(
@@ -444,67 +452,50 @@ class TestSDFTTrainer(TrlTestCase):
 
         assert capture_callback.generation_batch_build_count == 1
 
-
-class TestSDFTTeacherServerTopk(TrlTestCase):
-    """Server-free unit tests for the `use_teacher_server` + `topk_logits` path (no vLLM server needed)."""
-
-    def test_getter_shapes_and_padding_sentinels(self):
-        # Sample 0 has a 1-token completion (positions 1-2 are padding); sample 1 is full length 3.
-        ragged = {
-            "actual_logprobs": [[[-2.3]], [[-1.1], [-0.4], [-3.0]]],
-            "logprobs": [[[-2.3, -2.6]], [[-1.1, -1.5], [-0.4, -0.9], [-3.0, -3.4]]],
-            "logprob_token_ids": [[[90, 91]], [[90, 91], [9217, 9218], [100, 101]]],
-        }
-        mock_self = MagicMock()
-        mock_self.teacher_client.get_sequence_logprobs = MagicMock(return_value=ragged)
-        mock_self.temperature = 1.0
-        mock_self.args.distillation_mode = "topk_logits"
-        mock_self.args.distillation_topk = 2
-
-        inputs = {
-            "teacher_input_ids": torch.tensor([[10, 11, 90, 0, 0], [10, 11, 90, 9217, 100]]),
-            "teacher_attention_mask": torch.tensor([[1, 1, 1, 0, 0], [1, 1, 1, 1, 1]]),
-        }
-        out = SDFTTrainer._get_teacher_token_logprobs_from_server(mock_self, inputs, logits_to_keep=3)
-
-        assert out["actual_logprobs"].shape == (2, 3)
-        assert out["topk_logprobs"].shape == (2, 3, 2)
-        assert out["topk_token_ids"].shape == (2, 3, 2)
-        # Real positions preserved.
-        assert out["actual_logprobs"][0, 0].item() == pytest.approx(-2.3, rel=1e-5)
-        assert out["actual_logprobs"][1, 2].item() == pytest.approx(-3.0, rel=1e-5)
-        # Padding tail uses the -inf sentinel; the full-length sample stays finite.
-        assert out["actual_logprobs"][0, 1].item() == float("-inf")
-        assert out["topk_logprobs"][0, 2, 0].item() == float("-inf")
-        assert torch.isfinite(out["actual_logprobs"][1]).all()
-        # The requested top-k matches `distillation_topk`.
-        assert mock_self.teacher_client.get_sequence_logprobs.call_args.kwargs["top_logprobs"] == 2
-
-    def test_topk_mask_keeps_forward_and_backward_finite(self):
-        # Sample 0 has completion length 1 (positions 1-2 padded with -inf); sample 1 is full length.
-        teacher_topk = torch.tensor(
-            [
-                [[-2.3, -2.6], [float("-inf"), float("-inf")], [float("-inf"), float("-inf")]],
-                [[-1.1, -1.5], [-0.4, -0.9], [-3.0, -3.4]],
-            ],
-            dtype=torch.float32,
+    def test_server_loss_finite_with_masked_and_padded_rows(self):
+        # Drives the teacher-server path through `compute_loss` with a fake server client: row 0 is fully masked
+        # (zero-length scored completion) and row 1 has a shorter completion than the padded batch, so the client
+        # response is ragged and the padded tail comes back as -inf. Neither may leak NaN or inf.
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."], "privileged_context": ["Example answer: 4."]})
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            max_completion_length=3,
+            num_generations=1,
+            distillation_mode="topk_logits",
+            distillation_topk=2,
+            distillation_alpha=0.5,
+            distillation_add_tail=True,
+            distillation_is_clip=None,
+            report_to="none",
         )
-        loss_mask = torch.tensor([[1.0, 0.0, 0.0], [1.0, 1.0, 1.0]])
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.use_teacher_server = True
+        trainer.teacher_client = RecordingTeacherClient(
+            {
+                "actual_logprobs": [[], [[-1.1], [-0.4]]],
+                "logprobs": [[], [[-1.1, -1.5], [-0.4, -0.9]]],
+                "logprob_token_ids": [[], [[14, 15], [16, 17]]],
+            }
+        )
 
-        # Neutralize -inf at masked positions before the divergence (matches the server topk path).
-        keep = loss_mask.bool().unsqueeze(-1)
-        zero = torch.zeros((), dtype=teacher_topk.dtype)
-        teacher_topk = torch.where(keep, teacher_topk, zero)
-        raw_student = torch.randn(2, 3, 2, requires_grad=True)
-        student_topk = torch.where(keep, torch.log_softmax(raw_student, dim=-1), zero)
+        device = next(trainer.model.parameters()).device
+        batch = {
+            "prompt_ids": torch.tensor([[10, 11], [12, 13]], device=device),
+            "prompt_mask": torch.tensor([[1, 1], [1, 1]], device=device),
+            "completion_ids": torch.tensor([[14, 15, 16], [17, 18, 19]], device=device),
+            "completion_mask": torch.tensor([[0, 0, 0], [1, 1, 0]], device=device),
+            "teacher_input_ids": torch.tensor([[20, 21, 22, 14, 15, 16], [23, 24, 25, 17, 18, 19]], device=device),
+            "teacher_attention_mask": torch.tensor([[1, 1, 1, 0, 0, 0], [1, 1, 1, 1, 1, 0]], device=device),
+        }
 
-        student_sparse = add_tail_bucket(student_topk)
-        teacher_sparse = add_tail_bucket(teacher_topk)
-        assert torch.isfinite(student_sparse).all()
+        loss = trainer.compute_loss(trainer.model, batch)
 
-        per_token_loss = compute_divergence(student_sparse, teacher_sparse, 0.5)
-        loss = (per_token_loss * loss_mask).sum() / loss_mask.sum()
         assert torch.isfinite(loss)
-
         loss.backward()
-        assert torch.isfinite(raw_student.grad).all()
+        assert all(torch.isfinite(p.grad).all() for p in trainer.model.parameters() if p.grad is not None)
+        assert trainer.teacher_client.calls[0]["top_logprobs"] == 2
