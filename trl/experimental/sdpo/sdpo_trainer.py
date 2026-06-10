@@ -692,6 +692,14 @@ class SDPOTrainer(_BaseTrainer):
 
         Must be called after `super().__init__` so that `self.callback_handler` is available.
         """
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        if is_peft_model(self.model) and deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+            raise ValueError(
+                "PEFT with DeepSpeed ZeRO-3 is currently unsupported: the teacher forward on the shared model "
+                "invalidates the ZeRO-3 parameter coordinator trace and training crashes at backward recompute. "
+                "Use FSDP2 or ZeRO-2 with PEFT, or full fine-tuning under ZeRO-3."
+            )
+
         teacher_model_kind = self.args.teacher_model_kind
 
         if teacher_model_kind == "live":
