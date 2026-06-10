@@ -352,6 +352,16 @@ class SDPOConfig(_BaseConfig):
             "help": "Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation instead of the default model.generate(). Requires `vllm` to be installed."
         },
     )
+    use_teacher_server: bool = field(
+        default=False,
+        metadata={
+            "help": "Compute teacher logprobs from the running vLLM generation server instead of a local teacher "
+            "forward. Only supported for `teacher_model_kind='live'` with `use_vllm=True`, `vllm_mode='server'`, "
+            "`distillation_weight=1.0` (pure distillation), and `distillation_mode` in {'sampled_token', "
+            "'topk_logits'} (the server returns the teacher's top-k logprobs, not the full vocabulary; `topk_logits` "
+            "distills over the teacher's own top-k support)."
+        },
+    )
     vllm_mode: str = field(
         default="colocate",
         metadata={
@@ -576,6 +586,11 @@ class SDPOConfig(_BaseConfig):
         super().__post_init__()
         if not 0.0 <= self.distillation_weight <= 1.0:
             raise ValueError(f"`distillation_weight` must be in [0, 1], got {self.distillation_weight}.")
+        if self.distillation_mode == "sampled_token" and self.distillation_alpha != 1.0:
+            raise ValueError(
+                "`distillation_mode='sampled_token'` only supports reverse KL, so it requires "
+                f"`distillation_alpha=1.0`, got {self.distillation_alpha}."
+            )
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
             self.steps_per_generation = self.gradient_accumulation_steps
