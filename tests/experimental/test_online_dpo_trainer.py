@@ -113,6 +113,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         assert metrics["eval_loss"] >= 0
         assert all(param.grad is None for param in self.model.parameters())
+        assert all(len(values) == 0 for values in trainer.stats.values())
 
     def test_train_with_ref_model(self):
         training_args = OnlineDPOConfig(

@@ -1093,7 +1093,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
         return logprobs
 
-    def _compute_loss(self, model: nn.Module, inputs: dict[str, torch.Tensor | Any]) -> torch.Tensor:
+    def _compute_loss(self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], log_stats: bool = True) -> torch.Tensor:
         prompts = inputs["prompt"]
         batch_size = len(prompts)
 
@@ -1232,44 +1232,47 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         loss = losses.mean()
 
-        # Log everything
-        if self.reward_funcs is not None:
-            # When using reward_funcs, we have rewards instead of scores
-            scores_margin = rewards[chosen_indices] - rewards[rejected_indices]
-            self.stats["objective/scores_margin"].append(
-                self.accelerator.gather_for_metrics(scores_margin.mean()).mean().item()
+        if log_stats:
+            # Log everything
+            if self.reward_funcs is not None:
+                # When using reward_funcs, we have rewards instead of scores
+                scores_margin = rewards[chosen_indices] - rewards[rejected_indices]
+                self.stats["objective/scores_margin"].append(
+                    self.accelerator.gather_for_metrics(scores_margin.mean()).mean().item()
+                )
+                self.stats["objective/scores"].append(self.accelerator.gather_for_metrics(rewards.mean()).mean().item())
+            self.stats["val/contain_eos_token"].append(contain_eos_token.float().mean().item())
+            self.stats["logps/chosen"].append(self.accelerator.gather_for_metrics(chosen_logprobs_sum).mean().item())
+            self.stats["logps/rejected"].append(self.accelerator.gather_for_metrics(rejected_logprobs_sum).mean().item())
+
+            kl = logprobs - ref_logprobs
+            mean_kl = kl.sum(1).mean()
+            self.stats["objective/kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+            non_score_reward = (-self.beta * kl).sum(1)
+            mean_non_score_reward = non_score_reward.mean()
+            self.stats["objective/non_score_reward"].append(
+                self.accelerator.gather_for_metrics(mean_non_score_reward).mean().item()
             )
-            self.stats["objective/scores"].append(self.accelerator.gather_for_metrics(rewards.mean()).mean().item())
-        self.stats["val/contain_eos_token"].append(contain_eos_token.float().mean().item())
-        self.stats["logps/chosen"].append(self.accelerator.gather_for_metrics(chosen_logprobs_sum).mean().item())
-        self.stats["logps/rejected"].append(self.accelerator.gather_for_metrics(rejected_logprobs_sum).mean().item())
+            if self.reward_funcs is not None:
+                # Calculate RLHF reward by combining rewards with non_score_reward
+                rlhf_reward = rewards + non_score_reward
+                self.stats["objective/rlhf_reward"].append(
+                    self.accelerator.gather_for_metrics(rlhf_reward).mean().item()
+                )
 
-        kl = logprobs - ref_logprobs
-        mean_kl = kl.sum(1).mean()
-        self.stats["objective/kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
-        non_score_reward = (-self.beta * kl).sum(1)
-        mean_non_score_reward = non_score_reward.mean()
-        self.stats["objective/non_score_reward"].append(
-            self.accelerator.gather_for_metrics(mean_non_score_reward).mean().item()
-        )
-        if self.reward_funcs is not None:
-            # Calculate RLHF reward by combining rewards with non_score_reward
-            rlhf_reward = rewards + non_score_reward
-            self.stats["objective/rlhf_reward"].append(self.accelerator.gather_for_metrics(rlhf_reward).mean().item())
-
-        mean_entropy = -logprobs.sum(1).mean()
-        self.stats["objective/entropy"].append(self.accelerator.gather_for_metrics(mean_entropy).mean().item())
-        chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
-        gathered_chosen_rewards = self.accelerator.gather_for_metrics(chosen_rewards)
-        self.stats["rewards/chosen"].append(gathered_chosen_rewards.mean().item())
-        rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
-        gathered_rejected_rewards = self.accelerator.gather_for_metrics(rejected_rewards)
-        self.stats["rewards/rejected"].append(gathered_rejected_rewards.mean().item())
-        margin = gathered_chosen_rewards - gathered_rejected_rewards
-        self.stats["rewards/margins"].append(margin.mean().item())
-        accuracy = margin > 0
-        self.stats["rewards/accuracies"].append(accuracy.float().mean().item())
-        self.stats["beta"].append(self.beta)
+            mean_entropy = -logprobs.sum(1).mean()
+            self.stats["objective/entropy"].append(self.accelerator.gather_for_metrics(mean_entropy).mean().item())
+            chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
+            gathered_chosen_rewards = self.accelerator.gather_for_metrics(chosen_rewards)
+            self.stats["rewards/chosen"].append(gathered_chosen_rewards.mean().item())
+            rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
+            gathered_rejected_rewards = self.accelerator.gather_for_metrics(rejected_rewards)
+            self.stats["rewards/rejected"].append(gathered_rejected_rewards.mean().item())
+            margin = gathered_chosen_rewards - gathered_rejected_rewards
+            self.stats["rewards/margins"].append(margin.mean().item())
+            accuracy = margin > 0
+            self.stats["rewards/accuracies"].append(accuracy.float().mean().item())
+            self.stats["beta"].append(self.beta)
 
         return loss
 
@@ -1308,7 +1311,7 @@ class OnlineDPOTrainer(_BaseTrainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
         with torch.no_grad():
             with self.compute_loss_context_manager():
-                loss = self.compute_loss(model, inputs)
+                loss = self._compute_loss(model, inputs, log_stats=False)
             loss = loss.mean().detach()
         return loss, None, None
 
