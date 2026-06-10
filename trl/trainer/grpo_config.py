@@ -991,16 +991,7 @@ class GRPOConfig(_BaseConfig):
                 FutureWarning,
                 stacklevel=2,
             )
-            if self.vllm_importance_sampling_clip_max == 3.0:
-                self.vllm_importance_sampling_clip_max = self.vllm_importance_sampling_cap
-            elif self.vllm_importance_sampling_clip_max != self.vllm_importance_sampling_cap:
-                warnings.warn(
-                    "Both `vllm_importance_sampling_cap` and `vllm_importance_sampling_clip_max` were provided. "
-                    "Ignoring the deprecated `vllm_importance_sampling_cap` value in favor of "
-                    "`vllm_importance_sampling_clip_max`.",
-                    UserWarning,
-                    stacklevel=2,
-                )
+            self.vllm_importance_sampling_clip_max = self.vllm_importance_sampling_cap
 
         if (
             self.vllm_importance_sampling_clip_min is not None
