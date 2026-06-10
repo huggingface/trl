@@ -1501,8 +1501,7 @@ class DPOTrainer(_BaseTrainer):
         try:
             if self.use_liger_kernel:
                 return self._compute_loss_liger(model, inputs, return_outputs)
-            else:
-                return self._compute_loss(model, inputs, return_outputs)
+            return self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
                 raise ValueError(
