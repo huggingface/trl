@@ -178,6 +178,12 @@ class SDPOConfig(_BaseConfig):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
             instead of the default model.generate(). Requires `vllm` to be installed.
+        use_teacher_server (`bool`, *optional*, defaults to `False`):
+            Compute teacher logprobs from the running vLLM generation server instead of a local teacher forward. Only
+            supported for `teacher_model_kind='live'` with `use_vllm=True`, `vllm_mode='server'`,
+            `distillation_weight=1.0` (pure distillation), and `distillation_mode` in {'sampled_token', 'topk_logits'}
+            (the server returns the teacher's top-k logprobs, not the full vocabulary; `topk_logits` distills over the
+            teacher's own top-k support).
         vllm_mode (`str`, *optional*, defaults to `"colocate"`):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or
             `'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a
