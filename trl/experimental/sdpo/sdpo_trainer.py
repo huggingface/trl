@@ -56,6 +56,7 @@ from ...trainer.utils import (
     split_tensor_dict,
     use_adapter,
 )
+from ..callbacks import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 from ..utils import prepare_peft_model
 from .loss_utils import (
     add_tail_bucket,
@@ -66,7 +67,6 @@ from .loss_utils import (
     compute_topk_self_distillation_loss,
 )
 from .sdpo_config import SDPOConfig
-from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 
 
 logger = logging.get_logger(__name__)
@@ -401,6 +401,12 @@ class SDPOTrainer(_BaseTrainer):
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
 
+        # The EMA teacher adapter must exist before accelerate/DeepSpeed wraps the model: ZeRO-3 registers every
+        # module exactly once at initialization and cannot adopt modules added afterwards.
+        if args.teacher_model_kind == "ema" and is_peft_model(model) and is_pure_lora_training(model):
+            active_adapter = model.active_adapter or "default"
+            model.add_adapter("teacher", model.peft_config[active_adapter])
+
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 get_config_model_id(model.config), truncation_side="left", padding_side="left"
@@ -686,7 +692,6 @@ class SDPOTrainer(_BaseTrainer):
 
         Must be called after `super().__init__` so that `self.callback_handler` is available.
         """
-
         teacher_model_kind = self.args.teacher_model_kind
 
         if teacher_model_kind == "live":
