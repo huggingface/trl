@@ -52,7 +52,6 @@ jobs:
         run: python3 -c "import torch; assert torch.version.hip, 'CUDA torch got installed'; print('ROCm torch', torch.__version__, '| HIP', torch.version.hip)"
 
       - name: Run slow tests on single GPU
-        if: always()
         run: make slow_tests
 
       - name: Generate Report
