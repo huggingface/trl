@@ -60,9 +60,9 @@ class OPSDConfig(_BaseConfig):
         > Parameters that control the teacher prompt
 
         teacher_prompt_template (`str`, *optional*):
-            Template used to combine the student prompt and the ground-truth solution into the teacher prompt. Must
-            contain the `{prompt}` and `{solution}` placeholders. Defaults to the official OPSD wording, which wraps
-            the solution in reference markers followed by a transition instruction.
+            Template used to combine the student prompt and the privileged ground-truth solution into the teacher
+            prompt. Must contain the `{prompt}` and `{privileged_context}` placeholders. Defaults to the official OPSD
+            wording, which wraps the solution in reference markers followed by a transition instruction.
         teacher_chat_template_kwargs (`dict[str, Any]`, *optional*):
             Extra kwargs forwarded to `apply_chat_template` when building the teacher prompt (for example
             `{"enable_thinking": True}` to pair a thinking teacher with a non-thinking student).
@@ -79,7 +79,7 @@ class OPSDConfig(_BaseConfig):
 
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
             Whether to only keep the columns required by the trainer in the dataset. Keep this to `False` if you
-            provide extra columns (such as `solution`) that the trainer needs.
+            provide extra columns (such as `privileged_context`) that the trainer needs.
         max_prompt_length (`int`, *optional*, defaults to `512`):
             Maximum prompt length. Longer prompts are truncated from the left.
         shuffle_dataset (`bool`, *optional*, defaults to `True`):
@@ -195,7 +195,7 @@ class OPSDConfig(_BaseConfig):
     remove_unused_columns: bool = field(
         default=False,
         metadata={
-            "help": "Whether to only keep the columns required by the trainer in the dataset. Keep this to `False` if you provide extra columns (such as `solution`) that the trainer needs."
+            "help": "Whether to only keep the columns required by the trainer in the dataset. Keep this to `False` if you provide extra columns (such as `privileged_context`) that the trainer needs."
         },
     )
     max_prompt_length: int | None = field(
@@ -417,7 +417,7 @@ class OPSDConfig(_BaseConfig):
         default=(
             "{prompt}\n\n"
             "Here is a reference solution to this problem:\n"
-            "=== Reference Solution Begin ===\n{solution}\n=== Reference Solution End ===\n\n"
+            "=== Reference Solution Begin ===\n{privileged_context}\n=== Reference Solution End ===\n\n"
             "After reading the reference solution above, make sure you truly understand the reasoning behind each "
             "step, do not copy or paraphrase it. Now, using your own words and independent reasoning, derive the "
             "same final answer to the problem above. Think step by step, explore different approaches, and don't "
@@ -425,7 +425,7 @@ class OPSDConfig(_BaseConfig):
         ),
         metadata={
             "help": "Template used to combine the student prompt and the ground-truth solution into the teacher "
-            "prompt. Must contain the `{prompt}` and `{solution}` placeholders."
+            "prompt. Must contain the `{prompt}` and `{privileged_context}` placeholders."
         },
     )
     teacher_chat_template_kwargs: dict[str, Any] | None = field(
@@ -449,8 +449,13 @@ class OPSDConfig(_BaseConfig):
                     "pointwise clip applies to per-vocabulary-entry divergences, which `sampled_token` does not "
                     "compute. Set `distillation_kl_clip=None`."
                 )
-        if "{prompt}" not in self.teacher_prompt_template or "{solution}" not in self.teacher_prompt_template:
-            raise ValueError("teacher_prompt_template must contain both `{prompt}` and `{solution}` placeholders")
+        if (
+            "{prompt}" not in self.teacher_prompt_template
+            or "{privileged_context}" not in self.teacher_prompt_template
+        ):
+            raise ValueError(
+                "teacher_prompt_template must contain both `{prompt}` and `{privileged_context}` placeholders"
+            )
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
             self.steps_per_generation = self.gradient_accumulation_steps

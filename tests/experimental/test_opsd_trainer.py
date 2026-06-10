@@ -71,7 +71,7 @@ class TestOPSDTrainer(TrlTestCase):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
-                "solution": [
+                "privileged_context": [
                     "Example answer: 4.",
                     "Example answer: Paris.",
                 ],
@@ -103,7 +103,7 @@ class TestOPSDTrainer(TrlTestCase):
     @require_liger_kernel
     @require_torch_accelerator
     def test_liger_loss_matches_non_liger_loss(self):
-        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."], "solution": ["Example answer: 4."]})
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."], "privileged_context": ["Example answer: 4."]})
         common = dict(
             output_dir=self.tmp_dir,
             report_to="none",
@@ -156,11 +156,11 @@ class TestOPSDTrainer(TrlTestCase):
             atol=1e-6,
         )
 
-    def test_train_rejects_none_solution(self):
+    def test_train_rejects_none_privileged_context(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2."],
-                "solution": [None],
+                "privileged_context": [None],
             }
         )
 
@@ -179,7 +179,7 @@ class TestOPSDTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        with pytest.raises(ValueError, match="`solution` must not be None"):
+        with pytest.raises(ValueError, match="`privileged_context` must not be None"):
             trainer.train()
 
     def test_train_with_chat_template_kwargs(self):
@@ -189,7 +189,7 @@ class TestOPSDTrainer(TrlTestCase):
                     [{"role": "user", "content": "Solve 2+2."}],
                     [{"role": "user", "content": "Solve 3+3."}],
                 ],
-                "solution": [
+                "privileged_context": [
                     "Teacher hint: answer with 4.",
                     "Teacher hint: answer with 6.",
                 ],
@@ -225,7 +225,7 @@ class TestOPSDTrainer(TrlTestCase):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
-                "solution": [
+                "privileged_context": [
                     "Example answer: 4.",
                     "Example answer: Paris.",
                 ],
@@ -264,7 +264,7 @@ class TestOPSDTrainer(TrlTestCase):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
-                "solution": [
+                "privileged_context": [
                     "Example answer: 4.",
                     "Example answer: Paris.",
                 ],
@@ -304,7 +304,7 @@ class TestOPSDTrainer(TrlTestCase):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
-                "solution": [
+                "privileged_context": [
                     "Example answer: 4.",
                     "Example answer: 6.",
                 ],
@@ -339,7 +339,7 @@ class TestOPSDTrainer(TrlTestCase):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
-                "solution": [
+                "privileged_context": [
                     "Example answer: 4.",
                     "Example answer: 6.",
                 ],
@@ -436,7 +436,7 @@ class TestOPSDTeacherPrompt(TrlTestCase):
         dataset = Dataset.from_dict(
             {
                 "prompt": [[{"role": "user", "content": "Solve 2+2."}]],
-                "solution": ["The answer is 4."],
+                "privileged_context": ["The answer is 4."],
             }
         )
         training_args = OPSDConfig(

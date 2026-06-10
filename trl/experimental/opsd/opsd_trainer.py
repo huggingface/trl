@@ -137,39 +137,42 @@ def _extract_last_user_text(messages: list[dict[str, Any]]) -> str:
 
 
 class SolutionTeacherContextBuilder:
-    """Builds teacher contexts from student prompts plus the ground-truth solution"""
+    """Builds teacher contexts from student prompts plus the privileged ground-truth solution"""
 
     def __init__(self, trainer):
         self.trainer = trainer
 
-    def _stringify_solution(self, solution: Any) -> str:
-        if solution is None:
-            raise ValueError("`solution` must not be None for self-distillation teacher prompt construction.")
-        if isinstance(solution, str):
-            return solution
-        return str(solution)
+    def _stringify_privileged_context(self, privileged_context: Any) -> str:
+        if privileged_context is None:
+            raise ValueError(
+                "`privileged_context` must not be None for self-distillation teacher prompt construction."
+            )
+        if isinstance(privileged_context, str):
+            return privileged_context
+        return str(privileged_context)
 
-    def _compose_teacher_prompt(self, prompt: Any, solution: Any) -> Any:
-        solution_text = self._stringify_solution(solution)
+    def _compose_teacher_prompt(self, prompt: Any, privileged_context: Any) -> Any:
+        privileged_text = self._stringify_privileged_context(privileged_context)
         if isinstance(prompt, list):
             system_messages = prompt[:-1]
             prompt_text = _extract_last_user_text(prompt)
             teacher_text = self.trainer.args.teacher_prompt_template.format(
                 prompt=prompt_text,
-                solution=solution_text,
+                privileged_context=privileged_text,
             )
             return system_messages + [{"role": "user", "content": teacher_text}]
-        return self.trainer.args.teacher_prompt_template.format(prompt=prompt, solution=solution_text)
+        return self.trainer.args.teacher_prompt_template.format(prompt=prompt, privileged_context=privileged_text)
 
     def build(
         self,
         prompts: list[Any],
-        solutions: list[Any],
+        privileged_contexts: list[Any],
         completion_ids: torch.Tensor,
         completion_mask: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         teacher_prompts = [
-            self._compose_teacher_prompt(prompt, solution) for prompt, solution in zip(prompts, solutions, strict=True)
+            self._compose_teacher_prompt(prompt, privileged_context)
+            for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
         ]
         teacher_prompt_ids_list = self.trainer._tokenize_prompts(
             teacher_prompts, chat_template_kwargs=self.trainer.teacher_chat_template_kwargs
@@ -456,7 +459,7 @@ class OPSDTrainer(_BaseTrainer):
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:
-            self._signature_columns = ["prompt", "solution"]
+            self._signature_columns = ["prompt", "privileged_context"]
 
     def _dispatch_self_distillation_callback(self, event_name: str, **payload) -> None:
         for callback in self.callback_handler.callbacks:
@@ -631,10 +634,10 @@ class OPSDTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         self._record_completion_metrics(mode, batch)
         prompts = [example["prompt"] for example in inputs]
-        solutions = [example.get("solution") for example in inputs]
+        privileged_contexts = [example.get("privileged_context") for example in inputs]
         teacher_batch = self.teacher_context_builder.build(
             prompts,
-            solutions,
+            privileged_contexts,
             batch["completion_ids"],
             batch["completion_mask"],
         )

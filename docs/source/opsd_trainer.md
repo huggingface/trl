@@ -6,7 +6,7 @@ On-Policy Self-Distillation (OPSD) was introduced in [Self-Distilled Reasoner: O
 
 ## How it works
 
-For each problem the student samples its own completion. The teacher, which is the same network conditioned on the problem plus the ground-truth `solution` (wrapped in the `teacher_prompt_template`), then scores that completion token by token, and the divergence between the two next-token distributions is minimized along the student trajectory. Gradients flow only through the student logits; the teacher acts as a fixed supervision target.
+For each problem the student samples its own completion. The teacher, which is the same network conditioned on the problem plus the ground-truth solution from the `privileged_context` column (wrapped in the `teacher_prompt_template`), then scores that completion token by token, and the divergence between the two next-token distributions is minimized along the student trajectory. Gradients flow only through the student logits; the teacher acts as a fixed supervision target.
 
 ## Loss modes and clipping
 
@@ -30,7 +30,7 @@ from trl.experimental.opsd import OPSDConfig, OPSDTrainer
 dataset = Dataset.from_dict(
     {
         "prompt": [[{"role": "user", "content": "Solve 2+2."}]],
-        "solution": ["The answer is 4."],
+        "privileged_context": ["The answer is 4."],
     }
 )
 
@@ -52,7 +52,7 @@ trainer.train()
 Each example must provide:
 
 - `prompt`: the student-facing problem
-- `solution`: the ground-truth solution, shown only to the teacher
+- `privileged_context`: the ground-truth solution, shown only to the teacher (the same contract as the SDFT and SDPO trainers)
 
 ## Serving the teacher from the vLLM server
 
@@ -87,7 +87,7 @@ The trainer emits a small set of callback hooks that are useful for debugging, o
 
 ## Example script
 
-Use [`trl/experimental/opsd/opsd.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/opsd/opsd.py) to launch OPSD training from the command line. It maps gsm8k-style `question`/`answer` or `problem`/`solution` columns automatically and supports PEFT/LoRA via the standard `ModelConfig` flags.
+Use [`trl/experimental/opsd/opsd.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/opsd/opsd.py) to launch OPSD training from the command line. It maps gsm8k-style `question`/`answer` or `problem`/`solution` columns automatically (use `--solution_column` for other names) and supports PEFT/LoRA via the standard `ModelConfig` flags.
 
 ```bash
 accelerate launch trl/experimental/opsd/opsd.py \

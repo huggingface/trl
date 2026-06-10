@@ -17,8 +17,9 @@ Train a model with On-Policy Self-Distillation (OPSD).
 
 The dataset must provide a problem and its ground-truth solution. Each example needs either:
 
-- `prompt` and `solution` columns, or
-- gsm8k-style `question`/`problem` and `answer`/`solution` columns, which are mapped automatically.
+- `prompt` and `privileged_context` columns (the shared self-distillation contract), or
+- gsm8k-style `question`/`problem` and `answer`/`solution` columns, which are mapped automatically. Use
+  `--solution_column` to pick a differently named solution column.
 
 Example (mirrors the official Qwen3-1.7B configuration):
 
@@ -75,9 +76,13 @@ class OPSDScriptArguments(ScriptArguments):
         default=8,
         metadata={"help": "Number of prompts to log during evaluation. Set to 0 to disable completion logging."},
     )
+    solution_column: str = field(
+        default="solution",
+        metadata={"help": "Dataset column holding the ground-truth solution, forwarded as `privileged_context`."},
+    )
 
 
-def _to_opsd_example(example: dict[str, Any]) -> dict[str, Any]:
+def _to_opsd_example(example: dict[str, Any], solution_column: str) -> dict[str, Any]:
     prompt = example.get("prompt")
     if prompt is None and "problem" in example:
         prompt = [{"role": "user", "content": example["problem"]}]
@@ -86,17 +91,21 @@ def _to_opsd_example(example: dict[str, Any]) -> dict[str, Any]:
     if prompt is None:
         raise ValueError("Each example must provide one of: `prompt`, `problem`, or `question`.")
 
-    solution = example.get("solution")
+    solution = example.get("privileged_context")
+    if solution is None:
+        solution = example.get(solution_column)
     if solution is None and "answer" in example:
         solution = example["answer"]
     if solution is None:
-        raise ValueError("Each example must provide one of: `solution` or `answer`.")
+        raise ValueError(f"Each example must provide one of: `privileged_context`, `{solution_column}`, or `answer`.")
 
-    return {"prompt": prompt, "solution": solution}
+    return {"prompt": prompt, "privileged_context": solution}
 
 
-def _prepare_split(dataset):
-    return dataset.map(_to_opsd_example, remove_columns=dataset.column_names)
+def _prepare_split(dataset, solution_column: str):
+    return dataset.map(
+        _to_opsd_example, fn_kwargs={"solution_column": solution_column}, remove_columns=dataset.column_names
+    )
 
 
 if __name__ == "__main__":
@@ -148,10 +157,10 @@ if __name__ == "__main__":
     if not isinstance(dataset, DatasetDict):
         raise ValueError("OPSD example expects a dataset with named splits.")
 
-    train_dataset = _prepare_split(dataset[script_args.dataset_train_split])
+    train_dataset = _prepare_split(dataset[script_args.dataset_train_split], script_args.solution_column)
     eval_dataset = None
     if training_args.eval_strategy != "no" and script_args.dataset_test_split in dataset:
-        eval_dataset = _prepare_split(dataset[script_args.dataset_test_split])
+        eval_dataset = _prepare_split(dataset[script_args.dataset_test_split], script_args.solution_column)
 
     model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
     model.config.use_cache = False if training_args.gradient_checkpointing else True
