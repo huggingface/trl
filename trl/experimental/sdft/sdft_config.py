@@ -166,8 +166,6 @@ class SDFTConfig(_BaseConfig):
 
         > Parameters that control the training
 
-        loss_type (`str`, *optional*, defaults to `"grpo"`):
-            Policy loss aggregation. Supported: `grpo`, `bnpo`, `dr_grpo`, `dapo`.
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
         generation_batch_size (`int`, *optional*):
