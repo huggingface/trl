@@ -101,46 +101,59 @@ class PEFTAdapterEMACallback(TrainerCallback):
         self.teacher_adapter_config = None
         self._initialized = False
 
-    def _get_student_state_dict(self):
-        """Get student adapter state dict using PEFT keys (without adapter name)."""
-        from peft import get_peft_model_state_dict
+    def _unwrapped_model(self):
+        return self.accelerator.unwrap_model(self.model) if self.accelerator is not None else self.model
 
-        if self.accelerator is not None:
-            model = self.accelerator.unwrap_model(self.model)
-        else:
-            model = self.model
-        return get_peft_model_state_dict(model)
+    def _get_student_state_dict(self):
+        """Student adapter state with full (unsharded) tensors, keyed without the adapter name."""
+        from peft import get_peft_model_state_dict
+        from peft.utils.integrations import gather_params_ctx
+        from torch.distributed.tensor import DTensor
+
+        model = self._unwrapped_model()
+        trainable_params = [p for p in model.parameters() if p.requires_grad]
+        # ZeRO-3 shards every parameter, so gather before reading; FSDP2 hands back DTensors, so materialize them.
+        with gather_params_ctx(trainable_params, modifier_rank=None):
+            state = get_peft_model_state_dict(model)
+            return {k: (v.full_tensor() if isinstance(v, DTensor) else v).detach().clone() for k, v in state.items()}
+
+    @torch.no_grad()
+    def _write_teacher_weights(self, model):
+        """Copy the shadow weights into the teacher adapter, re-sharding when the target is sharded."""
+        from peft.utils.integrations import gather_params_ctx
+        from torch.distributed.tensor import DTensor, distribute_tensor
+
+        infix = f".{self.teacher_adapter_name}."
+        targets = [(name, param) for name, param in model.named_parameters() if infix in name]
+        # Under ZeRO-3 the teacher parameters are sharded too: gather them, write the full values (identical on
+        # every rank), and let DeepSpeed re-partition on exit.
+        with gather_params_ctx([param for _, param in targets], modifier_rank=0):
+            for name, param in targets:
+                shadow = self.shadow_weights.get(name.replace(infix, "."))
+                if shadow is None:
+                    continue
+                value = shadow.to(device=param.device, dtype=param.dtype)
+                if isinstance(param.data, DTensor):
+                    value = distribute_tensor(value, param.data.device_mesh, param.data.placements)
+                param.data.copy_(value)
 
     def _initialize_teacher_adapter(self):
-        """Create teacher adapter with zero weights initialized from student adapter."""
-        from peft import get_peft_model_state_dict, set_peft_model_state_dict
-
+        """Create the zero-initialized teacher adapter and its full-tensor shadow weights."""
         if self._initialized:
             return
 
-        if self.accelerator is not None:
-            model = self.accelerator.unwrap_model(self.model)
-        else:
-            model = self.model
-
+        model = self._unwrapped_model()
         adapter_name = model.active_adapter
         if adapter_name is None:
             adapter_name = "default"
-
         self.teacher_adapter_config = model.peft_config.get(adapter_name)
 
-        student_state = get_peft_model_state_dict(model)
+        student_state = self._get_student_state_dict()
+        self.shadow_weights = {k: torch.zeros_like(v) for k, v in student_state.items()}
 
-        teacher_state = {k: torch.zeros_like(v) for k, v in student_state.items()}
-
-        model.add_adapter(self.teacher_adapter_name, self.teacher_adapter_config)
-
-        model.set_adapter(self.teacher_adapter_name)
-        set_peft_model_state_dict(model, teacher_state, adapter_name=self.teacher_adapter_name)
-
-        model.set_adapter(adapter_name)
-
-        self.shadow_weights = {k: v.clone().zero_() for k, v in teacher_state.items()}
+        if self.teacher_adapter_name not in model.peft_config:
+            model.add_adapter(self.teacher_adapter_name, self.teacher_adapter_config)
+        self._write_teacher_weights(model)
 
         self._initialized = True
         logger.info(f"Initialized PEFT adapter EMA teacher with adapter name: {self.teacher_adapter_name}")
@@ -160,23 +173,12 @@ class PEFTAdapterEMACallback(TrainerCallback):
             self.accelerator = kwargs["accelerator"]
 
         student_state = self._get_student_state_dict()
-
         for key, student_param in student_state.items():
-            if key in self.shadow_weights:
-                shadow = self.shadow_weights[key]
-                shadow.data = (1 - self.update_rate) * shadow.data + self.update_rate * student_param.data
+            shadow = self.shadow_weights.get(key)
+            if shadow is not None:
+                shadow.mul_(1 - self.update_rate).add_(student_param, alpha=self.update_rate)
 
-        from peft import set_peft_model_state_dict
-
-        if self.accelerator is not None:
-            unwrapped_model = self.accelerator.unwrap_model(self.model)
-        else:
-            unwrapped_model = self.model
-
-        original_adapter = unwrapped_model.active_adapter
-        unwrapped_model.set_adapter(self.teacher_adapter_name)
-        set_peft_model_state_dict(unwrapped_model, self.shadow_weights, adapter_name=self.teacher_adapter_name)
-        unwrapped_model.set_adapter(original_adapter)
+        self._write_teacher_weights(self._unwrapped_model())
 
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         if self.accelerator is None and "accelerator" in kwargs:

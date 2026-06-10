@@ -54,7 +54,7 @@ from ...trainer.utils import (
     split_tensor_dict,
     use_adapter,
 )
-from ..teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
+from ..callbacks import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 from ..utils import prepare_peft_model
 from .loss_utils import (
     add_tail_bucket,
@@ -277,6 +277,12 @@ class OPSDTrainer(_BaseTrainer):
                 )
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
+
+        # The EMA teacher adapter must exist before accelerate/DeepSpeed wraps the model: ZeRO-3 registers every
+        # module exactly once at initialization and cannot adopt modules added afterwards.
+        if args.teacher_model_kind == "ema" and is_peft_model(model) and is_pure_lora_training(model):
+            active_adapter = model.active_adapter or "default"
+            model.add_adapter("teacher", model.peft_config[active_adapter])
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
