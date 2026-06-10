@@ -23,7 +23,7 @@ from transformers import (
     TrainingArguments,
 )
 
-from ...trainer.callbacks import SyncRefModelCallback
+from ..trainer.callbacks import SyncRefModelCallback
 
 
 logger = logging.getLogger(__name__)
