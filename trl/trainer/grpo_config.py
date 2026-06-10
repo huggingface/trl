@@ -1005,11 +1005,11 @@ class GRPOConfig(_BaseConfig):
         if (
             self.vllm_importance_sampling_clip_min is not None
             and self.vllm_importance_sampling_clip_max is not None
-            and self.vllm_importance_sampling_clip_min > self.vllm_importance_sampling_clip_max
+            and self.vllm_importance_sampling_clip_min >= self.vllm_importance_sampling_clip_max
         ):
             raise ValueError(
-                f"vllm_importance_sampling_clip_min ({self.vllm_importance_sampling_clip_min}) must be less than or "
-                f"equal to vllm_importance_sampling_clip_max ({self.vllm_importance_sampling_clip_max})."
+                f"vllm_importance_sampling_clip_min ({self.vllm_importance_sampling_clip_min}) must be less than "
+                f"vllm_importance_sampling_clip_max ({self.vllm_importance_sampling_clip_max})."
             )
 
         if (
