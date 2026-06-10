@@ -139,7 +139,7 @@ TRL's [`GRPOTrainer`] supports interactive environment training through the `env
 Your environment class must follow these rules:
 
 - **`__init__(self)`** *(optional)*: If provided, must take no arguments. Use it to initialize state or clients. If you need external configuration (e.g., a URL), capture it from the enclosing scope or module-level variables.
-- **`reset(self, **kwargs)`**: Called at the start of each episode. Receives all dataset columns as keyword arguments. Return a string observation (or `None` for no initial observation).
+- **`reset`**`(self, **kwargs)`: Called at the start of each episode. Receives all dataset columns as keyword arguments. Return a string observation (or `None` for no initial observation).
 - **Tool methods**: Any public method (not starting with `_`) other than `reset` is automatically exposed as a tool. Each tool method must have a docstring with `Args:` descriptions, since the trainer uses these to generate the tool schema for the model.
 
 ### Tips for environment classes
