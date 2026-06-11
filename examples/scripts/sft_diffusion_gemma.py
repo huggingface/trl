@@ -189,6 +189,10 @@ def main(script_args, training_args, model_args):
         )
     else:
         peft_config = None
+        # The reference recipe keeps the MoE router frozen during full fine-tuning
+        for name, param in model.named_parameters():
+            if ".router." in name:
+                param.requires_grad_(False)
 
     dataset = load_dataset(script_args.dataset_name, script_args.dataset_config, split=script_args.dataset_train_split)
 
