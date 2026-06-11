@@ -1360,7 +1360,14 @@ class GRPOTrainer(_BaseTrainer):
                     # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
                     for k, v in tokenized.items():
                         if k not in ("input_ids", "attention_mask"):
-                            multimodal_fields.setdefault(k, []).append(v[0])
+                            multimodal_fields.setdefault(k, []).append(v)
+                # Merge the per-prompt fields so the result matches the single batched `apply_chat_template` call used
+                # when there are no environments: image fields (pixel_values, image_grid_thw, ...) are flattened over
+                # patches/images and concatenated; per-token fields (e.g. token_type_ids) stay batched per prompt.
+                multimodal_fields = {
+                    k: torch.cat(v) if isinstance(v[0], torch.Tensor) else [row for prompt_v in v for row in prompt_v]
+                    for k, v in multimodal_fields.items()
+                }
                 return prompt_ids, images, multimodal_fields
 
             # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
