@@ -1582,6 +1582,7 @@ class GOLDTrainer(SFTTrainer):
         temperature=1.0,
         reduction="batchmean",
         logits_are_probs=False,
+        num_items_in_batch=None,
     ):
         """
         Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div. See Eq. (1)
@@ -1644,6 +1645,12 @@ class GOLDTrainer(SFTTrainer):
             jsd = jsd[mask]
 
         # Apply reduction
+        if num_items_in_batch is not None:
+            # Normalize by the global number of valid tokens for gradient-accumulation-correct loss (see issue #4719).
+            jsd_sum = jsd.sum()
+            if isinstance(num_items_in_batch, torch.Tensor):
+                num_items_in_batch = num_items_in_batch.to(jsd_sum.device)
+            return jsd_sum / num_items_in_batch
         if reduction == "batchmean":
             # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
             # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
@@ -1739,6 +1746,14 @@ class GOLDTrainer(SFTTrainer):
                     teacher_bias=getattr(teacher_head, "bias", None),
                 )
 
+                # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we
+                # want the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
+                if num_items_in_batch is not None:
+                    num_valid_local = (true_labels != -100).sum().clamp_min(1)
+                    if isinstance(num_items_in_batch, torch.Tensor):
+                        num_items_in_batch = num_items_in_batch.to(loss.device)
+                    loss = loss * num_valid_local / num_items_in_batch
+
                 del student_hidden, teacher_hidden, true_labels
             else:
                 outputs_student = model(
@@ -1763,6 +1778,7 @@ class GOLDTrainer(SFTTrainer):
                     labels=shifted_labels,
                     beta=self.beta,
                     temperature=self.temperature,
+                    num_items_in_batch=num_items_in_batch,
                 )
 
         if self.use_uld_loss and self.teacher_tokenizer is not None:

@@ -224,7 +224,13 @@ class GKDTrainer(SFTTrainer):
 
     @staticmethod
     def generalized_jsd_loss(
-        student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0, reduction="batchmean"
+        student_logits,
+        teacher_logits,
+        labels=None,
+        beta=0.5,
+        temperature=1.0,
+        reduction="batchmean",
+        num_items_in_batch=None,
     ):
         """
         Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div. See Eq. (1)
@@ -284,6 +290,12 @@ class GKDTrainer(SFTTrainer):
             jsd = jsd[mask]
 
         # Apply reduction
+        if num_items_in_batch is not None:
+            # Normalize by the global number of valid tokens for gradient-accumulation-correct loss (see issue #4719).
+            jsd_sum = jsd.sum()
+            if isinstance(num_items_in_batch, torch.Tensor):
+                num_items_in_batch = num_items_in_batch.to(jsd_sum.device)
+            return jsd_sum / num_items_in_batch
         if reduction == "batchmean":
             # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
             # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
@@ -354,6 +366,14 @@ class GKDTrainer(SFTTrainer):
                 teacher_bias=getattr(teacher_head, "bias", None),
             )
 
+            # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we want
+            # the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
+            if num_items_in_batch is not None:
+                num_valid_local = (true_labels != -100).sum().clamp_min(1)
+                if isinstance(num_items_in_batch, torch.Tensor):
+                    num_items_in_batch = num_items_in_batch.to(loss.device)
+                loss = loss * num_valid_local / num_items_in_batch
+
             # Release hidden states after loss computation
             del student_hidden, teacher_hidden, true_labels
             empty_cache()
@@ -388,6 +408,7 @@ class GKDTrainer(SFTTrainer):
                 teacher_logits=shifted_teacher_logits,
                 labels=shifted_labels,
                 beta=self.beta,
+                num_items_in_batch=num_items_in_batch,
             )
 
         # empty cache

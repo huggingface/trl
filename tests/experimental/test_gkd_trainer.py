@@ -359,3 +359,90 @@ class TestGKDTrainer(TrlTestCase):
             rtol=2e-2,
             atol=1e-6,
         )
+
+    def test_loss_normalizes_by_num_items_in_batch(self):
+        # When `num_items_in_batch` is passed (as under gradient accumulation), the loss must be the JSD summed over
+        # valid tokens divided by that global count, rather than the local per-microbatch mean. See issue #4719.
+        common = dict(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_length=64,
+            use_cpu=True,
+            bf16=False,
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train").select(
+            range(2)
+        )
+        trainer = GKDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=GKDConfig(use_liger_kernel=False, **common),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        # Diverge the teacher from the student so JSD is well above fp noise (else the loss is identically 0).
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
+        device = next(trainer.model.parameters()).device
+        batch = trainer.data_collator([trainer.train_dataset[i] for i in range(2)])
+        batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
+
+        # Number of valid (non-ignored) tokens in the local batch, sliced the same way `compute_loss` does.
+        prompt_lengths = batch["prompts"].shape[1]
+        num_valid = (batch["labels"][:, prompt_lengths:] != -100).sum()
+
+        trainer.model.eval()
+        with torch.no_grad():
+            loss_mean = trainer.compute_loss(trainer.model, batch)  # num_items_in_batch=None -> local mean
+            loss_global = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid)
+
+        # With num_items_in_batch equal to the local valid-token count, sum/N equals the local mean.
+        torch.testing.assert_close(loss_global, loss_mean, rtol=1e-4, atol=1e-6)
+
+        # Passing a different global count rescales the loss exactly by num_valid / num_items_in_batch. This is the
+        # gradient-accumulation-correct behavior: a microbatch contributes its token-sum divided by the *global* count.
+        loss_double = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid * 2)
+        torch.testing.assert_close(loss_double, loss_mean / 2, rtol=1e-4, atol=1e-6)
+
+    @require_liger_kernel
+    @require_torch_accelerator
+    def test_liger_loss_normalizes_by_num_items_in_batch(self):
+        # The Liger fused JSD path normalizes by the local valid-token count internally; passing num_items_in_batch
+        # must rescale it to the global count (see issue #4719). Mirrors the non-Liger test on the Liger path.
+        common = dict(output_dir=self.tmp_dir, report_to="none", per_device_train_batch_size=2, max_length=64)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train").select(
+            range(2)
+        )
+        trainer = GKDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=GKDConfig(use_liger_kernel=True, **common),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+        if not getattr(trainer, "use_liger_gkd_loss", False):
+            pytest.skip("Liger fused JSD not enabled at runtime; skipping fused-loss assertion")
+
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
+        device = next(trainer.model.parameters()).device
+        batch = trainer.data_collator([trainer.train_dataset[i] for i in range(2)])
+        batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
+
+        trainer.model.eval()
+        with torch.no_grad():
+            loss_mean = trainer.compute_loss(trainer.model, batch)  # num_items_in_batch=None -> local mean
+            loss_k = trainer.compute_loss(trainer.model, batch, num_items_in_batch=100)
+            loss_2k = trainer.compute_loss(trainer.model, batch, num_items_in_batch=200)
+
+        # Doubling the global count exactly halves the loss; the rescaled loss differs from the local mean.
+        torch.testing.assert_close(loss_2k, loss_k / 2, rtol=1e-4, atol=1e-6)
+        assert not torch.allclose(loss_k, loss_mean)
