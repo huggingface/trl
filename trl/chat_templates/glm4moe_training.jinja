@@ -4,6 +4,10 @@
       Always check for both tags to avoid edge cases where the model generates only one tag.
     - Added {% generation %} / {% endgeneration %} around assistant message output to support
       assistant-only loss masking in SFT training.
+    - The role marker of the message following an assistant turn (<|user|>/<|observation|>/...) is the
+      inference-time stop token that closes the turn, so it is emitted inside the assistant's generation
+      block (and suppressed at the start of the following message) to include it in the loss mask. The
+      rendered text is unchanged.
 -#}
 [gMASK]<sop>
 {%- if tools -%}
@@ -49,7 +53,8 @@ For each function call, output the function name and arguments within the follow
     {%- endif %}
 {%- endfor %}
 {% for m in messages %}
-{%- if m.role == 'user' -%}<|user|>
+{%- if m.role == 'user' -%}
+{{- '<|user|>' if loop.first or messages[loop.index0 - 1].role != 'assistant' }}
 {{ visible_text(m.content) }}
 {{- '/nothink' if (enable_thinking is defined and not enable_thinking and not visible_text(m.content).endswith("/nothink")) else '' -}}
 {%- elif m.role == 'assistant' -%}
@@ -86,24 +91,28 @@ For each function call, output the function name and arguments within the follow
 {% endfor %}
 </tool_call>{% endfor %}
 {% endif %}
+{%- if not loop.last and messages[loop.index0 + 1].role != 'assistant' %}
+{%- set next_role = messages[loop.index0 + 1].role %}
+{{- '<|user|>' if next_role == 'user' else '<|observation|>' if next_role == 'tool' else '<|system|>' }}
+{%- endif %}
 {%- endgeneration %}
 {%- elif m.role == 'tool' -%}
 {%- if m.content is string -%}
-{%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
+{%- if loop.first or (messages[loop.index0 - 1].role not in ["tool", "assistant"]) %}
     {{- '<|observation|>' }}
 {%- endif %}
 {{- '\n<tool_response>\n' }}
 {{- m.content }}
 {{- '\n</tool_response>' }}
 {%- else -%}
-<|observation|>{% for tr in m.content %}
+{{- '<|observation|>' if loop.first or messages[loop.index0 - 1].role != 'assistant' }}{% for tr in m.content %}
 
 <tool_response>
 {{ tr.output if tr.output is defined else tr }}
 </tool_response>{% endfor -%}
 {% endif -%}
 {%- elif m.role == 'system' -%}
-<|system|>
+{{- '<|system|>' if loop.first or messages[loop.index0 - 1].role != 'assistant' }}
 {{ visible_text(m.content) }}
 {%- endif -%}
 {%- endfor -%}
