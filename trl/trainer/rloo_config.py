@@ -68,11 +68,11 @@ class RLOOConfig(_BaseConfig):
 
         > Parameters that control generation
 
-        generation_batch_size: (`int`, *optional*):
+        generation_batch_size (`int`, *optional*):
             Batch size to use for generation. If `None`, it defaults to the effective training batch size:
             `per_device_train_batch_size * num_processes * steps_per_generation`. In other words, there is one
             generation batch processed per optimization step. Mutually exclusive with `steps_per_generation`.
-        steps_per_generation: (`int`, *optional*):
+        steps_per_generation (`int`, *optional*):
             Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive
             with `generation_batch_size`.
         temperature (`float`, defaults to `1.0`):

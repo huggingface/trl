@@ -48,6 +48,18 @@ class SelfDistillationCaptureCallback(TrainerCallback):
         self.generation_batch_build_count += 1
 
 
+class RecordingTeacherClient:
+    """Stands in for the vLLM server client and records scoring requests."""
+
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def get_sequence_logprobs(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+
 class TestSDFTTrainer(TrlTestCase):
     @staticmethod
     def _trainable_param_snapshot(model):
@@ -134,7 +146,6 @@ class TestSDFTTrainer(TrlTestCase):
             "completion_mask": torch.tensor([[1, 1, 0], [1, 1, 1]], device=device),
             "teacher_input_ids": torch.tensor([[20, 21, 22, 14, 15, 16], [23, 24, 25, 17, 18, 19]], device=device),
             "teacher_attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]], device=device),
-            "self_distillation_mask": torch.tensor([1.0, 0.0], device=device),
         }
 
         ref_trainer.model.eval()
@@ -440,3 +451,51 @@ class TestSDFTTrainer(TrlTestCase):
         trainer.train()
 
         assert capture_callback.generation_batch_build_count == 1
+
+    def test_server_loss_finite_with_masked_and_padded_rows(self):
+        # Drives the teacher-server path through `compute_loss` with a fake server client: row 0 is fully masked
+        # (zero-length scored completion) and row 1 has a shorter completion than the padded batch, so the client
+        # response is ragged and the padded tail comes back as -inf. Neither may leak NaN or inf.
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."], "privileged_context": ["Example answer: 4."]})
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            max_completion_length=3,
+            num_generations=1,
+            distillation_mode="topk_logits",
+            distillation_topk=2,
+            distillation_alpha=0.5,
+            distillation_add_tail=True,
+            distillation_is_clip=None,
+            report_to="none",
+        )
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.use_teacher_server = True
+        trainer.teacher_client = RecordingTeacherClient(
+            {
+                "actual_logprobs": [[], [[-1.1], [-0.4]]],
+                "logprobs": [[], [[-1.1, -1.5], [-0.4, -0.9]]],
+                "logprob_token_ids": [[], [[14, 15], [16, 17]]],
+            }
+        )
+
+        device = next(trainer.model.parameters()).device
+        batch = {
+            "prompt_ids": torch.tensor([[10, 11], [12, 13]], device=device),
+            "prompt_mask": torch.tensor([[1, 1], [1, 1]], device=device),
+            "completion_ids": torch.tensor([[14, 15, 16], [17, 18, 19]], device=device),
+            "completion_mask": torch.tensor([[0, 0, 0], [1, 1, 0]], device=device),
+            "teacher_input_ids": torch.tensor([[20, 21, 22, 14, 15, 16], [23, 24, 25, 17, 18, 19]], device=device),
+            "teacher_attention_mask": torch.tensor([[1, 1, 1, 0, 0, 0], [1, 1, 1, 1, 1, 0]], device=device),
+        }
+
+        loss = trainer.compute_loss(trainer.model, batch)
+
+        assert torch.isfinite(loss)
+        loss.backward()
+        assert all(torch.isfinite(p.grad).all() for p in trainer.model.parameters() if p.grad is not None)
+        assert trainer.teacher_client.calls[0]["top_logprobs"] == 2

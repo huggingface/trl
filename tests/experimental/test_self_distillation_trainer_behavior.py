@@ -285,8 +285,7 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         teacher_probs = torch.tensor([[[0.5, 0.5], [0.99, 0.01]]], dtype=torch.float32)
         distillation_logits = SimpleNamespace(
             completion_ids=torch.tensor([[0, 1]], dtype=torch.long),
-            completion_mask=torch.tensor([[1, 1]], dtype=torch.long),
-            response_mask=torch.tensor([[1, 0]], dtype=torch.long),
+            loss_mask=torch.tensor([[1, 0]], dtype=torch.long),
             student_logits=student_probs.log(),
             teacher_logits=teacher_probs.log(),
         )
@@ -313,8 +312,7 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
 
         distillation_logits = SimpleNamespace(
             completion_ids=torch.tensor([[0, 1]], dtype=torch.long),
-            completion_mask=torch.tensor([[1, 1]], dtype=torch.long),
-            response_mask=torch.tensor([[1, 1]], dtype=torch.long),
+            loss_mask=torch.tensor([[1, 1]], dtype=torch.long),
             student_logits=torch.log(torch.tensor([[[0.2, 0.8], [0.6, 0.4]]], dtype=torch.float32)),
             teacher_logits=torch.log(torch.tensor([[[0.5, 0.5], [0.5, 0.5]]], dtype=torch.float32)),
         )

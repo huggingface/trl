@@ -25,8 +25,8 @@ jobs:
         shell: bash
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
-        with: { ref: v1.5-release }
+        uses: actions/checkout@v6.0.2
+        with: { ref: v1.6-release }
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
