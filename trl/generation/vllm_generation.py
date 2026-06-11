@@ -32,6 +32,7 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
+from ..distributed import DistributedBackend
 from ..extras.profiling import ProfilingContext
 from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
@@ -118,8 +119,6 @@ class VLLMGeneration:
             Model to use for generation.
         accelerator ([`~accelerate.Accelerator`]):
             Accelerator for distributed training.
-        is_fsdp_enabled (`bool`):
-            Whether FSDP is enabled.
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
             Tokenizer or processor for the model.
 
@@ -224,7 +223,6 @@ class VLLMGeneration:
         self,
         model: "PreTrainedModel | PeftModel",
         accelerator: "Accelerator",
-        is_fsdp_enabled: bool,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         # vLLM configuration
         mode: str = "colocate",
@@ -254,7 +252,7 @@ class VLLMGeneration:
     ):
         self.model = model
         self.accelerator = accelerator
-        self.is_fsdp_enabled = is_fsdp_enabled
+        self._dist = DistributedBackend(accelerator)
         self.processing_class = processing_class
 
         # vLLM configuration
