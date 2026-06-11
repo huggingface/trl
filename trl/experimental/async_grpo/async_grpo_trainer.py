@@ -212,7 +212,7 @@ class DataCollatorForRollout(DataCollatorMixin):
             input_ids.append(torch.tensor(ids, dtype=torch.long))
             attention_mask.append(torch.ones(len(ids), dtype=torch.long))
             completion_mask.append(
-                torch.tensor([m for example in group for m in example["completion_mask"]], dtype=torch.float32)
+                torch.tensor([m for example in group for m in example["completion_mask"]], dtype=torch.long)
             )
             old_log_probs.append(
                 torch.tensor([lp for example in group for lp in example["old_log_probs"]], dtype=torch.float32)
@@ -225,7 +225,7 @@ class DataCollatorForRollout(DataCollatorMixin):
         input_ids = pad(input_ids, padding_value=self.pad_token_id)
         attention_mask = pad(attention_mask, padding_value=0)
         completion_mask = pad(completion_mask, padding_value=0)
-        old_log_probs = pad(old_log_probs, padding_value=0)
+        old_log_probs = pad(old_log_probs, padding_value=0.0)
         position_ids = pad(position_ids, padding_value=0)
         advantages = pad(advantages, padding_value=0.0)
 
