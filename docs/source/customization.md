@@ -5,6 +5,13 @@ TRL is designed with modularity in mind so that users are able to efficiently cu
 > [!NOTE]
 > Although these examples use the [`DPOTrainer`], these customization methods apply to most (if not all) trainers in TRL.
 
+> [!NOTE]
+> [Since Transformers v5](https://github.com/huggingface/transformers/pull/42805), `from_pretrained` infers the dtype from the model's config (e.g., `bfloat16`) instead of
+> defaulting to `float32`. When you load a model, pass `dtype` explicitly if you need a specific
+> precision.  
+> When TRL handles model loading (i.e., you pass a model name string to the trainer), it defaults to
+> `float32`.
+
 ## Use different optimizers and schedulers
 
 By default, the [`DPOTrainer`] creates a `torch.optim.AdamW` optimizer. You can create and define a different optimizer and pass it to [`DPOTrainer`] as follows:
