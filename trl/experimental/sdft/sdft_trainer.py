@@ -424,7 +424,6 @@ class SDFTTrainer(_BaseTrainer):
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
                 accelerator=self.accelerator,
-                is_fsdp_enabled=self.is_fsdp_enabled,
                 processing_class=self.processing_class,
                 mode=args.vllm_mode,
                 server_base_url=args.vllm_server_base_url,

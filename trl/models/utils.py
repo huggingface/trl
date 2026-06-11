@@ -138,7 +138,9 @@ def _unwrap_model_for_generation(
     is_gradient_checkpointing = unwrapped_model.is_gradient_checkpointing
     if is_gradient_checkpointing:
         unwrapped_model.gradient_checkpointing_disable()
-    if accelerator.state.deepspeed_plugin is not None and accelerator.state.deepspeed_plugin.zero_stage == 3:
+    from ..distributed import DistributedBackend
+
+    if DistributedBackend(accelerator).is_zero3:
         if not gather_deepspeed3_params:
             yield accelerator.unwrap_model(model)
         else:
