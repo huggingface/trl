@@ -55,6 +55,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --dataset_name openai/gsm8k \
     --dataset_config main \
     --use_peft \
+    --lora_dropout 0 \
     --learning_rate 1.5e-4 \
     --adam_beta1 0.95 \
     --adam_beta2 0.99 \
