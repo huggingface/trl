@@ -54,6 +54,7 @@ from .testing_utils import (
     require_peft,
     require_torch_accelerator,
     require_torch_multi_accelerator,
+    require_torchcodec,
     require_vision,
 )
 
@@ -1883,6 +1884,80 @@ class TestSFTTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2AudioForConditionalGeneration",
+            "trl-internal-testing/tiny-VoxtralForConditionalGeneration",
+        ],
+    )
+    @require_torchcodec
+    def test_train_audio(self, model_id):
+        dataset = load_dataset("trl-internal-testing/zen-audio", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # audio training is memory intensive
+            max_length=None,  # for audio LMs, truncating can remove audio tokens, leading to errors
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            # Qwen2-Audio's audio encoder positional embedding is frozen in `__init__`
+            # (`embed_positions.requires_grad_(False)`, Whisper-style sinusoidal). Pre-5.0 transformers preserves that
+            # through `from_pretrained` so the param stays frozen; transformers >= 5.0 (weight-loading refactor in
+            # #41580 + meta-init in #42941) resets `requires_grad=True` on load, so it ends up updated.
+            if n == "audio_tower.embed_positions.weight" and Version(transformers.__version__) < Version("5.0.0"):
+                assert torch.equal(param, new_param), f"Param {n} expected frozen pre-5.0, but changed"
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    @require_torchcodec
+    def test_train_audio_prompt_completion(self):
+        dataset = load_dataset("trl-internal-testing/zen-audio", "conversational_prompt_completion", split="train")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # audio training is memory intensive
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            max_length=None,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2AudioForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n == "audio_tower.embed_positions.weight":  # see test_train_audio for the version split
+                if Version(transformers.__version__) < Version("5.0.0"):
+                    assert torch.equal(param, new_param), f"Param {n} expected frozen pre-5.0, but changed"
+                else:
+                    assert not torch.equal(param, new_param), f"Param {n} expected updated on >=5.0, but unchanged"
+                continue
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     @require_peft
     def test_prompt_tuning(self):

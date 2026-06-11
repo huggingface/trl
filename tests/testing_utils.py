@@ -27,6 +27,7 @@ from transformers.utils import (
     is_peft_available,
     is_rich_available,
     is_torch_available,
+    is_torchcodec_available,
     is_vision_available,
 )
 
@@ -60,6 +61,7 @@ require_torch_accelerator = pytest.mark.skipif(
 require_torch_multi_accelerator = pytest.mark.skipif(
     not is_torch_available() or backend_device_count(torch_device) <= 1, reason="test requires multiple accelerators"
 )
+require_torchcodec = pytest.mark.skipif(not is_torchcodec_available(), reason="test requires torchcodec")
 require_vision = pytest.mark.skipif(not is_vision_available(), reason="test requires vision")
 require_vllm = pytest.mark.skipif(not is_vllm_available(), reason="test requires vllm")
 require_wandb = pytest.mark.skipif(not is_wandb_available(), reason="test requires wandb")
