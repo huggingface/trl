@@ -379,6 +379,13 @@ class VLLMGeneration:
             name = name.replace(prefix, "")
         return name
 
+    def _push_param_to_vllm(self, name: str, param) -> None:
+        """Push a single parameter tensor to the vLLM engine (server or colocate mode)."""
+        if self.mode == "server" and self.accelerator.is_main_process:
+            self.vllm_client.update_named_param(name, param)
+        elif self.mode == "colocate":
+            self.llm.llm_engine.model_executor.driver_worker.model_runner.model.load_weights([(name, param)])
+
     def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited: set[str] | None = None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
         # For FSDP1, we need to recurse into children and also use summon_full_params
