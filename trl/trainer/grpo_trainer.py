@@ -2048,9 +2048,9 @@ class GRPOTrainer(_BaseTrainer):
                 per_prompt_tools = [self.tools] * len(prompts)
             prompts_text = [
                 apply_chat_template(
-                    {"prompt": prompt}, self.processing_class, tools=prompt_tools, **self.chat_template_kwargs
+                    {"prompt": prompt}, self.processing_class, tools=tools, **self.chat_template_kwargs
                 )["prompt"]
-                for prompt, prompt_tools in zip(prompts, per_prompt_tools, strict=True)
+                for prompt, tools in zip(prompts, per_prompt_tools, strict=True)
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
             prompt_inputs = super()._prepare_inputs(prompt_inputs)
