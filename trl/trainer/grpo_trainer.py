@@ -616,6 +616,14 @@ class GRPOTrainer(_BaseTrainer):
                 "set to `'token'` (the default)."
             )
 
+        if args.importance_sampling_level == "sequence" and args.loss_type in ["bnpo", "dr_grpo", "dapo", "cispo"]:
+            logger.warning(
+                f"When using `importance_sampling_level='sequence'`, the `'{args.loss_type}'` loss sums per-token "
+                "contributions, which effectively weights each sequence by its completion length instead of "
+                "optimizing the per-sequence objective. To reproduce the GSPO paper's setup, set `loss_type='grpo'` "
+                "(see https://huggingface.co/docs/trl/main/en/paper_index#group-sequence-policy-optimization)."
+            )
+
         if self.loss_type == "vespo" and self.use_vllm and self.vllm_importance_sampling_correction:
             if self.vllm_importance_sampling_mode not in ["token_truncate", "token_mask"]:
                 raise ValueError(
