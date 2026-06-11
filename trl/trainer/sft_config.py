@@ -109,9 +109,7 @@ class SFTConfig(_BaseConfig):
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
               in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`. Under
               FSDP2, set `fsdp_reshard_after_forward false` in the accelerate config — the chunked path otherwise
-              re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time. The patched
-              `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level `lm_head`;
-              architectures with a non-standard head are not supported.
+              re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time.
 
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
@@ -306,7 +304,6 @@ class SFTConfig(_BaseConfig):
                 FutureWarning,
                 stacklevel=3,
             )
-            self.loss_type = "nll"
         if self.pad_token is not None:
             warnings.warn(
                 "`pad_token` is deprecated and will be removed in v2.0.0. "
