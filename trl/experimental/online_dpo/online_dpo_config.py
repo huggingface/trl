@@ -144,6 +144,9 @@ class OnlineDPOConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
+        reward_weights (`list[float]`, *optional*):
+            Weights for combining multiple reward functions. Must match the number of reward functions. If `None`, all
+            reward functions are equally weighted.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:

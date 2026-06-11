@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
 import warnings
 from pathlib import Path
 from typing import TypeVar
@@ -23,6 +24,14 @@ from .data_utils import prepare_multimodal_messages
 
 
 _CHAT_TEMPLATES_DIR = Path(__file__).parent / "chat_templates"
+
+
+def has_generation_markers(chat_template: str) -> bool:
+    """
+    Check whether the chat template defines `{% generation %}` markers, accounting for whitespace-trim variants such as
+    `{%- generation %}` and `{%- generation -%}`.
+    """
+    return re.search(r"\{%-?\s*generation\s*-?%\}", chat_template) is not None
 
 
 def clone_chat_template(
@@ -563,6 +572,75 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase
     return ids2[: len(ids1)] == ids1
 
 
+def is_chat_template_stop_token_trained(
+    processing_class: PreTrainedTokenizerBase | ProcessorMixin, chat_template: str | None = None
+) -> bool:
+    """
+    Check whether the chat template includes an assistant turn's end-of-turn token in the loss mask.
+
+    Prefix preservation guarantees that earlier turns render identically, but not that the token the model must emit to
+    *end* its turn is part of the loss. Some templates attribute an assistant turn's end-of-turn token to the message
+    that follows it, so when masking with `return_assistant_tokens_mask=True` that token falls outside the assistant
+    span and the model is never trained to stop. This renders an assistant turn followed by a user message and checks
+    that the assistant's masked span ends on an end-of-turn token rather than on content.
+
+    The template must define `{% generation %}` / `{% endgeneration %}` markers (see [`get_training_chat_template`]),
+    otherwise the assistant mask is empty and this returns `False`.
+
+    Args:
+        processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
+            Tokenizer or processor instance to check.
+        chat_template (`str`, *optional*):
+            Chat template to check. Defaults to the one attached to `processing_class`.
+
+    Returns:
+        `bool`:
+            `True` if the assistant turn's end-of-turn token is included in the loss mask, `False` otherwise.
+    """
+    # The assistant turn is followed by a user message because some templates never terminate the final assistant
+    # turn; the boundary with the next message is where the end-of-turn token must be attributed.
+    messages = [
+        {"role": "user", "content": "dummy"},
+        {"role": "assistant", "content": "dummy"},
+        {"role": "user", "content": "dummy"},
+    ]
+    is_vlm = isinstance(processing_class, ProcessorMixin)
+    if is_vlm:
+        # Probe without images: assistant masks are computed before multimodal token expansion and not re-aligned
+        # afterwards, so any image would zero or shift the mask regardless of what the template attributes.
+        for message in messages:
+            message["content"] = [{"type": "text", "text": message["content"]}]
+
+    try:
+        output = processing_class.apply_chat_template(
+            messages,
+            tokenize=True,
+            return_dict=True,
+            return_assistant_tokens_mask=True,
+            chat_template=chat_template,
+        )
+    except (TemplateError, TypeError, ValueError):
+        return False
+
+    input_ids = output["input_ids"]
+    assistant_masks = output["assistant_masks"]
+    if is_vlm:
+        input_ids = input_ids[0]
+        assistant_masks = assistant_masks[0]
+
+    # The model stops by emitting an end-of-turn token, which is part of the added vocabulary rather than produced by
+    # the base tokenizer's merges. Ignoring trailing whitespace, the last masked token must be that terminator; if it
+    # is plain content, the end-of-turn token was attributed to the following message and is never trained.
+    tokenizer = processing_class.tokenizer if is_vlm else processing_class
+    added_ids = set(tokenizer.get_added_vocab().values())
+    masked_ids = [token_id for token_id, masked in zip(input_ids, assistant_masks, strict=False) if masked]
+    for token_id in reversed(masked_ids):
+        if tokenizer.decode([token_id]).strip() == "":
+            continue
+        return token_id in added_ids
+    return False
+
+
 cohere_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere_training.jinja").read_text(encoding="utf-8")
 
 cohere2_training_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2_training.jinja").read_text(encoding="utf-8")
@@ -694,7 +772,7 @@ def get_training_chat_template(
     # First check if patching is needed. Prefix-preservation only matters when the template actually supports tools
     # (the check itself renders a tool message), so skip it otherwise.
     prefix_ok = not supports_tool_calling(processing_class) or is_chat_template_prefix_preserving(processing_class)
-    if prefix_ok and "{% generation %}" in processing_class.chat_template:
+    if prefix_ok and has_generation_markers(processing_class.chat_template):
         return None  # No patching needed
 
     if processing_class.chat_template == cohere_chat_template:

@@ -187,9 +187,11 @@ def _build(
     return CorrectnessConfig(name=name, method=method, args=args, num_processes=num_processes)
 
 
-# Equivalence classes: each maps to a `members` list and a tolerance pair. The first member is the canonical
-# config — it owns the class's reference snapshot and is the only one re-recorded under `--update-references`.
-# Every other member is asserted to match that snapshot.
+# Equivalence classes: each maps to a `members` list plus per-field `tol` (max |Δ|) and `residual_tol` (mean Δ)
+# dicts. The first member is the canonical config — it owns the class's reference snapshot and is the only one
+# re-recorded under `--update-references`. Every other member is asserted to match that snapshot.
+# Tuning tip: run `python tests/invariant/test_invariant.py <klass> --report` to see actual Δs and set tolerances
+# to ~1.5–2× the observed noise.
 EQUIVALENCE_CLASSES: dict[str, dict] = {
     "sft": {
         "tol": {"loss": 1e-3, "grad_norm": 1e-1},
@@ -199,6 +201,33 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
             _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
             _build("sft_no_grad_ckpt", "sft", SFT_DATASET, gradient_checkpointing=False),
             _build("sft_ddp2", "sft", SFT_DATASET, per_device_train_batch_size=4, num_processes=2),
+        ],
+    },
+    "sft_fa2": {
+        # Loss is much tighter than grad_norm under FA2+bf16 (grad_norm absorbs bf16 + FA varlen kernel noise).
+        # See https://github.com/huggingface/trl/pull/5842#issuecomment-4539190615
+        "tol": {"loss": 1.5e-2, "grad_norm": 1.0},
+        "residual_tol": {"loss": 1e-4, "grad_norm": 5e-2},
+        "members": [
+            _build(
+                "sft_fa2",
+                "sft",
+                SFT_DATASET,
+                attn="kernels-community/flash-attn2",  # to avoid cross-contamination between samples when padding_free=True
+                bf16=True,  # required for FA2 kernels, which are bfloat16-only
+                max_length=None,  # Required when padding_free=True
+                per_device_train_batch_size=2,
+            ),
+            _build(
+                "sft_fa2_padfree",
+                "sft",
+                SFT_DATASET,
+                attn="kernels-community/flash-attn2",  # to avoid cross-contamination between samples when padding_free=True
+                bf16=True,  # required for FA2 kernels, which are bfloat16-only
+                max_length=None,  # Required when padding_free=True
+                per_device_train_batch_size=2,
+                padding_free=True,
+            ),
         ],
     },
     "dpo": {
