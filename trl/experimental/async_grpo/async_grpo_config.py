@@ -86,7 +86,7 @@ class AsyncGRPOConfig(_BaseConfig):
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
-    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `logging_steps`: Defaults to `1` instead of `500`.
     > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
