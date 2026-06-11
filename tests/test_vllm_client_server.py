@@ -15,6 +15,7 @@
 import os
 import subprocess
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 from packaging.version import Version
@@ -69,6 +70,28 @@ class TestChunkList(TrlTestCase):
             [1, "two", 3.0],
             [{"four": 4}, ["f", "i", "v", "e"]],
         ]
+
+
+class TestVLLMClient(TrlTestCase):
+    def test_load_lora_adapter_posts_payload(self):
+        with patch.object(VLLMClient, "check_server"):
+            client = VLLMClient(base_url="http://localhost:8000", connection_timeout=0)
+        client.session.post = MagicMock(return_value=SimpleNamespace(status_code=200))
+
+        client.load_lora_adapter("trl_lora_adapter", "/tmp/adapter", load_inplace=True)
+
+        client.session.post.assert_called_once_with(
+            "http://localhost:8000/v1/load_lora_adapter",
+            json={"lora_name": "trl_lora_adapter", "lora_path": "/tmp/adapter", "load_inplace": True},
+        )
+
+    def test_load_lora_adapter_raises_on_failure(self):
+        with patch.object(VLLMClient, "check_server"):
+            client = VLLMClient(base_url="http://localhost:8000", connection_timeout=0)
+        client.session.post = MagicMock(return_value=SimpleNamespace(status_code=500, text="error"))
+
+        with pytest.raises(Exception, match="Request failed: 500, error"):
+            client.load_lora_adapter("trl_lora_adapter", "/tmp/adapter", load_inplace=True)
 
 
 class TestExtractLogprobs(TrlTestCase):

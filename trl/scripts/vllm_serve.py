@@ -463,9 +463,7 @@ def main(script_args: ScriptArguments):
         )
 
     if script_args.enable_lora and not is_vllm_available(min_version="0.15.0"):
-        raise ImportError(
-            "LoRA adapter loading in the vLLM serve script requires vLLM >= 0.15.0. "
-        )
+        raise ImportError("LoRA adapter loading in the vLLM serve script requires vLLM >= 0.15.0. ")
     elif not is_vllm_available():
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
