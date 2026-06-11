@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import itertools
+import multiprocessing as mp
 import queue
 
 import numpy as np
@@ -21,7 +22,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
+from trl.experimental.async_grpo.async_rollout_worker import RolloutSample, _AsyncRolloutLoop
 
 from ..testing_utils import TrlTestCase
 
@@ -128,3 +129,69 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+
+class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
+    """Unit tests for the rollout worker's environment/tool wiring (no vLLM required)."""
+
+    def _make_loop(self, environment_factory):
+        model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        # `_AsyncRolloutLoop.__init__` only sets up state (no vLLM connection / generation happens here).
+        return _AsyncRolloutLoop(
+            model_name=model_id,
+            dataset=dataset,
+            reward_funcs=[dummy_reward_func],
+            processing_class=AutoTokenizer.from_pretrained(model_id),
+            rollout_buffer=mp.Queue(),
+            model_version_value=mp.Value("i", 0),
+            heartbeat_value=mp.Value("d", 0.0),
+            failed_event=mp.Event(),
+            exception_info_queue=mp.Queue(),
+            environment_factory=environment_factory,
+            num_generations=2,
+            max_inflight_tasks=4,
+        )
+
+    def test_multiple_environments_expose_only_their_own_tools(self):
+        class CounterEnvironment:
+            def reset(self, **kwargs): ...
+
+            def increment(self, step: int) -> int:
+                """Increment the counter.
+
+                Args:
+                    step: Value to add.
+
+                Returns:
+                    The updated value.
+                """
+                return step
+
+        class EchoEnvironment:
+            def reset(self, **kwargs): ...
+
+            def shout(self, text: str) -> str:
+                """Shout the text.
+
+                Args:
+                    text: Text to shout.
+
+                Returns:
+                    The text in upper case.
+                """
+                return text.upper()
+
+        loop = self._make_loop({"counter": CounterEnvironment, "echo": EchoEnvironment})
+        try:
+            assert loop._multi_environment is True
+            # Each environment exposes only its own tool, used to render that example's prompt schema.
+            assert [tool.__name__ for tool in loop._env_tools["counter"]] == ["increment"]
+            assert [tool.__name__ for tool in loop._env_tools["echo"]] == ["shout"]
+            # `self.tools` is the union, used only to decide whether a training chat template is needed.
+            assert sorted(tool.__name__ for tool in loop.tools) == ["increment", "shout"]
+            # The probe instances seed the reuse pool, so they are not wasted.
+            assert len(loop._environment_pool["counter"]) == 1
+            assert len(loop._environment_pool["echo"]) == 1
+        finally:
+            loop._loop.close()
