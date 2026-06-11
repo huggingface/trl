@@ -511,44 +511,33 @@ def supports_tool_calling(processing_class) -> bool:
     return all(s in rendered for s in (_name_sentinel, _arg_key_sentinel, _arg_val_sentinel, _content_sentinel))
 
 
-def is_chat_template_prefix_preserving(
-    processing_class: PreTrainedTokenizerBase | ProcessorMixin, append_role: str = "tool"
-) -> bool:
+def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase | ProcessorMixin) -> bool:
     """
-    Check whether the chat template preserves prefixes when a message of the given role is appended.
+    Check whether the chat template preserves prefixes when applied.
 
-    A prefix-preserving chat template renders earlier messages identically regardless of what messages follow. For tool
-    messages this property is required by `_get_tool_suffix_ids`, which extracts tool response formatting tokens by
-    comparing tokenizations with and without tool messages appended. Multi-turn rollouts that append user or system
-    messages mid-conversation rely on the same property for those roles.
+    A prefix-preserving chat template renders earlier messages identically regardless of what messages follow. This
+    property is required by `_get_tool_suffix_ids`, which extracts tool response formatting tokens by comparing
+    tokenizations with and without tool messages appended.
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
             Tokenizer or processor instance to check.
-        append_role (`str`, *optional*, defaults to `"tool"`):
-            Role of the appended message to probe: `"tool"`, `"user"`, or `"system"`.
 
     Returns:
         `bool`:
             `True` if the chat template preserves prefixes, `False` otherwise.
     """
-    if append_role == "tool":
-        # Use the same dummy messages as _get_tool_suffix_ids to test the exact property it relies on.
-        dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": {}}}]
-        messages1 = [
-            {"role": "user", "content": "dummy"},
-            {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
-        ]
-        messages2 = messages1 + [{"role": "tool", "name": "dummy", "content": "dummy"}]
-    elif append_role in ("user", "system"):
-        messages1 = [
-            {"role": "user", "content": "dummy"},
-            {"role": "assistant", "content": "dummy"},
-        ]
-        messages2 = messages1 + [{"role": append_role, "content": "dummy2"}]
-    else:
-        raise ValueError(f"Unsupported append_role: {append_role!r}. Expected 'tool', 'user', or 'system'.")
-
+    # Use the same dummy messages as _get_tool_suffix_ids to test the exact property it relies on.
+    dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": {}}}]
+    messages1 = [
+        {"role": "user", "content": "dummy"},
+        {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
+    ]
+    messages2 = [
+        {"role": "user", "content": "dummy"},
+        {"role": "assistant", "content": "", "tool_calls": dummy_tool_calls},
+        {"role": "tool", "name": "dummy", "content": "dummy"},
+    ]
     # VLM processors expect structured list-of-blocks content, and image-token expansion only kicks in when an image
     # is actually present, so include a dummy image to exercise the real code path.
     is_vlm = isinstance(processing_class, ProcessorMixin)
@@ -565,8 +554,6 @@ def is_chat_template_prefix_preserving(
             messages2, tokenize=True, return_dict=False, add_generation_prompt=True
         )
     except TypeError:
-        if append_role != "tool":
-            raise
         # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
         # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
         dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
