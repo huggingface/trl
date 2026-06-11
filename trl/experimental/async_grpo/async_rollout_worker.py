@@ -37,9 +37,7 @@ from transformers import PreTrainedTokenizerBase
 from trl.chat_template_utils import (
     add_response_schema,
     get_training_chat_template,
-    has_generation_markers,
     is_chat_template_prefix_preserving,
-    is_chat_template_stop_token_trained,
     parse_response,
 )
 from trl.import_utils import is_vllm_available
@@ -257,21 +255,6 @@ class _AsyncRolloutLoop:
             self.chat_template = get_training_chat_template(self.tokenizer)
         else:
             self.chat_template = None
-
-        # A prefix-preserving template can still attribute the assistant's end-of-turn token to the next message,
-        # leaving it out of the loss mask so the model is never trained to stop. Warn if the template we resolved
-        # has that issue. The check only applies to templates with `{% generation %}` markers; without them the
-        # assistant mask is empty and the check is meaningless.
-        chat_template = self.chat_template or self.tokenizer.chat_template
-        if (
-            chat_template
-            and has_generation_markers(chat_template)
-            and not is_chat_template_stop_token_trained(self.tokenizer, chat_template=chat_template)
-        ):
-            logger.warning(
-                "The chat template does not include the assistant turn's end-of-turn token in the loss mask; "
-                "the model may not learn to stop."
-            )
 
         self._groups_to_score: asyncio.Queue[RolloutGroup | None] = asyncio.Queue(maxsize=16)
         self._total_completion_tokens = 0
