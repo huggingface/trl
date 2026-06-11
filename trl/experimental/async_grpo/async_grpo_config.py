@@ -55,7 +55,7 @@ class AsyncGRPOConfig(_BaseConfig):
         > Parameters that control the training
 
         epsilon (`float`, *optional*, defaults to `0.2`):
-            Lower-bound epsilon value for clipping.
+            Epsilon value for clipping.
         epsilon_high (`float`, *optional*, defaults to `0.2`):
             Upper-bound epsilon value for clipping.
 
@@ -154,7 +154,7 @@ class AsyncGRPOConfig(_BaseConfig):
     # Parameters that control the training
     epsilon: float = field(
         default=0.2,
-        metadata={"help": "Lower-bound epsilon value for clipping."},
+        metadata={"help": "Epsilon value for clipping."},
     )
     epsilon_high: float = field(
         default=0.2,
