@@ -677,7 +677,7 @@ class TestGetTrainingChatTemplate:
     def test_new_chat_template_is_prefix_preserving(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
         new_chat_template = get_training_chat_template(tokenizer)
-        if chat_template is not None:
+        if new_chat_template is not None:
             tokenizer.chat_template = new_chat_template
         # Prefix-preservation is only meaningful for templates that actually support tool messages — the check
         # itself renders one. Skip the assertion for tool-less templates (e.g. Gemma).
