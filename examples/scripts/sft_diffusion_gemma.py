@@ -35,7 +35,8 @@ cross-attending to that cache. Training therefore differs from autoregressive SF
 4. The loss is plain mean cross-entropy between the decoder logits and the clean tokens over the whole canvas
    (corrupted and uncorrupted positions alike), plus an autoregressive co-loss on the encoder.
 
-Requires transformers with https://github.com/huggingface/transformers/pull/46568.
+Requires transformers from main, with https://github.com/huggingface/transformers/pull/46568 for training support
+and https://github.com/huggingface/transformers/pull/46572 for gradient checkpointing.
 
 The script trains with `assistant_only_loss`, so [`SFTTrainer`] swaps in TRL's DiffusionGemma training chat template
 (`trl/chat_templates/diffusion_gemma_training.jinja`), whose `{% generation %}` markers cover the assistant content
@@ -156,7 +157,8 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         diffusion_loss = F.cross_entropy(outputs.logits.flatten(0, 1), canvas_target.flatten())
 
         # Autoregressive co-loss on the encoder, over all valid next-token pairs
-        encoder_logits = self.model.lm_head(outputs.encoder_last_hidden_state).float()
+        lm_head = self.model.lm_head
+        encoder_logits = lm_head(outputs.encoder_last_hidden_state.to(lm_head.weight.dtype)).float()
         cap = self.final_logit_softcapping
         encoder_logits = torch.tanh(encoder_logits / cap) * cap
         ar_mask = attention_mask[:, :-1].bool() & attention_mask[:, 1:].bool()
@@ -209,9 +211,6 @@ def main(script_args, training_args, model_args):
     # The supervised canvas is derived from the labels, so the loss must be restricted to the assistant response.
     # This also makes SFTTrainer swap in TRL's DiffusionGemma training chat template.
     training_args.assistant_only_loss = True
-    # The decoder reads the encoder's KV cache, but gradient checkpointing drops cache writes during training,
-    # leaving the decoder without context.
-    training_args.gradient_checkpointing = False
 
     trainer = DiffusionGemmaSFTTrainer(
         model=model,
