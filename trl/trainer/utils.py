@@ -1027,6 +1027,38 @@ def create_model_from_path(
     return model
 
 
+def warn_if_fp32_with_mixed_precision(args, model_init_kwargs: dict | None) -> None:
+    """Warn when a string model would be loaded in float32 while mixed-precision training is enabled.
+
+    When a model is passed as a path/identifier, it is loaded via [`create_model_from_path`], which defaults `dtype` to
+    `"float32"` unless the user sets it explicitly in `model_init_kwargs`. If bf16 or fp16 (mixed precision) training
+    is also enabled, the result is float32 master weights with autocast, which can differ noticeably from pure
+    low-precision training. This is silent and easy to miss, so emit a hint pointing to `model_init_kwargs={"dtype":
+    ...}`.
+
+    The warning is intentionally conservative: it fires only when mixed precision is on AND the user did not specify
+    `dtype` at all (so an explicit choice — including `"auto"` or `None` — is never overridden by a warning). It is
+    applied only to the trainable (policy) model load; reference models are frozen and not optimized, so loading them
+    in float32 raises no mixed-precision training concern.
+
+    Args:
+        args ([`SFTConfig`], [`DPOConfig`], [`GRPOConfig`], [`RLOOConfig`], or [`RewardConfig`]):
+            The trainer configuration. Read for `bf16` / `fp16` flags.
+        model_init_kwargs (`dict`, *optional*):
+            The keyword arguments that will be forwarded to the model loader. Inspected for an explicit `dtype` key.
+    """
+    mixed_precision = bool(args.bf16) or bool(args.fp16)
+    dtype_unset = "dtype" not in (model_init_kwargs or {})
+    if mixed_precision and dtype_unset:
+        precision = "bf16" if args.bf16 else "fp16"
+        logger.warning(
+            f"The model will be loaded in float32 because no `dtype` was specified, while {precision} "
+            "mixed-precision training is enabled. This keeps float32 master weights under autocast, which "
+            "can differ from pure low-precision training. To load the model directly in low precision, pass "
+            'e.g. `model_init_kwargs={"dtype": "bfloat16"}` in the trainer config.'
+        )
+
+
 def hash_module(module: torch.nn.Module) -> str:
     h = hashlib.sha256()
     for _, tensor in sorted(module.state_dict().items()):

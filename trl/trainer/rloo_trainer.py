@@ -78,6 +78,7 @@ from .utils import (
     start_event_loop_in_daemon,
     unsplit_pixel_values_by_grid,
     use_adapter,
+    warn_if_fp32_with_mixed_precision,
 )
 
 
@@ -239,6 +240,8 @@ class RLOOTrainer(_BaseTrainer):
         # Model
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
+            # Warn if the model will load in fp32 under mixed precision (see warn_if_fp32_with_mixed_precision)
+            warn_if_fp32_with_mixed_precision(args, model_init_kwargs)
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
