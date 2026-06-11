@@ -360,16 +360,17 @@ class TestGKDTrainer(TrlTestCase):
             atol=1e-6,
         )
 
+    @require_torch_accelerator
     def test_loss_normalizes_by_num_items_in_batch(self):
         # When `num_items_in_batch` is passed (as under gradient accumulation), the loss must be the JSD summed over
         # valid tokens divided by that global count, rather than the local per-microbatch mean. See issue #4719.
+        # GPU-gated like `test_liger_loss_matches_non_liger_loss`: GKD's loss path is accelerator-affine, so the model
+        # runs on the device rather than being forced to CPU.
         common = dict(
             output_dir=self.tmp_dir,
             report_to="none",
             per_device_train_batch_size=2,
             max_length=64,
-            use_cpu=True,
-            bf16=False,
         )
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train").select(
             range(2)
