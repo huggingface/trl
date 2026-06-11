@@ -17,7 +17,14 @@ This guide covers **how to integrate Harbor with TRL**. For Harbor itself, see t
 pip install trl[harbor]
 ```
 
-This installs the `harbor` framework (Python >= 3.12). The integration imports `harbor` lazily and runs it **in-process**, so users who don't touch `trl.experimental.harbor` aren't affected. A sandbox backend must be reachable at train time (e.g. a Docker daemon for `--env docker`, or an `E2B_API_KEY` for `--env e2b`).
+This installs the `harbor` framework (Python >= 3.12). The integration imports `harbor` lazily and runs it **in-process**, so users who don't touch `trl.experimental.harbor` aren't affected.
+
+A sandbox backend must also be installed and reachable at train time. Harbor keeps cloud backends behind its own extras, so install the one you intend to use and provide its credentials:
+
+```bash
+pip install "harbor[e2b]"      # E2B cloud sandbox  -> environment_type="e2b",  needs E2B_API_KEY
+# docker backend (environment_type="docker", Harbor's default) just needs a reachable Docker daemon
+```
 
 ## Quick start
 

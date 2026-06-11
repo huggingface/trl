@@ -14,12 +14,13 @@
 
 """Harbor × TRL integration (experimental).
 
-Train on Harbor agentic task suites with `GRPOTrainer` via `environment_factory`, with a pluggable
-base agent (harness). Requires `harbor` installed in the same interpreter (`pip install trl[harbor]`,
-Python >= 3.12); `harbor` is imported lazily so this module imports without it.
+Train on Harbor agentic task suites with `GRPOTrainer` via `environment_factory`, with a pluggable base agent
+(harness). Requires `harbor` installed in the same interpreter (`pip install trl[harbor]`, Python >= 3.12); `harbor` is
+imported lazily so this module imports without it.
 
 ```python
 from trl.experimental.harbor import HarborSpec
+
 spec = HarborSpec("AdithyaSK/data_agent_rl_environment_train", agent="bash", num_tasks=64)
 ```
 """

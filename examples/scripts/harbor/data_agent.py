@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # /// script
-# dependencies = ["trl[vllm,harbor]"]
+# dependencies = ["trl[vllm,harbor]", "harbor[e2b]"]  # harbor[e2b]: the --env e2b backend (swap per --env)
 # ///
 
 """GRPO training against a Harbor task suite.
@@ -21,7 +21,8 @@
 One ``HarborSpec`` fans out into TRL's three slots — ``.train_dataset`` / ``.environment_factory`` /
 ``.reward_funcs``. The base agent (harness) is selected with ``--agent``: the built-in ``"bash"``, or
 an import/file path to a custom ``HarborEnv`` subclass. Harbor runs in-process, so install with
-``trl[harbor]`` (Python >= 3.12) and have a sandbox backend reachable (``--env e2b`` recommended).
+``trl[harbor]`` (Python >= 3.12) plus the chosen sandbox backend's extra (``pip install "harbor[e2b]"``
+for the recommended ``--env e2b``; the ``docker`` backend just needs a reachable Docker daemon).
 
 Usage (server vLLM, single-node 2+2 GPU split):
 
