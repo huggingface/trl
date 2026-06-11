@@ -26,7 +26,6 @@ import torch
 from accelerate.utils import gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForSequenceClassification,
@@ -42,6 +41,7 @@ from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available, logging
 
 from ...data_utils import apply_chat_template, is_conversational
+from ...distributed import DistributedBackend
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
@@ -591,6 +591,8 @@ class SDPOTrainer(_BaseTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
+        self._dist = DistributedBackend(self.accelerator)
+
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
@@ -696,8 +698,7 @@ class SDPOTrainer(_BaseTrainer):
 
         Must be called after `super().__init__` so that `self.callback_handler` is available.
         """
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        if is_peft_model(self.model) and deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+        if is_peft_model(self.model) and self._dist.is_zero3:
             raise ValueError(
                 "PEFT with DeepSpeed ZeRO-3 is currently unsupported: the teacher forward on the shared model "
                 "invalidates the ZeRO-3 parameter coordinator trace and training crashes at backward recompute. "
@@ -1035,7 +1036,7 @@ class SDPOTrainer(_BaseTrainer):
                 generation_kwargs=self.generation_kwargs,
             ) as unwrapped_model,
             torch.no_grad(),
-            FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+            self._dist.summon_full_params(self.model_wrapped, recurse=False),
         ):
             prompt_completion_ids = unwrapped_model.generate(
                 **generate_inputs, generation_config=self.generation_config
@@ -1596,11 +1597,8 @@ class SDPOTrainer(_BaseTrainer):
         if not self.use_liger_loss:
             return nullcontext()
 
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
+        if not self._dist.is_zero3:
             return nullcontext()
-
-        import deepspeed
 
         unwrapped_student = self.accelerator.unwrap_model(model)
         unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
@@ -1611,7 +1609,7 @@ class SDPOTrainer(_BaseTrainer):
             params.append(student_head.bias)
         if teacher_head.bias is not None:
             params.append(teacher_head.bias)
-        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
+        return self._dist.gather_params(params)
 
     def _get_teacher_context_for_self_distillation(self):
         """Return the context manager that routes the teacher forward to the correct weights.
