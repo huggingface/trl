@@ -46,30 +46,19 @@ LoRA follows the reference fine-tune of the released checkpoint: rank 16, alpha 
 dense-MLP linears of the encoder and decoder layers only; the MoE experts, the router, the self-conditioning block,
 and the vision tower stay frozen.
 
-Usage:
+The default hyperparameters follow the reference fine-tuning configs of the released checkpoint (learning rate
+1.5e-4, Adam betas (0.95, 0.99), weight decay 1e-4, 25 warmup steps then cosine to 1.5e-5, global batch size 8,
+sequence length 1024, 800 steps, LoRA rank 16 with alpha 32), so a run only needs:
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/sft_diffusion_gemma.py \
-    --model_name_or_path google/diffusiongemma-26B-A4B-it \
-    --dtype bfloat16 \
-    --attn_implementation sdpa \
-    --dataset_name openai/gsm8k \
-    --dataset_config main \
     --use_peft \
-    --lora_dropout 0 \
-    --learning_rate 1.5e-4 \
-    --adam_beta1 0.95 \
-    --adam_beta2 0.99 \
-    --weight_decay 1e-4 \
-    --warmup_steps 25 \
-    --lr_scheduler_type cosine_with_min_lr \
-    --lr_scheduler_kwargs '{"min_lr": 1.5e-5}' \
-    --max_steps 800 \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 8 \
-    --max_length 1024 \
     --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
+
+Drop `--use_peft` for full fine-tuning, which keeps the MoE router frozen like the reference recipe.
 """
+
+from dataclasses import dataclass, field
 
 import torch
 import torch.nn.functional as F
@@ -78,6 +67,68 @@ from peft import LoraConfig
 from transformers import AutoTokenizer, DiffusionGemmaForBlockDiffusion
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser
+
+
+@dataclass
+class DiffusionGemmaScriptArguments(ScriptArguments):
+    r"""
+    [`ScriptArguments`] with GSM8K as the default dataset.
+
+    Parameters whose default values are overridden:
+
+    > - `dataset_name`: Defaults to `"openai/gsm8k"`.
+    > - `dataset_config`: Defaults to `"main"`.
+    """
+
+    dataset_name: str = "openai/gsm8k"
+    dataset_config: str | None = "main"
+
+
+@dataclass
+class DiffusionGemmaSFTConfig(SFTConfig):
+    r"""
+    [`SFTConfig`] whose defaults follow the reference fine-tuning configs of the released checkpoint.
+
+    Parameters whose default values are overridden:
+
+    > - `learning_rate`: Defaults to `1.5e-4`.
+    > - `adam_beta1`/`adam_beta2`: Default to `0.95`/`0.99`.
+    > - `weight_decay`: Defaults to `1e-4`.
+    > - `warmup_steps`: Defaults to `25`.
+    > - `lr_scheduler_type`: Defaults to `"cosine_with_min_lr"` with `lr_scheduler_kwargs={"min_lr": 1.5e-5}`.
+    > - `max_steps`: Defaults to `800`.
+    > - `per_device_train_batch_size`/`gradient_accumulation_steps`: Default to `1`/`8` (global batch size 8).
+    > - `max_length`: Defaults to `1024`.
+    """
+
+    learning_rate: float = 1.5e-4
+    adam_beta1: float = 0.95
+    adam_beta2: float = 0.99
+    weight_decay: float = 1e-4
+    warmup_steps: int = 25
+    lr_scheduler_type: str = "cosine_with_min_lr"
+    lr_scheduler_kwargs: dict | None = field(default_factory=lambda: {"min_lr": 1.5e-5})
+    max_steps: int = 800
+    per_device_train_batch_size: int = 1
+    gradient_accumulation_steps: int = 8
+    max_length: int = 1024
+
+
+@dataclass
+class DiffusionGemmaModelConfig(ModelConfig):
+    r"""
+    [`ModelConfig`] with the released checkpoint and its reference LoRA settings as defaults.
+
+    Parameters whose default values are overridden:
+
+    > - `model_name_or_path`: Defaults to `"google/diffusiongemma-26B-A4B-it"`.
+    > - `dtype`: Defaults to `"bfloat16"`.
+    > - `lora_dropout`: Defaults to `0.0`.
+    """
+
+    model_name_or_path: str = "google/diffusiongemma-26B-A4B-it"
+    dtype: str = "bfloat16"
+    lora_dropout: float = 0.0
 
 
 class DiffusionGemmaSFTTrainer(SFTTrainer):
@@ -232,7 +283,12 @@ def main(script_args, training_args, model_args):
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
 
+def make_parser():
+    dataclass_types = (DiffusionGemmaScriptArguments, DiffusionGemmaSFTConfig, DiffusionGemmaModelConfig)
+    return TrlParser(dataclass_types)
+
+
 if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
+    parser = make_parser()
     script_args, training_args, model_args = parser.parse_args_and_config()
     main(script_args, training_args, model_args)
