@@ -606,10 +606,10 @@ def is_chat_template_stop_token_trained(
     ]
     is_vlm = isinstance(processing_class, ProcessorMixin)
     if is_vlm:
-        from PIL import Image
-
-        dummy_image = Image.new("RGB", (8, 8))
-        messages = prepare_multimodal_messages(messages, images=[dummy_image])
+        # Probe without images: assistant masks are computed before multimodal token expansion and not re-aligned
+        # afterwards, so any image would zero or shift the mask regardless of what the template attributes.
+        for message in messages:
+            message["content"] = [{"type": "text", "text": message["content"]}]
 
     try:
         output = processing_class.apply_chat_template(
