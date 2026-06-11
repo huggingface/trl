@@ -89,7 +89,7 @@ def print_prompt_completions_sample_uld(
     num_samples: int = None,
 ) -> None:
     """
-    Print out a sample of model completions to the console with multiple reward metrics.
+    Print out a sample of model completions to the console.
 
     This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring model outputs
     during training. It requires the `rich` library to be installed.
@@ -99,10 +99,6 @@ def print_prompt_completions_sample_uld(
             List of prompts.
         completions (`list[str]`):
             List of completions corresponding to the prompts.
-        rewards (`dict[str, list[float]]`):
-            Dictionary where keys are reward names and values are lists of rewards.
-        advantages (`list[float]`):
-            List of advantages corresponding to the prompts and completions.
         step (`int`):
             Current training step number, used in the output title.
         num_samples (`int` or `None`, *optional*, defaults to `None`):
@@ -110,27 +106,16 @@ def print_prompt_completions_sample_uld(
 
     Example:
     ```python
-    >>> from trl.trainer.utils import print_prompt_completions_sample
+    >>> from trl.experimental.gold.gold_trainer import print_prompt_completions_sample_uld
 
     >>> prompts = ["The sky is", "The sun is"]
     >>> completions = [" blue.", " in the sky."]
-    >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
-    >>> advantages = [0.987, 0.654]
-    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42)
-    ╭──────────────────────────── Step 42 ─────────────────────────────╮
-    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
-    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
-    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
-    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
-    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
-    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
-    │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
-    ╰──────────────────────────────────────────────────────────────────╯
+    >>> print_prompt_completions_sample_uld(prompts, completions, 42)
     ```
     """
     if not is_rich_available():
         raise ImportError(
-            "The function `print_prompt_completions_sample` requires the `rich` library. Please install it with "
+            "The function `print_prompt_completions_sample_uld` requires the `rich` library. Please install it with "
             "`pip install rich`."
         )
     console = Console()
