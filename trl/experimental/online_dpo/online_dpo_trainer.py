@@ -213,7 +213,11 @@ class OnlineDPOTrainer(_BaseTrainer):
             if isinstance(reward_funcs[i], nn.Module):
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
-                self.reward_func_names.append(reward_funcs[i].__name__)
+                try:
+                    reward_func_name = reward_funcs[i].__name__
+                except AttributeError:
+                    reward_func_name = str(reward_funcs[i])
+                self.reward_func_names.append(reward_func_name)
         self.reward_funcs = reward_funcs
 
         # Handle reward processing classes for reward_funcs
