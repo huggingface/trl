@@ -389,8 +389,6 @@ class VLLMGeneration:
     def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited: set[str] | None = None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
         # For FSDP1, we need to recurse into children and also use summon_full_params
-        accelerator = self.accelerator
-
         if visited is None:
             visited = set()
         for child_name, child_module in module.named_children():
@@ -413,8 +411,6 @@ class VLLMGeneration:
 
     def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
         """FSDP2-specific parameter synchronization."""
-        accelerator = self.accelerator
-
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
         for name, param in module.state_dict().items():
             # When using PEFT, we need to recover the original parameter name
