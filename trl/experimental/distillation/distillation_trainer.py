@@ -1347,7 +1347,6 @@ class DistillationTrainer(_BaseTrainer):
         student_log_probs: torch.Tensor,
         completion_tokens: torch.Tensor,
         labels: torch.Tensor,
-        num_items_in_batch=None,
     ) -> torch.Tensor:
         """Compute exact sparse top-1 generalized JSD/KL from server-provided teacher logprobs.
 
@@ -1392,6 +1391,10 @@ class DistillationTrainer(_BaseTrainer):
         # Server path only supports "sampled" mode — config validation enforces this, but we guard
         # explicitly so future relaxations of the config check don't silently change behaviour.
         reverse_token_ids = self._get_reverse_kl_top_1_tokens(student_log_probs, completion_tokens)
+        # The server path normalizes locally (batchmean), not by num_items_in_batch: teacher logprobs may not cover
+        # every student completion token (the loss is summed over the trimmed teacher window), so the global token
+        # count would be the wrong denominator. Gradient-accumulation normalization for the server path is left as a
+        # follow-up.
         return self._compute_sparse_top_1_divergence_loss(
             student_log_probs=student_log_probs,
             teacher_top1_token_ids=topk_token_ids.squeeze(-1),
@@ -1399,7 +1402,6 @@ class DistillationTrainer(_BaseTrainer):
             reverse_token_ids=reverse_token_ids,
             reverse_teacher_logprobs=actual_teacher_lps,
             labels=labels,
-            num_items_in_batch=num_items_in_batch,
         )
 
     def _compute_server_forward_kl_loss(
@@ -1407,7 +1409,6 @@ class DistillationTrainer(_BaseTrainer):
         teacher_result: dict[str, torch.Tensor],
         student_log_probs: torch.Tensor,
         labels: torch.Tensor,
-        num_items_in_batch=None,
     ) -> torch.Tensor:
         """Compute sparse forward KL from server-provided teacher top-k logprobs (beta==0 path).
 
@@ -1443,9 +1444,9 @@ class DistillationTrainer(_BaseTrainer):
             beta=0.0,
             support_mask=support_mask,
         )
-        return self._reduce_divergence_loss(
-            jsd, labels=labels, reduction="batchmean", num_items_in_batch=num_items_in_batch
-        )
+        # See `_compute_server_sparse_top_1_divergence_loss`: the server path normalizes locally, not by
+        # num_items_in_batch, because the teacher window may not cover every student completion token.
+        return self._reduce_divergence_loss(jsd, labels=labels, reduction="batchmean")
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         self._raise_if_local_teacher_tokenizer_mismatch()
@@ -1484,14 +1485,12 @@ class DistillationTrainer(_BaseTrainer):
                     student_log_probs=student_log_probs[:, :comp_len, :],
                     completion_tokens=completion_tokens,
                     labels=trimmed_labels,
-                    num_items_in_batch=num_items_in_batch,
                 )
             else:
                 loss = self._compute_server_forward_kl_loss(
                     teacher_result=teacher_result,
                     student_log_probs=student_log_probs[:, :comp_len, :],
                     labels=trimmed_labels,
-                    num_items_in_batch=num_items_in_batch,
                 )
         else:
             # Local teacher: exact full-vocabulary loss except for the shared mixed top-1 path.
