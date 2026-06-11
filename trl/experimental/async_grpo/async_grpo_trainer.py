@@ -24,21 +24,35 @@ from typing import Any, Protocol
 
 import torch
 from accelerate.logging import get_logger
+from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
+from transformers import AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.utils.import_utils import is_peft_available
 
 from trl.trainer.base_trainer import _BaseTrainer
-from trl.trainer.utils import pad, patch_chunked_lm_head
+from trl.trainer.utils import create_model_from_path, pad, patch_chunked_lm_head
 
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
 from .weight_transfer import WeightTransferClient
 
 
+if is_peft_available():
+    from peft import PeftConfig, get_peft_model
+
+
 logger = get_logger(__name__)
+
+
+def _safe_qsize(q) -> int:
+    try:
+        return q.qsize()
+    except NotImplementedError:
+        return -1
+
 
 # A reward function is a callable that returns a list of floats (the rewards). The callable receives prompts,
 # completions, and additional arguments from the trainer (refer to the trainer's source for details). To ensure forward
@@ -149,7 +163,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
     def __iter__(self):
         while True:
             t0 = time.time()
-            if self.queue.qsize() == 0:
+            if _safe_qsize(self.queue) == 0:
                 logger.info("queue empty, waiting for rollout samples...")
             try:
                 sample = self.queue.get(timeout=self.poll_interval_s)
@@ -159,8 +173,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 continue
             queue_wait_time_s = time.time() - t0
             if queue_wait_time_s > 1.0:
-                logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={self.queue.qsize()})")
-
+                logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={_safe_qsize(self.queue)})")
             staleness = self.model_version_fn() - sample.model_version
             if staleness > self.max_staleness:
                 logger.info(f"dropping stale sample (staleness={staleness}, max={self.max_staleness})")
@@ -302,6 +315,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        peft_config ([`~peft.PeftConfig`], *optional*):
+            PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         tools (list of `Callable`, *optional*):
             A list of callable tool functions (sync or async) that the model can invoke during generation. Each tool
             should be a standard Python function with properly type-hinted arguments and return values, and a
@@ -344,6 +359,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
         environment_factory: EnvironmentFactory | None = None,
         rollout_worker: RolloutWorkerProtocol | None = None,
@@ -357,12 +373,49 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Model
         model_name = model
-        model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.float32)
+        model_init_kwargs = self.args.model_init_kwargs or {}
+        # FSDP2 requires device_map=None ("auto" fails)
+        model_init_kwargs["device_map"] = None
+        model = create_model_from_path(model, **model_init_kwargs)
 
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
         patch_chunked_lm_head(model, chunk_size=8192, temperature=self.temperature)
+
+        # PEFT
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            # Create PEFT model
+            model = get_peft_model(model, peft_config)
+
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
+        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
+        if is_peft_model(model) and self.args.gradient_checkpointing:
+            model.enable_input_require_grads()
+
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        quantization_config = model_init_kwargs.get("quantization_config")
+        is_qlora = quantization_config is not None and (
+            quantization_config.load_in_4bit or quantization_config.load_in_8bit
+        )
+        self._is_qlora = is_qlora
+        if is_qlora:
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data = param.data.to(torch.bfloat16)
 
         # Processing class
         if processing_class is None:
@@ -429,8 +482,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 # DTensor.shape returns the global shape without triggering any all-gather.
                 weight_names, weight_dtype_names, weight_shapes = [], [], []
                 for name, param in model.named_parameters():
-                    # DDP/FSDP1 wrapping, avoids vllm module not exist error
-                    name = name.removeprefix("module.")
+                    name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+                    if is_peft_model(model):
+                        # When using PEFT, we need to recover the original parameter name
+                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+                        if model.prefix in name:
+                            continue
+                        # When module to save, remove its prefix and discard the original module
+                        if "original_module" in name:
+                            continue
+                        name = name.replace("modules_to_save.default.", "")
                     weight_names.append(name)
                     weight_dtype_names.append(str(param.dtype).split(".")[-1])
                     weight_shapes.append(list(param.shape))
@@ -662,12 +724,31 @@ class AsyncGRPOTrainer(_BaseTrainer):
         device = self.accelerator.device
         for name, param in self.model.named_parameters():
             name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+            if is_peft_model(self.model):
+                # When using PEFT, we need to recover the original parameter name
+                name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+                if self.model.prefix in name:
+                    continue
+                # When module to save, remove its prefix and discard the original module
+                if "original_module" in name:
+                    continue
+                name = name.replace("modules_to_save.default.", "")
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)
             yield name, full
 
     def _sync_weight(self):
+        if is_peft_model(self.model) and self._is_qlora and self.is_fsdp_enabled:
+            if self.accelerator.state.fsdp_plugin.fsdp_version == 2:
+                raise ValueError(
+                    "AsyncGRPO QLoRA with FSDP2 is not supported with the current full-weight sync path. "
+                    "PEFT bitsandbytes merge_adapter() cannot merge DTensor-sharded bnb weights. Use dense LoRA with "
+                    "FSDP2, QLoRA without FSDP2, or an adapter-only vLLM LoRA sync path. See "
+                    "https://github.com/huggingface/accelerate/issues/3874."
+                )
+
         t0 = time.time()
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process and self.weight_transfer:
@@ -678,14 +759,23 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.accelerator.wait_for_everyone()
         t_barrier = time.time()
 
-        logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        if self.accelerator.is_main_process and self.weight_transfer:
-            self.weight_transfer.send_weights(self._streaming_iter())
-        else:
-            # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
-            for _ in self._streaming_iter():
-                pass
-        t_transfer = time.time()
+        # Merge LoRA before syncing so vLLM gets full weights
+        if is_peft_model(self.model):
+            self.model.merge_adapter()
+
+        try:
+            logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
+            if self.accelerator.is_main_process and self.weight_transfer:
+                self.weight_transfer.send_weights(self._streaming_iter())
+            else:
+                # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
+                for _ in self._streaming_iter():
+                    pass
+            t_transfer = time.time()
+        finally:
+            # Unmerge LoRA to resume training
+            if is_peft_model(self.model):
+                self.model.unmerge_adapter()
 
         self.accelerator.wait_for_everyone()
 

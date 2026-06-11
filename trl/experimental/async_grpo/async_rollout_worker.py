@@ -51,6 +51,13 @@ Messages: TypeAlias = list[dict[str, str]]
 _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
+def _safe_qsize(q: MPQueue) -> int:
+    try:
+        return q.qsize()
+    except NotImplementedError:
+        return -1
+
+
 async def _retry_on_http_error(coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
     """Retry an aiohttp coroutine on transport errors with bounded exponential backoff."""
     for attempt in range(max_attempts):
@@ -205,7 +212,7 @@ class _AsyncRolloutLoop:
         self._dataset_iter = iter(dataset)
         self.reward_funcs = reward_funcs
         self.reward_func_names = [f.__name__ for f in reward_funcs]
-        self.tokenizer = add_response_schema(processing_class)
+        self.tokenizer = processing_class
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
@@ -248,6 +255,13 @@ class _AsyncRolloutLoop:
                     raise ValueError("Asynchronous tools are not supported yet.")
                 self._sync_tool_dicts[i][tool.__name__] = tool
         self.tools = base_tools + (environment_methods[0] if self.environments is not None else [])
+
+        # utility function to manually set the response schema for known chat templates.
+        # `response_schema` lives on the tokenizer, since `parse_response` is a tokenizer method that reads `self.response_schema`.
+        if self.tools:
+            self.tokenizer = add_response_schema(self.tokenizer)
+        else:
+            self.tokenizer.response_schema = None
 
         # The chat template must be prefix-preserving in multi-turn training; if the tokenizer's
         # template isn't, swap in a training-safe one.
@@ -428,7 +442,7 @@ class _AsyncRolloutLoop:
             scoring_time = time.monotonic() - t0
             logger.info(
                 f"[score] scored {len(samples)} samples in {scoring_time:.2f}s, "
-                f"buffer_qsize={self.rollout_buffer.qsize()}"
+                f"buffer_qsize={_safe_qsize(self.rollout_buffer)}"
             )
 
             self._compute_rollout_metrics(samples, scoring_time, wait_scoring)
@@ -466,7 +480,7 @@ class _AsyncRolloutLoop:
             sample.metrics["generation_tok_per_s"] = generation_tok_per_sec
             sample.metrics["scoring_time_ms"] = scoring_time * 1000
             sample.metrics["wait_scoring_ms"] = wait_scoring * 1000
-            sample.metrics["buffer_qsize"] = self.rollout_buffer.qsize()
+            sample.metrics["buffer_qsize"] = _safe_qsize(self.rollout_buffer)
 
     def _repeat_iterator(self) -> Iterator[tuple[int, dict[str, Any]]]:
         group_id = 0
@@ -498,7 +512,10 @@ class _AsyncRolloutLoop:
         )
         while True:
             turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
-            assistant_message = parse_response(self.tokenizer, turn_ids)
+            if self.tokenizer.response_schema is not None:
+                assistant_message = parse_response(self.tokenizer, turn_ids)
+            else:
+                assistant_message = {"role": "assistant", "content": self.tokenizer.decode(turn_ids, skip_special_tokens=True)}
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
             completion_logprobs.extend(turn_logprobs)
