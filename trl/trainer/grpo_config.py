@@ -124,6 +124,9 @@ class GRPOConfig(_BaseConfig):
             implementation.
         vllm_structured_outputs_regex (`str`, *optional*):
             Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
+        vllm_lora_sync (`bool`, *optional*, defaults to `False`):
+            Whether to sync only the active PEFT LoRA adapter to a vLLM server instead of syncing full model weights.
+            This is supported only with `vllm_mode="server"`.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
 
@@ -543,6 +546,13 @@ class GRPOConfig(_BaseConfig):
     vllm_structured_outputs_regex: str | None = field(
         default=None,
         metadata={"help": "Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled."},
+    )
+    vllm_lora_sync: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to sync only the active PEFT LoRA adapter to a vLLM server instead of syncing full "
+            "model weights. This is supported only with `vllm_mode='server'`."
+        },
     )
 
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)

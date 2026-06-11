@@ -218,6 +218,10 @@ class ScriptArguments:
         speculative_config (`str`, *optional*):
             JSON string for vLLM speculative decoding config, forwarded to `LLM(speculative_config=...)`. When unset,
             speculative decoding is disabled. Example: `'{"method": "qwen3_next_mtp", "num_speculative_tokens": 5}'`.
+        enable_lora (`bool`, *optional*, defaults to `False`):
+            Whether to enable vLLM LoRA support.
+        max_lora_rank (`int`, *optional*):
+            Maximum LoRA rank when LoRA support is enabled.
     """
 
     model: str = field(
@@ -329,12 +333,21 @@ class ScriptArguments:
             'Example: \'{"method": "qwen3_next_mtp", "num_speculative_tokens": 5}\''
         },
     )
+    enable_lora: bool = field(
+        default=False,
+        metadata={"help": "Whether to enable vLLM LoRA support."},
+    )
+    max_lora_rank: int | None = field(
+        default=None,
+        metadata={"help": "Maximum LoRA rank when LoRA support is enabled."},
+    )
 
 
 def llm_worker(
     script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection
 ) -> None:
     from vllm import LLM
+    from vllm.lora.request import LoRARequest
 
     # Set required environment variables for DP to work with vLLM
     os.environ["VLLM_DP_RANK"] = str(data_parallel_rank)
@@ -362,6 +375,8 @@ def llm_worker(
         # Important so temperature scaling/logit tweaking affects the TIS log probs
         logprobs_mode="processed_logprobs",
         speculative_config=json.loads(script_args.speculative_config) if script_args.speculative_config else None,
+        enable_lora=script_args.enable_lora,
+        max_lora_rank=script_args.max_lora_rank,
     )
 
     # Send ready signal to parent process
@@ -379,10 +394,22 @@ def llm_worker(
         if command["type"] in ["call", "fire_and_forget"]:
             method_name = command["method"]
             args, kwargs = command.get("args", ()), command.get("kwargs", {})
+            if "lora_request_kwargs" in kwargs:
+                lora_request_kwargs = kwargs.pop("lora_request_kwargs")
+                kwargs["lora_request"] = LoRARequest(**lora_request_kwargs)
             method = getattr(llm, method_name)
             result = method(*args, **kwargs)
             if command["type"] == "call":
                 connection.send(result)
+        elif command["type"] == "load_lora_adapter":
+            lora_request = LoRARequest(
+                command["lora_name"],
+                command["lora_int_id"],
+                command["lora_path"],
+                load_inplace=command["load_inplace"],
+            )
+            llm.load_lora_adapter(lora_request=lora_request)
+            connection.send({"message": "LoRA adapter loaded"})
         elif command["type"] == "shutdown":
             break
 
@@ -487,6 +514,7 @@ def main(script_args: ScriptArguments):
                 process.join()  # ensure process termination after calling terminate()
 
     app = FastAPI(lifespan=lifespan)
+    active_lora = {"name": None, "path": None, "int_id": 1}
 
     # Define the endpoints for the model server
     @app.get("/health/")
@@ -640,6 +668,12 @@ def main(script_args: ScriptArguments):
             if not prompts:
                 prompts = ["<placeholder>"]
             kwargs = {"prompts": prompts, "sampling_params": sampling_params}
+            if active_lora["name"] is not None:
+                kwargs["lora_request_kwargs"] = {
+                    "lora_name": active_lora["name"],
+                    "lora_int_id": active_lora["int_id"],
+                    "lora_path": active_lora["path"],
+                }
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
         # Receive results
@@ -1096,6 +1130,12 @@ def main(script_args: ScriptArguments):
                 "chat_template_kwargs": request.chat_template_kwargs,
                 "tools": request.tools,
             }
+            if active_lora["name"] is not None:
+                kwargs["lora_request_kwargs"] = {
+                    "lora_name": active_lora["name"],
+                    "lora_int_id": active_lora["int_id"],
+                    "lora_path": active_lora["path"],
+                }
             connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
 
         # Receive results
@@ -1116,6 +1156,36 @@ def main(script_args: ScriptArguments):
             "logprobs": logprobs,
             "logprob_token_ids": logprob_token_ids,
         }
+
+    class LoadLoRAAdapterRequest(BaseModel):
+        lora_name: str
+        lora_path: str
+        load_inplace: bool = True
+
+    @app.post("/v1/load_lora_adapter")
+    async def load_lora_adapter(request: LoadLoRAAdapterRequest):
+        """
+        Loads a LoRA adapter into the vLLM engine.
+        """
+        if not script_args.enable_lora:
+            raise ValueError(
+                "LoRA support is not enabled. Launch the server with "
+                "`trl vllm-serve --model ... --enable-lora --max-lora-rank <rank>`."
+            )
+        active_lora["name"] = request.lora_name
+        active_lora["path"] = request.lora_path
+        for connection in connections:
+            connection.send(
+                {
+                    "type": "load_lora_adapter",
+                    "lora_name": request.lora_name,
+                    "lora_path": request.lora_path,
+                    "lora_int_id": active_lora["int_id"],
+                    "load_inplace": request.load_inplace,
+                }
+            )
+        all_outputs = [connection.recv() for connection in connections]
+        return {"message": "LoRA adapter loaded", "worker_responses": all_outputs}
 
     class InitCommunicatorRequest(BaseModel):
         host: str

@@ -66,7 +66,7 @@ from ..data_utils import apply_chat_template, is_conversational, prepare_multimo
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
-from ..import_utils import is_jmespath_available, is_liger_kernel_available
+from ..import_utils import is_jmespath_available, is_liger_kernel_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -96,7 +96,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
@@ -374,6 +374,26 @@ class GRPOTrainer(_BaseTrainer):
                     ref_name = name.replace(".default.", ".ref.")
                     ref_param = model.get_parameter(ref_name)
                     ref_param.data.copy_(param.data)
+
+        if args.vllm_lora_sync:
+            if not args.use_vllm:
+                raise ValueError("`vllm_lora_sync=True` requires `use_vllm=True`.")
+            if args.vllm_mode != "server":
+                raise ValueError("`vllm_lora_sync=True` is currently supported only with `vllm_mode='server'`.")
+            if not is_peft_model(model):
+                raise ValueError("`vllm_lora_sync=True` requires a PEFT model.")
+            if len(model.active_adapters) != 1:
+                raise ValueError("`vllm_lora_sync=True` currently supports exactly one active adapter.")
+            active_adapter = model.active_adapters[0]
+            active_peft_config = model.peft_config[active_adapter]
+            if not isinstance(active_peft_config, LoraConfig):
+                raise ValueError("`vllm_lora_sync=True` currently supports only PEFT LoRA adapters.")
+            if active_peft_config.modules_to_save:
+                raise ValueError("`vllm_lora_sync=True` does not support LoRA configs with `modules_to_save`.")
+            if active_peft_config.use_dora:
+                raise ValueError("`vllm_lora_sync=True` does not support DoRA adapters.")
+            if not is_vllm_available(min_version="0.15.0"):
+                raise ImportError("`vllm_lora_sync=True` requires vLLM >= 0.15.0 for `load_inplace` support.")
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
@@ -795,6 +815,8 @@ class GRPOTrainer(_BaseTrainer):
                 max_completion_length=self.max_completion_length,
                 logprobs=0,  # we only need the generated token logprobs for the importance sampling correction
                 generation_kwargs=args.generation_kwargs,
+                lora_sync=args.vllm_lora_sync,
+                lora_sync_output_dir=args.output_dir,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
         else:
