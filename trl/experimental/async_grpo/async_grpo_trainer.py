@@ -219,7 +219,9 @@ class DataCollatorForRollout(DataCollatorMixin):
             )
             position_ids.append(torch.cat([torch.arange(n) for n in seq_lengths]))
             advantages.append(
-                torch.cat([torch.full((n,), example["advantage"]) for example, n in zip(group, seq_lengths)])
+                torch.cat(
+                    [torch.full((n,), example["advantage"]) for example, n in zip(group, seq_lengths, strict=False)]
+                )
             )
 
         input_ids = pad(input_ids, padding_value=self.pad_token_id)
@@ -534,9 +536,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             DataLoader(
                 dataset,
                 batch_size=self.args.per_device_train_batch_size * self.accelerator.num_processes,
-                collate_fn=DataCollatorForRollout(
-                    self.processing_class.pad_token_id, self.accelerator.num_processes
-                ),
+                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id, self.accelerator.num_processes),
                 num_workers=0,
                 # NOTE(@aminediro):
                 # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
@@ -565,8 +565,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Padding-free: the collator already packed this rank's samples into a single row (real tokens concatenated,
         # `position_ids` resetting per sequence, advantages expanded per-token), then padded the row to the longest
         # rank's length so DataLoaderDispatcher could scatter rectangular rows. Strip that trailing inter-rank padding
-        # here. FlashAttention derives `cu_seq_lens` from the `position_ids` resets, so we drop `attention_mask` for
-        # the forward.
+        # here.
         mask_bool = inputs["attention_mask"].bool()
         input_ids = inputs["input_ids"][mask_bool].unsqueeze(0)
         completion_mask = inputs["completion_mask"][mask_bool].unsqueeze(0)
@@ -645,7 +644,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             sample_metrics = inputs["metrics"]  # dict[str, Tensor(shape=[1, n_samples_local])]
             keys = list(sample_metrics.keys())
             device = completion_mask.device
-            # Number of packed sequences on this rank = number of `position_ids` resets (positions equal to 0).
             n_samples = (position_ids == 0).sum().to(torch.float32)
             if keys:
                 # nan-aware per key: unscorable samples carry NaN, so a plain .sum() would poison the whole metric.
@@ -675,7 +673,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
             self._metrics["train"]["forward_time_s"].append(self._last_forward_time_s)
             # NOTE: in dynamic mbs setup, we would need to agg across DP ranks.
-            # Longest single packed sequence on this rank = max `position_ids` value + 1.
             self._metrics["train"]["train_seq_len"].append(float(position_ids.max() + 1))
         return loss
 
