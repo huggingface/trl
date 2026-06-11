@@ -98,7 +98,7 @@ class SFTConfig(_BaseConfig):
             Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
             on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
             `False`, loss is computed on the entire sequence.
-        loss_type (`str`, *optional*):
+        loss_type (`str`, *optional*, defaults to `"nll"`):
             Type of loss to use. Defaults to `"nll"`. This default will change to `"chunked_nll"` in TRL 1.7. Possible
             values are:
 
