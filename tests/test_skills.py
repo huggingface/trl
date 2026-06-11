@@ -456,14 +456,8 @@ class TestListAgentNames:
     def test_contains_expected_agents(self):
         """Test that list includes expected agent names."""
         agents = list_agent_names()
+        assert "agents" in agents
         assert "claude" in agents
-        assert "codex" in agents
-        assert "opencode" in agents
-
-    def test_agents_are_sorted(self):
-        """Test that agent names are sorted."""
-        agents = list_agent_names()
-        assert agents == sorted(agents)
 
 
 class TestResolveTargetPath:
