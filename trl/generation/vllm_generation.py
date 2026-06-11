@@ -434,6 +434,13 @@ class VLLMGeneration:
                 llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                 llm_model.load_weights([(name, param)])
 
+    def _sync_fsdp_params_to_vllm(self, model: nn.Module):
+        """Dispatch FSDP weight sync to the version-appropriate method."""
+        if self._dist.fsdp_version == 1:
+            self._sync_fsdp1_params_to_vllm(model)
+        elif self._dist.fsdp_version == 2:
+            self._sync_fsdp2_params_to_vllm(model)
+
     def sync_weights(self):
         """Synchronize model weights to vLLM.
 
