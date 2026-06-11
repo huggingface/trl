@@ -293,17 +293,6 @@ class SFTConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
-        if self.loss_type is None:
-            warnings.warn(
-                "The default `loss_type` will change from `'nll'` to `'chunked_nll'` in TRL 1.7. For standard models "
-                "this is transparent (same math, lower memory) and no action is needed — you'll get the new default "
-                "automatically on upgrade. If you use a custom model, check ahead of time that "
-                "`loss_type='chunked_nll'` runs and yields the same loss as `'nll'`; if it doesn't, pin "
-                "`loss_type='nll'` to keep the current behavior and please open an issue at "
-                "https://github.com/huggingface/trl/issues so we can address the edge case.",
-                FutureWarning,
-                stacklevel=3,
-            )
         if self.pad_token is not None:
             warnings.warn(
                 "`pad_token` is deprecated and will be removed in v2.0.0. "
