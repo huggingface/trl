@@ -94,6 +94,8 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if self.args.packing:
+            raise ValueError("Packing is not supported: the diffusion loss needs per-example response spans.")
         config = self.model.config
         self.canvas_length = config.canvas_length
         self.vocab_size = config.text_config.vocab_size
@@ -108,10 +110,14 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         batch_size, seq_len = input_ids.shape
         block_size = self.canvas_length
 
-        # The completion is the contiguous suffix of supervised tokens
+        # The canvas covers the final assistant turn only, like the reference recipe: multi-turn conversations have
+        # several supervised spans, and the diffusion loss needs one contiguous response
         supervised = labels != -100
-        prefix_len = supervised.int().argmax(dim=1)
-        response_len = supervised.sum(dim=1)
+        positions = torch.arange(seq_len, device=device)
+        span_starts = supervised & ~F.pad(supervised, (1, 0))[:, :-1]
+        span_end = torch.where(supervised, positions, -1).amax(dim=1)
+        prefix_len = torch.where(span_starts, positions, -1).amax(dim=1).clamp(min=0)
+        response_len = (span_end - prefix_len + 1) * (span_end >= 0)
 
         # One canvas per step: select one response block per example. The encoder reads the full clean sequence (its
         # autoregressive co-loss covers it all), but the decoder may only see the prompt and the clean response
