@@ -249,12 +249,11 @@ class GRPOTrainer(_BaseTrainer):
             method should return either `None` or a string: when it returns a string, that string is appended to the
             last user message before generation.
 
-            When a single callable is provided, an instance of the environment is created for each generation in the
-            batch, allowing for parallel and independent interactions. When a dictionary is provided, each example must
-            carry an `environment` field naming which environment to use; the matching factory is instantiated per
-            example and only that environment's tools are exposed in the example's prompt. This allows training on a mix
-            of tasks (e.g. a coding environment and a game environment) in a single run. This feature is experimental
-            and may change or be removed at any time without prior notice.
+            With a single callable, every example uses the same environment, with one instance per rollout so their
+            interactions stay isolated. With a dictionary, each example must carry an `environment` field selecting its
+            environment by name, and only that environment's tools are exposed in its prompt — letting a single run mix
+            tasks (e.g. a coding environment and a game). This feature is experimental and may change or be removed at
+            any time without prior notice.
     """
 
     _tag_names = ["trl", "grpo"]
