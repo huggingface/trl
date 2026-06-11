@@ -409,11 +409,7 @@ class VLLMGeneration:
                         continue  # skip FSDP subtrees already traversed
                     visited.add(full_name)
 
-                    if self.mode == "server" and accelerator.is_main_process:
-                        self.vllm_client.update_named_param(full_name, param.data)
-                    elif self.mode == "colocate":
-                        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                        llm_model.load_weights([(full_name, param.data)])
+                    self._push_param_to_vllm(full_name, param.data)
 
     def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
         """FSDP2-specific parameter synchronization."""
@@ -435,11 +431,7 @@ class VLLMGeneration:
                 param = param.to(torch.device("cuda"))
             param = param.full_tensor()
 
-            if self.mode == "server" and accelerator.is_main_process:
-                self.vllm_client.update_named_param(name, param)
-            elif self.mode == "colocate":
-                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                llm_model.load_weights([(name, param)])
+            self._push_param_to_vllm(name, param)
 
     def _sync_fsdp_params_to_vllm(self, model: nn.Module):
         """Dispatch FSDP weight sync to the version-appropriate method."""
@@ -487,11 +479,7 @@ class VLLMGeneration:
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
-                        if self.mode == "server" and accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
+                        self._push_param_to_vllm(name, param.data)
                 # Unmerge adapters while parameters are still gathered
                 model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
@@ -503,11 +491,7 @@ class VLLMGeneration:
                 for name, param in model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
                     with self._dist.gather_params([param]):
-                        if self.mode == "server" and accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
+                        self._push_param_to_vllm(name, param.data)
 
         # Reset cache on vLLM
         if self.mode == "server" and accelerator.is_main_process:
