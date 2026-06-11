@@ -408,7 +408,7 @@ def llm_worker(
                 command["lora_path"],
                 load_inplace=command["load_inplace"],
             )
-            llm.load_lora_adapter(lora_request=lora_request)
+            llm.llm_engine.add_lora(lora_request)
             connection.send({"message": "LoRA adapter loaded"})
         elif command["type"] == "shutdown":
             break
@@ -462,7 +462,11 @@ def main(script_args: ScriptArguments):
             "Uvicorn is required to run the vLLM serve script. Please install it using `pip install uvicorn`."
         )
 
-    if not is_vllm_available():
+    if script_args.enable_lora and not is_vllm_available(min_version="0.15.0"):
+        raise ImportError(
+            "LoRA adapter loading in the vLLM serve script requires vLLM >= 0.15.0. "
+        )
+    elif not is_vllm_available():
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
     import uvicorn

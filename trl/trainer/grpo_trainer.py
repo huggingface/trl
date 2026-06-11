@@ -392,6 +392,8 @@ class GRPOTrainer(_BaseTrainer):
                 raise ValueError("`vllm_lora_sync=True` does not support LoRA configs with `modules_to_save`.")
             if active_peft_config.use_dora:
                 raise ValueError("`vllm_lora_sync=True` does not support DoRA adapters.")
+            if active_peft_config.bias != "none":
+                raise ValueError("`vllm_lora_sync=True` does not support LoRA adapters with bias.")
             if not is_vllm_available(min_version="0.15.0"):
                 raise ImportError("`vllm_lora_sync=True` requires vLLM >= 0.15.0 for `load_inplace` support.")
 
