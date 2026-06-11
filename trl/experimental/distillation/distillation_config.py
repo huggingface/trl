@@ -60,6 +60,9 @@ class DistillationConfig(_BaseConfig):
             `beta == 0` or `loss_top_k != 1`.
         max_completion_length (`int`, *optional*, defaults to `512`):
             Maximum number of tokens to generate per completion during on-policy generation.
+        max_prompt_length (`int` or `None`, *optional*):
+            Maximum number of tokens for the prompt. If `None`, auto-computed as `max_length - max_completion_length`.
+            Prompts are truncated according to the tokenizer's `truncation_side` setting.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the student model during training.
 
@@ -135,6 +138,12 @@ class DistillationConfig(_BaseConfig):
 
         > Parameters that control logging
 
+        wandb_entity (`str` or `None`, *optional*):
+            The W&B entity to store runs under.
+        wandb_project (`str` or `None`, *optional*):
+            The W&B project to store runs under.
+        wandb_run_group (`str` or `None`, *optional*):
+            The W&B group to store runs under.
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `log_completions_steps` steps. If `rich` is
             installed, it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb`
