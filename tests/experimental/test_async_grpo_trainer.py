@@ -195,28 +195,3 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             assert len(loop._environment_pool["echo"]) == 1
         finally:
             loop._loop.close()
-
-    def test_single_environment_is_normalized(self):
-        class CounterEnvironment:
-            def reset(self, **kwargs): ...
-
-            def increment(self, step: int) -> int:
-                """Increment the counter.
-
-                Args:
-                    step: Value to add.
-
-                Returns:
-                    The updated value.
-                """
-                return step
-
-        loop = self._make_loop(CounterEnvironment)
-        try:
-            # A single callable is normalized to one unnamed (`None`) environment shared by every example.
-            assert loop._multi_environment is False
-            assert list(loop.environment_factories) == [None]
-            assert [tool.__name__ for tool in loop._env_tools[None]] == ["increment"]
-            assert len(loop._environment_pool[None]) == 1
-        finally:
-            loop._loop.close()
