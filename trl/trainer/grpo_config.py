@@ -1010,7 +1010,6 @@ class GRPOConfig(_BaseConfig):
             and self.vllm_importance_sampling_clip_max is None
         ):
             raise ValueError(
-                "vllm_importance_sampling_clip_min and vllm_importance_sampling_clip_max cannot both be None when "
-                "using vllm_importance_sampling_correction=True. "
-                "To disable importance sampling correction, set vllm_importance_sampling_correction=False."
+                "At least one of `vllm_importance_sampling_clip_min` or `vllm_importance_sampling_clip_max` "
+                "must be set when `vllm_importance_sampling_mode` is a `*_truncate` mode."
             )
