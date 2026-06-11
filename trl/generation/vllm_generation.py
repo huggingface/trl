@@ -463,43 +463,51 @@ class VLLMGeneration:
             gather_if_zero3 = nullcontext
 
         if is_peft_model(model):
-            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
-            # merging adapters in a sharded manner is not supported.
-            # TODO: does this work with FSDP?
-            with gather_if_zero3(list(model.parameters())):
-                model.merge_adapter()
-
-                # Update vLLM weights while parameters are gathered
-                if is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
-                    # Update vLLM weights while parameters are gathered
-                    # For PEFT with FSDP we need to use the memory efficient post-order traversal
+            if is_fsdp_enabled:
+                # For PEFT with FSDP, gather_if_zero3 is nullcontext (FSDP handles sharding).
+                # Merge all adapters, sync via FSDP-aware traversal, then unmerge.
+                with gather_if_zero3(list(model.parameters())):
+                    model.merge_adapter()
                     fsdp_plugin = getattr(accelerator.state, "fsdp_plugin", None)
                     fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
                     if fsdp_version == 1:
-                        self._sync_fsdp1_params_to_vllm(model)  # use memory-efficient post-order traversal for FSDP
+                        self._sync_fsdp1_params_to_vllm(model)
                     elif fsdp_version == 2:
                         self._sync_fsdp2_params_to_vllm(model)
-                else:
-                    # DeepSpeed ZeRO-3 with PEFT
-                    for name, param in model.named_parameters():
-                        # When using PEFT, we need to recover the original parameter name
-                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
-                        if model.prefix in name:
-                            continue
-                        # When module to save, remove its prefix and discard the original module
-                        if "original_module" in name:
-                            continue
-                        name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+                    model.unmerge_adapter()
+            else:
+                # DeepSpeed ZeRO-3 with PEFT: gather, merge, sync, and unmerge one LoRA module at a time
+                # to avoid materializing the entire model on every rank (which OOMs on large models).
+                from peft.tuners.tuners_utils import BaseTunerLayer, onload_layer
+                from peft.utils.other import ModulesToSaveWrapper
 
-                        if self.mode == "server" and accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
-                # Unmerge adapters while parameters are still gathered
-                model.unmerge_adapter()
-                # Parameters will automatically be repartitioned when exiting the context
+                for module_name, module in model.named_modules():
+                    if not isinstance(module, (BaseTunerLayer, ModulesToSaveWrapper)):
+                        continue
+                    with gather_if_zero3(list(module.parameters())):
+                        if isinstance(module, BaseTunerLayer):
+                            with onload_layer(module):
+                                module.merge()
+                        for name, param in module.named_parameters():
+                            full_name = f"{module_name}.{name}"
+                            name = (
+                                full_name.removeprefix("base_model.model.")
+                                .replace(".base_layer", "")
+                                .replace("base_layer.", "")
+                            )
+                            if model.prefix in name:
+                                continue
+                            if "original_module" in name:
+                                continue
+                            name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+                            if self.mode == "server" and accelerator.is_main_process:
+                                self.vllm_client.update_named_param(name, param.data)
+                            elif self.mode == "colocate":
+                                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                                llm_model.load_weights([(name, param.data)])
+                        if isinstance(module, BaseTunerLayer):
+                            with onload_layer(module):
+                                module.unmerge()
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
             if is_fsdp_enabled:

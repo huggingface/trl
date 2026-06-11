@@ -380,7 +380,13 @@ def llm_worker(
             method_name = command["method"]
             args, kwargs = command.get("args", ()), command.get("kwargs", {})
             method = getattr(llm, method_name)
-            result = method(*args, **kwargs)
+            try:
+                result = method(*args, **kwargs)
+            except Exception as exc:
+                if command["type"] == "call":
+                    connection.send(exc)
+                    continue
+                raise
             if command["type"] == "call":
                 connection.send(result)
         elif command["type"] == "shutdown":
@@ -644,6 +650,9 @@ def main(script_args: ScriptArguments):
 
         # Receive results
         all_outputs = [connection.recv() for connection in connections]
+        for output in all_outputs:
+            if isinstance(output, Exception):
+                raise output
 
         # Handle empty prompts (see above)
         all_outputs = [output for output, prompts in zip(all_outputs, chunked_prompts, strict=True) if prompts]
@@ -688,6 +697,9 @@ def main(script_args: ScriptArguments):
             kwargs = {"prompts": chunk, "sampling_params": sampling_params}
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
         all_outputs = [connection.recv() for connection in connections]
+        for output in all_outputs:
+            if isinstance(output, Exception):
+                raise output
         all_outputs = [output for output, chunk in zip(all_outputs, chunked_prompts, strict=True) if chunk]
         return list(chain.from_iterable(all_outputs))
 
@@ -1100,6 +1112,9 @@ def main(script_args: ScriptArguments):
 
         # Receive results
         all_outputs = [connection.recv() for connection in connections]
+        for output in all_outputs:
+            if isinstance(output, Exception):
+                raise output
 
         # Handle empty prompts (see above)
         all_outputs = [output for output, prompts in zip(all_outputs, chunked_messages, strict=True) if prompts]
