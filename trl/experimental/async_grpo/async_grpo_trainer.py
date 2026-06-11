@@ -586,21 +586,55 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
 
-            clipped = (ratio < 1 - self.epsilon_low) | (ratio > 1 + self.epsilon_high)
-            local_clip_sum = (
-                clipped[valid_mask].float().sum()
+            # Compute the clipped probability ratios. A token is counted as clipped only when clipping is binding in a
+            # policy-relevant direction: low clip when the advantage is negative, high clip when it is positive.
+            is_low_clipped = (ratio < 1 - self.epsilon_low) & (advantages < 0)
+            is_high_clipped = (ratio > 1 + self.epsilon_high) & (advantages > 0)
+            is_region_clipped = is_low_clipped | is_high_clipped
+            local_low_clip_sum = (
+                is_low_clipped[valid_mask].float().sum()
+                if valid_mask.any()
+                else torch.zeros((), device=completion_mask.device)
+            )
+            local_high_clip_sum = (
+                is_high_clipped[valid_mask].float().sum()
+                if valid_mask.any()
+                else torch.zeros((), device=completion_mask.device)
+            )
+            local_region_clip_sum = (
+                is_region_clipped[valid_mask].float().sum()
                 if valid_mask.any()
                 else torch.zeros((), device=completion_mask.device)
             )
 
-            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, clip_sum, count]
-            stats = torch.stack([local_ratio_sum, local_kl_sum, local_entropy_sum, local_clip_sum, local_count])
+            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum, count]
+            stats = torch.stack(
+                [
+                    local_ratio_sum,
+                    local_kl_sum,
+                    local_entropy_sum,
+                    local_low_clip_sum,
+                    local_high_clip_sum,
+                    local_region_clip_sum,
+                    local_count,
+                ]
+            )
             stats = self.accelerator.reduce(stats, reduction="sum")
-            global_ratio_sum, global_kl_sum, global_entropy_sum, global_clip_sum, global_count = stats.unbind(0)
+            (
+                global_ratio_sum,
+                global_kl_sum,
+                global_entropy_sum,
+                global_low_clip_sum,
+                global_high_clip_sum,
+                global_region_clip_sum,
+                global_count,
+            ) = stats.unbind(0)
             self._metrics["train"]["ratio"].append((global_ratio_sum / global_count).item())
             self._metrics["train"]["kl"].append((global_kl_sum / global_count).item())
             self._metrics["train"]["entropy"].append((global_entropy_sum / global_count).item())
-            self._metrics["train"]["clip_ratio"].append((global_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/low_mean"].append((global_low_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
 
             # Logging metrics from the rollout worker (reward, reward_std, etc.).
             # inputs["metrics"] is a dict of 1D tensors keyed by metric name.
