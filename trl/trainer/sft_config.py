@@ -98,8 +98,9 @@ class SFTConfig(_BaseConfig):
             Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
             on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
             `False`, loss is computed on the entire sequence.
-        loss_type (`str`, *optional*, defaults to `"nll"`):
-            Type of loss to use. Possible values are:
+        loss_type (`str`, *optional*):
+            Type of loss to use. Defaults to `"nll"`. This default will change to `"chunked_nll"` in TRL 1.7. Possible
+            values are:
 
             - `"nll"`: standard negative log-likelihood (default).
             - `"dft"`: Dynamic Fine-Tuning, as described in
@@ -261,10 +262,11 @@ class SFTConfig(_BaseConfig):
             )
         },
     )
-    loss_type: str = field(
-        default="nll",
+    loss_type: str | None = field(
+        default=None,
         metadata={
-            "help": "Type of loss to use. Possible values are `'nll'` (negative log-likelihood, default), `'dft'` "
+            "help": "Type of loss to use. Defaults to `'nll'`. This default will change to `'chunked_nll'` in TRL "
+            "1.6. Possible values are `'nll'` (negative log-likelihood, default), `'dft'` "
             "(Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), and `'chunked_nll'` (same math as "
             "`'nll'`, but the `lm_head` projection is computed on non-ignored tokens only and the cross-entropy is "
             "processed in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`. "
@@ -287,6 +289,15 @@ class SFTConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        if self.loss_type is None:
+            warnings.warn(
+                "The default `loss_type` will change from `'nll'` to `'chunked_nll'` in TRL 1.7. To keep the current "
+                "behavior, set `loss_type='nll'`. Otherwise no action is needed — you'll get the new default "
+                "automatically on upgrade.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            self.loss_type = "nll"
         if self.pad_token is not None:
             warnings.warn(
                 "`pad_token` is deprecated and will be removed in v2.0.0. "
