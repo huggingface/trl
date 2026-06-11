@@ -14,7 +14,7 @@
 
 from dataclasses import dataclass, field
 
-from trl.trainer.base_config import _BaseConfig
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
