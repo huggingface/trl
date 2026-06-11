@@ -309,15 +309,20 @@ class AsyncGRPOTrainer(_BaseTrainer):
             https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
             use and that it has been fine-tuned for tool calling.
-        environment_factory (`EnvironmentFactory`, *optional*):
-            A callable that creates and returns an environment instance. The environment class should define methods
-            that can be invoked as tools during generation. Each method should comply with the same requirements as the
-            `tools` described above. If `environment_factory` is provided, an instance of the environment is created
-            for each generation in the batch, allowing for parallel and independent interactions. The environment must
+        environment_factory (`EnvironmentFactory` or `dict[str, EnvironmentFactory]`, *optional*):
+            A callable that creates and returns an environment instance, or a dictionary mapping environment names to
+            such callables. The environment class should define methods that can be invoked as tools during generation.
+            Each method should comply with the same requirements as the `tools` described above. The environment must
             also implement a callable `reset` method that can be used to reset state between generations. The `reset`
             method should return either `None` or a string: when it returns a string, that string is appended to the
-            last user message before generation. This feature is experimental and may change or be removed at any time
-            without prior notice.
+            last user message before generation.
+
+            When a single callable is provided, an instance of the environment is created for each generation in the
+            batch, allowing for parallel and independent interactions. When a dictionary is provided, each example must
+            carry an `environment` field naming which environment to use; the matching factory is instantiated per
+            example and only that environment's tools are exposed in the example's prompt. This allows training on a mix
+            of tasks (e.g. a coding environment and a game environment) in a single run. This feature is experimental
+            and may change or be removed at any time without prior notice.
     """
 
     _tag_names = ["trl", "async-grpo"]
@@ -345,7 +350,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         tools: list[Callable] | None = None,
-        environment_factory: EnvironmentFactory | None = None,
+        environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
         rollout_worker: RolloutWorkerProtocol | None = None,
     ):
         self.args = args or AsyncGRPOConfig()
