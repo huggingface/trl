@@ -27,15 +27,15 @@ DiffusionGemma ([`google/diffusiongemma-26B-A4B-it`](https://huggingface.co/goog
 into a KV cache, and the decoder denoises a block of response tokens (the "canvas") with bidirectional attention,
 cross-attending to that cache. Training therefore differs from autoregressive SFT:
 
-1. Per example, one response block of `canvas_length` tokens is selected at random; the encoder consumes the prompt
-   plus the clean response blocks before it (the decoder attends to the full encoder KV cache, so later response
-   tokens must not enter the encoder).
+1. Per example, one response block of `canvas_length` tokens is selected at random; the encoder reads the full clean
+   sequence, and the decoder mask restricts the canvas to the prompt plus the clean response blocks before it.
 2. The clean canvas (EOS-filled past the end of the response) is corrupted by independently replacing tokens with
    uniform-random vocabulary tokens with per-example probability `t ~ U(eps, 1)`. There is no mask token.
-3. With probability 0.5 the decoder is self-conditioned on its own logits from a first, no-grad pass (the released
-   checkpoint draws this coin per example; per batch here, to keep to two forward passes).
-4. The loss is plain mean cross-entropy between the decoder logits and the clean tokens over the whole canvas,
-   corrupted and uncorrupted positions alike.
+3. With probability 0.5 per example, the decoder is self-conditioned on its own logits from a first, no-grad pass.
+4. The loss is plain mean cross-entropy between the decoder logits and the clean tokens over the whole canvas
+   (corrupted and uncorrupted positions alike), plus an autoregressive co-loss on the encoder.
+
+Requires transformers with https://github.com/huggingface/transformers/pull/46568.
 
 The script trains with `assistant_only_loss`, so [`SFTTrainer`] swaps in TRL's DiffusionGemma training chat template
 (`trl/chat_templates/diffusion_gemma_training.jinja`), whose `{% generation %}` markers cover the assistant content
@@ -56,6 +56,13 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --dataset_config main \
     --use_peft \
     --learning_rate 1.5e-4 \
+    --adam_beta1 0.95 \
+    --adam_beta2 0.99 \
+    --weight_decay 1e-4 \
+    --warmup_steps 25 \
+    --lr_scheduler_type cosine_with_min_lr \
+    --lr_scheduler_kwargs '{"min_lr": 1.5e-5}' \
+    --max_steps 800 \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 8 \
     --max_length 1024 \
@@ -88,10 +95,12 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         config = self.model.config
         self.canvas_length = config.canvas_length
         self.vocab_size = config.text_config.vocab_size
+        self.final_logit_softcapping = config.text_config.final_logit_softcapping
         self.eos_token_id = self.processing_class.eos_token_id
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
         labels = inputs["labels"]
         device = input_ids.device
         batch_size, seq_len = input_ids.shape
@@ -102,8 +111,9 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         prefix_len = supervised.int().argmax(dim=1)
         response_len = supervised.sum(dim=1)
 
-        # One canvas per step: select one response block per example. The encoder must only see the prompt and the
-        # clean response blocks *before* it, since the decoder attends to the whole encoder KV cache.
+        # One canvas per step: select one response block per example. The encoder reads the full clean sequence (its
+        # autoregressive co-loss covers it all), but the decoder may only see the prompt and the clean response
+        # blocks *before* the selected one, so the decoder mask cuts the cache off there.
         num_blocks = (response_len - 1).clamp(min=0) // block_size + 1
         block_idx = (torch.rand(batch_size, device=device) * num_blocks).long()
         encoder_len = prefix_len + block_idx * block_size
@@ -122,30 +132,37 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         random_tokens = torch.randint(self.vocab_size, (batch_size, block_size), device=device)
         canvas_ids = torch.where(corrupt, random_tokens, canvas_target)
 
-        # Encoder sees the clean prefix, right-padded across the batch; the decoder mask marks the padded cache
-        # positions invalid and keeps the canvas fully attendable
-        max_encoder_len = int(encoder_len.max())
-        encoder_ids = input_ids[:, :max_encoder_len]
-        encoder_mask = (torch.arange(max_encoder_len, device=device) < encoder_len[:, None]).long()
+        cache_mask = (torch.arange(seq_len, device=device) < encoder_len[:, None]).long()
         canvas_mask = torch.ones(batch_size, block_size, dtype=torch.long, device=device)
         model_kwargs = {
-            "input_ids": encoder_ids,
-            "attention_mask": encoder_mask,
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
             "decoder_input_ids": canvas_ids,
-            "decoder_attention_mask": torch.cat([encoder_mask, canvas_mask], dim=1),
+            "decoder_attention_mask": torch.cat([cache_mask, canvas_mask], dim=1),
             "decoder_position_ids": encoder_len[:, None] + offsets,
         }
 
-        # Two-pass self-conditioning: a first no-grad pass produces the logits the second pass conditions on
-        if torch.rand(()) < self.self_conditioning_p:
-            with torch.no_grad():
-                model_kwargs["self_conditioning_logits"] = model(**model_kwargs).logits
+        # Two-pass self-conditioning: a first no-grad pass produces the logits the second pass conditions on,
+        # gated per example with probability p
+        with torch.no_grad():
+            model_kwargs["self_conditioning_logits"] = model(**model_kwargs).logits
+        model_kwargs["self_conditioning_mask"] = torch.rand(batch_size, device=device) < self.self_conditioning_p
 
         outputs = model(**model_kwargs)
 
         # Flat cross-entropy over all canvas positions, corrupted and uncorrupted (no 1/t weighting: the uniform
         # corruption kernel has a flat ELBO)
-        loss = F.cross_entropy(outputs.logits.flatten(0, 1), canvas_target.flatten())
+        diffusion_loss = F.cross_entropy(outputs.logits.flatten(0, 1), canvas_target.flatten())
+
+        # Autoregressive co-loss on the encoder, over all valid next-token pairs
+        encoder_logits = self.model.lm_head(outputs.encoder_last_hidden_state).float()
+        cap = self.final_logit_softcapping
+        encoder_logits = torch.tanh(encoder_logits / cap) * cap
+        ar_mask = attention_mask[:, :-1].bool() & attention_mask[:, 1:].bool()
+        ar_targets = torch.where(ar_mask, input_ids[:, 1:], -100)
+        ar_loss = F.cross_entropy(encoder_logits[:, :-1].flatten(0, 1), ar_targets.flatten(), ignore_index=-100)
+
+        loss = diffusion_loss + ar_loss
         return (loss, outputs) if return_outputs else loss
 
 
