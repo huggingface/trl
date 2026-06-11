@@ -12,12 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import annotations
-
-import copy
 import inspect
 import textwrap
 from collections import defaultdict
+from contextlib import nullcontext
+from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
@@ -27,6 +26,7 @@ from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
@@ -37,11 +37,12 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_peft_available
+from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available
 
+from ...data_utils import is_conversational
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
@@ -49,31 +50,97 @@ from ...trainer.utils import (
     get_config_model_id,
     identity,
     pad,
+    selective_log_softmax,
     split_tensor_dict,
     use_adapter,
 )
-from ..self_distillation.self_distillation_mixin import SelfDistillationMixin
-from ..self_distillation.teacher_context import PromptTokenizer, extract_last_user_text
 from ..utils import prepare_peft_model
+from .loss_utils import (
+    add_tail_bucket,
+    apply_importance_sampling_clipping,
+    compute_divergence,
+    compute_full_logit_self_distillation_loss,
+    compute_sampled_token_self_distillation_loss,
+    compute_topk_self_distillation_loss,
+)
 from .sdft_config import SDFTConfig
+from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 
 
 if is_peft_available():
     from peft import PeftConfig
-    from peft.peft_model import PeftModel
 
-    from ..self_distillation.peft_adapter_ema_callback import PEFTAdapterEMACallback
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 logger = get_logger(__name__)
 
 
+TrainingBatch = dict[str, torch.Tensor | Any]
+
+
+def build_teacher_request_inputs(
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    prompt_attention_mask: torch.Tensor,
+) -> tuple[list[list[int]], list[int], list[int]]:
+    """Trim padded batch tensors into per-sample (prompt+completion) sequences for teacher-server requests."""
+    if input_ids.shape != attention_mask.shape:
+        raise ValueError(
+            f"input_ids and attention_mask must have the same shape, got {input_ids.shape} and {attention_mask.shape}."
+        )
+
+    input_ids_cpu = input_ids.detach().cpu()
+    attention_mask_cpu = attention_mask.detach().cpu().bool()
+    prompt_lengths = prompt_attention_mask.detach().cpu().sum(dim=1).to(torch.long)
+
+    trimmed_input_ids: list[list[int]] = []
+    prompt_lengths_list: list[int] = []
+    completion_lengths_list: list[int] = []
+    for row, mask, prompt_length in zip(input_ids_cpu, attention_mask_cpu, prompt_lengths, strict=True):
+        trimmed_row = row[mask]
+        prompt_len = int(prompt_length.item())
+        if prompt_len < 0 or prompt_len > trimmed_row.numel():
+            raise ValueError(
+                f"Invalid prompt length {prompt_len} for trimmed sequence of length {trimmed_row.numel()}."
+            )
+        trimmed_input_ids.append(trimmed_row.tolist())
+        prompt_lengths_list.append(prompt_len)
+        completion_lengths_list.append(int(trimmed_row.numel()) - prompt_len)
+    return trimmed_input_ids, prompt_lengths_list, completion_lengths_list
+
+
+@dataclass
+class DistillationLogits:
+    """Aligned logits and masks used to compute a self-distillation objective."""
+
+    completion_ids: torch.Tensor
+    loss_mask: torch.Tensor
+    student_logits: torch.Tensor
+    teacher_logits: torch.Tensor
+
+
+def _extract_last_user_text(messages: list[dict[str, Any]]) -> str:
+    """Extract the text content from the last user message in a conversational prompt."""
+    last_message = messages[-1]
+    if last_message.get("role") != "user":
+        raise ValueError(
+            f"Self-distillation teacher prompt construction expects the conversation to end with a user turn, "
+            f"but the last message has role '{last_message.get('role')}'. "
+            f"Prompts ending with assistant prefills or tool turns are not supported."
+        )
+    content = last_message.get("content", "")
+    if isinstance(content, list):
+        return " ".join(part.get("text", "") for part in content if part.get("type") == "text")
+    return content
+
+
 class DemonstrationTeacherContextBuilder:
-    """Builds student and teacher contexts from prompts plus privileged context, as in SDFT."""
+    """Builds student and teacher contexts from prompts plus privileged context"""
 
     def __init__(self, trainer):
         self.trainer = trainer
-        self.prompt_tokenizer = PromptTokenizer(trainer)
 
     def _stringify_privileged_context(self, privileged_context: Any) -> str:
         if privileged_context is None:
@@ -99,7 +166,7 @@ class DemonstrationTeacherContextBuilder:
         privileged_text = self._stringify_privileged_context(privileged_context)
         if isinstance(prompt, list):
             system_messages = prompt[:-1]
-            prompt_text = extract_last_user_text(prompt)
+            prompt_text = _extract_last_user_text(prompt)
             teacher_text = self.trainer.args.teacher_prompt_template.format(
                 prompt=prompt_text,
                 privileged_context=privileged_text,
@@ -108,8 +175,6 @@ class DemonstrationTeacherContextBuilder:
         return self.trainer.args.teacher_prompt_template.format(prompt=prompt, privileged_context=privileged_text)
 
     def select_generation_prompts(self, prompts: list[Any], privileged_contexts: list[Any]) -> list[Any]:
-        if not self.trainer.generate_from_teacher:
-            return prompts
         return [
             self._compose_teacher_prompt(prompt, privileged_context)
             for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
@@ -122,23 +187,27 @@ class DemonstrationTeacherContextBuilder:
         completion_ids: torch.Tensor,
         completion_mask: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        student_batch = self.prompt_tokenizer.tokenize_prompts(prompts)
         teacher_prompts = [
             self._compose_teacher_prompt(prompt, privileged_context)
             for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
         ]
-        teacher_batch = self.prompt_tokenizer.tokenize_prompts(teacher_prompts)
-        teacher_input_ids = torch.cat([teacher_batch.prompt_ids, completion_ids], dim=1)
-        teacher_attention_mask = torch.cat([teacher_batch.prompt_mask, completion_mask], dim=1)
+        teacher_prompt_ids_list = self.trainer._tokenize_prompts(teacher_prompts)
+        device = completion_ids.device
+        teacher_prompt_ids = [torch.tensor(ids) for ids in teacher_prompt_ids_list]
+        teacher_prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in teacher_prompt_ids]
+        teacher_prompt_ids = pad(
+            teacher_prompt_ids, padding_value=self.trainer._tokenizer.pad_token_id, padding_side="left"
+        ).to(device=device)
+        teacher_prompt_mask = pad(teacher_prompt_mask, padding_value=0, padding_side="left").to(device=device)
+        teacher_input_ids = torch.cat([teacher_prompt_ids, completion_ids], dim=1)
+        teacher_attention_mask = torch.cat([teacher_prompt_mask, completion_mask], dim=1)
         return {
-            "prompt_ids": student_batch.prompt_ids,
-            "prompt_mask": student_batch.prompt_mask,
             "teacher_input_ids": teacher_input_ids,
             "teacher_attention_mask": teacher_attention_mask,
         }
 
 
-class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
+class SDFTTrainer(_BaseTrainer):
     """Trainer for SDFT-style on-policy self-distillation with explicit teacher prompts."""
 
     _tag_names = ["trl", "sdft"]
@@ -146,12 +215,12 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
     config_cls = SDFTConfig
     # docstyle-ignore
     _paper = {
-        "title": "Self-Training with On-Policy Self-Distillation for Language Model Alignment",
+        "title": "Self-Distillation Enables Continual Learning",
         "id": "2601.19897",
         "citation": textwrap.dedent("""\
-            @article{hubotter2026selftraining,
-                title        = {{Self-Training with On-Policy Self-Distillation for Language Model Alignment}},
-                author       = {Jonas H\\"ubotter and Frederike L\\"ubeck and Lejs Behric and Anton Baumann and Marco Bagatella and Daniel Marta and Ido Hakimi and Idan Shenfeld and Thomas Kleine Buening and Carlos Guestrin and Andreas Krause},
+            @article{shenfeld2026selfdistillation,
+                title        = {{Self-Distillation Enables Continual Learning}},
+                author       = {Idan Shenfeld and Mehul Damani and Jonas H\\"ubotter and Pulkit Agrawal},
                 year         = 2026,
                 eprint       = {arXiv:2601.19897}
             }"""),
@@ -168,16 +237,19 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: PeftConfig | None = None,
     ):
-        if train_dataset is None:
-            raise ValueError("`train_dataset` is required")
         if isinstance(train_dataset, IterableDataset):
             raise NotImplementedError("Iterable datasets are not yet supported in SDFTTrainer.")
         if isinstance(eval_dataset, IterableDataset) or (
             isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
         ):
             raise NotImplementedError("Iterable eval datasets are not yet supported in SDFTTrainer.")
-        if args.use_vllm:
-            raise NotImplementedError("SDFTTrainer does not support `use_vllm=True` yet.")
+
+        self.num_loss_tokens_to_skip = args.num_loss_tokens_to_skip
+        self.teacher_context_builder = DemonstrationTeacherContextBuilder(self)
+
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
@@ -185,8 +257,8 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
             logger.warning(
-                "You passed `model_init_kwargs` to `SDFTConfig`, but `model` is already instantiated. "
-                "The `model_init_kwargs` will be ignored."
+                "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
+                "instantiated. The `model_init_kwargs` will be ignored."
             )
 
         self.model_kwarg_keys = (
@@ -195,7 +267,14 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             else inspect.signature(model.get_base_model().forward).parameters.keys()
         )
 
-        # PEFT
+        if peft_config is None and getattr(model, "peft_config", None) is not None:
+            logger.warning(
+                "The provided self-distillation student model already contains a PEFT adapter. "
+                "This setup is accepted but not directly supported. In particular, `teacher_model_kind='base'` "
+                "may refer to the underlying base weights rather than the exact initially loaded student state "
+                "including its adapter. For unambiguous teacher behavior, start from a merged/non-adapter model "
+                "or manage separate adapters explicitly."
+            )
         if peft_config is not None:
             if not is_peft_available():
                 raise ImportError(
@@ -209,7 +288,7 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
                 )
             if is_peft_model(model):
                 raise ValueError(
-                    "You passed a `PeftModel` instance together with a `peft_config` to SDFTTrainer. Pass either a base "
+                    "You passed a `PeftModel` instance together with a `peft_config`. Pass either a base "
                     "model with `peft_config`, or a pre-wrapped PEFT model."
                 )
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
@@ -233,20 +312,18 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
         self.num_generations = args.num_generations
+        self.num_generations_eval = args.num_generations_eval or args.num_generations
         self.num_iterations = args.num_iterations
-        self.temperature = args.temperature
-        self.loss_type = args.loss_type
         self.shuffle_dataset = args.shuffle_dataset
+        self.temperature = args.temperature
         self.generate_from_teacher = args.generate_from_teacher
-        self.num_loss_tokens_to_skip = args.num_loss_tokens_to_skip
+        self.use_vllm = args.use_vllm
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self._step = 0
         self._buffered_inputs = None
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self.prompt_tokenizer = PromptTokenizer(self)
-        self.teacher_context_builder = DemonstrationTeacherContextBuilder(self)
 
-        generation_kwargs = {
+        self.generation_kwargs = {
             "max_new_tokens": self.max_completion_length,
             "do_sample": True,
             "pad_token_id": self._tokenizer.pad_token_id,
@@ -260,11 +337,67 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             "cache_implementation": args.cache_implementation,
         }
         if args.generation_kwargs is not None:
-            generation_kwargs.update(args.generation_kwargs)
-        self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
+            self.generation_kwargs.update(args.generation_kwargs)
+        self.generation_config = GenerationConfig(**self.generation_kwargs, disable_compile=True)
 
         if hasattr(model, "warnings_issued"):
             model.warnings_issued["estimate_tokens"] = True
+
+        # Teacher logprobs from the running vLLM generation server (reuses the synced student weights) instead of a
+        # local teacher forward. MVP: `live` teacher only — the generation server holds the current student weights.
+        self.use_teacher_server = args.use_teacher_server
+        if self.use_teacher_server:
+            if not (args.use_vllm and args.vllm_mode == "server"):
+                raise ValueError(
+                    "`use_teacher_server=True` requires `use_vllm=True` and `vllm_mode='server'`: teacher logprobs are "
+                    "served by the same vLLM server used for generation."
+                )
+            if args.teacher_model_kind != "live":
+                raise ValueError(
+                    "`use_teacher_server=True` only supports `teacher_model_kind='live'` (the generation server holds "
+                    f"the current student weights), got {args.teacher_model_kind!r}."
+                )
+            if args.distillation_mode not in ("sampled_token", "topk_logits"):
+                raise ValueError(
+                    "`use_teacher_server=True` only supports `distillation_mode` in {'sampled_token', 'topk_logits'}, "
+                    f"got {args.distillation_mode!r}. The server returns the teacher's top-k logprobs, not the full "
+                    "vocabulary, so `full_logits` is unavailable. Note `topk_logits` distills over the teacher's own "
+                    "top-k support (the server cannot score the student's top-k indices)."
+                )
+            if args.use_liger_kernel:
+                raise ValueError(
+                    "`use_teacher_server=True` is incompatible with `use_liger_kernel`: the server returns top-k "
+                    "logprobs while the Liger fused loss needs full-vocabulary hidden states."
+                )
+        # Liger fused JSD loss for `full_logits`: same generalized JSD as `compute_divergence`, so alpha maps to beta.
+        self.use_liger_loss = False
+        if args.use_liger_kernel:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "Liger is required to use `use_liger_kernel` as the self-distillation loss. Run "
+                    "`pip install liger-kernel`."
+                )
+            if args.distillation_mode != "full_logits":
+                raise ValueError(
+                    "`use_liger_kernel` only supports `distillation_mode='full_logits'`, got "
+                    f"{args.distillation_mode!r}. The fused JSD kernel operates on the full vocabulary and cannot "
+                    "express the top-k support or sampled-token objectives."
+                )
+            if args.distillation_is_clip is not None:
+                raise ValueError(
+                    "`use_liger_kernel` is incompatible with `distillation_is_clip`: the fused kernel does not expose "
+                    "per-token losses for importance-sampling clipping."
+                )
+            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+                beta=args.distillation_alpha,
+                ignore_index=-100,
+                temperature=args.temperature,
+                compiled=False,
+                weight_hard_loss=0.0,
+                weight_soft_loss=1.0,
+            )
+            self._forward_redirection = _ForwardRedirection()
+            self.use_liger_loss = True
 
         super().__init__(
             model=model,
@@ -278,41 +411,147 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             compute_loss_func="non-None value to disable scaling",
         )
 
+        self._last_loaded_step = -1 if self.use_vllm else 0
+        if self.use_vllm:
+            from ...generation.vllm_generation import VLLMGeneration
+
+            self.vllm_generation = VLLMGeneration(
+                model=self.model,
+                accelerator=self.accelerator,
+                is_fsdp_enabled=self.is_fsdp_enabled,
+                processing_class=self.processing_class,
+                mode=args.vllm_mode,
+                server_base_url=args.vllm_server_base_url,
+                server_host=args.vllm_server_host,
+                server_port=args.vllm_server_port,
+                group_port=args.vllm_group_port,
+                server_timeout=args.vllm_server_timeout,
+                tensor_parallel_size=args.vllm_tensor_parallel_size,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                max_model_length=args.vllm_max_model_length,
+                max_num_seqs=args.per_device_train_batch_size
+                * args.vllm_tensor_parallel_size
+                * args.steps_per_generation,
+                enable_sleep_mode=args.vllm_enable_sleep_mode,
+                model_impl=args.vllm_model_impl,
+                repetition_penalty=args.repetition_penalty,
+                temperature=self.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                min_p=args.min_p,
+                max_completion_length=self.max_completion_length,
+                logprobs=None,
+                generation_kwargs=args.generation_kwargs,
+            )
+
+        # Per-rank read-only client to the same generation server for teacher scoring (weights are synced there by
+        # `VLLMGeneration`; scoring needs no weight-update communicator). Mirrors the distillation trainer's
+        # `teacher_client`.
+        self.teacher_client = None
+        if self.use_teacher_server:
+            from ...generation.vllm_client import VLLMClient
+
+            base_url = args.vllm_server_base_url or f"http://{args.vllm_server_host}:{args.vllm_server_port}"
+            self.teacher_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
+
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
-        self.model.add_model_tags(self._tag_names)
+        if hasattr(self.model, "add_model_tags"):
+            self.model.add_model_tags(self._tag_names)
 
-        # In self-distillation the teacher is always derived from the student:
-        # - PEFT: base model with adapter disabled (or EMA teacher adapter when sync_ref_model=True)
-        # - Non-PEFT: same model (or deep-copied EMA model when sync_ref_model=True)
-        self.teacher_model = None
-
-        if args.sync_ref_model:
-            if is_peft_available() and is_peft_model(self.model):
-                self.add_callback(
-                    PEFTAdapterEMACallback(
-                        model=self.model,
-                        teacher_adapter_name="teacher",
-                        update_rate=args.ref_model_mixup_alpha,
-                        sync_steps=args.ref_model_sync_steps,
-                        accelerator=self.accelerator,
-                    )
-                )
-            else:
-                student_model = self.accelerator.unwrap_model(self.model)
-                self.teacher_model = copy.deepcopy(student_model)
-                self.teacher_model.requires_grad_(False)
-                self.teacher_model.eval()
-                if self.is_deepspeed_enabled:
-                    self.teacher_model = prepare_deepspeed(self.teacher_model, self.accelerator)
-                elif self.is_fsdp_enabled:
-                    self.teacher_model = prepare_fsdp(self.teacher_model, self.accelerator)
-                else:
-                    self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
-                self.add_callback(SyncRefModelCallback(ref_model=self.teacher_model, accelerator=self.accelerator))
-
+        self._setup_teacher_model()
         self.model_accepts_loss_kwargs = False
+
+    def _set_signature_columns_if_needed(self):
+        if self._signature_columns is None:
+            self._signature_columns = ["prompt", "privileged_context"]
+
+    def _dispatch_self_distillation_callback(self, event_name: str, **payload) -> None:
+        for callback in self.callback_handler.callbacks:
+            callback_fn = getattr(callback, event_name, None)
+            if callback_fn is not None:
+                callback_fn(
+                    args=self.args,
+                    state=self.state,
+                    control=self.control,
+                    model=self.model,
+                    processing_class=self.processing_class,
+                    **payload,
+                )
+
+    def _setup_teacher_model(self) -> None:
+        """Prepare teacher state according to the semantic teacher choice.
+
+        Resolve `teacher_model_kind` × PEFT state into the effective teacher:
+
+            - `"live"` (any model):
+                Teacher is the student. No divergence, no callback.
+            - `"base"` + PEFT model:
+                Teacher reuses `self.model`; the base weights are recovered downstream by disabling the adapter via
+                `use_adapter` during teacher forward.
+            - `"base"` + non-PEFT model:
+                Teacher is a frozen deepcopy of the initial student (falls through to the copy branch below).
+            - `"ema"` + pure-LoRA training:
+                Teacher reuses `self.model`; a dedicated `"teacher"` LoRA adapter is attached and updated by
+                `PEFTAdapterEMACallback`. Teacher forward switches to that adapter downstream.
+            - `"ema"` (otherwise):
+                Teacher is a frozen deepcopy synchronized each step by `SyncTeacherModelCallback`.
+
+        Must be called after `super().__init__` so that `self.callback_handler` is available.
+        """
+
+        teacher_model_kind = self.args.teacher_model_kind
+
+        if teacher_model_kind == "live":
+            self.teacher_model = self.model
+            return
+
+        if teacher_model_kind == "base" and is_peft_model(self.model):
+            self.teacher_model = self.model
+            return
+
+        if self._use_peft_ema_teacher_adapter():
+            # Must run after super().__init__ so self.callback_handler exists.
+            self.add_callback(
+                PEFTAdapterEMACallback(
+                    model=self.model,
+                    teacher_adapter_name="teacher",
+                    update_rate=self.args.teacher_update_rate,
+                    sync_steps=self.args.teacher_sync_steps,
+                    accelerator=self.accelerator,
+                )
+            )
+            self.teacher_model = self.model
+            return
+
+        if is_peft_model(self.model):
+            raise ValueError(
+                "`teacher_model_kind='ema'` with a non-pure-LoRA PEFT model is not supported: the separate EMA "
+                "teacher cannot be parameter-matched to the PEFT student. Use pure-LoRA training, a non-PEFT model, "
+                "or `teacher_model_kind` in {'live', 'base'}."
+            )
+
+        # Build the teacher from the model path (like the GRPO/DPO reference model) rather than deep-copying the
+        # student: under ZeRO-3 the student params are already sharded, so a deep copy would clone empty shards.
+        model_init_kwargs = self.args.model_init_kwargs or {}
+        if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+            model_init_kwargs["device_map"] = None
+        self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
+        self.teacher_model.requires_grad_(False)
+        self.teacher_model.eval()
+        if self.is_deepspeed_enabled:
+            self.teacher_model = prepare_deepspeed(self.teacher_model, self.accelerator)
+        elif self.is_fsdp_enabled:
+            self.teacher_model = prepare_fsdp(self.teacher_model, self.accelerator)
+        else:
+            self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
+
+        if teacher_model_kind == "ema":
+            self.add_callback(SyncTeacherModelCallback(teacher_model=self.teacher_model, accelerator=self.accelerator))
+
+    def _use_peft_ema_teacher_adapter(self) -> bool:
+        return self.args.teacher_model_kind == "ema" and is_pure_lora_training(self.model, self.accelerator)
 
     def get_train_dataloader(self):
         if self.train_dataset is None:
@@ -356,51 +595,191 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
         return RepeatSampler(
             data_source=eval_dataset,
-            mini_repeat_count=self.num_generations,
+            mini_repeat_count=self.num_generations_eval,
             seed=self.args.seed,
         )
 
     def training_step(self, model, inputs, num_items_in_batch):
-        output = super().training_step(model, inputs, num_items_in_batch)
+        # Gather spans forward+backward: the fused JSD computes the lm_head grad in backward.
+        with self._get_liger_zero3_lm_head_gather_ctx(model):
+            output = super().training_step(model, inputs, num_items_in_batch)
         self._step += 1
         return output
 
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        if not isinstance(inputs, dict):
+            inputs = self._prepare_inputs(inputs)
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+        return loss.detach(), None, None
+
     def _prepare_inputs(self, generation_batch):
+        """Return the per-step training batch, regenerating rollouts and buffering them for reuse in train mode.
+
+        In train mode, rollouts are generated once every `steps_per_generation * num_iterations` steps and split into
+        per-step slices reused until the next regeneration. In eval mode, every batch is freshly prepared.
+        """
         mode = "train" if self.model.training else "eval"
         if mode == "train":
             generate_every = self.args.steps_per_generation * self.num_iterations
             if self._step % generate_every == 0 or self._buffered_inputs is None:
-                generation_batch = self._build_buffered_batch(generation_batch)
-                self._buffered_inputs = split_tensor_dict(generation_batch, self.args.steps_per_generation)
+                buffered_batch = self._prepare_training_batch(generation_batch)
+                self._buffered_inputs = split_tensor_dict(buffered_batch, self.args.steps_per_generation)
                 self._dispatch_self_distillation_callback(
                     "on_generation_batch_built",
                     generate_every=generate_every,
                     steps_per_generation=self.args.steps_per_generation,
                 )
             return self._buffered_inputs[self._step % self.args.steps_per_generation]
-        return self._build_buffered_batch(generation_batch)
+        return self._prepare_training_batch(generation_batch)
 
-    def _generate_completion_ids(self, prompts: list[Any]) -> tuple[torch.Tensor, torch.Tensor]:
-        generate_inputs = self.processing_class(
-            text=self.prompt_tokenizer.apply_prompt_template(prompts),
-            return_tensors="pt",
-            padding=True,
-            padding_side="left",
-            max_length=self.max_prompt_length,
-            truncation=True,
-            add_special_tokens=False,
+    def _prepare_training_batch(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
+        """Sample student rollouts and construct teacher prompts"""
+        batch = self.sample_rollouts(inputs)
+        mode = "train" if self.model.training else "eval"
+        self._record_completion_metrics(mode, batch)
+        prompts = [example["prompt"] for example in inputs]
+        privileged_contexts = [example.get("privileged_context") for example in inputs]
+        teacher_batch = self.teacher_context_builder.build(
+            prompts,
+            privileged_contexts,
+            batch["completion_ids"],
+            batch["completion_mask"],
         )
-        # This generation helper builds tokenized model inputs directly, so use the base Trainer tensor preparation
-        # instead of re-entering the buffered outer training hook.
-        generate_inputs = _BaseTrainer._prepare_inputs(self, generate_inputs)
+        batch.update(
+            {
+                "teacher_input_ids": teacher_batch["teacher_input_ids"],
+                "teacher_attention_mask": teacher_batch["teacher_attention_mask"],
+            }
+        )
+
+        self._dispatch_self_distillation_callback(
+            "on_self_distillation_batch_prepared",
+            old_per_token_logps=batch.get("old_per_token_logps"),
+            prompt_ids=batch["prompt_ids"],
+            completion_ids=batch["completion_ids"],
+            teacher_input_ids=batch["teacher_input_ids"],
+            teacher_attention_mask=batch["teacher_attention_mask"],
+        )
+        return batch
+
+    def sample_rollouts(self, inputs: list[dict[str, Any]]) -> TrainingBatch:
+        """Generate completions for a batch of prompts and assemble the training batch."""
+        prompts = [example["prompt"] for example in inputs]
+        privileged_contexts = [example.get("privileged_context") for example in inputs]
+
+        student_prompt_ids_list = self._tokenize_prompts(prompts)
+        if self.generate_from_teacher:
+            generation_prompts = self.teacher_context_builder.select_generation_prompts(prompts, privileged_contexts)
+            generation_prompt_ids_list = self._tokenize_prompts(generation_prompts)
+        else:
+            generation_prompts = prompts
+            generation_prompt_ids_list = student_prompt_ids_list
+
+        self._dispatch_self_distillation_callback(
+            "on_generation_prompts_selected",
+            generation_prompts=generation_prompts,
+            generation_prompt_text=None,
+        )
+
+        _, completion_ids_list = self._generate(generation_prompt_ids_list)
+        device = self.accelerator.device
+        prompt_ids = [torch.tensor(ids) for ids in student_prompt_ids_list]
+        prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
+        prompt_ids = pad(prompt_ids, padding_value=self._tokenizer.pad_token_id, padding_side="left").to(device=device)
+        prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left").to(device=device)
+
+        completion_ids = [torch.tensor(ids) for ids in completion_ids_list]
+        completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
+        completion_ids = pad(completion_ids, padding_value=self._tokenizer.pad_token_id, padding_side="right").to(
+            device=device
+        )
+        completion_mask = pad(completion_mask, padding_value=0, padding_side="right").to(device=device)
+
+        old_per_token_logps = None
+        if not self.generate_from_teacher:
+            old_per_token_logps = self._compute_rollout_logps(
+                prompt_ids=prompt_ids,
+                prompt_mask=prompt_mask,
+                completion_ids=completion_ids,
+                completion_mask=completion_mask,
+            )
+        batch: TrainingBatch = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "raw_completion_lengths": torch.tensor(
+                [len(ids) for ids in completion_ids_list], device=device, dtype=torch.long
+            ),
+        }
+        if old_per_token_logps is not None:
+            batch["old_per_token_logps"] = old_per_token_logps
+        return batch
+
+    def _get_completion_ids_list(self, batch: TrainingBatch) -> list[list[int]]:
+        raw_completion_lengths = batch["raw_completion_lengths"].detach().cpu().tolist()
+        return [
+            ids[:length].tolist()
+            for ids, length in zip(batch["completion_ids"].detach().cpu(), raw_completion_lengths, strict=True)
+        ]
+
+    def _tokenize_prompts(self, prompts: list[Any]) -> list[list[int]]:
+        if is_conversational({"prompt": prompts[0]}):
+            tokenized = self.processing_class.apply_chat_template(
+                conversation=prompts,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                **self.chat_template_kwargs,
+            )
+            prompt_ids = tokenized["input_ids"]
+        else:
+            prompt_ids = self.processing_class(text=prompts)["input_ids"]
+        if self.max_prompt_length is not None:
+            prompt_ids = [ids[-self.max_prompt_length :] for ids in prompt_ids]
+        return prompt_ids
+
+    def _generate(self, prompt_ids: list[list[int]]) -> tuple[list[list[int]], list[list[int]]]:
+        if self.use_vllm:
+            return self._generate_vllm(prompt_ids)
+        return self._generate_transformers(prompt_ids)
+
+    def _generate_vllm(self, prompt_ids: list[list[int]]) -> tuple[list[list[int]], list[list[int]]]:
+        if self.state.global_step != self._last_loaded_step:
+            self.vllm_generation.sync_weights()
+            self._last_loaded_step = self.state.global_step
+
+        mode = "train" if self.model.training else "eval"
+        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+        prompt_ids_out, completion_ids_list, _, _ = self.vllm_generation.generate(
+            prompts=prompt_ids,
+            images=None,
+            num_generations=num_generations,
+        )
+        return prompt_ids_out, completion_ids_list
+
+    def _generate_transformers(self, prompt_ids: list[list[int]]) -> tuple[list[list[int]], list[list[int]]]:
+        device = self.accelerator.device
+        prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
+        padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left").to(
+            device=device
+        )
+        attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left").to(
+            device=device
+        )
+        generate_inputs: dict[str, torch.Tensor | Any] = {"input_ids": padded_ids, "attention_mask": attention_mask}
 
         with (
             unwrap_model_for_generation(
                 self.model_wrapped,
                 self.accelerator,
                 gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                generation_kwargs=self.generation_kwargs,
             ) as unwrapped_model,
             torch.no_grad(),
+            FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
         ):
             prompt_completion_ids = unwrapped_model.generate(
                 **generate_inputs, generation_config=self.generation_config
@@ -409,88 +788,520 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         prompt_length = generate_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
         is_eos = completion_ids == self._tokenizer.eos_token_id
-        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=completion_ids.device)
+        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-        seq_idx = torch.arange(is_eos.size(1), device=completion_ids.device).expand(is_eos.size(0), -1)
-        completion_mask = (seq_idx <= eos_idx.unsqueeze(1)).long()
+        seq_idx = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+        completion_mask = (seq_idx <= eos_idx.unsqueeze(1)).int()
+        completion_ids_list = [
+            c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
+        ]
+        return prompt_ids, completion_ids_list
 
-        completion_ids_list = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
-        completion_ids = [torch.tensor(ids, device=self.accelerator.device) for ids in completion_ids_list]
-        completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
-        return (
-            pad(completion_ids, padding_value=self._tokenizer.pad_token_id, padding_side="right"),
-            pad(completion_mask, padding_value=0, padding_side="right"),
-        )
+    def _compute_rollout_logps(
+        self,
+        prompt_ids: torch.Tensor,
+        prompt_mask: torch.Tensor,
+        completion_ids: torch.Tensor,
+        completion_mask: torch.Tensor,
+    ) -> torch.Tensor | None:
+        generate_every = self.args.steps_per_generation * self.num_iterations
+        old_per_token_logps = None
 
-    def _build_buffered_batch(self, inputs: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
-        prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
-        generation_prompts = self.teacher_context_builder.select_generation_prompts(prompts, privileged_contexts)
-        generation_prompt_text = self.prompt_tokenizer.apply_prompt_template(generation_prompts)
-        self._dispatch_self_distillation_callback(
-            "on_generation_prompts_selected",
-            generation_prompts=generation_prompts,
-            generation_prompt_text=generation_prompt_text,
-        )
-        completion_ids, completion_mask = self._generate_completion_ids(generation_prompts)
-
-        teacher_batch = self.teacher_context_builder.build(
-            prompts, privileged_contexts, completion_ids, completion_mask
-        )
-
-        prompt_completion_ids = torch.cat([teacher_batch["prompt_ids"], completion_ids], dim=1)
-        attention_mask = torch.cat([teacher_batch["prompt_mask"], completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)
-
-        with torch.no_grad():
-            generate_every = self.args.steps_per_generation * self.num_iterations
-            if not self.generate_from_teacher and self.args.gradient_accumulation_steps % generate_every != 0:
-                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+        if self.args.gradient_accumulation_steps % generate_every != 0:
+            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+            attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+            logits_to_keep = completion_ids.size(1)
+            with torch.no_grad():
+                logits = self._forward_logits(
                     self.model,
                     prompt_completion_ids,
                     attention_mask,
                     logits_to_keep,
-                    compute_entropy=False,
                 )
-            else:
-                old_per_token_logps = None
+                old_per_token_logps = selective_log_softmax(logits, completion_ids)
 
-        self._dispatch_self_distillation_callback(
-            "on_self_distillation_batch_prepared",
-            old_per_token_logps=old_per_token_logps,
-            prompt_ids=teacher_batch["prompt_ids"],
-            completion_ids=completion_ids,
-        )
-        output = {
-            "prompt_ids": teacher_batch["prompt_ids"],
-            "prompt_mask": teacher_batch["prompt_mask"],
-            "completion_ids": completion_ids,
-            "completion_mask": completion_mask,
-            "teacher_input_ids": teacher_batch["teacher_input_ids"],
-            "teacher_attention_mask": teacher_batch["teacher_attention_mask"],
-        }
-        if old_per_token_logps is not None:
-            output["old_per_token_logps"] = old_per_token_logps
-        return output
+        return old_per_token_logps
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The SDFTTrainer does not support returning outputs")
 
-        if self.num_loss_tokens_to_skip > 0:
-            inputs = dict(inputs)
-            completion_mask = inputs["completion_mask"].clone()
-            token_positions = torch.arange(completion_mask.size(1), device=completion_mask.device).unsqueeze(0)
-            completion_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
-            inputs["completion_mask"] = completion_mask
-
-        loss = self._compute_self_distillation_loss(model, inputs)
+        if self.use_teacher_server:
+            loss = self._compute_server_distillation_loss(model, inputs)
+        elif self.use_liger_loss:
+            loss = self._compute_liger_loss(model, inputs)
+        else:
+            distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
+            loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
         accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
         return loss / accumulation_scale
 
-    def _get_teacher_context_for_self_distillation(self, model):
-        if is_peft_available() and isinstance(self.model, PeftModel):
-            model = self.accelerator.unwrap_model(self.model)
-            if self.args.sync_ref_model and "teacher" in model.peft_config:
-                return use_adapter(model, adapter_name="teacher")
-            return use_adapter(model, adapter_name=None)
-        return super()._get_teacher_context_for_self_distillation(model)
+    def _compute_self_distillation_loss(
+        self,
+        model,
+        inputs: TrainingBatch,
+        distillation_logits: DistillationLogits,
+    ) -> torch.Tensor:
+        """Compute the per-token distillation loss and aggregate by normalizing over sequence length.
+
+        Dispatches between three objectives based on `distillation_mode`:
+
+            - `"topk_logits"`: top-k approximation of the divergence, optionally with a tail bucket for the remaining
+              probability mass (`distillation_add_tail`).
+            - `"full_logits"`: full-vocab divergence.
+            - `"sampled_token"`: token-level (reverse-KL) distillation on sampled `completion_ids`.
+
+        When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a clipped
+        importance-sampling ratio between the current student and the student at rollout time.
+        """
+        if distillation_logits.loss_mask.sum() == 0:
+            mode = "train" if model.training else "eval"
+            self._log_self_distillation_metric(mode, 0.0)
+            # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
+            return distillation_logits.student_logits.sum() * 0.0
+
+        if self.args.distillation_mode == "topk_logits":
+            if self.args.distillation_topk is None:
+                raise ValueError("`distillation_mode='topk_logits'` requires `distillation_topk` to be set.")
+            per_token_loss = compute_topk_self_distillation_loss(
+                distillation_logits.student_logits,
+                distillation_logits.teacher_logits,
+                distillation_topk=self.args.distillation_topk,
+                distillation_alpha=self.args.distillation_alpha,
+                distillation_add_tail=self.args.distillation_add_tail,
+            )
+        elif self.args.distillation_mode == "full_logits":
+            per_token_loss = compute_full_logit_self_distillation_loss(
+                distillation_logits.student_logits,
+                distillation_logits.teacher_logits,
+                distillation_alpha=self.args.distillation_alpha,
+            )
+        elif self.args.distillation_mode == "sampled_token":
+            per_token_loss = compute_sampled_token_self_distillation_loss(
+                distillation_logits.student_logits,
+                distillation_logits.teacher_logits,
+                distillation_logits.completion_ids,
+                distillation_alpha=self.args.distillation_alpha,
+            )
+        else:
+            raise ValueError(
+                "distillation_mode must be one of: 'sampled_token', 'full_logits', 'topk_logits', "
+                f"got {self.args.distillation_mode!r}"
+            )
+
+        old_per_token_logps = inputs.get("old_per_token_logps")
+        if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
+            student_per_token_logps = selective_log_softmax(
+                distillation_logits.student_logits,
+                distillation_logits.completion_ids,
+            )
+            per_token_loss = apply_importance_sampling_clipping(
+                per_token_loss,
+                student_per_token_logps,
+                old_per_token_logps,
+                self.args.distillation_is_clip,
+            )
+
+        loss = (per_token_loss * distillation_logits.loss_mask).sum(-1) / distillation_logits.loss_mask.sum(-1).clamp(
+            min=1.0
+        )
+        loss = loss.mean()
+
+        mode = "train" if model.training else "eval"
+        mean_distill_loss = (
+            per_token_loss * distillation_logits.loss_mask
+        ).sum() / distillation_logits.loss_mask.sum().clamp(min=1.0)
+        self._log_self_distillation_metric(
+            mode,
+            self.accelerator.gather(mean_distill_loss).mean().item(),
+        )
+        return loss
+
+    def _compute_server_distillation_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
+        """Distillation loss with teacher logprobs served by the vLLM generation server (`teacher_model_kind='live'`).
+
+        The student is forwarded locally (grad) for its logits; the teacher logprobs are fetched from the server (no
+        local teacher forward). `sampled_token` distills the realized token (reverse KL); `topk_logits` distills over
+        the teacher's own top-k support (the server cannot score the student's top-k indices).
+        """
+        # Buffered batches are reused across optimizer steps (`num_iterations > 1`), so the server weights can lag the
+        # live student; re-sync before scoring.
+        if self.state.global_step != self._last_loaded_step:
+            self.vllm_generation.sync_weights()
+            # Only the main process pushes weights to the server, so hold every rank here until the push completes;
+            # otherwise non-main ranks could score against half-updated weights.
+            self.accelerator.wait_for_everyone()
+            self._last_loaded_step = self.state.global_step
+
+        completion_ids = inputs["completion_ids"]
+        completion_mask = inputs["completion_mask"]
+        logits_to_keep = completion_ids.size(1)
+
+        # SDFT skips the first few completion tokens in the distillation loss to suppress teacher-prompt artifacts.
+        loss_mask = completion_mask
+        if self.num_loss_tokens_to_skip > 0:
+            token_positions = torch.arange(completion_mask.size(1), device=completion_mask.device).unsqueeze(0)
+            loss_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
+
+        student_input_ids = torch.cat([inputs["prompt_ids"], completion_ids], dim=1)
+        student_attention_mask = torch.cat([inputs["prompt_mask"], completion_mask], dim=1)
+        student_logits = self._forward_logits(
+            model=model,
+            input_ids=student_input_ids,
+            attention_mask=student_attention_mask,
+            logits_to_keep=logits_to_keep,
+        )
+
+        mode = "train" if model.training else "eval"
+        teacher = self._get_teacher_token_logprobs_from_server(inputs, logits_to_keep)
+        # Padding positions come back as `-inf`; the masked-out positions are neutralized to finite values below so the
+        # divergence does not leak `+inf` through them (mirrors the distillation trainer).
+        required = loss_mask.bool()
+        student_per_token_logps = selective_log_softmax(student_logits, completion_ids)
+
+        teacher_per_token_logps = teacher["actual_logprobs"]
+        if (required & ~torch.isfinite(teacher_per_token_logps)).any():
+            raise ValueError("Teacher server returned no logprob for a required completion token.")
+        teacher_per_token_logps = torch.where(
+            required, teacher_per_token_logps, torch.zeros_like(teacher_per_token_logps)
+        )
+
+        # Diagnostic for disagreement between local student scores and server teacher scores on realized tokens.
+        # Sudden jumps can indicate stale server weights or numerical drift.
+        abs_diff = ((student_per_token_logps.detach() - teacher_per_token_logps).abs() * loss_mask).sum() / (
+            loss_mask.sum().clamp(min=1.0)
+        )
+        self._metrics[mode]["self_distillation/server_logprob_abs_diff"].append(
+            self.accelerator.gather(abs_diff).mean().item()
+        )
+
+        if self.args.distillation_mode == "sampled_token":
+            # Reverse-KL token-level objective, matching `compute_sampled_token_self_distillation_loss`.
+            per_token_loss = (student_per_token_logps - teacher_per_token_logps).detach() * student_per_token_logps
+        else:
+            teacher_topk_logps = teacher["topk_logprobs"]
+            teacher_topk_ids = teacher["topk_token_ids"]
+            # Project the student onto the teacher's top-k support, then renormalize (or add a tail bucket) before the
+            # divergence, matching `compute_topk_self_distillation_loss` on the teacher's support.
+            keep = required.unsqueeze(-1)
+            student_topk_logps = torch.gather(
+                torch.log_softmax(student_logits, dim=-1), dim=-1, index=teacher_topk_ids
+            )
+            student_topk_logps = torch.where(keep, student_topk_logps, torch.zeros_like(student_topk_logps))
+            teacher_topk_logps = torch.where(keep, teacher_topk_logps, torch.zeros_like(teacher_topk_logps))
+            if self.args.distillation_add_tail:
+                student_topk_logps = add_tail_bucket(student_topk_logps)
+                teacher_topk_logps = add_tail_bucket(teacher_topk_logps)
+            else:
+                student_topk_logps = student_topk_logps - torch.logsumexp(student_topk_logps, dim=-1, keepdim=True)
+                teacher_topk_logps = teacher_topk_logps - torch.logsumexp(teacher_topk_logps, dim=-1, keepdim=True)
+            per_token_loss = compute_divergence(student_topk_logps, teacher_topk_logps, self.args.distillation_alpha)
+
+        old_per_token_logps = inputs.get("old_per_token_logps")
+        if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
+            per_token_loss = apply_importance_sampling_clipping(
+                per_token_loss, student_per_token_logps, old_per_token_logps, self.args.distillation_is_clip
+            )
+
+        loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
+        loss = loss.mean()
+        mean_distill_loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
+        self._log_self_distillation_metric(mode, self.accelerator.gather(mean_distill_loss).mean().item())
+        return loss
+
+    def _get_teacher_token_logprobs_from_server(
+        self, inputs: TrainingBatch, logits_to_keep: int
+    ) -> dict[str, torch.Tensor]:
+        """Per-token teacher logprobs from the vLLM server.
+
+        Returns a dict with `actual_logprobs` (`(B, T)`, the realized-token logprob for reverse KL) and `topk_logprobs`
+        / `topk_token_ids` (`(B, T, K)`, the teacher's top-k support for top-k logit distillation). Completions are
+        right-padded, so server values fill the leading positions of each row and the trailing padding keeps the `-inf`
+        / `0` sentinels (neutralized by the caller).
+        """
+        import numpy as np
+
+        teacher_input_ids = inputs["teacher_input_ids"]
+        teacher_attention_mask = inputs["teacher_attention_mask"]
+        device = teacher_input_ids.device
+        batch_size = teacher_input_ids.size(0)
+        prompt_attention_mask = teacher_attention_mask[:, : teacher_attention_mask.size(1) - logits_to_keep]
+        if self.args.distillation_mode == "topk_logits" and self.args.distillation_topk is None:
+            raise ValueError("`distillation_mode='topk_logits'` requires `distillation_topk` to be set.")
+        top_logprobs = self.args.distillation_topk if self.args.distillation_mode == "topk_logits" else 1
+
+        sequences, prompt_lengths, _ = build_teacher_request_inputs(
+            teacher_input_ids, teacher_attention_mask, prompt_attention_mask
+        )
+        result = self.teacher_client.get_sequence_logprobs(
+            sequences=sequences,
+            prompt_lengths=prompt_lengths,
+            top_logprobs=top_logprobs,
+            temperature=self.temperature,
+        )
+
+        actual = np.full((batch_size, logits_to_keep), float("-inf"), dtype=np.float32)
+        topk = np.full((batch_size, logits_to_keep, top_logprobs), float("-inf"), dtype=np.float32)
+        topk_ids = np.zeros((batch_size, logits_to_keep, top_logprobs), dtype=np.int64)
+        for i in range(batch_size):
+            seq_actual = result["actual_logprobs"][i]
+            n = min(len(seq_actual), logits_to_keep)
+            if n:
+                actual[i, :n] = np.array(seq_actual, dtype=np.float32)[:n, 0]
+                topk[i, :n] = np.array(result["logprobs"][i], dtype=np.float32)[:n]
+                topk_ids[i, :n] = np.array(result["logprob_token_ids"][i], dtype=np.int64)[:n]
+        return {
+            "actual_logprobs": torch.from_numpy(actual).to(device),
+            "topk_logprobs": torch.from_numpy(topk).to(device),
+            "topk_token_ids": torch.from_numpy(topk_ids).to(device),
+        }
+
+    def _compute_teacher_student_logits(
+        self,
+        model,
+        teacher_model,
+        inputs: TrainingBatch,
+    ) -> DistillationLogits:
+        """Compute the per-token logits of the student and teacher over the completion tokens.
+
+        The student is forwarded on its own input (original prompt plus the sampled completion) while the teacher is
+        forwarded on its input (prompt, privileged context, and the same completion). Both sets of logits are aligned
+        to the completion tokens so they can be compared position-by-position in the distillation loss.
+
+        The teacher forward runs under `torch.no_grad()` and the context resolved by
+        `_get_teacher_context_for_self_distillation`, which routes it to the correct weights.
+        """
+        prompt_ids = inputs["prompt_ids"]
+        prompt_mask = inputs["prompt_mask"]
+        completion_ids = inputs["completion_ids"]
+        completion_mask = inputs["completion_mask"]
+        logits_to_keep = completion_ids.size(1)
+
+        # SDFT skips the first few completion tokens in the distillation loss to suppress teacher-prompt artifacts.
+        loss_mask = completion_mask
+        if self.num_loss_tokens_to_skip > 0:
+            token_positions = torch.arange(completion_mask.size(1), device=completion_mask.device).unsqueeze(0)
+            loss_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
+
+        student_input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        student_attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        student_logits = self._forward_logits(
+            model=model,
+            input_ids=student_input_ids,
+            attention_mask=student_attention_mask,
+            logits_to_keep=logits_to_keep,
+        )
+
+        with torch.no_grad(), self._get_teacher_context_for_self_distillation():
+            teacher_logits = self._forward_logits(
+                model=teacher_model,
+                input_ids=inputs["teacher_input_ids"],
+                attention_mask=inputs["teacher_attention_mask"],
+                logits_to_keep=logits_to_keep,
+            )
+
+        return DistillationLogits(
+            completion_ids=completion_ids,
+            loss_mask=loss_mask,
+            student_logits=student_logits,
+            teacher_logits=teacher_logits,
+        )
+
+    def _forward_logits(
+        self,
+        model,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        logits_to_keep: int,
+    ) -> torch.Tensor:
+        """Forward the model and return temperature-scaled logits aligned to the completion tokens."""
+        model_inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "use_cache": False,
+        }
+        if "logits_to_keep" in self.model_kwarg_keys:
+            model_inputs["logits_to_keep"] = logits_to_keep + 1
+
+        logits = model(**model_inputs).logits
+        logits = logits[:, :-1, :]
+        logits = logits[:, -logits_to_keep:, :]
+        return logits / self.temperature
+
+    def _compute_liger_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
+        """`full_logits` distillation via the Liger fused JSD kernel: forwards the base models for hidden states and
+        fuses the lm_head projection with the divergence, never materializing the full-vocab logits.
+
+        Each model is forwarded through its own wrapper via `_forward_redirection` so FSDP2/DeepSpeed materialize the
+        sharded params during the unwrapped base forward. The fused kernel needs both lm_head weights live at once, so
+        the frozen teacher weight is captured while the teacher is materialized and handed to the student pass.
+        """
+        logits_to_keep = inputs["completion_ids"].size(1)
+        completion_mask = inputs["completion_mask"]
+        loss_mask = completion_mask
+        if self.num_loss_tokens_to_skip > 0:
+            token_positions = torch.arange(completion_mask.size(1), device=completion_mask.device).unsqueeze(0)
+            loss_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
+
+        unwrapped_student = self.accelerator.unwrap_model(model)
+        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
+
+        with torch.no_grad(), self._get_teacher_context_for_self_distillation():
+            teacher_hidden, teacher_weight, teacher_bias = self._forward_redirection(
+                self.teacher_model,
+                unwrapped_teacher,
+                self._liger_teacher_side,
+                unwrapped_teacher,
+                inputs,
+                logits_to_keep,
+            )
+
+        return self._forward_redirection(
+            model,
+            unwrapped_student,
+            self._liger_student_loss,
+            unwrapped_student,
+            inputs,
+            logits_to_keep,
+            loss_mask,
+            teacher_hidden,
+            teacher_weight,
+            teacher_bias,
+        )
+
+    def _liger_teacher_side(self, teacher, inputs: TrainingBatch, logits_to_keep: int):
+        """Teacher hidden states + frozen lm_head weight, captured while the teacher params are materialized."""
+        hidden = teacher.get_decoder()(
+            input_ids=inputs["teacher_input_ids"],
+            attention_mask=inputs["teacher_attention_mask"],
+            use_cache=False,
+        ).last_hidden_state
+        hidden = hidden[:, :-1][:, -logits_to_keep:]
+        head = teacher.get_output_embeddings()
+        # Clone so the weight survives re-sharding once this forward context exits.
+        weight = head.weight.detach().clone()
+        bias = head.bias.detach().clone() if head.bias is not None else None
+        return hidden, weight, bias
+
+    def _liger_student_loss(
+        self,
+        student,
+        inputs: TrainingBatch,
+        logits_to_keep,
+        loss_mask,
+        teacher_hidden,
+        teacher_weight,
+        teacher_bias,
+    ):
+        student_input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
+        student_attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
+        student_hidden = student.get_decoder()(
+            input_ids=student_input_ids,
+            attention_mask=student_attention_mask,
+            use_cache=False,
+        ).last_hidden_state
+        # Align hidden states to the completion-predicting positions, matching `_forward_logits`.
+        student_hidden = student_hidden[:, :-1][:, -logits_to_keep:]
+
+        # `ignore_index` masks non-response positions; the token values only feed the disabled hard-CE term.
+        completion_ids = inputs["completion_ids"]
+        true_labels = torch.where(loss_mask.bool(), completion_ids, torch.full_like(completion_ids, -100))
+
+        student_head = student.get_output_embeddings()
+        # Per-sequence then batch mean (grpo), matching the non-Liger path: the fused kernel reduces by total tokens
+        # (bnpo), so we call it per sequence and average.
+        seq_losses = [
+            self.liger_jsd_loss(
+                student_input=student_hidden[i],
+                student_weight=student_head.weight,
+                teacher_input=teacher_hidden[i],
+                teacher_weight=teacher_weight,
+                true_labels=true_labels[i],
+                student_bias=student_head.bias,
+                teacher_bias=teacher_bias,
+            )
+            for i in range(student_hidden.size(0))
+        ]
+        loss = torch.stack(seq_losses).mean()
+
+        mode = "train" if student.training else "eval"
+        self._log_self_distillation_metric(mode, self.accelerator.gather(loss.detach()).mean().item())
+        return loss
+
+    def _get_liger_zero3_lm_head_gather_ctx(self, model):
+        """Gather the sharded student/teacher lm_head weights for the fused matmul under ZeRO-3. Liger reads
+        `lm_head.weight` by attribute, so the gather hook never fires; the decoder forward gathers itself. No-op
+        outside ZeRO-3."""
+        if not self.use_liger_loss:
+            return nullcontext()
+
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
+            return nullcontext()
+
+        import deepspeed
+
+        unwrapped_student = self.accelerator.unwrap_model(model)
+        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
+        student_head = unwrapped_student.get_output_embeddings()
+        teacher_head = unwrapped_teacher.get_output_embeddings()
+        params = [student_head.weight, teacher_head.weight]
+        if student_head.bias is not None:
+            params.append(student_head.bias)
+        if teacher_head.bias is not None:
+            params.append(teacher_head.bias)
+        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
+
+    def _get_teacher_context_for_self_distillation(self):
+        """Return the context manager that routes the teacher forward to the correct weights.
+
+        For non-PEFT models this is a no-op. For PEFT models:
+
+            - `teacher_model_kind == "base"`: disable the student adapter so the teacher forward uses the base weights.
+            - `teacher_model_kind == "ema"` under pure-LoRA training: switch to the `"teacher"` LoRA adapter.
+            - otherwise: no-op; the teacher is a separate deepcopy.
+        """
+        teacher_model_kind = self.args.teacher_model_kind
+        if not is_peft_model(self.model):
+            return nullcontext()
+
+        target_model = self.accelerator.unwrap_model(self.teacher_model)
+
+        if teacher_model_kind == "base":
+            return use_adapter(target_model, adapter_name=None)
+        if teacher_model_kind == "ema" and self._use_peft_ema_teacher_adapter():
+            return use_adapter(target_model, adapter_name="teacher")
+        return nullcontext()
+
+    def _record_completion_metrics(self, mode: str, batch: TrainingBatch) -> None:
+        device = self.accelerator.device
+        completion_ids_list = self._get_completion_ids_list(batch)
+        agg_completion_lengths = self.accelerator.gather(batch["raw_completion_lengths"])
+        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
+
+        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+        agg_is_truncated = self.accelerator.gather(is_truncated)
+        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
+        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
+        if len(term_completion_lengths) == 0:
+            term_completion_lengths = torch.zeros(1, device=device)
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
+
+    def _log_self_distillation_metric(self, mode: str, value: float) -> None:
+        metric_prefix = self._name.lower().replace(" ", "_")
+        self._metrics[mode]["self_distillation/distillation_loss"].append(value)
+        self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
+
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        mode = "train" if self.model.training else "eval"
+        metrics = {k: sum(v) / len(v) for k, v in self._metrics[mode].items() if v}
+        if mode == "eval":
+            metrics = {f"eval_{k}": v for k, v in metrics.items()}
+        logs = {**logs, **metrics}
+        super().log(logs, start_time)
+        self._metrics[mode].clear()

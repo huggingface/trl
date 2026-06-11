@@ -565,7 +565,8 @@ class GRPOTrainer(_BaseTrainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
         self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
-        self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
+        self.vllm_importance_sampling_clip_max = args.vllm_importance_sampling_clip_max
+        self.vllm_importance_sampling_clip_min = args.vllm_importance_sampling_clip_min
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
@@ -997,7 +998,16 @@ class GRPOTrainer(_BaseTrainer):
 
         model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
 
-        last_hidden_state = unwrapped_model.model(**model_inputs).last_hidden_state
+        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
+        # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
+        # returns just the text stack and feeds image-placeholder IDs through it.
+        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
+        # Fall back to `.model` there.
+        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+            backbone = unwrapped_model.model
+        else:
+            backbone = unwrapped_model.base_model
+        last_hidden_state = backbone(**model_inputs).last_hidden_state
         # Exclude the last value: it corresponds to the next token pred
         last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
         # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
@@ -2079,11 +2089,27 @@ class GRPOTrainer(_BaseTrainer):
 
                 if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
                     vllm_importance_sampling_ratio = torch.clamp(
-                        vllm_importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                        vllm_importance_sampling_ratio,
+                        min=self.vllm_importance_sampling_clip_min,
+                        max=self.vllm_importance_sampling_clip_max,
                     )
                 elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
+                    min_val = (
+                        self.vllm_importance_sampling_clip_min
+                        if self.vllm_importance_sampling_clip_min is not None
+                        else -math.inf
+                    )
+                    max_val = (
+                        self.vllm_importance_sampling_clip_max
+                        if self.vllm_importance_sampling_clip_max is not None
+                        else math.inf
+                    )
+
+                    invalid_mis_mask = (vllm_importance_sampling_ratio < min_val) | (
+                        vllm_importance_sampling_ratio > max_val
+                    )
                     vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
-                        vllm_importance_sampling_ratio > self.vllm_importance_sampling_cap, value=0.0
+                        invalid_mis_mask, value=0.0
                     )
                 else:
                     raise ValueError(
@@ -2139,22 +2165,28 @@ class GRPOTrainer(_BaseTrainer):
         rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
         num_generations = self.num_generations if mode == "train" else self.num_generations_eval
 
+        # A completion for which every reward function returned None is unscorable. nansum would collapse it to 0,
+        # which both biases the per-group baseline and hands the completion a spurious advantage. Mark these rows NaN
+        # so they're excluded from the (nan-aware) baseline below; their advantage is forced to 0 afterwards.
+        unscorable_mask = torch.isnan(rewards_per_func).all(dim=1)
+
         if self.multi_objective_aggregation == "sum_then_normalize":
             # Apply weights to each reward function's output and sum
             rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-            mean_grouped_rewards = rewards.view(-1, num_generations).mean(dim=1)
+            rewards[unscorable_mask] = torch.nan
+            mean_grouped_rewards = torch.nanmean(rewards.view(-1, num_generations), dim=1)
             mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(num_generations, dim=0)
             if self.scale_rewards in ["group", "none"]:
                 # If self.scale_rewards = "none", we'll only use std_rewards to check for zero std for logging
                 if num_generations > 1:
-                    std_rewards = rewards.view(-1, num_generations).std(dim=1)
+                    std_rewards = nanstd(rewards.view(-1, num_generations), dim=1)
                     std_rewards = std_rewards.repeat_interleave(num_generations, dim=0)
                 else:  # doesn't occur during training, but could occur in eval when num_generations_eval=1
                     std_rewards = torch.zeros_like(rewards)
             elif self.scale_rewards == "batch":
                 # Compute global std
                 if rewards.numel() > 1:
-                    std_rewards = rewards.std().expand_as(rewards)
+                    std_rewards = nanstd(rewards).expand_as(rewards)
                 else:  # doesn't occur during training, but could occur in eval when num_generations_eval=batch_size=1
                     std_rewards = torch.zeros_like(rewards)
             else:
@@ -2174,8 +2206,9 @@ class GRPOTrainer(_BaseTrainer):
             reward_k = (grouped - mean_k) / (std_k + 1e-4)
             reward_k = reward_k.view(-1, len(self.reward_funcs))
             rewards = (reward_k * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-            std_rewards = rewards.std().expand_as(rewards) if rewards.numel() > 1 else torch.zeros_like(rewards)
-            advantages = (rewards - rewards.mean()) / (std_rewards + 1e-4)
+            rewards[unscorable_mask] = torch.nan
+            std_rewards = nanstd(rewards).expand_as(rewards) if rewards.numel() > 1 else torch.zeros_like(rewards)
+            advantages = (rewards - torch.nanmean(rewards)) / (std_rewards + 1e-4)
             is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 
         else:
@@ -2183,6 +2216,10 @@ class GRPOTrainer(_BaseTrainer):
                 f"Invalid multi_objective_aggregation: {self.multi_objective_aggregation}. Must be "
                 "'sum_then_normalize' or 'normalize_then_sum'."
             )
+
+        # Unscorable completions (every reward func returned None) carry no learning signal: their reward is NaN here,
+        # so zero their advantage to keep them from moving the policy.
+        advantages = torch.nan_to_num(advantages, nan=0.0)
 
         # Slice to keep only the local part of the data
         process_slice = slice(
@@ -2199,8 +2236,9 @@ class GRPOTrainer(_BaseTrainer):
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
         rewards = (rewards_per_func * self.reward_weights.to(rewards_per_func.device).unsqueeze(0)).nansum(dim=1)
-        self._metrics[mode]["reward"].append(rewards.mean().item())
-        self._metrics[mode]["reward_std"].append(rewards.std().item())
+        rewards[unscorable_mask] = torch.nan  # exclude unscorable rows from the logged reward stats
+        self._metrics[mode]["reward"].append(torch.nanmean(rewards).item())
+        self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
@@ -2325,19 +2363,35 @@ class GRPOTrainer(_BaseTrainer):
 
         # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
         loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
-        # Compute loss and metrics using liger grpo loss
-        loss, metrics = self.liger_grpo_loss(
-            _input=last_hidden_state,
-            lin_weight=unwrapped_model.lm_head.weight,
-            selected_token_ids=completion_ids,
-            # The attention_mask parameter in liger loss is actually used as a loss mask (not model attention)
-            attention_mask=loss_mask,
-            advantages=inputs["advantages"],
-            bias=unwrapped_model.lm_head.bias,
-            old_per_token_logps=inputs.get("old_per_token_logps"),
-            ref_per_token_logps=inputs.get("ref_per_token_logps"),
-            vllm_is_ratio=inputs.get("importance_sampling_ratio"),
-        )
+        lm_head_weight = unwrapped_model.lm_head.weight
+        lm_head_bias = unwrapped_model.lm_head.bias
+        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires
+        # and the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
+        # computed during this forward, so it isn't needed in the backward). Skip it when already gathered: with tied
+        # embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning on exit breaks its tracking.
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        gather_ctx = nullcontext()
+        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+            from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+
+            params = [lm_head_weight] if lm_head_bias is None else [lm_head_weight, lm_head_bias]
+            if any(p.ds_status != ZeroParamStatus.AVAILABLE for p in params):
+                import deepspeed
+
+                gather_ctx = deepspeed.zero.GatheredParameters(params, modifier_rank=None)
+        with gather_ctx:
+            loss, metrics = self.liger_grpo_loss(
+                _input=last_hidden_state,
+                lin_weight=lm_head_weight,
+                selected_token_ids=completion_ids,
+                # The attention_mask parameter in liger loss is actually used as a loss mask (not model attention)
+                attention_mask=loss_mask,
+                advantages=inputs["advantages"],
+                bias=lm_head_bias,
+                old_per_token_logps=inputs.get("old_per_token_logps"),
+                ref_per_token_logps=inputs.get("ref_per_token_logps"),
+                vllm_is_ratio=inputs.get("importance_sampling_ratio"),
+            )
         # Extract metrics from the liger_grpo_loss output
         # KL divergence is the first metric when beta is non-zero
         mean_kl = metrics[0] if self.beta != 0.0 else None
@@ -2358,8 +2412,7 @@ class GRPOTrainer(_BaseTrainer):
             # Compute the loss using the liger grpo loss
             unwrapped_model = self.accelerator.unwrap_model(model)
             return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
-        else:
-            return self._compute_loss(model, inputs)
+        return self._compute_loss(model, inputs)
 
     @staticmethod
     def get_off_policy_mask(
