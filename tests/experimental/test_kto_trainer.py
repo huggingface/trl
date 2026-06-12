@@ -26,6 +26,116 @@ from trl.experimental.kto.kto_trainer import DataCollatorForVisionUnpairedPrefer
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_vision
 
 
+@require_vision
+class TestDataCollatorForVisionUnpairedPreference(TrlTestCase):
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.3.0"),
+        reason="mm_token_type_ids are returned by default since transformers-5.3.0 (see transformers#43972)",
+    )
+    def test_mm_token_type_ids_shape(self):
+        # Regression guard: when the processor returns mm_token_type_ids (Qwen2.5-VL after transformers#43972),
+        # the collator must produce a KL_completion_token_type_ids whose width matches KL_completion_input_ids,
+        # not the main completion's width (the two differ whenever their text lengths differ).
+        from PIL import Image
+        from transformers import AutoProcessor
+
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration")
+        collator = DataCollatorForVisionUnpairedPreference(processor, calculate_kl=True)
+        image = Image.new("RGB", (16, 16))
+        examples = [
+            {
+                "images": [image],
+                "prompt": [{"role": "user", "content": "What is this?"}],
+                "completion": [{"role": "assistant", "content": "A red square."}],
+                "label": True,
+            },
+            {
+                "images": [image],
+                "prompt": [{"role": "user", "content": "Describe it."}],
+                "completion": [{"role": "assistant", "content": "An image."}],
+                "label": False,
+            },
+        ]
+        output = collator(examples)
+
+        assert "mm_token_type_ids" in output
+        assert output["mm_token_type_ids"].shape == output["completion_input_ids"].shape, (
+            f"mm_token_type_ids shape {output['mm_token_type_ids'].shape} != "
+            f"completion_input_ids shape {output['completion_input_ids'].shape}"
+        )
+        assert "KL_completion_mm_token_type_ids" in output
+        assert output["KL_completion_mm_token_type_ids"].shape == output["KL_completion_input_ids"].shape, (
+            f"KL_completion_mm_token_type_ids shape {output['KL_completion_mm_token_type_ids'].shape} != "
+            f"KL_completion_input_ids shape {output['KL_completion_input_ids'].shape}"
+        )
+
+    def test_output_keys(self):
+        from PIL import Image
+        from transformers import AutoProcessor
+
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration")
+        image = Image.new("RGB", (16, 16))
+
+        def make_examples():
+            return [
+                {
+                    "images": [image],
+                    "prompt": [{"role": "user", "content": "What is this?"}],
+                    "completion": [{"role": "assistant", "content": "A red square."}],
+                    "label": True,
+                },
+                {
+                    "images": [image],
+                    "prompt": [{"role": "user", "content": "Describe it."}],
+                    "completion": [{"role": "assistant", "content": "An image."}],
+                    "label": False,
+                },
+            ]
+
+        # With KL
+        collator = DataCollatorForVisionUnpairedPreference(processor, calculate_kl=True)
+        output = collator(make_examples())
+        for key in ["completion_input_ids", "completion_attention_mask", "completion_mask", "pixel_values", "label"]:
+            assert key in output, f"Missing key: {key}"
+        for key in ["KL_completion_input_ids", "KL_completion_attention_mask", "KL_completion_mask"]:
+            assert key in output, f"Missing KL key: {key}"
+
+        # Without KL
+        collator_no_kl = DataCollatorForVisionUnpairedPreference(processor, calculate_kl=False)
+        output_no_kl = collator_no_kl(make_examples())
+        assert "completion_input_ids" in output_no_kl
+        assert "KL_completion_input_ids" not in output_no_kl
+
+    def test_kl_cycling(self):
+        # The KL completion for example i must be the completion from example i-1 (cycled by +1).
+        from PIL import Image
+        from transformers import AutoProcessor
+
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration")
+        collator = DataCollatorForVisionUnpairedPreference(processor, calculate_kl=True)
+        image = Image.new("RGB", (16, 16))
+        # Two distinct completions so that cycling is detectable
+        examples = [
+            {
+                "images": [image],
+                "prompt": [{"role": "user", "content": "Q1"}],
+                "completion": [{"role": "assistant", "content": "Answer one."}],
+                "label": True,
+            },
+            {
+                "images": [image],
+                "prompt": [{"role": "user", "content": "Q2"}],
+                "completion": [{"role": "assistant", "content": "Answer two."}],
+                "label": False,
+            },
+        ]
+        output = collator(examples)
+        # KL completions are cycled: KL[0] = completion[-1], KL[1] = completion[0]
+        # They must differ from the matching main completion (unless both are identical strings, which they aren't here)
+        assert not torch.equal(output["completion_input_ids"][0], output["KL_completion_input_ids"][0])
+        assert not torch.equal(output["completion_input_ids"][1], output["KL_completion_input_ids"][1])
+
+
 class TestKTOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -314,116 +424,6 @@ class TestKTOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-2]["eval_test"] == 0.0
-
-
-@require_vision
-class TestDataCollatorForVisionUnpairedPreference(TrlTestCase):
-    @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.3.0"),
-        reason="mm_token_type_ids are returned by default since transformers-5.3.0 (see transformers#43972)",
-    )
-    def test_mm_token_type_ids_shape(self):
-        # Regression guard: when the processor returns mm_token_type_ids (Qwen2.5-VL after transformers#43972),
-        # the collator must produce a KL_completion_token_type_ids whose width matches KL_completion_input_ids,
-        # not the main completion's width (the two differ whenever their text lengths differ).
-        from PIL import Image
-        from transformers import AutoProcessor
-
-        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration")
-        collator = DataCollatorForVisionUnpairedPreference(processor, calculate_kl=True)
-        image = Image.new("RGB", (16, 16))
-        examples = [
-            {
-                "images": [image],
-                "prompt": [{"role": "user", "content": "What is this?"}],
-                "completion": [{"role": "assistant", "content": "A red square."}],
-                "label": True,
-            },
-            {
-                "images": [image],
-                "prompt": [{"role": "user", "content": "Describe it."}],
-                "completion": [{"role": "assistant", "content": "An image."}],
-                "label": False,
-            },
-        ]
-        output = collator(examples)
-
-        assert "mm_token_type_ids" in output
-        assert output["mm_token_type_ids"].shape == output["completion_input_ids"].shape, (
-            f"mm_token_type_ids shape {output['mm_token_type_ids'].shape} != "
-            f"completion_input_ids shape {output['completion_input_ids'].shape}"
-        )
-        assert "KL_completion_mm_token_type_ids" in output
-        assert output["KL_completion_mm_token_type_ids"].shape == output["KL_completion_input_ids"].shape, (
-            f"KL_completion_mm_token_type_ids shape {output['KL_completion_mm_token_type_ids'].shape} != "
-            f"KL_completion_input_ids shape {output['KL_completion_input_ids'].shape}"
-        )
-
-    def test_output_keys(self):
-        from PIL import Image
-        from transformers import AutoProcessor
-
-        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration")
-        image = Image.new("RGB", (16, 16))
-
-        def make_examples():
-            return [
-                {
-                    "images": [image],
-                    "prompt": [{"role": "user", "content": "What is this?"}],
-                    "completion": [{"role": "assistant", "content": "A red square."}],
-                    "label": True,
-                },
-                {
-                    "images": [image],
-                    "prompt": [{"role": "user", "content": "Describe it."}],
-                    "completion": [{"role": "assistant", "content": "An image."}],
-                    "label": False,
-                },
-            ]
-
-        # With KL
-        collator = DataCollatorForVisionUnpairedPreference(processor, calculate_kl=True)
-        output = collator(make_examples())
-        for key in ["completion_input_ids", "completion_attention_mask", "completion_mask", "pixel_values", "label"]:
-            assert key in output, f"Missing key: {key}"
-        for key in ["KL_completion_input_ids", "KL_completion_attention_mask", "KL_completion_mask"]:
-            assert key in output, f"Missing KL key: {key}"
-
-        # Without KL
-        collator_no_kl = DataCollatorForVisionUnpairedPreference(processor, calculate_kl=False)
-        output_no_kl = collator_no_kl(make_examples())
-        assert "completion_input_ids" in output_no_kl
-        assert "KL_completion_input_ids" not in output_no_kl
-
-    def test_kl_cycling(self):
-        # The KL completion for example i must be the completion from example i-1 (cycled by +1).
-        from PIL import Image
-        from transformers import AutoProcessor
-
-        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration")
-        collator = DataCollatorForVisionUnpairedPreference(processor, calculate_kl=True)
-        image = Image.new("RGB", (16, 16))
-        # Two distinct completions so that cycling is detectable
-        examples = [
-            {
-                "images": [image],
-                "prompt": [{"role": "user", "content": "Q1"}],
-                "completion": [{"role": "assistant", "content": "Answer one."}],
-                "label": True,
-            },
-            {
-                "images": [image],
-                "prompt": [{"role": "user", "content": "Q2"}],
-                "completion": [{"role": "assistant", "content": "Answer two."}],
-                "label": False,
-            },
-        ]
-        output = collator(examples)
-        # KL completions are cycled: KL[0] = completion[-1], KL[1] = completion[0]
-        # They must differ from the matching main completion (unless both are identical strings, which they aren't here)
-        assert not torch.equal(output["completion_input_ids"][0], output["KL_completion_input_ids"][0])
-        assert not torch.equal(output["completion_input_ids"][1], output["KL_completion_input_ids"][1])
 
 
 @require_vision
