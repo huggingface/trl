@@ -517,12 +517,13 @@ class TestKTOTrainerVLM(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_train_vlm_with_max_length(self):
-        # Regression guard: mm_token_type_ids and KL_completion_mm_token_type_ids must be truncated alongside their
-        # corresponding input_ids when max_length is set, otherwise a shape mismatch crashes the model forward pass.
+        # Regression test: mm_token_type_ids (and KL_completion_mm_token_type_ids) must be truncated alongside
+        # input_ids when max_length is set, otherwise a shape mismatch crashes the model forward pass.
+        # max_length=37 truncates 1 completion token (total_len=38) while keeping all image tokens (prompt_len=34) safe.
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
-            max_length=64,
+            max_length=37,
             per_device_train_batch_size=2,
             max_steps=3,
             report_to="none",
