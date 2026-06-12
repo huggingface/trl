@@ -475,7 +475,6 @@ class TestKTOTrainerVLM(TrlTestCase):
             output_dir=self.tmp_dir,
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             per_device_train_batch_size=2,
-            max_steps=3,
             report_to="none",
         )
         trainer = KTOTrainer(model=model_id, args=training_args, train_dataset=dataset)
