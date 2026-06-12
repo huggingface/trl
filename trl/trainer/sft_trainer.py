@@ -1570,21 +1570,16 @@ class SFTTrainer(_BaseTrainer):
                     if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                         map_kwargs["desc"] = f"Building labels for {dataset_name} dataset"
 
-                    def build_labels(examples, mask_columns):
-                        labels = []
-                        for idx, input_ids in enumerate(examples["input_ids"]):
-                            masks = [examples[column][idx] for column in mask_columns]
-                            labels.append(
-                                [
-                                    token_id if all(mask[pos] for mask in masks) else -100
-                                    for pos, token_id in enumerate(input_ids)
-                                ]
-                            )
+                    def build_labels(example, mask_columns):
+                        masks = [example[column] for column in mask_columns]
+                        labels = [
+                            token_id if all(mask[pos] for mask in masks) else -100
+                            for pos, token_id in enumerate(example["input_ids"])
+                        ]
                         return {"labels": labels}
 
                     dataset = dataset.map(
                         build_labels,
-                        batched=True,
                         fn_kwargs={"mask_columns": mask_columns},
                         **map_kwargs,
                     )
