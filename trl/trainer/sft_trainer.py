@@ -379,15 +379,27 @@ def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
     return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
+def _truncation_slice(max_length: int, truncation_mode: str) -> slice:
+    # Defined once so that every consumer (collation, dataset preparation) truncates with the same window.
+    if truncation_mode == "keep_start":
+        return slice(None, max_length)
+    elif truncation_mode == "keep_end":
+        return slice(-max_length, None)
+    else:
+        raise ValueError(f"Unsupported truncation mode: {truncation_mode}, expected 'keep_start' or 'keep_end'")
+
+
 @dataclass
 class DataCollatorForLanguageModeling(DataCollatorMixin):
     """
     Data collator used for language modeling data. Inputs are dynamically padded to the maximum length of a batch.
 
     This collator expects each example in the input list to be a dictionary containing at least the `"input_ids"` key.
-    If the input contains a `"completion_mask"`, it is used to set the labels to `-100` for tokens that are not in the
-    completion. If `"assistant_masks"` are present, they are used to set the labels to `-100` for tokens that are not
-    in the assistant part of the sequence. The collator returns a dictionary containing the following keys:
+    If the input contains `"labels"`, they are used as is (truncated and padded like the input IDs), and the mask
+    columns described below are ignored. Otherwise, if the input contains a `"completion_mask"`, it is used to set the
+    labels to `-100` for tokens that are not in the completion. If `"assistant_masks"` are present, they are used to
+    set the labels to `-100` for tokens that are not in the assistant part of the sequence. The collator returns a
+    dictionary containing the following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
     - `"labels"`: Tensor of labels, padded to the maximum length of the batch. If `completion_only_loss` is set to
     `True`, tokens that are not in the completion are set to -100. If `assistant_masks` are present, tokens that are
@@ -464,26 +476,25 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         input_ids = [example["input_ids"] for example in examples]
         batch_seq_lengths = [example["seq_lengths"] for example in examples] if "seq_lengths" in examples[0] else None
+        has_labels = "labels" in examples[0]
         labels = [example.get("labels", example["input_ids"]) for example in examples]
+        # When the examples provide prebuilt labels (built during dataset preparation), the masking is already baked
+        # in, so the mask columns are ignored. The mask path is kept for examples that provide masks without labels,
+        # e.g., when using this collator standalone.
         completion_mask = (
             [example["completion_mask"] for example in examples]
-            if self.completion_only_loss and "completion_mask" in examples[0]
+            if not has_labels and self.completion_only_loss and "completion_mask" in examples[0]
             else None
         )
         assistant_masks = (
-            [example["assistant_masks"] for example in examples] if "assistant_masks" in examples[0] else None
+            [example["assistant_masks"] for example in examples]
+            if not has_labels and "assistant_masks" in examples[0]
+            else None
         )
 
         # Truncate per sequence if necessary
         if self.max_length is not None and not self.padding_free:
-            if self.truncation_mode == "keep_start":
-                sl = slice(None, self.max_length)
-            elif self.truncation_mode == "keep_end":
-                sl = slice(-self.max_length, None)
-            else:
-                raise ValueError(
-                    f"Unsupported truncation mode: {self.truncation_mode}, expected 'keep_start' or 'keep_end'"
-                )
+            sl = _truncation_slice(self.max_length, self.truncation_mode)
             input_ids = [ids[sl] for ids in input_ids]
             labels = [lbl[sl] for lbl in labels]
             if completion_mask is not None:
@@ -1557,6 +1568,42 @@ class SFTTrainer(_BaseTrainer):
                     **map_kwargs,
                 )
 
+            # Build the labels ahead of collation, so that "what's trainable" is defined in one place. A token is
+            # trainable when every applicable mask is 1 at its position: "assistant_masks" always applies when
+            # present, while "completion_mask" only applies when completion_only_loss is enabled. The collator then
+            # only truncates and pads the labels. Datasets that already provide a "labels" column are taken as is,
+            # and datasets without any applicable mask don't get a labels column: the collator defaults to using the
+            # input IDs as labels.
+            column_names = get_dataset_column_names(dataset)
+            if "labels" not in column_names:
+                mask_columns = []
+                if self.completion_only_loss and "completion_mask" in column_names:
+                    mask_columns.append("completion_mask")
+                if "assistant_masks" in column_names:
+                    mask_columns.append("assistant_masks")
+                if mask_columns:
+                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                        map_kwargs["desc"] = f"Building labels for {dataset_name} dataset"
+
+                    def build_labels(examples, mask_columns):
+                        labels = []
+                        for idx, input_ids in enumerate(examples["input_ids"]):
+                            masks = [examples[column][idx] for column in mask_columns]
+                            labels.append(
+                                [
+                                    token_id if all(mask[pos] for mask in masks) else -100
+                                    for pos, token_id in enumerate(input_ids)
+                                ]
+                            )
+                        return {"labels": labels}
+
+                    dataset = dataset.map(
+                        build_labels,
+                        batched=True,
+                        fn_kwargs={"mask_columns": mask_columns},
+                        **map_kwargs,
+                    )
+
             # Pack
             if packing:
                 if args.max_length is None:
@@ -1565,10 +1612,13 @@ class SFTTrainer(_BaseTrainer):
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
 
                 columns = ["input_ids"]
-                if "completion_mask" in get_dataset_column_names(dataset):
-                    columns.append("completion_mask")
-                if "assistant_masks" in get_dataset_column_names(dataset):
-                    columns.append("assistant_masks")
+                if "labels" in get_dataset_column_names(dataset):
+                    columns.append("labels")  # the masks are already baked into the labels
+                else:
+                    if "completion_mask" in get_dataset_column_names(dataset):
+                        columns.append("completion_mask")
+                    if "assistant_masks" in get_dataset_column_names(dataset):
+                        columns.append("assistant_masks")
 
                 dataset = dataset.select_columns(columns)
 
@@ -1581,7 +1631,7 @@ class SFTTrainer(_BaseTrainer):
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
-                collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
+                collator_expected_keys = {"input_ids", "seq_lengths", "labels", "completion_mask", "assistant_masks"}
                 column_names = get_dataset_column_names(dataset)
                 dataset = dataset.select_columns(collator_expected_keys.intersection(column_names))
 
