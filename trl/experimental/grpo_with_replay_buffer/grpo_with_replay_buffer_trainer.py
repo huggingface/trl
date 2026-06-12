@@ -475,7 +475,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         Args:
             groups_with_variance: Boolean tensor indicating which groups have reward variance
             group_advantages: Tensor of shape (num_groups, num_generations) containing advantage values
-            std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
+            group_std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
             prompt_ids: Tensor containing prompt token IDs
             prompt_mask: Tensor containing prompt attention masks
             completion_ids: Tensor containing completion token IDs
@@ -601,7 +601,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
 
         Args:
             group_advantages: Tensor of shape (num_groups, num_generations) containing advantage values
-            std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
+            group_std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
             prompt_ids: Tensor containing prompt token IDs
             prompt_mask: Tensor containing prompt attention masks
             completion_ids: Tensor containing completion token IDs
