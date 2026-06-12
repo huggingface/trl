@@ -19,9 +19,112 @@ from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.kto import KTOConfig, KTOTrainer
-from trl.experimental.kto.kto_trainer import _get_kl_completion_ids
+from trl.experimental.kto.kto_trainer import DataCollatorForUnpairedPreference, _get_kl_completion_ids
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft
+
+
+class TestDataCollatorForUnpairedPreference(TrlTestCase):
+    def test_padding_and_masks(self):
+        collator = DataCollatorForUnpairedPreference(pad_token_id=0)
+        examples = [
+            {"prompt_ids": [1, 2, 3], "completion_ids": [4, 5], "KL_completion_ids": [6], "label": True},
+            {"prompt_ids": [7, 8], "completion_ids": [9, 10], "KL_completion_ids": [11, 12, 13], "label": False},
+        ]
+        result = collator(examples)
+
+        expected_completion_input_ids = torch.tensor(
+            [
+                [1, 2, 3, 4, 5],  # prompt + completion (example 1)
+                [7, 8, 9, 10, 0],  # prompt + completion (example 2, padded)
+            ]
+        )
+        expected_completion_attention_mask = torch.tensor(
+            [
+                [1, 1, 1, 1, 1],
+                [1, 1, 1, 1, 0],
+            ]
+        )
+        expected_completion_mask = torch.tensor(
+            [
+                [0, 0, 0, 1, 1],  # completion (example 1)
+                [0, 0, 1, 1, 0],  # completion (example 2, padded)
+            ]
+        )
+        expected_kl_completion_input_ids = torch.tensor(
+            [
+                [1, 2, 3, 6, 0],  # prompt + KL completion (example 1, padded)
+                [7, 8, 11, 12, 13],  # prompt + KL completion (example 2)
+            ]
+        )
+        expected_kl_completion_attention_mask = torch.tensor(
+            [
+                [1, 1, 1, 1, 0],
+                [1, 1, 1, 1, 1],
+            ]
+        )
+        expected_kl_completion_mask = torch.tensor(
+            [
+                [0, 0, 0, 1, 0],  # KL completion (example 1, padded)
+                [0, 0, 1, 1, 1],  # KL completion (example 2)
+            ]
+        )
+
+        assert set(result.keys()) == {
+            "completion_input_ids",
+            "completion_attention_mask",
+            "completion_mask",
+            "KL_completion_input_ids",
+            "KL_completion_attention_mask",
+            "KL_completion_mask",
+            "label",
+        }
+        torch.testing.assert_close(result["completion_input_ids"], expected_completion_input_ids)
+        torch.testing.assert_close(result["completion_attention_mask"], expected_completion_attention_mask)
+        torch.testing.assert_close(result["completion_mask"], expected_completion_mask)
+        torch.testing.assert_close(result["KL_completion_input_ids"], expected_kl_completion_input_ids)
+        torch.testing.assert_close(result["KL_completion_attention_mask"], expected_kl_completion_attention_mask)
+        torch.testing.assert_close(result["KL_completion_mask"], expected_kl_completion_mask)
+        assert result["label"] == [True, False]
+
+    def test_optional_reference_logps(self):
+        collator = DataCollatorForUnpairedPreference(pad_token_id=0)
+        examples = [
+            {
+                "prompt_ids": [1, 2],
+                "completion_ids": [3],
+                "KL_completion_ids": [4],
+                "ref_logps": 0.1,
+                "ref_KL_logps": 0.2,
+                "label": True,
+            },
+            {
+                "prompt_ids": [5],
+                "completion_ids": [6, 7],
+                "KL_completion_ids": [8, 9],
+                "ref_logps": 0.3,
+                "ref_KL_logps": 0.4,
+                "label": False,
+            },
+        ]
+        result = collator(examples)
+
+        expected_ref_logps = torch.tensor([0.1, 0.3])
+        expected_ref_kl_logps = torch.tensor([0.2, 0.4])
+
+        assert set(result.keys()) == {
+            "completion_input_ids",
+            "completion_attention_mask",
+            "completion_mask",
+            "KL_completion_input_ids",
+            "KL_completion_attention_mask",
+            "KL_completion_mask",
+            "ref_logps",
+            "ref_KL_logps",
+            "label",
+        }
+        torch.testing.assert_close(result["ref_logps"], expected_ref_logps)
+        torch.testing.assert_close(result["ref_KL_logps"], expected_ref_kl_logps)
 
 
 class TestKTOTrainer(TrlTestCase):
@@ -138,12 +241,13 @@ class TestKTOTrainer(TrlTestCase):
         batch = trainer.data_collator([example])
         # completion_input_ids ends with EOS
         assert batch["completion_input_ids"][0, -1].item() == self.tokenizer.eos_token_id
-        # completion_labels: prompt prefix masked with -100, answer+EOS unmasked and matching input_ids
-        completion_input_ids = batch["completion_input_ids"][0].tolist()
-        completion_labels = batch["completion_labels"][0].tolist()
-        first_unmasked = next(i for i, lbl in enumerate(completion_labels) if lbl != -100)
-        assert first_unmasked > 0  # at least the prompt is masked
-        assert completion_labels[first_unmasked:] == completion_input_ids[first_unmasked:]
+        # completion_mask: prompt tokens are 0, completion tokens are 1; at least the prompt is masked
+        assert "completion_mask" in batch
+        completion_mask = batch["completion_mask"][0].tolist()
+        assert 0 in completion_mask and 1 in completion_mask
+        first_completion = next(i for i, m in enumerate(completion_mask) if m == 1)
+        assert first_completion > 0  # at least the prompt is masked
+        assert all(m == 0 for m in completion_mask[:first_completion])
 
         # Test corruption of (prompt, completion) pairs for KL dataset.
         # _get_kl_completion_ids shifts completion_ids by one within each batch; prompt_ids are unchanged.
