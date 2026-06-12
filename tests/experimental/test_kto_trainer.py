@@ -474,7 +474,7 @@ class TestKTOTrainerVLM(TrlTestCase):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
-            per_device_train_batch_size=2,
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
             report_to="none",
         )
         trainer = KTOTrainer(model=model_id, args=training_args, train_dataset=dataset)
@@ -488,6 +488,9 @@ class TestKTOTrainerVLM(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
+            # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
+            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen — if they
+            # ever start training, the feature-selection plumbing has likely regressed.
             if model_id in (
                 "trl-internal-testing/tiny-LlavaForConditionalGeneration",
                 "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
@@ -501,30 +504,9 @@ class TestKTOTrainerVLM(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
-            max_length=None,
-            per_device_train_batch_size=2,
-            max_steps=3,
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
             loss_type="apo_zero_unpaired",
-            report_to="none",
-        )
-        trainer = KTOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            args=training_args,
-            train_dataset=dataset,
-        )
-        trainer.train()
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-    def test_train_vlm_with_max_length(self):
-        # Regression test: mm_token_type_ids (and KL_completion_mm_token_type_ids) must be truncated alongside
-        # input_ids when max_length is set, otherwise a shape mismatch crashes the model forward pass.
-        # max_length=37 truncates 1 completion token (total_len=38) while keeping all image tokens (prompt_len=34) safe.
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            max_length=37,  # total_len=38, prompt_len=34 — truncates completion, not image tokens
-            per_device_train_batch_size=2,
-            max_steps=3,
             report_to="none",
         )
         trainer = KTOTrainer(
@@ -547,11 +529,7 @@ class TestKTOTrainerVLM(TrlTestCase):
     )
     def test_train_vlm_text_only_data(self, model_id, dataset_config):
         dataset = load_dataset("trl-internal-testing/zen", dataset_config, split="train")
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            max_steps=3,
-            report_to="none",
-        )
+        training_args = KTOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = KTOTrainer(
             model=model_id,
             args=training_args,
@@ -572,19 +550,24 @@ class TestKTOTrainerVLM(TrlTestCase):
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
-    def test_precompute_ref_log_probs_raises_for_vision(self):
+    def test_train_vlm_with_max_length(self):
+        # Regression test: mm_token_type_ids (and KL_completion_mm_token_type_ids) must be truncated alongside
+        # input_ids when max_length is set, otherwise a shape mismatch crashes the model forward pass.
+        # max_length=37 truncates 1 completion token (total_len=38) while keeping all image tokens (prompt_len=34) safe.
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
+            max_length=37,  # total_len=38, prompt_len=34 — truncates completion, not image tokens
+            per_device_train_batch_size=2,
             report_to="none",
-            precompute_ref_log_probs=True,
         )
-        with pytest.raises(ValueError, match="precompute_ref_log_probs.*not supported for vision datasets"):
-            KTOTrainer(
-                model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-                args=training_args,
-                train_dataset=dataset,
-            )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_vision_dataset_with_text_model_raises(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
@@ -596,6 +579,16 @@ class TestKTOTrainerVLM(TrlTestCase):
                 train_dataset=dataset,
             )
 
+    def test_precompute_ref_log_probs_raises_for_vision(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
+        training_args = KTOConfig(output_dir=self.tmp_dir, report_to="none", precompute_ref_log_probs=True)
+        with pytest.raises(ValueError, match="precompute_ref_log_probs.*not supported for vision datasets"):
+            KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
     @require_liger_kernel
     def test_train_vlm_liger(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
@@ -603,7 +596,6 @@ class TestKTOTrainerVLM(TrlTestCase):
             output_dir=self.tmp_dir,
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
-            max_steps=3,
             use_liger_kernel=True,
             report_to="none",
         )
