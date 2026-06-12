@@ -25,6 +25,107 @@ from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft
 
 
 class TestDataCollatorForUnpairedPreference(TrlTestCase):
+    def test_padding_and_masks(self):
+        collator = DataCollatorForUnpairedPreference(pad_token_id=0)
+        examples = [
+            {"prompt_ids": [1, 2, 3], "completion_ids": [4, 5], "KL_completion_ids": [6], "label": True},
+            {"prompt_ids": [7, 8], "completion_ids": [9, 10], "KL_completion_ids": [11, 12, 13], "label": False},
+        ]
+        result = collator(examples)
+
+        expected_completion_input_ids = torch.tensor(
+            [
+                [1, 2, 3, 4, 5],  # prompt + completion (example 1)
+                [7, 8, 9, 10, 0],  # prompt + completion (example 2, padded)
+            ]
+        )
+        expected_completion_attention_mask = torch.tensor(
+            [
+                [1, 1, 1, 1, 1],
+                [1, 1, 1, 1, 0],
+            ]
+        )
+        expected_completion_mask = torch.tensor(
+            [
+                [0, 0, 0, 1, 1],  # completion (example 1)
+                [0, 0, 1, 1, 0],  # completion (example 2, padded)
+            ]
+        )
+        expected_kl_completion_input_ids = torch.tensor(
+            [
+                [1, 2, 3, 6, 0],  # prompt + KL completion (example 1, padded)
+                [7, 8, 11, 12, 13],  # prompt + KL completion (example 2)
+            ]
+        )
+        expected_kl_completion_attention_mask = torch.tensor(
+            [
+                [1, 1, 1, 1, 0],
+                [1, 1, 1, 1, 1],
+            ]
+        )
+        expected_kl_completion_mask = torch.tensor(
+            [
+                [0, 0, 0, 1, 0],  # KL completion (example 1, padded)
+                [0, 0, 1, 1, 1],  # KL completion (example 2)
+            ]
+        )
+
+        assert set(result.keys()) == {
+            "completion_input_ids",
+            "completion_attention_mask",
+            "completion_mask",
+            "KL_completion_input_ids",
+            "KL_completion_attention_mask",
+            "KL_completion_mask",
+            "label",
+        }
+        torch.testing.assert_close(result["completion_input_ids"], expected_completion_input_ids)
+        torch.testing.assert_close(result["completion_attention_mask"], expected_completion_attention_mask)
+        torch.testing.assert_close(result["completion_mask"], expected_completion_mask)
+        torch.testing.assert_close(result["KL_completion_input_ids"], expected_kl_completion_input_ids)
+        torch.testing.assert_close(result["KL_completion_attention_mask"], expected_kl_completion_attention_mask)
+        torch.testing.assert_close(result["KL_completion_mask"], expected_kl_completion_mask)
+        assert result["label"] == [True, False]
+
+    def test_optional_reference_logps(self):
+        collator = DataCollatorForUnpairedPreference(pad_token_id=0)
+        examples = [
+            {
+                "prompt_ids": [1, 2],
+                "completion_ids": [3],
+                "KL_completion_ids": [4],
+                "ref_logps": 0.1,
+                "ref_KL_logps": 0.2,
+                "label": True,
+            },
+            {
+                "prompt_ids": [5],
+                "completion_ids": [6, 7],
+                "KL_completion_ids": [8, 9],
+                "ref_logps": 0.3,
+                "ref_KL_logps": 0.4,
+                "label": False,
+            },
+        ]
+        result = collator(examples)
+
+        expected_ref_logps = torch.tensor([0.1, 0.3])
+        expected_ref_kl_logps = torch.tensor([0.2, 0.4])
+
+        assert set(result.keys()) == {
+            "completion_input_ids",
+            "completion_attention_mask",
+            "completion_mask",
+            "KL_completion_input_ids",
+            "KL_completion_attention_mask",
+            "KL_completion_mask",
+            "ref_logps",
+            "ref_KL_logps",
+            "label",
+        }
+        torch.testing.assert_close(result["ref_logps"], expected_ref_logps)
+        torch.testing.assert_close(result["ref_KL_logps"], expected_ref_kl_logps)
+
     def test_with_pad_to_multiple_of(self):
         collator = DataCollatorForUnpairedPreference(pad_token_id=0, pad_to_multiple_of=5)
         examples = [
