@@ -27,7 +27,14 @@ from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoTokenizer,
+    PreTrainedTokenizerBase,
+    TrainerCallback,
+)
 from transformers.data.data_collator import DataCollatorMixin
 
 from trl.trainer.base_trainer import _BaseTrainer
@@ -44,6 +51,21 @@ logger = get_logger(__name__)
 # completions, and additional arguments from the trainer (refer to the trainer's source for details). To ensure forward
 # compatibility, it should accept **kwargs.
 RewardFunc = Callable[..., list[float]]
+
+
+def _load_policy_model(model_name: str):
+    config = AutoConfig.from_pretrained(model_name)
+    architectures = getattr(config, "architectures", None) or []
+    is_image_text_model = any("ConditionalGeneration" in name or "ImageTextToText" in name for name in architectures)
+
+    if not is_image_text_model:
+        return AutoModelForCausalLM.from_pretrained(model_name, device_map=None, dtype=torch.float32)
+
+    model = AutoModelForImageTextToText.from_pretrained(model_name, device_map=None, dtype=torch.float32)
+    for name, parameter in model.named_parameters():
+        if "visual" in name or "vision" in name:
+            parameter.requires_grad = False
+    return model
 
 
 class _SupportsReset(Protocol):
@@ -257,9 +279,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model (`str`):
             Model to be trained. Must be a string, being the *model id* of a pretrained model hosted inside a model
             repo on huggingface.co, or a path to a *directory* containing model weights saved using
-            [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-            using [`~transformers.AutoModelForCausalLM.from_pretrained`]. The model name is also used to identify the
-            model on the vLLM server used for generation.
+            [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. Text models are loaded
+            using [`~transformers.AutoModelForCausalLM.from_pretrained`]; image-text and conditional generation models
+            use the matching image-text auto model so trainer weight names match the vLLM server. The model name is also
+            used to identify the model on the vLLM server used for generation.
         reward_funcs (`RewardFunc | list[RewardFunc]`):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. Can be either:
@@ -362,7 +385,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Model
         model_name = model
-        model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.float32)
+        model = _load_policy_model(model)
 
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
