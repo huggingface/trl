@@ -1240,6 +1240,17 @@ class TestDPOTrainer(TrlTestCase):
             )
 
     @require_vision
+    def test_vision_dataset_with_text_model_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match="vision-related.*vision-language model"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    @require_vision
     def test_precompute_ref_log_probs_raises_for_vision(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
         training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none", precompute_ref_log_probs=True)
