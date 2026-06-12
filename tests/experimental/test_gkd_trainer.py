@@ -122,6 +122,41 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
         assert new_input_ids.shape == new_attention_mask.shape
         assert new_labels.shape == new_attention_mask.shape
 
+    def test_generate_on_policy_outputs_masks_prompt(self):
+        # The on-policy / seq-KD labels must mask the prompt with -100, matching the collator
+        # convention (labels[:len(prompt)] = -100). Otherwise `compute_loss`, which relies on the
+        # -100 mask to skip prompts, would apply the JSD loss to prompt positions too.
+        # Prompts have different lengths so batched left-padding is exercised (the bug condition).
+        prompts = ["Hello, how are you doing today?", "Hi"]
+        self.tokenizer.padding_side = "left"
+        tokenized_prompts = self.tokenizer(prompts, return_tensors="pt", padding=True)
+        prompt_width = tokenized_prompts["input_ids"].shape[1]
+
+        inputs = {
+            "prompts": tokenized_prompts["input_ids"].to(self.device),
+            "prompt_attention_mask": tokenized_prompts["attention_mask"].to(self.device),
+        }
+
+        # Force a non-trivial completion so the completion region is not all padding (which would
+        # let the prompt-masking assertion pass for the wrong reason).
+        generation_config = GenerationConfig(
+            max_new_tokens=16,
+            min_new_tokens=8,
+            num_return_sequences=1,
+            pad_token_id=self.tokenizer.pad_token_id,
+            eos_token_id=self.tokenizer.eos_token_id,
+            do_sample=False,
+        )
+
+        _, _, new_labels = GKDTrainer.generate_on_policy_outputs(
+            self.model, inputs, generation_config, self.tokenizer.pad_token_id
+        )
+
+        # Every prompt position (the first `prompt_width` columns) must be masked.
+        assert (new_labels[:, :prompt_width] == -100).all(), "Prompt positions are not fully masked"
+        # The completion region must still carry signal (not entirely masked away).
+        assert (new_labels[:, prompt_width:] != -100).any(), "Completion tokens were unexpectedly all masked"
+
 
 class TestGeneralizedJSDLoss(TrlTestCase):
     def setup_method(self):

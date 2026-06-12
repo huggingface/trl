@@ -453,6 +453,12 @@ class GKDTrainer(SFTTrainer):
             new_labels[new_labels == pad_token_id] = -100
             new_attention_mask[generated_tokens == pad_token_id] = 0
 
+        # Mask the prompt so only the generated completion contributes to the loss. `generate` echoes
+        # the prompt back as the first `prompt_length` columns, so masking them with -100 matches the
+        # collator convention (`labels[:len(prompt)] = -100`) that `compute_loss` relies on.
+        prompt_length = inputs["prompts"].shape[1]
+        new_labels[:, :prompt_length] = -100
+
         return generated_tokens, new_attention_mask, new_labels
 
     def training_step(
