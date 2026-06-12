@@ -111,6 +111,15 @@ def print_prompt_completions_sample_uld(
     >>> prompts = ["The sky is", "The sun is"]
     >>> completions = [" blue.", " in the sky."]
     >>> print_prompt_completions_sample_uld(prompts, completions, 42)
+    ╭─────────── Step 42 ───────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │ │
+    │ ├────────────┼──────────────┤ │
+    │ │ The sun is │  in the sky. │ │
+    │ └────────────┴──────────────┘ │
+    ╰───────────────────────────────╯
     ```
     """
     if not is_rich_available():
