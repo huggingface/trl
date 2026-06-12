@@ -318,6 +318,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             method should return either `None` or a string: when it returns a string, that string is appended to the
             last user message before generation. This feature is experimental and may change or be removed at any time
             without prior notice.
+        rollout_worker (`RolloutWorkerProtocol`, *optional*):
+            Custom rollout worker implementing [`RolloutWorkerProtocol`]. If `None`, a default [`AsyncRolloutWorker`]
+            is created, which spawns a CUDA-free child process and scores completions with the trainer's
+            `reward_funcs`. Pass a custom worker to plug in a different rollout/scoring backend instead — for example,
+            one that runs reward models on their own GPUs.
     """
 
     _tag_names = ["trl", "async-grpo"]
