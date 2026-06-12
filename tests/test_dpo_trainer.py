@@ -967,6 +967,61 @@ class TestDPOTrainer(TrlTestCase):
         for tag in ["dpo", "trl"]:
             assert tag in trainer.model.model_tags
 
+    @require_peft
+    @require_bitsandbytes
+    def test_peft_with_quantization(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype="float32",
+            quantization_config=quantization_config,
+        )
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        # Initialize the trainer with the already configured PeftModel
+        training_args = DPOConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
+        trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset, peft_config=LoraConfig())
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["mean_token_accuracy"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            # In bitsandbytes, bias parameters are automatically cast to the input dtype during the forward pass if
+            # their dtype doesn’t match. This causes the module to change unexpectedly during the first forward pass of
+            # the training. To handle this, we cast these specific bias parameters to float32 before comparison.
+            # https://github.com/bitsandbytes-foundation/bitsandbytes/blob/45553f7392e524eacf400b132cfe01261f6477be/bitsandbytes/nn/modules.py#L518
+            # We still need to investigate why the compute dtype ends up being different than for these parameters.
+            if n in [
+                "base_model.model.model.layers.1.self_attn.k_proj.bias",
+                "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
+                "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
+            ]:
+                param = param.float()
+
+            if "lora" not in n:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "lora" in n:  # We expect the peft params to be different
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            else:
+                raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
+
+
+@require_vision
+class TestDPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
@@ -1010,7 +1065,6 @@ class TestDPOTrainer(TrlTestCase):
             ),
         ],
     )
-    @require_vision
     def test_train_vlm(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
 
@@ -1053,7 +1107,6 @@ class TestDPOTrainer(TrlTestCase):
         reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
         strict=False,
     )
-    @require_vision
     def test_train_vlm_multi_image(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_preference", split="train")
 
@@ -1123,7 +1176,6 @@ class TestDPOTrainer(TrlTestCase):
         "dataset_config",
         ["conversational_preference", "standard_preference"],
     )
-    @require_vision
     def test_train_vlm_text_only_data(self, model_id, dataset_config):
         dataset = load_dataset("trl-internal-testing/zen", dataset_config, split="train")
 
@@ -1148,7 +1200,6 @@ class TestDPOTrainer(TrlTestCase):
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
-    @require_vision
     def test_train_vlm_with_max_length(self):
         # Regression test for #5283: mm_token_type_ids must be truncated alongside input_ids when max_length is set,
         # otherwise a shape mismatch crashes the model forward pass.
@@ -1168,59 +1219,6 @@ class TestDPOTrainer(TrlTestCase):
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    @require_peft
-    @require_bitsandbytes
-    def test_peft_with_quantization(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
-        )
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            dtype="float32",
-            quantization_config=quantization_config,
-        )
-
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
-
-        # Initialize the trainer with the already configured PeftModel
-        training_args = DPOConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
-        trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset, peft_config=LoraConfig())
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-        assert trainer.state.log_history[-1]["mean_token_accuracy"] is not None
-
-        # Check that the peft params have changed and the base model params have not changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            # In bitsandbytes, bias parameters are automatically cast to the input dtype during the forward pass if
-            # their dtype doesn’t match. This causes the module to change unexpectedly during the first forward pass of
-            # the training. To handle this, we cast these specific bias parameters to float32 before comparison.
-            # https://github.com/bitsandbytes-foundation/bitsandbytes/blob/45553f7392e524eacf400b132cfe01261f6477be/bitsandbytes/nn/modules.py#L518
-            # We still need to investigate why the compute dtype ends up being different than for these parameters.
-            if n in [
-                "base_model.model.model.layers.1.self_attn.k_proj.bias",
-                "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
-                "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
-            ]:
-                param = param.float()
-
-            if "lora" not in n:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
-            elif "lora" in n:  # We expect the peft params to be different
-                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-            else:
-                raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
-
-    @require_vision
     def test_train_vlm_keep_end_raises(self):
         # Regression test for #5285: keep_end with a VLM must raise at init time, not silently corrupt training.
         # Image tokens live at the start of the sequence (in the prompt); keep_end would drop them.
@@ -1239,7 +1237,6 @@ class TestDPOTrainer(TrlTestCase):
                 train_dataset=dataset,
             )
 
-    @require_vision
     def test_vision_dataset_with_text_model_raises(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
         training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
@@ -1250,7 +1247,6 @@ class TestDPOTrainer(TrlTestCase):
                 train_dataset=dataset,
             )
 
-    @require_vision
     def test_precompute_ref_log_probs_raises_for_vision(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
         training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none", precompute_ref_log_probs=True)
@@ -1262,7 +1258,6 @@ class TestDPOTrainer(TrlTestCase):
             )
 
     @require_liger_kernel
-    @require_vision
     def test_train_vlm_liger(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
         training_args = DPOConfig(
