@@ -14,10 +14,13 @@
 
 import argparse
 import base64
+import hmac
+import ipaddress
 import json
 import logging
 import math
 import os
+import socket
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -177,7 +180,7 @@ class ScriptArguments:
             Number of data parallel workers to use. For dense models, keep this at 1. Starting from vLLM `0.14.0`,
             setting this above `1` for dense models is no longer supported/useful and will error out (see vLLM PR
             #30739).
-        host (`str`, *optional*, defaults to `"0.0.0.0"`):
+        host (`str`, *optional*, defaults to `"127.0.0.1"`):
             Host address to run the server on.
         port (`int`, *optional*, defaults to `8000`):
             Port to run the server on.
@@ -211,6 +214,8 @@ class ScriptArguments:
         log_level (`str`, *optional*, defaults to `"info"`):
             Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
             `"trace"`.
+        api_key (`str`, *optional*):
+            API key required for HTTP requests to the vLLM server. Required when binding to a non-loopback host.
         distributed_executor_backend (`str` or `None`, *optional*):
             Distributed executor backend for vLLM. Set to `"ray"` to distribute tensor parallel workers across multiple
             nodes via a Ray cluster. Required when `tensor_parallel_size` exceeds the number of local GPUs. If not set,
@@ -240,7 +245,7 @@ class ScriptArguments:
         },
     )
     host: str = field(
-        default="0.0.0.0",
+        default="127.0.0.1",
         metadata={"help": "Host address to run the server on."},
     )
     port: int = field(
@@ -304,6 +309,13 @@ class ScriptArguments:
         metadata={
             "help": "Log level for uvicorn. Possible choices: 'critical', 'error', 'warning', 'info', 'debug', "
             "'trace'."
+        },
+    )
+    api_key: str | None = field(
+        default_factory=lambda: os.environ.get("TRL_VLLM_SERVER_API_KEY"),
+        metadata={
+            "help": "API key required for HTTP requests to the vLLM server. Can also be set with the "
+            "TRL_VLLM_SERVER_API_KEY environment variable. Required when binding to a non-loopback host."
         },
     )
     vllm_model_impl: str = field(
@@ -407,6 +419,34 @@ def chunk_list(lst: list, n: int) -> list[list]:
     return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
 
 
+def _is_loopback_host(host: str) -> bool:
+    normalized_host = host.strip("[]").lower()
+    if normalized_host in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    try:
+        return ipaddress.ip_address(normalized_host).is_loopback
+    except ValueError:
+        pass
+
+    try:
+        addr_infos = socket.getaddrinfo(normalized_host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False
+
+    resolved_addresses = {addr_info[4][0] for addr_info in addr_infos}
+    return bool(resolved_addresses) and all(ipaddress.ip_address(address).is_loopback for address in resolved_addresses)
+
+
+def _validate_auth_config(host: str, api_key: str | None) -> None:
+    if api_key or _is_loopback_host(host):
+        return
+
+    raise ValueError(
+        "Refusing to bind the TRL vLLM server to a non-loopback host without authentication. "
+        "Set --api-key or TRL_VLLM_SERVER_API_KEY, or bind to 127.0.0.1."
+    )
+
+
 def main(script_args: ScriptArguments):
     import asyncio
 
@@ -439,7 +479,7 @@ def main(script_args: ScriptArguments):
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
     import uvicorn
-    from fastapi import FastAPI
+    from fastapi import Depends, FastAPI, Header, HTTPException
     from pydantic import BaseModel
     from vllm import SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
@@ -449,6 +489,8 @@ def main(script_args: ScriptArguments):
         from PIL import Image
 
     logger = logging.getLogger(__name__)
+
+    _validate_auth_config(script_args.host, script_args.api_key)
 
     # Spawn dp workers, and setup pipes for communication
     master_port = get_open_port()
@@ -486,7 +528,31 @@ def main(script_args: ScriptArguments):
                 process.terminate()
                 process.join()  # ensure process termination after calling terminate()
 
-    app = FastAPI(lifespan=lifespan)
+    def require_api_key(
+        authorization: str | None = Header(default=None),
+        x_trl_api_key: str | None = Header(default=None),
+    ) -> None:
+        if script_args.api_key is None:
+            return
+
+        expected_api_key = script_args.api_key
+        provided_bearer = None
+        if authorization is not None:
+            auth_parts = authorization.split(None, 1)
+            if len(auth_parts) == 2 and auth_parts[0].lower() == "bearer":
+                provided_bearer = auth_parts[1]
+
+        if (
+            provided_bearer is not None
+            and hmac.compare_digest(provided_bearer, expected_api_key)
+            or x_trl_api_key is not None
+            and hmac.compare_digest(x_trl_api_key, expected_api_key)
+        ):
+            return
+
+        raise HTTPException(status_code=401, detail="Invalid or missing TRL vLLM server API key")
+
+    app = FastAPI(lifespan=lifespan, dependencies=[Depends(require_api_key)])
 
     # Define the endpoints for the model server
     @app.get("/health/")
@@ -1033,7 +1099,7 @@ def main(script_args: ScriptArguments):
 
         Example request:
         ```bash
-        curl -X POST 'http://0.0.0.0:8000/chat/' \
+        curl -X POST 'http://127.0.0.1:8000/chat/' \
           -H 'Content-Type: application/json' \
           -d '{"messages": [[{ "role": "user", "content": "Hello!" }]]}'
         ```

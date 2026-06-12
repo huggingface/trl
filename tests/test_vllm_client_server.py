@@ -13,8 +13,10 @@
 # limitations under the License.
 
 import os
+import socket
 import subprocess
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from packaging.version import Version
@@ -24,7 +26,7 @@ from transformers.testing_utils import torch_device
 from trl.generation.vllm_client import VLLMClient
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
-from trl.scripts.vllm_serve import chunk_list
+from trl.scripts.vllm_serve import ScriptArguments, _is_loopback_host, _validate_auth_config, chunk_list
 
 from .testing_utils import (
     TrlTestCase,
@@ -46,6 +48,58 @@ else:
 
 
 class TestChunkList(TrlTestCase):
+    def test_vllm_server_defaults_to_loopback(self):
+        args = ScriptArguments(model="dummy")
+        assert args.host == "127.0.0.1"
+        assert _is_loopback_host(args.host)
+        assert not _is_loopback_host("0.0.0.0")
+
+    def test_vllm_server_api_key_env_is_read_at_instantiation(self):
+        with patch.dict(os.environ, {"TRL_VLLM_SERVER_API_KEY": "secret"}):
+            args = ScriptArguments(model="dummy")
+
+        assert args.api_key == "secret"
+
+    def test_vllm_server_loopback_host_resolves_hostname(self):
+        with patch(
+            "trl.scripts.vllm_serve.socket.getaddrinfo",
+            return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0))],
+        ):
+            assert _is_loopback_host("loopback.local")
+
+        with patch(
+            "trl.scripts.vllm_serve.socket.getaddrinfo",
+            return_value=[
+                (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0)),
+                (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.0.0.1", 0)),
+            ],
+        ):
+            assert not _is_loopback_host("mixed.local")
+
+    def test_vllm_server_requires_api_key_for_non_loopback(self):
+        with pytest.raises(ValueError, match="non-loopback host without authentication"):
+            _validate_auth_config("0.0.0.0", None)
+
+        _validate_auth_config("0.0.0.0", "secret")
+        _validate_auth_config("127.0.0.1", None)
+
+    def test_vllm_client_uses_api_key_env(self):
+        with patch("trl.generation.vllm_client.is_vllm_available", return_value=True):
+            with patch.object(VLLMClient, "check_server"):
+                with patch.dict(os.environ, {"TRL_VLLM_SERVER_API_KEY": "secret"}):
+                    client = VLLMClient()
+
+        assert client.base_url == "http://127.0.0.1:8000"
+        assert client.session.headers["Authorization"] == "Bearer secret"
+
+    def test_vllm_client_check_server_fails_on_unauthorized_health(self):
+        client = object.__new__(VLLMClient)
+        client.base_url = "http://127.0.0.1:8000"
+        client.session = SimpleNamespace(get=lambda url: SimpleNamespace(status_code=401, headers={}))
+
+        with pytest.raises(Exception, match="HTTP 401"):
+            client.check_server(total_timeout=240, retry_interval=0)
+
     def test_even_split(self):
         assert chunk_list([1, 2, 3, 4, 5, 6], 2) == [[1, 2, 3], [4, 5, 6]]
 
