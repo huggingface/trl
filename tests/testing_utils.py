@@ -27,6 +27,8 @@ from transformers.utils import (
     is_peft_available,
     is_rich_available,
     is_torch_available,
+    is_torch_bf16_gpu_available,
+    is_torch_xla_available,
     is_vision_available,
 )
 
@@ -97,6 +99,20 @@ def is_ampere_or_newer(device_index=0):
     major, minor = torch.cuda.get_device_capability(device_index)
     # Ampere starts at compute capability 8.0 (e.g., A100 = 8.0, RTX 30xx = 8.6)
     return (major, minor) >= (8, 0)
+
+
+def is_bf16_supported() -> bool:
+    """Whether the current device has hardware bf16 support for `bf16=True` training.
+
+    `is_torch_bf16_gpu_available` already covers CUDA (Ampere or newer), XPU, HPU, NPU, etc., and XLA devices are added
+    via `is_torch_xla_available`. On a CPU or a pre-Ampere GPU (e.g. T4), `bf16=True` raises "Your setup doesn't
+    support bf16/gpu", so tests should pass `bf16=is_bf16_supported()` instead of a hard-coded `True`.
+
+    `transformers`' `TrainingArguments` validation also accepts `bf16=True` when `use_cpu=True` (CPU training is an
+    explicit opt-in). This helper deliberately does not treat that as supported, since it reports hardware bf16
+    capability; tests setting `use_cpu=True` should not rely on it.
+    """
+    return is_torch_bf16_gpu_available() or is_torch_xla_available()
 
 
 class TrlTestCase:
