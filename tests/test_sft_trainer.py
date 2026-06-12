@@ -1408,6 +1408,32 @@ class TestSFTTrainer(TrlTestCase):
         # The packed dataset must still contain trainable (non -100) labels
         assert any(label != -100 for example in trainer.train_dataset for label in example["labels"])
 
+    def test_skip_prepare_dataset_with_masks_but_no_labels_raises(self):
+        """With `skip_prepare_dataset=True`, labels are not built at preparation time and the collator doesn't
+        consume the mask columns; such datasets must be rejected instead of silently training on the full sequence."""
+        dataset = Dataset.from_list([{"input_ids": [1, 2, 3, 4], "assistant_masks": [0, 0, 1, 1]} for _ in range(2)])
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, dataset_kwargs={"skip_prepare_dataset": True}, report_to="none"
+        )
+        with pytest.raises(ValueError, match="Provide a 'labels' column"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+    def test_skip_prepare_dataset_with_labels(self):
+        """Datasets providing labels directly are accepted as is with `skip_prepare_dataset=True`."""
+        dataset = Dataset.from_list([{"input_ids": [1, 2, 3, 4], "labels": [-100, -100, 3, 4]} for _ in range(2)])
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, dataset_kwargs={"skip_prepare_dataset": True}, report_to="none"
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert trainer.train_dataset[:]["labels"] == [[-100, -100, 3, 4], [-100, -100, 3, 4]]
+
     def test_train_completion_only(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 

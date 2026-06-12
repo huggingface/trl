@@ -1220,6 +1220,33 @@ class SFTTrainer(_BaseTrainer):
             and args.dataset_kwargs.get("skip_prepare_dataset", False)
             or self._is_vision_dataset
         )
+        if (
+            skip_prepare_dataset
+            and not self._is_vision_dataset
+            and isinstance(data_collator, DataCollatorForLanguageModeling)
+        ):
+            # Labels are built from the mask columns during dataset preparation, which is being skipped here, and
+            # the data collator does not consume the mask columns. A dataset carrying masks without labels would
+            # therefore silently be trained on the full sequence.
+            datasets_to_check = {"train": train_dataset}
+            if isinstance(eval_dataset, dict):
+                datasets_to_check.update(eval_dataset)
+            elif eval_dataset is not None:
+                datasets_to_check["eval"] = eval_dataset
+            for dataset_name, dataset in datasets_to_check.items():
+                column_names = get_dataset_column_names(dataset)
+                if "labels" not in column_names and (
+                    "completion_mask" in column_names or "assistant_masks" in column_names
+                ):
+                    raise ValueError(
+                        f"The {dataset_name} dataset contains mask columns ('completion_mask' or "
+                        "'assistant_masks') but no 'labels' column, and dataset preparation is skipped "
+                        "(`skip_prepare_dataset=True`). Since labels are built from the mask columns during "
+                        "dataset preparation and the data collator does not consume the mask columns, this "
+                        "dataset would silently be trained on the full sequence. Provide a 'labels' column with "
+                        "-100 for the tokens that shouldn't contribute to the loss, or remove "
+                        "`skip_prepare_dataset` from `dataset_kwargs`."
+                    )
         if not skip_prepare_dataset:
             if self.completion_only_loss and formatting_func:
                 raise ValueError(
