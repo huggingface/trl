@@ -754,9 +754,14 @@ class KTOTrainer(_BaseTrainer):
             `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
         """
         if isinstance(input, list):  # conversational: list of message dicts
+            if self._is_vlm:
+                input = prepare_multimodal_messages(input)
             result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
         else:  # non-conversational: plain text string
             result = processing_class(text=input)
+        # VLMs emit a batch dimension even for single examples; unwrap it
+        if self._is_vlm:
+            return {k: v[0] for k, v in result.items()}
         return result
 
     def _get_kl_dataset(
