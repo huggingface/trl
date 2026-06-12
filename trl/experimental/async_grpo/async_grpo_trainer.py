@@ -31,7 +31,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.data.data_collator import DataCollatorMixin
 
 from trl.trainer.base_trainer import _BaseTrainer
-from trl.trainer.utils import pad, patch_chunked_lm_head
+from trl.trainer.utils import nanmax, nanmin, pad, patch_chunked_lm_head
 
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
@@ -607,6 +607,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 else torch.zeros((), device=completion_mask.device)
             )
 
+            # Per-rank clip fractions, gathered below to report the cross-rank saturation extrema.
+            local_low_clip_mean = local_low_clip_sum / local_count.clamp(min=1.0)
+            local_high_clip_mean = local_high_clip_sum / local_count.clamp(min=1.0)
+
             # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum, count]
             stats = torch.stack(
                 [
@@ -635,6 +639,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["clip_ratio/low_mean"].append((global_low_clip_sum / global_count).item())
             self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
             self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
+
+            # Cross-rank saturation extrema, mirroring GRPOTrainer's clip_ratio/low_min and clip_ratio/high_max:
+            # the smallest per-rank low-clip and largest per-rank high-clip fractions across ranks.
+            gathered_low_clip = self.accelerator.gather(local_low_clip_mean)
+            gathered_high_clip = self.accelerator.gather(local_high_clip_mean)
+            self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
+            self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
 
             # Logging metrics from the rollout worker (reward, reward_std, etc.).
             # inputs["metrics"] is a dict of 1D tensors keyed by metric name.
