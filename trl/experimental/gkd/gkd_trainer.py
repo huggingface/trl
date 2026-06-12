@@ -396,11 +396,14 @@ class GKDTrainer(SFTTrainer):
                     attention_mask=inputs["attention_mask"],
                 )
 
-            # slice the logits for the generated tokens using the inputs["prompts"] lengths
-            prompt_lengths = inputs["prompts"].shape[1]
-            shifted_student_logits = student_outputs.logits[:, prompt_lengths - 1 : -1, :]
-            shifted_teacher_logits = teacher_outputs.logits[:, prompt_lengths - 1 : -1, :]
-            shifted_labels = inputs["labels"][:, prompt_lengths:]
+            # Standard causal shift: logits at position i predict the token at i + 1. The `labels != -100` mask
+            # inside `generalized_jsd_loss` already excludes prompt (and padding) positions, so we do not slice by
+            # prompt length. Slicing by `inputs["prompts"].shape[1]` (the batch-max prompt width) would drop real
+            # completion tokens for samples whose prompt is shorter than the batch maximum, since `labels` is padded
+            # to the full-sequence width independently of `prompts`.
+            shifted_student_logits = student_outputs.logits[:, :-1, :]
+            shifted_teacher_logits = teacher_outputs.logits[:, :-1, :]
+            shifted_labels = inputs["labels"][:, 1:]
 
             # compute loss
             loss = self.generalized_jsd_loss(

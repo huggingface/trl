@@ -17,7 +17,7 @@ import os
 import pytest
 import torch
 import torch.nn.functional as F
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
 from trl.experimental.gkd import GKDConfig, GKDTrainer
@@ -409,6 +409,58 @@ class TestGKDTrainer(TrlTestCase):
         # gradient-accumulation-correct behavior: a microbatch contributes its token-sum divided by the *global* count.
         loss_double = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid * 2)
         torch.testing.assert_close(loss_double, loss_mean / 2, rtol=1e-4, atol=1e-6)
+
+    @require_torch_accelerator
+    def test_loss_covers_all_completion_tokens_with_variable_length_prompts(self):
+        # The loss must be computed over EVERY valid completion token, even when prompts have different lengths.
+        # A previous implementation sliced logits/labels by `inputs["prompts"].shape[1]` (the batch-max prompt
+        # width); because `labels` is padded to the full-sequence width independently of `prompts`, that slice
+        # dropped completion tokens for samples whose prompt was shorter than the batch maximum, mis-scaling the
+        # loss when normalized by `num_items_in_batch`. See issue #4719.
+        common = dict(output_dir=self.tmp_dir, report_to="none", per_device_train_batch_size=2, max_length=64)
+        # Two conversations with deliberately different prompt lengths.
+        dataset = Dataset.from_dict(
+            {
+                "messages": [
+                    [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello there, how are you?"}],
+                    [
+                        {"role": "user", "content": "Please explain in detail the theory of general relativity"},
+                        {"role": "assistant", "content": "OK"},
+                    ],
+                ]
+            }
+        )
+        trainer = GKDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=GKDConfig(use_liger_kernel=False, **common),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
+        device = next(trainer.model.parameters()).device
+        batch = trainer.data_collator([trainer.train_dataset[i] for i in range(2)])
+        batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
+
+        # The prompts are different lengths, so the batch-max prompt width exceeds at least one sample's prompt.
+        assert batch["prompts"].shape[1] > (batch["labels"][0] != -100).nonzero()[0].item()
+
+        # All valid completion tokens across the batch — what num_items_in_batch counts.
+        num_valid = (batch["labels"] != -100).sum()
+
+        trainer.model.eval()
+        with torch.no_grad():
+            loss_mean = trainer.compute_loss(trainer.model, batch)  # None -> local mean over the tokens it summed
+            loss_global = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid)
+
+        # If the loss covers every valid completion token, the global-count reduction (sum / num_valid) equals the
+        # local mean. The old prompt-width slice summed FEWER tokens than num_valid, so loss_global != loss_mean.
+        torch.testing.assert_close(loss_global, loss_mean, rtol=1e-4, atol=1e-6)
 
     @require_liger_kernel
     @require_torch_accelerator
