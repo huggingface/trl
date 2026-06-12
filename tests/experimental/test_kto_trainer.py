@@ -19,9 +19,44 @@ from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.kto import KTOConfig, KTOTrainer
-from trl.experimental.kto.kto_trainer import _get_kl_completion_ids
+from trl.experimental.kto.kto_trainer import DataCollatorForUnpairedPreference, _get_kl_completion_ids
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft
+
+
+class TestDataCollatorForUnpairedPreference(TrlTestCase):
+    def test_with_pad_to_multiple_of(self):
+        collator = DataCollatorForUnpairedPreference(pad_token_id=0, pad_to_multiple_of=5)
+        examples = [
+            {"prompt_ids": [1], "completion_ids": [2], "KL_completion_ids": [3], "label": True},
+            {"prompt_ids": [4, 5], "completion_ids": [6, 7], "KL_completion_ids": [8, 9], "label": False},
+        ]
+        result = collator(examples)
+
+        expected_completion_input_ids = torch.tensor(
+            [
+                [1, 2, 0, 0, 0],  # prompt + completion (example 1, padded to multiple of 5)
+                [4, 5, 6, 7, 0],  # prompt + completion (example 2)
+            ]
+        )
+        expected_kl_completion_input_ids = torch.tensor(
+            [
+                [1, 3, 0, 0, 0],  # prompt + KL completion (example 1, padded to multiple of 5)
+                [4, 5, 8, 9, 0],  # prompt + KL completion (example 2)
+            ]
+        )
+
+        assert set(result.keys()) == {
+            "completion_input_ids",
+            "completion_attention_mask",
+            "completion_mask",
+            "KL_completion_input_ids",
+            "KL_completion_attention_mask",
+            "KL_completion_mask",
+            "label",
+        }
+        torch.testing.assert_close(result["completion_input_ids"], expected_completion_input_ids)
+        torch.testing.assert_close(result["KL_completion_input_ids"], expected_kl_completion_input_ids)
 
 
 class TestKTOTrainer(TrlTestCase):
