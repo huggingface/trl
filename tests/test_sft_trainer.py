@@ -107,8 +107,9 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
-    def test_completion_mask(self):
-        """Test completion mask functionality."""
+    def test_mask_columns_ignored(self):
+        """Mask columns are not consumed by the collator: labels are expected to be prebuilt during dataset
+        preparation."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [
             {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
@@ -117,22 +118,6 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
-        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3], [-100, 5, -100]]))
-
-    def test_completion_only_loss_disabled(self):
-        """Test behavior when completion_only_loss is disabled."""
-        collator = DataCollatorForLanguageModeling(pad_token_id=0, completion_only_loss=False)
-        examples = [
-            {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
-            {"input_ids": [4, 5], "completion_mask": [0, 1]},
-        ]
-
-        result = collator(examples)
-
-        # Labels should not be masked when completion_only_loss=False
         assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
@@ -150,12 +135,12 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5]]))
 
-    def test_padding_free_with_completion_mask(self):
-        """Test padding-free mode with completion masks."""
+    def test_padding_free_with_prebuilt_labels(self):
+        """Test padding-free mode with prebuilt labels."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
         examples = [
-            {"input_ids": [1, 2, 3], "completion_mask": [0, 0, 1]},
-            {"input_ids": [4, 5], "completion_mask": [1, 1]},
+            {"input_ids": [1, 2, 3], "labels": [-100, -100, 3]},
+            {"input_ids": [4, 5], "labels": [4, 5]},
         ]
 
         result = collator(examples)
@@ -163,6 +148,7 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
+        # The first token of each document is additionally masked (position_ids == 0)
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, -100, 3, -100, 5]]))
 
     def test_packing(self):
@@ -242,20 +228,6 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
-    def test_assistant_masks(self):
-        """Test handling of assistant masks in examples."""
-        collator = DataCollatorForLanguageModeling(pad_token_id=0)
-        examples = [
-            {"input_ids": [1, 2, 3], "assistant_masks": [0, 1, 1]},
-            {"input_ids": [4, 5], "assistant_masks": [0, 1]},
-        ]
-
-        result = collator(examples)
-
-        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3], [-100, 5, -100]]))
-
     def test_prebuilt_labels_take_precedence_over_masks(self):
         """When examples provide prebuilt labels, the mask columns must be ignored."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0)
@@ -323,12 +295,12 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
-    def test_max_length_with_completion_mask(self):
-        """Test that truncation is applied correctly when completion masks are present."""
+    def test_max_length_with_prebuilt_labels(self):
+        """Test that truncation is applied correctly when prebuilt labels are present."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3)
         examples = [
-            {"input_ids": [1, 2, 3, 4, 5], "completion_mask": [0, 0, 1, 1, 1]},
-            {"input_ids": [6, 7, 8], "completion_mask": [0, 1, 1]},
+            {"input_ids": [1, 2, 3, 4, 5], "labels": [-100, -100, 3, 4, 5]},
+            {"input_ids": [6, 7, 8], "labels": [-100, 7, 8]},
         ]
 
         result = collator(examples)
@@ -338,12 +310,12 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, -100, 3], [-100, 7, 8]]))
 
-    def test_max_length_keep_end_with_completion_mask(self):
-        """Test keep_end truncation with completion masks preserves the final tokens."""
+    def test_max_length_keep_end_with_prebuilt_labels(self):
+        """Test keep_end truncation with prebuilt labels preserves the final tokens."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3, truncation_mode="keep_end")
         examples = [
-            {"input_ids": [1, 2, 3, 4, 5], "completion_mask": [0, 0, 1, 1, 1]},
-            {"input_ids": [6, 7, 8], "completion_mask": [0, 1, 1]},
+            {"input_ids": [1, 2, 3, 4, 5], "labels": [-100, -100, 3, 4, 5]},
+            {"input_ids": [6, 7, 8], "labels": [-100, 7, 8]},
         ]
 
         result = collator(examples)
