@@ -80,6 +80,29 @@ trainer = GKDTrainer(
 trainer.train()
 ```
 
+## Accelerated generation with vLLM
+
+Student on-policy generation can become the dominant cost in a GKD training step. Setting `use_vllm=True` routes the student generation path through a vLLM engine, which is typically several times faster than `model.generate`.
+
+Two modes are supported via `vllm_mode`:
+
+* `"colocate"` (default): vLLM runs in the same process as the trainer and shares the GPU(s). Tune `vllm_gpu_memory_utilization` and `vllm_tensor_parallel_size` to fit alongside the student and teacher models. Set `vllm_enable_sleep_mode=True` to offload the engine during the optimizer step, trading some host–device transfer latency for lower peak GPU memory.
+* `"server"`: connect to an external TRL vLLM server via `vllm_server_base_url` (or `vllm_server_host`/`vllm_server_port`).
+
+`vllm_sync_frequency` controls how often the updated student weights are pushed into the vLLM engine. The default of `1` syncs after every training step; larger values reduce sync overhead at the cost of stale generations.
+
+Teacher sequence-level KD (`seq_kd=True`) is unaffected — it still uses `model.generate` because the teacher is a different, frozen model.
+
+```python
+training_args = GKDConfig(
+    output_dir="gkd-model",
+    use_vllm=True,
+    vllm_mode="colocate",
+    vllm_gpu_memory_utilization=0.3,
+    vllm_sync_frequency=1,
+)
+```
+
 ### Expected dataset type
 
 The dataset should be formatted as a list of "messages" where each message is a list of dictionaries with the following keys:

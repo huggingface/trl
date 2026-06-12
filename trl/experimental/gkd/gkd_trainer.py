@@ -35,10 +35,12 @@ from transformers import (
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import ModelOutput, is_liger_kernel_available, is_peft_available
 
+from ...generation.vllm_generation import VLLMGeneration
+from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
-from ...trainer.utils import disable_dropout_in_model
+from ...trainer.utils import disable_dropout_in_model, pad
 from ..utils import DataCollatorForChatML, empty_cache
 from .gkd_config import GKDConfig
 
@@ -221,6 +223,43 @@ class GKDTrainer(SFTTrainer):
             and self.model.generation_config.eos_token_id is not None
         ):
             self.generation_config.eos_token_id = self.model.generation_config.eos_token_id
+
+        self.use_vllm = args.use_vllm
+        if self.use_vllm:
+            if not is_vllm_available():
+                raise ImportError(
+                    "vLLM is not available and use_vllm is set to True. Please install vLLM with "
+                    "`pip install vllm` to use it."
+                )
+            self.vllm_generation = VLLMGeneration(
+                model=self.model,
+                accelerator=self.accelerator,
+                is_fsdp_enabled=self.is_fsdp_enabled,
+                processing_class=self.processing_class,
+                mode=args.vllm_mode,
+                structured_outputs_regex=args.vllm_structured_outputs_regex,
+                server_base_url=args.vllm_server_base_url,
+                server_host=args.vllm_server_host,
+                server_port=args.vllm_server_port,
+                group_port=args.vllm_group_port,
+                server_timeout=args.vllm_server_timeout,
+                tensor_parallel_size=args.vllm_tensor_parallel_size,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                max_model_length=args.vllm_max_model_length or args.max_length,
+                max_num_seqs=args.per_device_train_batch_size * args.gradient_accumulation_steps,
+                enable_sleep_mode=args.vllm_enable_sleep_mode,
+                model_impl=args.vllm_model_impl,
+                # GKDConfig does not expose repetition_penalty / top_p / top_k / min_p; mirror the existing model.generate() defaults.
+                repetition_penalty=1.0,
+                temperature=args.temperature,
+                top_p=1.0,
+                top_k=0,
+                min_p=0.0,
+                max_completion_length=args.max_new_tokens,
+                logprobs=None,
+            )
+            self.vllm_sync_frequency = args.vllm_sync_frequency
+            self._last_vllm_sync_step = -self.vllm_sync_frequency
 
     @staticmethod
     def generalized_jsd_loss(
@@ -431,6 +470,48 @@ class GKDTrainer(SFTTrainer):
 
         return generated_tokens, new_attention_mask, new_labels
 
+    def _generate_on_policy_outputs_vllm(self, inputs, pad_token_id):
+        # Strip left-padding from prompts using the prompt_attention_mask (DataCollatorForChatML left-pads prompts).
+        # Stripping is only for the vLLM API call; the returned tensor reuses the original padded prompt layout
+        # so that compute_loss can slice with inputs["prompts"].shape[1].
+        prompts = inputs["prompts"]
+        prompt_attention_mask = inputs["prompt_attention_mask"]
+        prompt_ids_list: list[list[int]] = []
+        for prompt_idx, prompt in enumerate(prompts):
+            prompt = prompt[prompt_attention_mask[prompt_idx].bool()]
+            prompt_ids_list.append(prompt.tolist())
+
+        if (
+            self.state.global_step != self._last_vllm_sync_step
+            and self.state.global_step >= self._last_vllm_sync_step + self.vllm_sync_frequency
+        ):
+            self.vllm_generation.sync_weights()
+            self._last_vllm_sync_step = self.state.global_step
+
+        _, completion_ids, _, _ = self.vllm_generation.generate(
+            prompts=prompt_ids_list,
+            images=None,
+            num_generations=1,
+        )
+
+        device = self.accelerator.device
+        prompt_ids = prompts.to(device)
+        prompt_attn = prompt_attention_mask.to(device)
+        completion_tensors = [torch.tensor(ids, device=device, dtype=torch.long) for ids in completion_ids]
+        completion_ids_padded = pad(completion_tensors, padding_side="right", padding_value=pad_token_id)
+        completion_attention_mask = torch.ones_like(completion_ids_padded)
+        completion_attention_mask[completion_ids_padded == pad_token_id] = 0
+
+        generated_tokens = torch.cat([prompt_ids, completion_ids_padded], dim=1)
+        new_attention_mask = torch.cat([prompt_attn, completion_attention_mask], dim=1)
+
+        # Build labels: mask the prompt span with -100, then mask any pad positions in the completion.
+        new_labels = generated_tokens.clone()
+        new_labels[:, : prompt_ids.shape[1]] = -100
+        new_labels[new_labels == pad_token_id] = -100
+
+        return generated_tokens, new_attention_mask, new_labels
+
     def training_step(
         self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
     ) -> torch.Tensor:
@@ -442,16 +523,21 @@ class GKDTrainer(SFTTrainer):
         the original inputs.
         """
         if random.random() <= self.lmbda:
-            with (
-                unwrap_model_for_generation(
-                    model,
-                    self.accelerator,
-                    generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
-                ) as unwrapped_model
-            ):
-                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+            if self.use_vllm:
+                new_input_ids, new_attention_mask, new_labels = self._generate_on_policy_outputs_vllm(
+                    inputs, self.processing_class.pad_token_id
                 )
+            else:
+                with (
+                    unwrap_model_for_generation(
+                        model,
+                        self.accelerator,
+                        generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                    ) as unwrapped_model
+                ):
+                    new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
+                        unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                    )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
