@@ -259,15 +259,15 @@ class MiniLLMTrainer(GRPOTrainer):
             teacher_log_probs:
                 Per-token log-probabilities from the teacher, of shape (batch_size, sequence_length)
             mask:
-                Optional boolean tensor of shape (batch_size, sequence_length) selecting the tokens to include in
-                the loss (e.g. excluding padding)
+                Optional boolean tensor of shape (batch_size, sequence_length) selecting the tokens to include in the
+                loss (e.g. excluding padding)
             reduction:
-                Specifies the reduction to apply to the output: 'batchmean' (default), 'sum' or 'mean'; any other
-                value returns the unreduced per-token loss
+                Specifies the reduction to apply to the output: 'batchmean' (default), 'sum' or 'mean'; any other value
+                returns the unreduced per-token loss
 
         Returns:
-            loss: Scalar tensor with the single-step KL regularization loss (unreduced if `reduction` is not one of
-            the above)
+            loss: Scalar tensor with the single-step KL regularization loss (unreduced if `reduction` is not one of the
+            above)
         """
         reg_loss = F.kl_div(
             teacher_log_probs, student_log_probs, reduction="none", log_target=True
