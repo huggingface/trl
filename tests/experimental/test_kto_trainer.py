@@ -523,7 +523,7 @@ class TestKTOTrainerVLM(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
-            max_length=37,
+            max_length=37,  # total_len=38, prompt_len=34 — truncates completion, not image tokens
             per_device_train_batch_size=2,
             max_steps=3,
             report_to="none",
