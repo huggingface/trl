@@ -197,6 +197,15 @@ Under FSDP2, pass `--fsdp_reshard_after_forward false` to `accelerate launch` �
 
 Not compatible with `use_liger_kernel=True`, PEFT, or VLM.
 
+The number of valid tokens processed per chunk is controlled by `chunked_nll_chunk_size` (default: `256`). Peak logit-activation memory scales linearly with this value. Reduce it for very large vocabularies (≥ 64k tokens) or tight VRAM budgets:
+
+```python
+from trl import SFTConfig
+
+# 64 tokens per chunk — recommended for vocab ≥ 64k on constrained hardware
+training_args = SFTConfig(..., loss_type="chunked_nll", chunked_nll_chunk_size=64)
+```
+
 ## Padding-free
 
 Padding-free batching is an alternative approach for reducing memory usage. In this method, a batch is first sampled and then flattened into a single sequence, avoiding padding. Unlike packing, which can result in incomplete sequences by combining parts of different samples, padding-free batching ensures that all sequences remain complete and intact.

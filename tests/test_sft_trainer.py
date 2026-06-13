@@ -522,6 +522,31 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_train_chunked_nll_loss_custom_chunk_size(self):
+        """chunked_nll_chunk_size must be forwarded to _patch_chunked_ce_lm_head."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        custom_chunk_size = 64
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            loss_type="chunked_nll",
+            chunked_nll_chunk_size=custom_chunk_size,
+            report_to="none",
+        )
+
+        with patch("trl.trainer.sft_trainer._patch_chunked_ce_lm_head", wraps=_patch_chunked_ce_lm_head) as mock_patch:
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+        mock_patch.assert_called_once()
+        _, kwargs = mock_patch.call_args
+        assert kwargs["chunk_size"] == custom_chunk_size, (
+            f"Expected chunk_size={custom_chunk_size}, got {kwargs['chunk_size']}"
+        )
+
     @require_peft
     def test_train_chunked_nll_loss_peft(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
