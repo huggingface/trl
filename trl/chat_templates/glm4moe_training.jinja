@@ -93,7 +93,7 @@ For each function call, output the function name and arguments within the follow
 {{- m.content }}
 {{- '\n</tool_response>' }}
 {%- else -%}
-<|observation|>{% for tr in m.content %}
+{{- '<|observation|>' if loop.first or messages[loop.index0 - 1].role != 'assistant' }}{% for tr in m.content %}
 
 <tool_response>
 {{ tr.output if tr.output is defined else tr }}
