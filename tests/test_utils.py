@@ -666,8 +666,22 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
             [{"role": "user", "content": "What is the weather in London?"}],
         ]
         completions = [
-            [{"role": "tool", "name": "get_temperature", "args": {"location": "Paris"}}],
-            [{"role": "tool", "name": "get_weather", "args": {"location": "London"}}],
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "get_temperature", "arguments": {"location": "Paris"}}}],
+                },
+                {"role": "tool", "content": "22 degrees"},
+                {"role": "assistant", "content": "The temperature in Paris is 22 degrees."},
+            ],
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "get_weather", "arguments": {"location": "London"}}}],
+                },
+                {"role": "tool", "content": "Cloudy"},
+                {"role": "assistant", "content": "The weather in London is cloudy."},
+            ],
         ]
         rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
         advantages = [0.987, 0.654]
@@ -683,15 +697,26 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         │ ┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
         │ ┃ Prompt            ┃ Completion        ┃ Correctness ┃ Format ┃ Advantage ┃ │
         │ ┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
-        │ │ USER              │ TOOL              │        0.12 │   0.79 │      0.99 │ │
+        │ │ USER              │ ASSISTANT         │        0.12 │   0.79 │      0.99 │ │
         │ │ What is the       │ get_temperature(… │             │        │           │ │
-        │ │ temperature in    │ 'Paris'})         │             │        │           │ │
-        │ │ Paris?            │                   │             │        │           │ │
+        │ │ temperature in    │                   │             │        │           │ │
+        │ │ Paris?            │ TOOL              │             │        │           │ │
+        │ │                   │ 22 degrees        │             │        │           │ │
+        │ │                   │                   │             │        │           │ │
+        │ │                   │ ASSISTANT         │             │        │           │ │
+        │ │                   │ The temperature   │             │        │           │ │
+        │ │                   │ in Paris is 22    │             │        │           │ │
+        │ │                   │ degrees.          │             │        │           │ │
         │ ├───────────────────┼───────────────────┼─────────────┼────────┼───────────┤ │
-        │ │ USER              │ TOOL              │        0.46 │   0.10 │      0.65 │ │
-        │ │ What is the       │ get_weather({'lo… │             │        │           │ │
-        │ │ weather in        │ 'London'})        │             │        │           │ │
-        │ │ London?           │                   │             │        │           │ │
+        │ │ USER              │ ASSISTANT         │        0.46 │   0.10 │      0.65 │ │
+        │ │ What is the       │ get_weather(loca… │             │        │           │ │
+        │ │ weather in        │                   │             │        │           │ │
+        │ │ London?           │ TOOL              │             │        │           │ │
+        │ │                   │ Cloudy            │             │        │           │ │
+        │ │                   │                   │             │        │           │ │
+        │ │                   │ ASSISTANT         │             │        │           │ │
+        │ │                   │ The weather in    │             │        │           │ │
+        │ │                   │ London is cloudy. │             │        │           │ │
         │ └───────────────────┴───────────────────┴─────────────┴────────┴───────────┘ │
         ╰──────────────────────────────────────────────────────────────────────────────╯
         """)
