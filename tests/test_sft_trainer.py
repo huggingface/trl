@@ -23,7 +23,7 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate.utils.memory import release_memory
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from packaging.version import Version
 from packaging.version import parse as parse_version
 from transformers import (
@@ -1099,6 +1099,21 @@ class TestSFTTrainer(TrlTestCase):
         assert isinstance(trainer.data_collator, DataCollatorForLanguageModeling)
         assert trainer.data_collator.max_length == 16
         assert trainer.data_collator.truncation_mode == "keep_end"
+
+    def test_dataset_with_transform_requires_skip_prepare_dataset(self):
+        dataset = Dataset.from_dict({"text": ["hello world"]})
+
+        def add_suffix(batch):
+            batch["text"] = [text + " <AUG>" for text in batch["text"]]
+            return batch
+
+        dataset = dataset.with_transform(add_suffix)
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+
+        with pytest.raises(ValueError, match=r"Dataset\.with_transform\(\).*skip_prepare_dataset"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
 
     def test_padding_free_without_packing_and_max_length_raises(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
