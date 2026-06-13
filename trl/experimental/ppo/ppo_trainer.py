@@ -37,6 +37,7 @@ from transformers import (
     DataCollatorWithPadding,
     FeatureExtractionMixin,
     GenerationConfig,
+    PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
@@ -317,12 +318,16 @@ class PPOTrainer(_BaseTrainer):
             Model to be trained. This is the policy model.
         ref_model (`torch.nn.Module`, *optional*):
             Reference model used to compute the KL divergence. If `None`, a copy of the policy model is created.
-        reward_model (`torch.nn.Module`):
-            Reward model used to compute the rewards.
+        reward_model ([`~transformers.PreTrainedModel`]):
+            Reward model used to compute the rewards. Must be a sequence-classification model (e.g. loaded with
+            [`~transformers.AutoModelForSequenceClassification`]), since the trainer relies on its `base_model_prefix`
+            attribute and `score` head.
         train_dataset ([`~datasets.Dataset`]):
             Dataset for training.
-        value_model (`torch.nn.Module`):
-            Value model used to predict the value of a state.
+        value_model ([`~transformers.PreTrainedModel`]):
+            Value model used to predict the value of a state. Must be a sequence-classification model (e.g. loaded with
+            [`~transformers.AutoModelForSequenceClassification`]), since the trainer relies on its `base_model_prefix`
+            attribute and `score` head.
         data_collator ([`~transformers.DataCollatorWithPadding`], *optional*):
             Data collator to batch and pad samples from the dataset. If `None`, a default data collator is created
             using the `processing_class`.
@@ -360,9 +365,9 @@ class PPOTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
         model: nn.Module,
         ref_model: nn.Module | None,
-        reward_model: nn.Module,
+        reward_model: PreTrainedModel,
         train_dataset: Dataset,
-        value_model: nn.Module,
+        value_model: PreTrainedModel,
         data_collator: DataCollatorWithPadding | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
         # less commonly used
@@ -450,6 +455,18 @@ class PPOTrainer(_BaseTrainer):
             self.ref_model = None
         else:
             self.ref_model = create_reference_model(self.policy_model)
+
+        # The trainer relies on the transformers `base_model_prefix` attribute and a `score` head, so `value_model`
+        # and `reward_model` must be `PreTrainedModel` instances (typically loaded with
+        # `AutoModelForSequenceClassification`). A plain `nn.Module` would otherwise fail later with a cryptic
+        # `AttributeError: ... has no attribute 'base_model_prefix'` (see #1977).
+        for name, module in [("value_model", value_model), ("reward_model", reward_model)]:
+            if not isinstance(module, PreTrainedModel):
+                raise TypeError(
+                    f"`{name}` must be a `transformers.PreTrainedModel` exposing a `base_model_prefix` attribute and "
+                    f"a `score` head (e.g. a model loaded with `AutoModelForSequenceClassification.from_pretrained(...)`), "
+                    f"but got `{type(module).__name__}`. A plain `nn.Module` is not supported."
+                )
 
         self.reward_model = reward_model
         self.train_dataset = train_dataset

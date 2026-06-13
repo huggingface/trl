@@ -827,3 +827,21 @@ class TestPPOTrainer(TrlTestCase):
 
         assert critic_weights_updated, "Critic weights were not updated during training"
         assert policy_weights_updated, "Policy LoRA weights were not updated during training"
+
+    @pytest.mark.parametrize("bad_arg", ["value_model", "reward_model"])
+    def test_plain_nn_module_raises_clear_error(self, bad_arg):
+        """Passing a plain `nn.Module` as `value_model`/`reward_model` should raise a clear `TypeError` instead of a
+        cryptic `AttributeError: ... has no attribute 'base_model_prefix'` (see #1977)."""
+        training_args = PPOConfig(output_dir=self.tmp_dir, report_to="none")
+        kwargs = {
+            "args": training_args,
+            "processing_class": self.tokenizer,
+            "model": self.model,
+            "ref_model": self.ref_model,
+            "reward_model": self.reward_model,
+            "value_model": self.value_model,
+            "train_dataset": self.raw_dataset["train"],
+        }
+        kwargs[bad_arg] = torch.nn.Module()  # plain nn.Module, lacks `base_model_prefix`
+        with pytest.raises(TypeError, match="base_model_prefix"):
+            PPOTrainer(**kwargs)
