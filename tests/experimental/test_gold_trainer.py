@@ -1264,10 +1264,19 @@ class TestGOLDTrainerLoss(TrlTestCase):
 
     def test_loss_normalizes_by_num_items_in_batch(self):
         # When `num_items_in_batch` is passed (as under gradient accumulation), the JSD loss must be reduced as
-        # sum / num_items_in_batch rather than the local per-microbatch mean. See issue #4719. The ULD path has its
-        # own normalization and is not covered here.
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train").select(
-            range(2)
+        # sum / num_items_in_batch rather than the local per-microbatch mean. The batch uses variable-length prompts
+        # to ensure the loss covers every valid completion token instead of slicing by the batch-max prompt width.
+        # See issue #4719. The ULD path has its own normalization and is not covered here.
+        dataset = Dataset.from_dict(
+            {
+                "messages": [
+                    [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello there, how are you?"}],
+                    [
+                        {"role": "user", "content": "Please explain in detail the theory of general relativity"},
+                        {"role": "assistant", "content": "OK"},
+                    ],
+                ]
+            }
         )
         trainer = GOLDTrainer(
             model=self.model_id,
@@ -1276,6 +1285,8 @@ class TestGOLDTrainerLoss(TrlTestCase):
                 output_dir=self.tmp_dir,
                 report_to="none",
                 per_device_train_batch_size=2,
+                max_length=64,
+                max_completion_length=20,
                 use_cpu=True,
                 bf16=False,
             ),
@@ -1293,8 +1304,13 @@ class TestGOLDTrainerLoss(TrlTestCase):
         batch = trainer.data_collator([trainer.train_dataset[i] for i in range(2)])
         batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
 
-        prompt_lengths = batch["prompts"].shape[1]
-        num_valid = (batch["labels"][:, prompt_lengths:] != -100).sum()
+        prompt_width = batch["prompts"].shape[1]
+        old_prompt_width_count = (batch["labels"][:, prompt_width:] != -100).sum()
+        num_valid = (batch["labels"] != -100).sum()
+
+        # Prove this batch exposes the regression: the old prompt-width slice would miss valid completion labels.
+        assert prompt_width > (batch["labels"][0] != -100).nonzero()[0].item()
+        assert num_valid > old_prompt_width_count
 
         trainer.model.eval()
         with torch.no_grad():
