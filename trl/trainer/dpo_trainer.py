@@ -1135,7 +1135,7 @@ class DPOTrainer(_BaseTrainer):
 
         input_ids = model_kwargs["input_ids"]
         completion_mask = inputs["completion_mask"]
-        shift_completion_mask = completion_mask[:, 1:].contiguous()
+        shift_completion_mask = completion_mask[:, 1:]
         labels = input_ids[:, 1:].clone()
         labels[shift_completion_mask == 0] = -100
 
