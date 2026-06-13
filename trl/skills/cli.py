@@ -69,7 +69,7 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
         "install",
         parents=[target_parser],
         help="Install skill",
-        description="Install TRL skill to to target",
+        description="Install TRL skill to target",
     )
     install_parser.add_argument("skill", nargs="?", help="Skill name to install (omit to use --all)")
     install_parser.add_argument("--all", action="store_true", help="Install all available TRL skills")

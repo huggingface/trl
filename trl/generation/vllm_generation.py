@@ -32,6 +32,7 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
+from ..distributed import DistributedBackend
 from ..extras.profiling import ProfilingContext
 from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
@@ -118,8 +119,6 @@ class VLLMGeneration:
             Model to use for generation.
         accelerator ([`~accelerate.Accelerator`]):
             Accelerator for distributed training.
-        is_fsdp_enabled (`bool`):
-            Whether FSDP is enabled.
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
             Tokenizer or processor for the model.
 
@@ -224,7 +223,6 @@ class VLLMGeneration:
         self,
         model: "PreTrainedModel | PeftModel",
         accelerator: "Accelerator",
-        is_fsdp_enabled: bool,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         # vLLM configuration
         mode: str = "colocate",
@@ -254,7 +252,7 @@ class VLLMGeneration:
     ):
         self.model = model
         self.accelerator = accelerator
-        self.is_fsdp_enabled = is_fsdp_enabled
+        self._dist = DistributedBackend(accelerator)
         self.processing_class = processing_class
 
         # vLLM configuration
@@ -381,11 +379,16 @@ class VLLMGeneration:
             name = name.replace(prefix, "")
         return name
 
+    def _push_param_to_vllm(self, name: str, param) -> None:
+        """Push a single parameter tensor to the vLLM engine (server or colocate mode)."""
+        if self.mode == "server" and self.accelerator.is_main_process:
+            self.vllm_client.update_named_param(name, param)
+        elif self.mode == "colocate":
+            self.llm.llm_engine.model_executor.driver_worker.model_runner.model.load_weights([(name, param)])
+
     def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited: set[str] | None = None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
         # For FSDP1, we need to recurse into children and also use summon_full_params
-        accelerator = self.accelerator
-
         if visited is None:
             visited = set()
         for child_name, child_module in module.named_children():
@@ -404,16 +407,10 @@ class VLLMGeneration:
                         continue  # skip FSDP subtrees already traversed
                     visited.add(full_name)
 
-                    if self.mode == "server" and accelerator.is_main_process:
-                        self.vllm_client.update_named_param(full_name, param.data)
-                    elif self.mode == "colocate":
-                        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                        llm_model.load_weights([(full_name, param.data)])
+                    self._push_param_to_vllm(full_name, param.data)
 
     def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
         """FSDP2-specific parameter synchronization."""
-        accelerator = self.accelerator
-
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
         for name, param in module.state_dict().items():
             # When using PEFT, we need to recover the original parameter name
@@ -430,11 +427,14 @@ class VLLMGeneration:
                 param = param.to(torch.device("cuda"))
             param = param.full_tensor()
 
-            if self.mode == "server" and accelerator.is_main_process:
-                self.vllm_client.update_named_param(name, param)
-            elif self.mode == "colocate":
-                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                llm_model.load_weights([(name, param)])
+            self._push_param_to_vllm(name, param)
+
+    def _sync_fsdp_params_to_vllm(self, model: nn.Module):
+        """Dispatch FSDP weight sync to the version-appropriate method."""
+        if self._dist.fsdp_version == 1:
+            self._sync_fsdp1_params_to_vllm(model)
+        elif self._dist.fsdp_version == 2:
+            self._sync_fsdp2_params_to_vllm(model)
 
     def sync_weights(self):
         """Synchronize model weights to vLLM.
@@ -450,35 +450,18 @@ class VLLMGeneration:
 
         model = self.model
         accelerator = self.accelerator
-        is_fsdp_enabled = self.is_fsdp_enabled
-
-        # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
-        deepspeed_plugin = accelerator.state.deepspeed_plugin
-        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-        if zero_stage_3:
-            import deepspeed
-
-            gather_if_zero3 = deepspeed.zero.GatheredParameters
-        else:
-            gather_if_zero3 = nullcontext
 
         if is_peft_model(model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
             # merging adapters in a sharded manner is not supported.
             # TODO: does this work with FSDP?
-            with gather_if_zero3(list(model.parameters())):
+            with self._dist.gather_params(list(model.parameters())):
                 model.merge_adapter()
 
                 # Update vLLM weights while parameters are gathered
-                if is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
-                    # Update vLLM weights while parameters are gathered
+                if self._dist.is_fsdp:  # note if using FSDP, gather_params is a no-op
                     # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    fsdp_plugin = getattr(accelerator.state, "fsdp_plugin", None)
-                    fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
-                    if fsdp_version == 1:
-                        self._sync_fsdp1_params_to_vllm(model)  # use memory-efficient post-order traversal for FSDP
-                    elif fsdp_version == 2:
-                        self._sync_fsdp2_params_to_vllm(model)
+                    self._sync_fsdp_params_to_vllm(model)
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in model.named_parameters():
@@ -492,32 +475,19 @@ class VLLMGeneration:
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
-                        if self.mode == "server" and accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
+                        self._push_param_to_vllm(name, param.data)
                 # Unmerge adapters while parameters are still gathered
                 model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
-            if is_fsdp_enabled:
-                fsdp_plugin = getattr(accelerator.state, "fsdp_plugin", None)
-                fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
-                if fsdp_version == 1:
-                    self._sync_fsdp1_params_to_vllm(model)  # use memory-efficient post-order traversal for FSDP
-                elif fsdp_version == 2:
-                    self._sync_fsdp2_params_to_vllm(model)
+            if self._dist.is_fsdp:
+                self._sync_fsdp_params_to_vllm(model)
             else:
                 for name, param in model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
-                    with gather_if_zero3([param]):
-                        if self.mode == "server" and accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
+                    with self._dist.gather_params([param]):
+                        self._push_param_to_vllm(name, param.data)
 
         # Reset cache on vLLM
         if self.mode == "server" and accelerator.is_main_process:
