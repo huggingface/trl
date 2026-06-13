@@ -92,15 +92,21 @@ trainer.train()
 
 ```python
 from datasets import load_dataset
-from trl import GRPOTrainer
+from trl import GRPOConfig, GRPOTrainer
 from trl.rewards import accuracy_reward
 
 dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+
+training_args = GRPOConfig(
+    output_dir="Qwen2.5-0.5B-Instruct-GRPO",
+    max_completion_length=1024,
+)
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
+    args=training_args,
 )
 trainer.train()
 ```
