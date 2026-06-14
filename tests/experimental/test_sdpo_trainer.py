@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import math
 
 import torch
 from datasets import Dataset, load_dataset
@@ -142,6 +143,33 @@ class TestSDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_log_filters_nan_from_accumulated_metrics(self):
+        """A reward function that is inactive for a whole batch (returns ``None``) appends a NaN to
+        its accumulated metric list. When the metrics are averaged in ``log()``, a naive
+        ``sum()/len()`` lets that single NaN contaminate the valid values recorded in other batches
+        and wipes the whole metric. The aggregation must drop NaNs, consistent with the
+        ``GRPOTrainer``/``RLOOTrainer`` fix (issue #4501)."""
+        from transformers.trainer_callback import TrainerControl, TrainerState
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=SDPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+        )
+        trainer.state = TrainerState()
+        trainer.control = TrainerControl()
+        trainer.model.train()  # ensure log() runs in "train" mode
+
+        # Two batches scored the reward function (0.5, 0.7); one batch had it inactive (NaN).
+        trainer._metrics["train"]["self_distillation/rewards/reward"] = [0.5, float("nan"), 0.7]
+        trainer.log({})
+
+        logged = trainer.state.log_history[-1]["self_distillation/rewards/reward"]
+        assert logged is not None and not math.isnan(logged), f"NaN leaked into logged metric: {logged}"
+        assert math.isclose(logged, 0.6), f"expected mean of valid values (0.6), got {logged}"
 
     @require_liger_kernel
     @require_torch_accelerator
