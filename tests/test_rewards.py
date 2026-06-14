@@ -12,9 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pickle
 import threading
 
-from trl.rewards import accuracy_reward, get_soft_overlong_punishment, reasoning_accuracy_reward, think_format_reward
+import pytest
+
+from trl.rewards import (
+    accuracy_reward,
+    get_repetition_penalty_reward,
+    get_soft_overlong_punishment,
+    reasoning_accuracy_reward,
+    think_format_reward,
+)
 
 from .testing_utils import TrlTestCase, require_math_latex
 
@@ -86,6 +95,90 @@ class TestSoftOverlongPunishmentReward:
         completion_ids = [[1] * 90]  # 90 is between 80 and 100
         rewards = reward_fn(completion_ids)
         assert round(abs(rewards[0] - -0.5), 4) == 0
+
+
+class TestRepetitionPenaltyReward:
+    def test_no_repetition_yields_zero(self):
+        """A completion with only unique n-grams gets no penalty."""
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        completions = [[{"content": "the cat sat on the mat"}]]
+        assert reward_fn(completions) == [0.0]
+
+    def test_full_repetition_approaches_max_penalty(self):
+        """A fully repetitive completion approaches max_penalty."""
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        # "the the the the the" -> 4 bigrams, 1 unique -> scaling = 1 - 1/4 = 0.75
+        completions = [[{"content": "the the the the the"}]]
+        assert reward_fn(completions) == [pytest.approx(-0.75)]
+
+    def test_partial_repetition(self):
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        # "a b a b a b" -> 5 bigrams, 2 unique -> scaling = 1 - 2/5 = 0.6
+        completions = [[{"content": "a b a b a b"}]]
+        assert reward_fn(completions) == [pytest.approx(-0.6)]
+
+    def test_completion_shorter_than_ngram_size_yields_zero(self):
+        reward_fn = get_repetition_penalty_reward(ngram_size=3, max_penalty=-1.0)
+        completions = [[{"content": "hello world"}]]  # 2 words < ngram_size
+        assert reward_fn(completions) == [0.0]
+
+    def test_completion_exactly_ngram_size_yields_zero(self):
+        reward_fn = get_repetition_penalty_reward(ngram_size=3, max_penalty=-1.0)
+        completions = [[{"content": "a b c"}]]  # a single, unique n-gram
+        assert reward_fn(completions) == [0.0]
+
+    def test_empty_completion_yields_zero(self):
+        reward_fn = get_repetition_penalty_reward(ngram_size=3, max_penalty=-1.0)
+        completions = [[{"content": ""}]]
+        assert reward_fn(completions) == [0.0]
+
+    def test_penalty_is_case_insensitive(self):
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        # "The THE the" lowercased -> 2 bigrams, 1 unique -> scaling = 1 - 1/2 = 0.5
+        completions = [[{"content": "The THE the"}]]
+        assert reward_fn(completions) == [pytest.approx(-0.5)]
+
+    def test_max_penalty_scales_reward(self):
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-0.5)
+        # scaling 0.75 * max_penalty -0.5 = -0.375
+        completions = [[{"content": "the the the the the"}]]
+        assert reward_fn(completions) == [pytest.approx(-0.375)]
+
+    def test_ngram_size_changes_reward(self):
+        completions = [[{"content": "a b c a b c"}]]
+        # bigrams: 5 total, 3 unique -> 1 - 3/5 = 0.4
+        reward_bigram = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        assert reward_bigram(completions) == [pytest.approx(-0.4)]
+        # trigrams: 4 total, 3 unique -> 1 - 3/4 = 0.25
+        reward_trigram = get_repetition_penalty_reward(ngram_size=3, max_penalty=-1.0)
+        assert reward_trigram(completions) == [pytest.approx(-0.25)]
+
+    def test_batch_of_completions(self):
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        completions = [
+            [{"content": "the cat sat on the mat"}],  # no repetition
+            [{"content": "the the the the the"}],  # full repetition
+            [{"content": "hi"}],  # shorter than ngram_size
+        ]
+        assert reward_fn(completions) == [pytest.approx(0.0), pytest.approx(-0.75), pytest.approx(0.0)]
+
+    def test_positive_max_penalty_raises(self):
+        with pytest.raises(ValueError):
+            get_repetition_penalty_reward(ngram_size=2, max_penalty=0.5)
+
+    def test_extra_kwargs_are_ignored(self):
+        """Trainers pass prompts/completion_ids/etc. as kwargs; the reward must accept and ignore them."""
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        completions = [[{"content": "the the the the the"}]]
+        assert reward_fn(completions, prompts=["x"], completion_ids=[[1, 2]]) == [pytest.approx(-0.75)]
+
+    def test_reward_is_picklable(self):
+        """The reward must survive pickling for the async GRPO rollout worker."""
+        reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+        unpickled = pickle.loads(pickle.dumps(reward_fn))
+        completions = [[{"content": "the the the the the"}]]
+        assert unpickled(completions) == [pytest.approx(-0.75)]
+        assert unpickled.__name__ == "repetition_penalty_reward"
 
 
 class TestAccuracyReward:

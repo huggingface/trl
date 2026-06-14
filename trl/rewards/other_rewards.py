@@ -15,6 +15,71 @@
 from collections.abc import Callable
 
 
+def get_repetition_penalty_reward(ngram_size: int = 3, max_penalty: float = -1.0) -> Callable:
+    # docstyle-ignore
+    r"""
+    Reward function that penalizes repeated n-grams in a completion, used to discourage degenerate, repetitive text
+    (a common failure mode and reward-hacking strategy when length- or format-shaping rewards are used). Reference:
+    Appendix C.2 of the "Demystifying Long Chain-of-Thought Reasoning" paper (https://huggingface.co/papers/2502.03373).
+
+    The penalty is proportional to the fraction of repeated n-grams in the completion:
+
+    $$
+    R_{\text{repetition}}(y) = \left(1 - \frac{\#\,\text{unique } n\text{-grams}}{\#\,\text{total } n\text{-grams}}\right) \times p
+    $$
+
+    where \( p \) is `max_penalty`. A completion with no repeated n-gram gets a reward of `0.0`, while a fully repetitive
+    one approaches `max_penalty`. Words are obtained by lowercasing and splitting on whitespace, so the penalty is best
+    suited to whitespace-delimited languages. Completions with fewer than `ngram_size` words get a reward of `0.0`.
+
+    Args:
+        ngram_size (`int`, *optional*, defaults to `3`):
+            Size of the n-grams to consider.
+        max_penalty (`float`, *optional*, defaults to `-1.0`):
+            Most negative penalty, applied to a fully repetitive completion. Must be non-positive.
+
+    Returns:
+        `Callable`:
+            A reward function that takes a list of completions and returns a list of penalties (each in
+            `[max_penalty, 0.0]`).
+
+    Example:
+    ```python
+    >>> from trl.rewards import get_repetition_penalty_reward
+
+    >>> repetition_penalty = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
+    >>> completions = [[{"content": "the cat sat on the mat"}], [{"content": "the the the the the"}]]
+    >>> repetition_penalty(completions)
+    [0.0, -0.75]
+    ```
+    """
+    if max_penalty > 0:
+        raise ValueError(f"max_penalty {max_penalty} should not be positive")
+    return _RepetitionPenalty(ngram_size, max_penalty)
+
+
+class _RepetitionPenalty:
+    # Callable class rather than a closure so the reward stays picklable: the async GRPO rollout
+    # worker forwards reward funcs to a spawned child process, and closures can't be pickled.
+    __name__ = "repetition_penalty_reward"
+
+    def __init__(self, ngram_size: int, max_penalty: float):
+        self.ngram_size = ngram_size
+        self.max_penalty = max_penalty
+
+    def __call__(self, completions: list[list[dict[str, str]]], **kwargs) -> list[float]:
+        rewards = []
+        for completion in completions:
+            words = completion[0]["content"].lower().split()
+            if len(words) < self.ngram_size:
+                rewards.append(0.0)
+                continue
+            ngrams = list(zip(*[words[i:] for i in range(self.ngram_size)], strict=False))
+            scaling = 1 - len(set(ngrams)) / len(ngrams)
+            rewards.append(scaling * self.max_penalty if scaling else 0.0)
+        return rewards
+
+
 def get_soft_overlong_punishment(max_completion_len: int, soft_punish_cache: int) -> Callable:
     # docstyle-ignore
     r"""
