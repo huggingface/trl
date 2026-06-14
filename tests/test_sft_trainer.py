@@ -23,7 +23,7 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate.utils.memory import release_memory
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from packaging.version import Version
 from packaging.version import parse as parse_version
 from transformers import (
@@ -107,8 +107,9 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
-    def test_completion_mask(self):
-        """Test completion mask functionality."""
+    def test_mask_columns_ignored(self):
+        """Mask columns are not consumed by the collator: labels are expected to be prebuilt during dataset
+        preparation."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [
             {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
@@ -117,22 +118,6 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
-        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3], [-100, 5, -100]]))
-
-    def test_completion_only_loss_disabled(self):
-        """Test behavior when completion_only_loss is disabled."""
-        collator = DataCollatorForLanguageModeling(pad_token_id=0, completion_only_loss=False)
-        examples = [
-            {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
-            {"input_ids": [4, 5], "completion_mask": [0, 1]},
-        ]
-
-        result = collator(examples)
-
-        # Labels should not be masked when completion_only_loss=False
         assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
@@ -150,12 +135,12 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5]]))
 
-    def test_padding_free_with_completion_mask(self):
-        """Test padding-free mode with completion masks."""
+    def test_padding_free_with_prebuilt_labels(self):
+        """Test padding-free mode with prebuilt labels."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
         examples = [
-            {"input_ids": [1, 2, 3], "completion_mask": [0, 0, 1]},
-            {"input_ids": [4, 5], "completion_mask": [1, 1]},
+            {"input_ids": [1, 2, 3], "labels": [-100, -100, 3]},
+            {"input_ids": [4, 5], "labels": [4, 5]},
         ]
 
         result = collator(examples)
@@ -163,6 +148,7 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
+        # The first token of each document is additionally masked (position_ids == 0)
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, -100, 3, -100, 5]]))
 
     def test_packing(self):
@@ -242,19 +228,36 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
-    def test_assistant_masks(self):
-        """Test handling of assistant masks in examples."""
+    def test_prebuilt_labels_take_precedence_over_masks(self):
+        """When examples provide prebuilt labels, the mask columns must be ignored."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [
-            {"input_ids": [1, 2, 3], "assistant_masks": [0, 1, 1]},
-            {"input_ids": [4, 5], "assistant_masks": [0, 1]},
+            {
+                "input_ids": [1, 2, 3],
+                "labels": [1, -100, 3],
+                "completion_mask": [1, 1, 1],
+                "assistant_masks": [1, 1, 1],
+            },
+            {"input_ids": [4, 5], "labels": [-100, 5], "completion_mask": [1, 1], "assistant_masks": [1, 1]},
         ]
 
         result = collator(examples)
 
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3], [-100, 5, -100]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, -100, 3], [-100, 5, -100]]))
+
+    def test_prebuilt_labels_truncated_and_padded(self):
+        """Prebuilt labels must be truncated with the same window as the input IDs and padded with -100."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3)
+        examples = [
+            {"input_ids": [1, 2, 3, 4, 5], "labels": [-100, -100, 3, 4, 5]},
+            {"input_ids": [6, 7], "labels": [-100, 7]},
+        ]
+
+        result = collator(examples)
+
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [6, 7, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[-100, -100, 3], [-100, 7, -100]]))
 
     def test_max_length_keep_start(self):
         """Test that sequences longer than max_length are truncated from the start."""
@@ -292,12 +295,12 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
-    def test_max_length_with_completion_mask(self):
-        """Test that truncation is applied correctly when completion masks are present."""
+    def test_max_length_with_prebuilt_labels(self):
+        """Test that truncation is applied correctly when prebuilt labels are present."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3)
         examples = [
-            {"input_ids": [1, 2, 3, 4, 5], "completion_mask": [0, 0, 1, 1, 1]},
-            {"input_ids": [6, 7, 8], "completion_mask": [0, 1, 1]},
+            {"input_ids": [1, 2, 3, 4, 5], "labels": [-100, -100, 3, 4, 5]},
+            {"input_ids": [6, 7, 8], "labels": [-100, 7, 8]},
         ]
 
         result = collator(examples)
@@ -307,12 +310,12 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, -100, 3], [-100, 7, 8]]))
 
-    def test_max_length_keep_end_with_completion_mask(self):
-        """Test keep_end truncation with completion masks preserves the final tokens."""
+    def test_max_length_keep_end_with_prebuilt_labels(self):
+        """Test keep_end truncation with prebuilt labels preserves the final tokens."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3, truncation_mode="keep_end")
         examples = [
-            {"input_ids": [1, 2, 3, 4, 5], "completion_mask": [0, 0, 1, 1, 1]},
-            {"input_ids": [6, 7, 8], "completion_mask": [0, 1, 1]},
+            {"input_ids": [1, 2, 3, 4, 5], "labels": [-100, -100, 3, 4, 5]},
+            {"input_ids": [6, 7, 8], "labels": [-100, 7, 8]},
         ]
 
         result = collator(examples)
@@ -1307,6 +1310,129 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_dataset_prep_builds_labels_for_assistant_only_loss(self):
+        """Dataset preparation must bake the assistant masks into a labels column."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
+        )
+
+        assert "labels" in trainer.train_dataset.column_names
+        for example in trainer.train_dataset:
+            assert len(example["labels"]) == len(example["input_ids"])
+            expected = [
+                token_id if mask else -100
+                for token_id, mask in zip(example["input_ids"], example["assistant_masks"], strict=True)
+            ]
+            assert example["labels"] == expected
+
+    def test_dataset_prep_builds_labels_for_completion_only(self):
+        """Dataset preparation must bake the completion mask into a labels column when completion_only_loss
+        resolves to True (the default for prompt-completion datasets)."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert "labels" in trainer.train_dataset.column_names
+        for example in trainer.train_dataset:
+            expected = [
+                token_id if mask else -100
+                for token_id, mask in zip(example["input_ids"], example["completion_mask"], strict=True)
+            ]
+            assert example["labels"] == expected
+
+    def test_dataset_prep_respects_existing_labels(self):
+        """A user-provided labels column must be taken as is, even when mask columns are also present."""
+        dataset = Dataset.from_list(
+            [
+                {"input_ids": [1, 2, 3, 4], "labels": [1, -100, 3, -100], "assistant_masks": [1, 1, 1, 1]},
+                {"input_ids": [5, 6], "labels": [-100, 6], "assistant_masks": [1, 1]},
+            ]
+        )
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert trainer.train_dataset[:]["labels"] == [[1, -100, 3, -100], [-100, 6]]
+
+    def test_dataset_prep_builds_labels_for_pretokenized_with_masks(self):
+        """Pre-tokenized datasets that carry mask columns but no labels must get labels built at preparation."""
+        dataset = Dataset.from_list(
+            [
+                {"input_ids": [1, 2, 3, 4], "assistant_masks": [0, 0, 1, 1]},
+                {"input_ids": [5, 6, 7], "assistant_masks": [0, 1, 0]},
+            ]
+        )
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert trainer.train_dataset[:]["labels"] == [[-100, -100, 3, 4], [-100, 6, -100]]
+
+    def test_dataset_prep_no_labels_for_plain_lm(self):
+        """Datasets without any applicable mask must not get a labels column (the collator defaults to using the
+        input IDs as labels), keeping storage neutral."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert "labels" not in trainer.train_dataset.column_names
+
+    def test_packing_carries_labels(self):
+        """With packing enabled, the labels column must be packed alongside input_ids (replacing the masks)."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, packing=True, max_length=64, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        column_names = trainer.train_dataset.column_names
+        assert "labels" in column_names
+        assert "completion_mask" not in column_names
+        for example in trainer.train_dataset:
+            assert len(example["labels"]) == len(example["input_ids"])
+        # The packed dataset must still contain trainable (non -100) labels
+        assert any(label != -100 for example in trainer.train_dataset for label in example["labels"])
+
+    def test_skip_prepare_dataset_with_masks_but_no_labels_raises(self):
+        """With `skip_prepare_dataset=True`, labels are not built at preparation time and the collator doesn't
+        consume the mask columns; such datasets must be rejected instead of silently training on the full sequence."""
+        dataset = Dataset.from_list([{"input_ids": [1, 2, 3, 4], "assistant_masks": [0, 0, 1, 1]} for _ in range(2)])
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, dataset_kwargs={"skip_prepare_dataset": True}, report_to="none"
+        )
+        with pytest.raises(ValueError, match="Provide a 'labels' column"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+    def test_skip_prepare_dataset_with_labels(self):
+        """Datasets providing labels directly are accepted as is with `skip_prepare_dataset=True`."""
+        dataset = Dataset.from_list([{"input_ids": [1, 2, 3, 4], "labels": [-100, -100, 3, 4]} for _ in range(2)])
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, dataset_kwargs={"skip_prepare_dataset": True}, report_to="none"
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert trainer.train_dataset[:]["labels"] == [[-100, -100, 3, 4], [-100, -100, 3, 4]]
 
     def test_train_completion_only(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
