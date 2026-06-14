@@ -2773,7 +2773,8 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
     assert consumed_slice["input_ids"].shape == (1, 4)
     assert torch.equal(consumed_slice["spatial_shapes"], torch.tensor([[2, 2]], dtype=torch.long))
     assert consumed_slice["original_prompt_text"] == ["q1"]
-    assert consumed_slice["original_completion_text"] == ["tok3"]
+    # Special tokens (e.g. EOS) are kept so the text matches the supervised tokens that `byte_offsets`/ULD align on.
+    assert consumed_slice["original_completion_text"] == ["tok3<eos>"]
     assert "_gold_vlm_on_policy_raw_examples" in trainer._buffered_inputs[0]
     assert "_gold_vlm_on_policy_raw_examples" not in trainer._buffered_inputs[1]
 
