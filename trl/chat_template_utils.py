@@ -316,6 +316,131 @@ qwen3_5_schema = {
 }
 
 
+# New-style response templates (transformers >= 5.X with PR huggingface/transformers#45847). These coexist with the
+# legacy `*_schema` dicts above; `add_response_schema` sets both so the tokenizer works on both old and new
+# transformers (the new parser prefers `response_template`, the old one reads `response_schema`).
+qwen3_template = {
+    "defaults": {"role": "assistant"},
+    "start_anchor": "<|im_start|>assistant\n",
+    "fields": {
+        "reasoning_content": {
+            "open": "<think>",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open": "<tool_call>",
+            "close_pattern": r"</tool_call>\s*",
+            "repeats": True,
+            "content": "json",
+            "transform": "{type: 'function', function: content}",
+        },
+        "content": {
+            "close_pattern": r"<\|im_end\|>\s*",
+            "content": "text",
+        },
+    },
+}
+
+qwen3_5_template = {
+    "defaults": {"role": "assistant"},
+    "start_anchor": "<|im_start|>assistant\n",
+    "fields": {
+        "reasoning_content": {
+            "open": "<think>",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"<tool_call>\s*<function=(?P<name>[^\n>]+)>",
+            "close_pattern": r"</tool_call>\s*",
+            "repeats": True,
+            "content": "xml-inline",
+            "content_args": {
+                "tag_pattern": r"<parameter=(?P<key>[^>\n]+)>\s*(?P<value>.*?)\s*</parameter>",
+                "value_parser": {"name": "json", "args": {"allow_non_json": True}},
+            },
+            "transform": "{type: 'function', function: {name: name, arguments: content}}",
+        },
+        "content": {
+            "close_pattern": r"<\|im_end\|>\s*",
+            "content": "text",
+        },
+    },
+}
+
+glm4moe_template = {
+    "defaults": {"role": "assistant"},
+    "start_anchor": "<|assistant|>",
+    "fields": {
+        "reasoning_content": {
+            "open": "<think>",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"<tool_call>(?P<name>\S+)\n?",
+            "close_pattern": r"</tool_call>\s*",
+            "repeats": True,
+            "content": "xml-inline",
+            "content_args": {
+                "tag_pattern": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*\n<arg_value>(?P<value>.*?)</arg_value>",
+                "value_parser": {"name": "json", "args": {"allow_non_json": True}},
+            },
+            "transform": "{type: 'function', function: {name: name, arguments: content}}",
+        },
+        "content": {
+            "close_pattern": r"<\|user\|>\s*|$",
+            "content": "text",
+        },
+    },
+}
+
+llama3_template = {
+    "defaults": {"role": "assistant"},
+    "start_anchor": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+    "fields": {
+        "tool_calls": {
+            "open_pattern": r'(?=\{"name":\s*")',
+            "close_pattern": r"<\|eot_id\|>\s*",
+            "repeats": True,
+            "content": "json",
+            # Llama emits `parameters` instead of `arguments`; remap inside the transform so the captured JSON
+            # lands in the standard tool-call shape.
+            "transform": "{type: 'function', function: {name: content.name, arguments: content.parameters}}",
+        },
+        "content": {
+            "close_pattern": r"<\|eot_id\|>\s*",
+            "content": "text",
+        },
+    },
+}
+
+gpt_oss_template = {
+    "defaults": {"role": "assistant"},
+    "start_anchor": "<|start|>assistant",
+    "fields": {
+        "thinking": {
+            "open": "<|channel|>analysis<|message|>",
+            "close_pattern": r"<\|end\|>\s*",
+            "content": "text",
+        },
+        "content": {
+            "open": "<|channel|>final<|message|>",
+            "close_pattern": r"<\|return\|>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"to=functions\.(?P<name>\S+?)<\|channel\|>commentary\s+json<\|message\|>",
+            "close_pattern": r"<\|call\|>\s*",
+            "repeats": True,
+            "content": "json",
+            "transform": "{type: 'function', function: {name: name, arguments: content}}",
+        },
+    },
+}
+
+
 cohere_chat_template = (_CHAT_TEMPLATES_DIR / "cohere.jinja").read_text(encoding="utf-8")
 
 cohere2_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2.jinja").read_text(encoding="utf-8")
@@ -411,10 +536,13 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer = processing_class
     if chat_template == glm4moe_chat_template:
         tokenizer.response_schema = glm4moe_schema
+        tokenizer.response_template = glm4moe_template
     elif chat_template == gptoss_chat_template:
         tokenizer.response_schema = gptoss_schema
+        tokenizer.response_template = gpt_oss_template
     elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
         tokenizer.response_schema = llama3_schema
+        tokenizer.response_template = llama3_template
     elif chat_template in [
         qwen2_5_chat_template,
         qwen3_chat_template,
@@ -422,12 +550,14 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         qwen3_vl_chat_template,
     ]:
         tokenizer.response_schema = qwen3_schema
+        tokenizer.response_template = qwen3_template
     elif chat_template in [
         qwen3_5_nothink_chat_template,
         qwen3_5_think_chat_template,
         qwen3_6_chat_template,
     ]:
         tokenizer.response_schema = qwen3_5_schema
+        tokenizer.response_template = qwen3_5_template
     elif chat_template in [
         nemotron_3_nano_chat_template,
         nemotron_3_super_chat_template,
@@ -435,6 +565,7 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     ]:
         # Nemotron 3 renders tool calls in the same Hermes-style <function=...>/<parameter=...> format as Qwen3.5.
         tokenizer.response_schema = qwen3_5_schema
+        tokenizer.response_template = qwen3_5_template
     else:
         raise ValueError(
             "Unrecognized chat template, failed to add response schema. Please manually set the response schema on "
@@ -885,7 +1016,7 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
                 tool_call["arguments"] = {}
 
 
-def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int]) -> dict:
+def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int], prefix: list[int] | None = None) -> dict:
     r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
 
@@ -900,6 +1031,10 @@ def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int]) -> dict:
             Tokenizer with a `parse_response()` method.
         ids (`list[int]`):
             List of token sequences.
+        prefix (`list[int]`, *optional*):
+            Token IDs of the chat-prompt context that came before `ids` (e.g. the rendered chat template up to and
+            including the assistant header / any template-emitted thinking opener). Only used when the tokenizer has a
+            new-style `response_template` set; ignored for legacy `response_schema`.
 
     Returns:
         `dict`:
@@ -919,7 +1054,12 @@ def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int]) -> dict:
     ```
     """
     try:
-        parsed = tokenizer.parse_response(ids)
+        # `prefix=` is only supported when a new-style `response_template` is set on the tokenizer. For legacy
+        # `response_schema` only, the underlying call rejects the kwarg, so we omit it in that case.
+        if prefix is not None and getattr(tokenizer, "response_template", None) is not None:
+            parsed = tokenizer.parse_response(ids, prefix=prefix)
+        else:
+            parsed = tokenizer.parse_response(ids)
         if parsed is None:  # this can happen if the response is heavily truncated and even the content is lost
             raise ValueError("parse_response returned None")
         # Hotfix: remove incorrectly appended EOS token from tool calls
