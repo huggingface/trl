@@ -1139,7 +1139,7 @@ class GOLDTrainer(SFTTrainer):
 
         prompts_text = self.processing_class.batch_decode(
             prompt_ids_list,
-            skip_special_tokens=True,
+            skip_special_tokens=False,
         )
 
         if not self.use_vllm:
