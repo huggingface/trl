@@ -552,9 +552,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
         old_log_probs = old_log_probs[:, 1:]
         advantages = advantages.unsqueeze(1)
         log_ratio = log_probs - old_log_probs
-        ratio = torch.exp(log_ratio)
-        clipped = torch.clamp(ratio, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss = -torch.min(ratio * advantages, clipped * advantages)
+        coef_1 = torch.exp(log_ratio)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        per_token_loss = -torch.min(coef_1 * advantages, coef_2 * advantages)
 
         # DDP/FSDP averages gradients across ranks (world_size).
         # To get correct per-token normalization we scale by 1/tokens_per_rank
@@ -573,11 +573,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             local_count = valid_mask.sum().float()
 
             local_ratio_sum = (
-                ratio[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
+                coef_1[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
             # Approx KL: http://joschu.net/blog/kl-approx.html
             local_kl_sum = (
-                ((ratio[valid_mask] - 1) - log_ratio[valid_mask]).sum()
+                ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
                 if valid_mask.any()
                 else torch.zeros((), device=completion_mask.device)
             )
@@ -586,7 +586,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
 
-            clipped = (ratio < 1 - self.epsilon_low) | (ratio > 1 + self.epsilon_high)
+            clipped = (coef_1 < 1 - self.epsilon_low) | (coef_1 > 1 + self.epsilon_high)
             local_clip_sum = (
                 clipped[valid_mask].float().sum()
                 if valid_mask.any()
