@@ -32,17 +32,13 @@ from pathlib import Path
 
 
 AGENT_PATHS = {
+    "agents": {
+        "global": Path("~/.agents/skills"),
+        "project": Path("./.agents/skills"),
+    },
     "claude": {
         "global": Path("~/.claude/skills"),
         "project": Path("./.claude/skills"),
-    },
-    "codex": {
-        "global": Path("~/.codex/skills"),
-        "project": Path("./.codex/skills"),
-    },
-    "opencode": {
-        "global": Path("~/.config/opencode/skills"),
-        "project": Path(".opencode/skills"),
     },
 }
 
@@ -52,7 +48,7 @@ def list_agent_names() -> list[str]:
     List available predefined agent names.
 
     Returns:
-        `list[str]`: Sorted list of agent names (e.g., ['claude', 'codex', 'opencode']).
+        `list[str]`: Sorted list of agent names (e.g., ['agents', 'claude']).
     """
     return sorted(AGENT_PATHS.keys())
 
@@ -76,9 +72,9 @@ def resolve_target_path(target: str | Path, scope: str = "project") -> Path:
     Converts semantic agent names (e.g., 'claude') with scope to actual filesystem paths, or normalizes provided paths.
 
     Args:
-        target (`str | Path`): Agent name (e.g., 'claude', 'codex') or directory path.
+        target (`str | Path`): Agent name (e.g., 'agents', 'claude') or directory path.
         scope (`str`, defaults to `"project"`):
-            Scope for agent names: 'global' (user-level like ~/.agent/skills/) or 'project' (./agent/skills/).
+            Scope for agent names: 'global' (user-level like ~/.agents/skills/) or 'project' (./agents/skills/).
 
     Returns:
         `Path`: Resolved absolute path.
@@ -253,7 +249,7 @@ def install_skill(
 
     Args:
         skill_name (`str`): Name of skill to install.
-        target (`str | Path`): Agent name (e.g., 'claude', 'codex') or directory path.
+        target (`str | Path`): Agent name (e.g., 'agents', 'claude') or directory path.
         scope (`str`, defaults to `"project"`):
             Scope for agent names: 'global' (user-level) or 'project' (current directory).
         source (`str | Path`, *optional*):
@@ -329,7 +325,7 @@ def uninstall_skill(skill_name: str, target: str | Path, scope: str = "project")
 
     Args:
         skill_name (`str`): Name of skill to uninstall.
-        target (`str | Path`): Agent name (e.g., 'claude', 'codex') or directory path.
+        target (`str | Path`): Agent name (e.g., 'agents', 'claude') or directory path.
         scope (`str`, defaults to `"project"`):
             Scope for agent names: 'global' (user-level) or 'project' (current directory).
 

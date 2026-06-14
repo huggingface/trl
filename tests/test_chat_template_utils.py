@@ -25,6 +25,7 @@ from trl.chat_template_utils import (
     add_response_schema,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
+    is_chat_template_stop_token_trained,
     parse_response,
     supports_tool_calling,
 )
@@ -331,6 +332,17 @@ class TestSupportsToolCalling:
             # Silently drops both tool_calls and tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
             pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
+            # Olmo3 uses a bespoke function-calling schema (a `functions`/`function_calls` string on the
+            # message plus an `environment` role) instead of the standard `tools`/`tool_calls`/`tool`
+            # interface, so a standard tool-calling conversation is silently dropped.
+            pytest.param(
+                "trl-internal-testing/tiny-Olmo3ForCausalLM",
+                id="olmo3",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="Olmo 3 was introduced in transformers>=4.57.0",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
             # Renders tool message content as plain text but drops assistant tool_calls
@@ -502,6 +514,53 @@ class TestIsChatTemplatePrefixPreserving:
         assert is_chat_template_prefix_preserving(processor) is True
 
 
+class TestIsChatTemplateStopTokenTrained:
+    def test_stop_token_trained(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        # The assistant turn is closed by <|im_end|> inside the generation span, so the end-of-turn token is masked
+        # in and the model is trained to stop.
+        # docstyle-ignore
+        tokenizer.chat_template = textwrap.dedent(r"""
+        {%- for message in messages %}
+        {%- if message.role == 'user' %}
+            {{- '<|im_start|>user\n' + message.content + '<|im_end|>\n' }}
+        {%- elif message.role == 'assistant' %}
+            {{- '<|im_start|>assistant\n' }}
+            {%- generation %}{{- message.content + '<|im_end|>' }}{%- endgeneration %}
+            {{- '\n' }}
+        {%- endif %}
+        {%- endfor %}
+        {%- if add_generation_prompt %}
+            {{- '<|im_start|>assistant\n' }}
+        {%- endif %}""")
+        assert is_chat_template_stop_token_trained(tokenizer) is True
+
+    def test_stop_token_not_trained(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        # GLM-style: the assistant's end-of-turn token is emitted as the prefix of the following message, so the
+        # generation span covers content only and the model is never trained to stop.
+        # docstyle-ignore
+        tokenizer.chat_template = textwrap.dedent(r"""
+        {%- for message in messages %}
+        {%- if message.role == 'user' %}
+            {{- '<|im_start|>user\n' + message.content + '<|im_end|>\n' }}
+        {%- elif message.role == 'assistant' %}
+            {{- '<|im_start|>assistant\n' }}
+            {%- generation %}{{- message.content }}{%- endgeneration %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+        {%- endfor %}
+        {%- if add_generation_prompt %}
+            {{- '<|im_start|>assistant\n' }}
+        {%- endif %}""")
+        assert is_chat_template_stop_token_trained(tokenizer) is False
+
+    def test_template_error_returns_false(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        tokenizer.chat_template = "{{ raise_exception('probe rejected') }}"
+        assert is_chat_template_stop_token_trained(tokenizer) is False
+
+
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
@@ -617,12 +676,25 @@ class TestGetTrainingChatTemplate:
 
     def test_new_chat_template_is_prefix_preserving(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
-        tokenizer.chat_template = get_training_chat_template(tokenizer)
+        new_chat_template = get_training_chat_template(tokenizer)
+        if new_chat_template is not None:
+            tokenizer.chat_template = new_chat_template
         # Prefix-preservation is only meaningful for templates that actually support tool messages — the check
         # itself renders one. Skip the assertion for tool-less templates (e.g. Gemma).
         if not supports_tool_calling(tokenizer):
             pytest.skip("Template does not support tool calling; prefix-preservation check is not applicable.")
         assert is_chat_template_prefix_preserving(tokenizer) is True
+
+    def test_new_chat_template_trains_stop_token(self, tokenizer_name, request):
+        if tokenizer_name in (
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+        ):
+            reason = f"{tokenizer_name}: the processor returns an all-zero assistant tokens mask"
+            request.node.add_marker(pytest.mark.xfail(strict=False, reason=reason))
+        tokenizer = self._load(tokenizer_name)
+        new_chat_template = get_training_chat_template(tokenizer)
+        assert is_chat_template_stop_token_trained(tokenizer, chat_template=new_chat_template) is True
 
     def test_behavior_unchanged_single_user_no_generation_prompt(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
@@ -663,7 +735,13 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # GLM's native template doesn't terminate an assistant turn with an end-of-turn token; the turn is ended
+            # by the following message's role marker. The training template appends that terminator to the final
+            # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
+            assert after == before + "<|user|>"
+        else:
+            assert before == after
 
     def test_behavior_unchanged_final_assistant_with_reasoning_content(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
@@ -681,7 +759,13 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # GLM's native template doesn't terminate an assistant turn with an end-of-turn token; the turn is ended
+            # by the following message's role marker. The training template appends that terminator to the final
+            # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
+            assert after == before + "<|user|>"
+        else:
+            assert before == after
 
     def test_behavior_unchanged_final_assistant_with_existing_think_tags(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
@@ -698,7 +782,13 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # GLM's native template doesn't terminate an assistant turn with an end-of-turn token; the turn is ended
+            # by the following message's role marker. The training template appends that terminator to the final
+            # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
+            assert after == before + "<|user|>"
+        else:
+            assert before == after
 
     def test_behavior_unchanged_assistant_with_tool_calls(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
@@ -719,7 +809,13 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages_before, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # GLM's native template doesn't terminate an assistant turn with an end-of-turn token; the turn is ended
+            # by the following message's role marker. The training template appends that terminator to the final
+            # assistant turn so the stop token is trained — here `<|observation|>`, which closes a tool call.
+            assert after == before + "<|observation|>"
+        else:
+            assert before == after
 
     def test_behavior_unchanged_with_tools_with_and_without_system_message(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)

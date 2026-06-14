@@ -53,6 +53,30 @@ trainer.train()
 
 SDPO always requires a `prompt` column. To use environment feedback, also include a `privileged_context` column and set `include_environment_feedback=True`. SDPO will use successful rollouts and, when enabled, that text to build teacher reprompts for self-distillation.
 
+## Serving the teacher from the vLLM server
+
+With `teacher_model_kind="live"` the teacher is the current student, whose weights the vLLM **server** already holds (they are synced for generation each step). Set `use_teacher_server=True` to score the teacher log-probabilities on that same server instead of running a separate local teacher forward, removing the teacher from the training step entirely:
+
+```python
+training_args = SDPOConfig(
+    output_dir="sdpo-model",
+    use_vllm=True,
+    vllm_mode="server",
+    teacher_model_kind="live",
+    use_teacher_server=True,
+    distillation_weight=1.0,
+    distillation_mode="sampled_token",
+)
+```
+
+When using the teacher server:
+
+- `use_vllm=True` and `vllm_mode="server"` are required
+- `teacher_model_kind` must be `"live"` (the server holds the current student weights)
+- `distillation_weight` must be `1.0` (pure distillation; a convex blend with the policy loss needs the full-vocabulary logits)
+- `distillation_mode` must be `"sampled_token"` (reverse KL on the realized token) or `"topk_logits"`. The server returns the teacher's own top-k log-probs, so `topk_logits` distills over the teacher's top-k support (it cannot use the student's, unlike the local objective); with a `"live"` teacher the two supports nearly coincide. `full_logits` is unavailable.
+- `use_liger_kernel` is not supported
+
 ## Callbacks
 
 The trainer emits a small set of callback hooks that are useful for debugging, observability, and tests. These hooks are intended as practical integration points for experimental self-distillation workflows.

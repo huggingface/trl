@@ -37,6 +37,8 @@ from trl.trainer.utils import RepeatSampler, identity
 
 from ..testing_utils import require_liger_kernel
 
+from ..testing_utils import TrlTestCase
+
 
 @pytest.fixture(scope="module")
 def openr1_examples():
@@ -1376,28 +1378,6 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
 
     expected = config.uld_hybrid_unmatched_weight * loss_fn.last_unmatched_loss
     torch.testing.assert_close(loss, expected, atol=1e-6, rtol=1e-5)
-
-
-def test_vlm_prompt_length_ignores_rows_without_completion_labels():
-    labels = torch.tensor(
-        [
-            [-100, -100, -100, -100, -100],
-            [-100, -100, 10, 11, -100],
-            [-100, -100, -100, 12, 13],
-        ]
-    )
-
-    prompt_length = GOLDTrainer._get_min_completion_start_from_labels(labels)
-
-    assert prompt_length == 2
-
-
-def test_vlm_prompt_length_uses_sequence_length_when_all_labels_are_ignored():
-    labels = torch.full((2, 4), -100)
-
-    prompt_length = GOLDTrainer._get_min_completion_start_from_labels(labels)
-
-    assert prompt_length == labels.shape[1]
 
 
 def test_vlm_alignment_groups_cover_all_tokens_smolvlm_qwen3vl(smolvlm_processor, qwen3_vl_processor, vlm_examples):
@@ -3041,3 +3021,72 @@ def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
     )
     train_output = trainer.train()
     assert torch.isfinite(torch.tensor(train_output.training_loss))
+
+
+class TestGOLDTrainerLoss(TrlTestCase):
+    def setup_method(self):
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def test_loss_normalizes_by_num_items_in_batch(self):
+        # When `num_items_in_batch` is passed (as under gradient accumulation), the JSD loss must be reduced as
+        # sum / num_items_in_batch rather than the local per-microbatch mean. The batch uses variable-length prompts
+        # to ensure the loss covers every valid completion token instead of slicing by the batch-max prompt width.
+        # See issue #4719. The ULD path has its own normalization and is not covered here.
+        dataset = Dataset.from_dict(
+            {
+                "messages": [
+                    [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello there, how are you?"}],
+                    [
+                        {"role": "user", "content": "Please explain in detail the theory of general relativity"},
+                        {"role": "assistant", "content": "OK"},
+                    ],
+                ]
+            }
+        )
+        trainer = GOLDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=GOLDConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                per_device_train_batch_size=2,
+                max_length=64,
+                max_completion_length=20,
+                use_cpu=True,
+                bf16=False,
+            ),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        # Diverge the teacher from the student so JSD is well above fp noise (else the loss is identically 0).
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
+        device = next(trainer.model.parameters()).device
+        batch = trainer.data_collator([trainer.train_dataset[i] for i in range(2)])
+        batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
+
+        prompt_width = batch["prompts"].shape[1]
+        old_prompt_width_count = (batch["labels"][:, prompt_width:] != -100).sum()
+        num_valid = (batch["labels"] != -100).sum()
+
+        # Prove this batch exposes the regression: the old prompt-width slice would miss valid completion labels.
+        assert prompt_width > (batch["labels"][0] != -100).nonzero()[0].item()
+        assert num_valid > old_prompt_width_count
+
+        trainer.model.eval()
+        with torch.no_grad():
+            loss_mean = trainer.compute_loss(trainer.model, batch)  # num_items_in_batch=None -> local mean
+            loss_global = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid)
+
+        # With num_items_in_batch equal to the local valid-token count, sum/N equals the local mean.
+        torch.testing.assert_close(loss_global, loss_mean, rtol=1e-4, atol=1e-6)
+
+        # Doubling the global count exactly halves the loss (sum / num_items is linear in 1/num_items).
+        loss_double = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid * 2)
+        torch.testing.assert_close(loss_double, loss_mean / 2, rtol=1e-4, atol=1e-6)
