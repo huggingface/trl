@@ -473,6 +473,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         assistant_masks = (
             [example["assistant_masks"] for example in examples] if "assistant_masks" in examples[0] else None
         )
+        weights = [example["weight"] for example in examples] if "weight" in examples[0] else None
 
         # Truncate per sequence if necessary
         if self.max_length is not None and not self.padding_free:
@@ -549,6 +550,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
             output["labels"][assistant_masks == 0] = -100
+        if weights is not None:
+            output["weight"] = torch.tensor(weights, dtype=torch.float)
         return output
 
     @staticmethod
@@ -716,6 +719,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         # loss computation has to be done by the model, and masking them here would be infeasible in practice as vision
         # token definitions vary across architectures.
         output["labels"] = labels
+        if "weight" in examples[0]:
+            output["weight"] = torch.tensor([example["weight"] for example in examples], dtype=torch.float)
         return output
 
     def _collate_prompt_completion(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -814,7 +819,71 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             output["token_type_ids"] = token_type_ids
         if "mm_token_type_ids" in processed_prompts:
             output["mm_token_type_ids"] = mm_token_type_ids
+        if "weight" in examples[0]:
+            output["weight"] = torch.tensor([example["weight"] for example in examples], dtype=torch.float)
         return output
+
+
+def weighted_nll_loss(outputs, labels, weights, num_items_in_batch=None):
+    """
+    Per-sample weighted NLL loss for SFT.
+
+    Computes per-sample mean cross-entropy and scales each sample's contribution by
+    a scalar weight supplied by the dataset. Positive weights reinforce the response;
+    negative weights invert the gradient (gently pushing the model away from it);
+    zero weights mask the sample entirely.
+
+    When ``weights`` are all ``1.0`` the result is numerically identical to
+    ``loss_type="nll"`` (verified by the unit tests).
+
+    Args:
+        outputs:
+            Model outputs. ``outputs.logits`` must have shape ``(B, S, V)``.
+        labels (`torch.Tensor`):
+            Target token ids of shape ``(B, S)``. Positions equal to ``-100``
+            are excluded from the loss.
+        weights (`torch.Tensor`):
+            Per-sample scalar weights of shape ``(B,)``. Passed through the
+            dataset as a ``"weight"`` column.
+        num_items_in_batch (`int` or `torch.Tensor`, *optional*):
+            Global valid-token count supplied by the Trainer for
+            gradient-accumulation-correct normalisation. When ``None``,
+            normalises by ``weights.abs().sum()``.
+
+    Returns:
+        Scalar weighted loss.
+    """
+    shift_logits = outputs.logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+    B = shift_labels.shape[0]
+
+    # Per-token NLL, shape (B, S-1)
+    per_token_loss = nn.functional.cross_entropy(
+        shift_logits.view(-1, shift_logits.size(-1)),
+        shift_labels.view(-1),
+        ignore_index=-100,
+        reduction="none",
+    ).view(B, -1)
+
+    valid_mask = shift_labels != -100
+    weights = weights.to(dtype=per_token_loss.dtype, device=per_token_loss.device)
+
+    if num_items_in_batch is None:
+        # Normalise by sum of |weights|: numerically identical to nll when all weights == 1.
+        # Mean over valid tokens per sample, then weight-average across samples.
+        tokens_per_sample = valid_mask.sum(dim=-1).clamp(min=1)
+        per_sample_loss = (per_token_loss * valid_mask).sum(dim=-1) / tokens_per_sample
+        weighted_loss = (per_sample_loss * weights).sum()
+        denom = weights.abs().sum().clamp(min=1e-8)
+        loss = weighted_loss / denom
+    else:
+        # Gradient-accumulation path: broadcast sample weight to every token, then
+        # divide by the global token count — same unit as standard nll.
+        if isinstance(num_items_in_batch, torch.Tensor):
+            num_items_in_batch = num_items_in_batch.to(per_token_loss.device)
+        weighted_token_loss = per_token_loss * weights.unsqueeze(1) * valid_mask
+        loss = weighted_token_loss.sum() / num_items_in_batch
+    return loss
 
 
 def dft_loss(outputs, labels, num_items_in_batch=None):
@@ -1286,6 +1355,27 @@ class SFTTrainer(_BaseTrainer):
                         "passing a `compute_loss_func` is not allowed."
                     )
                 compute_loss_func = dft_loss
+            elif args.loss_type == "weighted_nll":
+                if compute_loss_func is not None:
+                    raise ValueError(
+                        "You passed a `compute_loss_func` together with `loss_type='weighted_nll'` to the "
+                        "`SFTTrainer`. When using `loss_type='weighted_nll'`, the loss function is internally "
+                        "set to the weighted NLL loss, so passing a `compute_loss_func` is not allowed."
+                    )
+                if args.packing:
+                    raise ValueError(
+                        "`loss_type='weighted_nll'` is not compatible with `packing=True`. Packing merges "
+                        "multiple examples into one sequence, so per-example weights have no well-defined "
+                        "meaning. Disable packing or use `loss_type='nll'`."
+                    )
+                if self.padding_free:
+                    raise ValueError(
+                        "`loss_type='weighted_nll'` is not compatible with `padding_free=True`. "
+                        "Padding-free mode flattens the batch to a single row, so per-example weights "
+                        "cannot be broadcast to the right tokens. Disable padding-free or use "
+                        "`loss_type='nll'`."
+                    )
+                # Actual loss computation is handled in compute_loss; no patch needed here.
             elif args.loss_type == "chunked_nll":
                 # Same math as `"nll"` but the `lm_head` matmul is skipped on ignored tokens and the CE is computed in
                 # chunks of tokens. Implemented by patching the model's forward before `super().__init__` so accelerate
@@ -1310,11 +1400,11 @@ class SFTTrainer(_BaseTrainer):
                 _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
             else:
                 raise ValueError(
-                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
-                    "'chunked_nll'."
+                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', "
+                    "'weighted_nll', and 'chunked_nll'."
                 )
-        elif args.loss_type == "chunked_nll":
-            raise ValueError("`loss_type='chunked_nll'` is not compatible with `use_liger_kernel=True`.")
+        elif args.loss_type in ("chunked_nll", "weighted_nll"):
+            raise ValueError(f"`loss_type='{args.loss_type}'` is not compatible with `use_liger_kernel=True`.")
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
@@ -1597,13 +1687,16 @@ class SFTTrainer(_BaseTrainer):
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
             if self._is_vision_dataset:
-                self._signature_columns = ["messages", "prompt", "completion", "image", "images"]
+                self._signature_columns = ["messages", "prompt", "completion", "image", "images", "weight"]
             else:
-                self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
+                self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks", "weight"]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
         prediction_loss_only = inputs.pop("_prediction_loss_only", None)
+
+        # Pop per-sample weights before forwarding to the model; the model does not expect them.
+        sample_weights = inputs.pop("weight", None)
 
         # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
         # This can be removed when this issue is fixed.
@@ -1647,6 +1740,29 @@ class SFTTrainer(_BaseTrainer):
                     f"Please increase `max_length` or set it to `None` to disable truncation."
                 ) from e
             raise
+
+        # Replace loss with weighted NLL when requested.
+        if self.args.loss_type == "weighted_nll":
+            if sample_weights is None:
+                raise ValueError(
+                    "loss_type='weighted_nll' requires a 'weight' column in the dataset but none was found in "
+                    "the batch. Add a float 'weight' field to each example (positive to reinforce, negative to "
+                    "suppress, zero to ignore)."
+                )
+            if labels is None:
+                raise ValueError(
+                    "`loss_type='weighted_nll'` is not supported with context parallelism or sequence "
+                    "parallelism (the `shift_labels` path). Use `loss_type='nll'` instead."
+                )
+            loss = weighted_nll_loss(outputs, labels, sample_weights, num_items_in_batch=num_items_in_batch)
+            # Re-add the MoE router aux loss. The model's forward adds
+            # `router_aux_loss_coef * aux_loss` to `outputs.loss`, but we
+            # discard that when we replace loss with weighted_nll_loss. Mirror
+            # the same scaling so MoE models train correctly.
+            if self.aux_loss_enabled and getattr(outputs, "aux_loss", None) is not None:
+                config = getattr(self.model.config, "text_config", self.model.config)
+                coef = getattr(config, "router_aux_loss_coef", 0.0)
+                loss = loss + coef * outputs.aux_loss.to(loss.device)
 
         # Compute entropy
         if self.args.loss_type == "chunked_nll":
