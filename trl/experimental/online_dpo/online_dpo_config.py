@@ -38,7 +38,7 @@ class OnlineDPOConfig(_BaseConfig):
             Path to the reward model.
         max_new_tokens (`int`, *optional*, defaults to `64`):
             Maximum number of tokens to generate per completion.
-        max_length (`int`, *optional*, defaults to `256`):
+        max_length (`int`, *optional*, defaults to `512`):
             Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If the
             sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the completion as
             possible.
