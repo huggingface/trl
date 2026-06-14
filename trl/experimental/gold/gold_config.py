@@ -21,6 +21,7 @@ from ...trainer.sft_config import SFTConfig
 
 @dataclass
 class GOLDConfig(SFTConfig):
+    # docstyle-ignore
     r"""
     Configuration class for [`GOLDTrainer`].
 
@@ -28,8 +29,16 @@ class GOLDConfig(SFTConfig):
     please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
 
     Args:
+        > Parameters that control generation and the training loop
+
         temperature (`float`, *optional*, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
+        top_p (`float`, *optional*, defaults to `0.95`):
+            If set to float < 1, only the smallest set of most probable tokens with probabilities that add up to
+            `top_p` or higher are kept for generation.
+        top_k (`int`, *optional*, defaults to `0`):
+            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, top-k-filtering is
+            disabled and all tokens are considered.
         lmbda (`float`, *optional*, defaults to `0.5`):
             Lambda parameter that controls the student data fraction (i.e., the proportion of on-policy
             student-generated outputs).
@@ -60,9 +69,29 @@ class GOLDConfig(SFTConfig):
         generation_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Number of unique prompts per worker per optimizer step. If `None`, it is computed from
             `(per_device_train_batch_size * gradient_accumulation_steps) // num_generations`.
+        > Parameters that control the ULD loss
+
         use_uld_loss (`bool`, *optional*, defaults to `False`):
             Whether to use Universal Logit Distillation (ULD) loss instead of Generalized Jensen-Shannon Divergence
             loss.
+        use_extended_uld (`bool`, *optional*, defaults to `True`):
+            Whether to enable extended ULD alignment that uses tokenizers to align and merge token probabilities
+            across student and teacher tokenizations. When `True`, the trainer will compute token mappings and merge
+            probabilities for split tokens; when `False`, ULD will use simple positional truncation like in the
+            original ULD paper.
+        uld_use_hybrid_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use a hybrid loss that combines ULD loss and JSD loss. When `True`, the final loss is a
+            combination of JSD for known token mappings and ULD for unknown token mappings.
+        uld_hybrid_matched_weight (`float` or `None`, *optional*):
+            Weight for the matched token loss component when using hybrid ULD + JSD loss. This weight scales the JSD
+            loss computed over tokens that have a direct mapping between student and teacher tokenizations. If `None`,
+            uses adaptive weighting based on vocabulary overlap. Must be set together with
+            `uld_hybrid_unmatched_weight` (both `None` or both `float`).
+        uld_hybrid_unmatched_weight (`float` or `None`, *optional*):
+            Weight for the unmatched token loss component when using hybrid ULD + JSD loss. This weight scales the ULD
+            loss computed over tokens that do not have a direct mapping between student and teacher tokenizations. If
+            `None`, uses adaptive weighting based on vocabulary overlap. Must be set together with
+            `uld_hybrid_matched_weight` (both `None` or both `float`).
         uld_crossentropy_weight (`float`, *optional*, defaults to `0.0`):
             Weight for the cross-entropy loss component in ULD loss. If 0, only ULD distillation loss is used.
         uld_distillation_weight (`float`, *optional*, defaults to `1.0`):
@@ -75,6 +104,8 @@ class GOLDConfig(SFTConfig):
             Whether to skip EOS token for student in ULD loss computation.
         uld_skip_teacher_eos (`bool`, *optional*, defaults to `True`):
             Whether to skip EOS token for teacher in ULD loss computation.
+        > Parameters that control vLLM integration
+
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed.
         vllm_mode (`str`, *optional*, defaults to `"colocate"`):
@@ -110,6 +141,37 @@ class GOLDConfig(SFTConfig):
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
             Enable vLLM sleep mode to offload student weights/cache during the optimizer step. Keeps GPU memory usage
             low, but waking the engine adds host–device transfer latency.
+
+        > Parameters that control logging
+
+        log_completions (`bool`, *optional*, defaults to `False`):
+            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
+            it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
+        log_completions_steps (`int`, *optional*, defaults to `100`):
+            Number of steps between logging (prompt, completion) pairs. Only used if `log_completions` is set to
+            `True`.
+        num_completions_to_print (`int` or `None`, *optional*):
+            Number of completions to print with `rich`. If `None`, all completions are logged.
+        wandb_entity (`str` or `None`, *optional*):
+            The entity to store runs under.
+        wandb_project (`str` or `None`, *optional*):
+            The project to store runs under.
+        wandb_run_group (`str` or `None`, *optional*):
+            The group to store runs under.
+        wandb_log_unique_prompts (`bool`, *optional*, defaults to `True`):
+            Whether to log the unique prompts to wandb. This will create a new run for each unique prompt.
+        callbacks (`list[str]`, *optional*, defaults to `[]`):
+            The callbacks to run during training.
+        hub_model_revision (`str` or `None`, *optional*, defaults to `"main"`):
+            The Hub model branch to push the model to.
+        overwrite_hub_revision (`bool`, *optional*, defaults to `False`):
+            Whether to overwrite the Hub revision.
+        push_to_hub_revision (`bool`, *optional*, defaults to `False`):
+            Whether to push to a Hub revision/branch.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `learning_rate`: Defaults to `1e-7` instead of `5e-5`.
     """
 
     _VALID_DICT_FIELDS = SFTConfig._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
