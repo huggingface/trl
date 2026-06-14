@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import copy
 import inspect
 import multiprocessing as mp
 import os
@@ -75,6 +76,7 @@ class RolloutGroup:
     tool_mask: list[list[int]]
     tool_call_counts: list[int]
     tool_failure_counts: list[int]
+    environments: list[object]
     model_version: int
     queued_at: float = 0.0
 
@@ -338,6 +340,7 @@ class _AsyncRolloutLoop:
                             tool_mask=[],
                             tool_call_counts=[],
                             tool_failure_counts=[],
+                            environments=[],
                             model_version=self.model_version,
                         )
                         pending_completed[group_id] = 0
@@ -382,6 +385,9 @@ class _AsyncRolloutLoop:
                     group.tool_mask.append(tool_mask)
                     group.tool_call_counts.append(tool_call_count)
                     group.tool_failure_counts.append(tool_failure_count)
+                    if self.environments is not None:
+                        # NOTE(@aminediro) Snapshot the env (with its accumulated reward) for this completion; the slot's env
+                        group.environments.append(copy.copy(self.environments[slot]))
                     self._total_completion_tokens += sum(tool_mask)
                     pending_completed[group_id] += 1
 
@@ -598,6 +604,8 @@ class _AsyncRolloutLoop:
             completion_ids=group.completions_ids,
             **group.reward_kwargs,
         )
+        if group.environments:
+            kwargs["environments"] = group.environments
         all_rewards = await asyncio.gather(
             *[
                 reward_func(**kwargs)
