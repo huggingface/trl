@@ -364,6 +364,82 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        ("steps_per_generation", "gradient_accumulation_steps", "max_steps"),
+        [(4, 2, 2), (2, 2, 2), (2, 4, 1)],
+    )
+    def test_dapo_loss_normalized_per_accumulation_window(
+        self, steps_per_generation, gradient_accumulation_steps, max_steps
+    ):
+        """DAPO must normalize the loss by the token count of one accumulation window, not of the whole
+        generation batch. When `steps_per_generation != gradient_accumulation_steps`, normalizing by the generation
+        batch scales the accumulated loss by `gradient_accumulation_steps / steps_per_generation` (e.g. 0.5x with
+        steps_per_generation=4, gradient_accumulation_steps=2). Regression test for #5619.
+
+        With `num_iterations=1`, `beta=0.0` and no vLLM, `coef_1 == 1` exactly, so the per-token loss is `-advantages`
+        broadcast over the completion tokens. This lets us compute the expected loss from the inputs alone:
+        `sum(-advantages * completion_tokens) / window_token_count`, where the window token count is
+        `num_items_in_batch * gradient_accumulation_steps / steps_per_generation`.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            return [float(len(completion)) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="dapo",
+            # with steps_per_generation > gradient_accumulation_steps, completions are reused after an optimizer
+            # step, where coef_1 = exp(logps - old_logps) != 1. A tiny lr keeps coef_1 == 1 up to float precision
+            # so the expected loss can be computed from the inputs alone.
+            learning_rate=1e-7,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            steps_per_generation=steps_per_generation,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            num_iterations=1,
+            beta=0.0,
+            max_steps=max_steps,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        captured = []
+        original_compute_loss = trainer._compute_loss
+
+        def compute_loss_spy(model, inputs):
+            loss = original_compute_loss(model, inputs)
+            captured.append(
+                {
+                    "loss": loss.detach().clone(),
+                    "num_items_in_batch": inputs["num_items_in_batch"],
+                    "seq_tokens": inputs["completion_mask"].sum(-1).detach().clone(),
+                    "advantages": inputs["advantages"].detach().clone(),
+                }
+            )
+            return loss
+
+        with patch.object(trainer, "_compute_loss", side_effect=compute_loss_spy):
+            trainer.train()
+
+        assert len(captured) == max_steps * gradient_accumulation_steps
+        num_processes = trainer.accelerator.num_processes
+        for record in captured:
+            token_loss_sum = (-record["advantages"] * record["seq_tokens"]).sum()
+            window_token_count = (
+                record["num_items_in_batch"] / num_processes * gradient_accumulation_steps / steps_per_generation
+            )
+            expected_loss = token_loss_sum / window_token_count
+            torch.testing.assert_close(record["loss"], expected_loss, rtol=1e-4, atol=1e-6)
+
+        release_memory(trainer.model, trainer)
+
     def test_train_with_eval(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
