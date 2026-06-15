@@ -396,7 +396,7 @@ def maybe_apply_chat_template(
         return example
 
 
-def _unpair_row(examples: list[dict[str, list[dict[str, str]]]]) -> list[dict[str, list[dict[str, str]]]]:
+def _unpair_row(examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
     batch_size = len(examples["chosen"])
     new_rows = {
         "completion": examples["chosen"] + examples["rejected"],
