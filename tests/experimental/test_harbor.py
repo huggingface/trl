@@ -125,3 +125,14 @@ class TestRewardFunc(TrlTestCase):
         # AsyncGRPOTrainer captures rewards in its rollout worker and passes them as a list, with no
         # live env instances. The reward func must use them directly.
         assert _outcome_reward_func(environment_reward=[0.25, 0.75]) == [0.25, 0.75]
+
+    def test_fresh_env_reward_is_zero_without_backend(self):
+        # The trainer discovers tool methods via `inspect.getmembers`, which evaluates properties. A fresh
+        # env (never `reset`) must expose its tools and return 0.0 from `reward` WITHOUT starting the
+        # Harbor backend or importing `harbor` (not installed in the trainer env).
+        import inspect
+
+        env = HarborBashEnv()
+        names = {n for n, _ in inspect.getmembers(env, predicate=inspect.ismethod)}
+        assert {"bash", "reset"} <= names
+        assert env.reward == 0.0
