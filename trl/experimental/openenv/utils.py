@@ -15,6 +15,7 @@
 from typing import Any
 
 import torch
+from accelerate.utils import broadcast_object_list, gather_object
 
 from ...data_utils import is_conversational
 from ...extras.profiling import profiling_context
@@ -98,16 +99,14 @@ def generate_rollout_completions(
     Returns one result per prompt, containing prompt and completion token ids along with per-token log probabilities
     and the generated text.
     """
-
-    if not prompts:
-        return []
-
     if not trainer.use_vllm:
         raise RuntimeError("Custom rollouts require vLLM to call generate_rollout_completions.")
 
     if trainer.vllm_mode == "server":
         return _generate_rollout_completions_server(trainer, prompts, generation_overrides, as_chat)
     elif trainer.vllm_mode == "colocate":
+        if not prompts:
+            return []
         return _generate_rollout_completions_colocate(trainer, prompts, generation_overrides, as_chat)
     else:
         raise ValueError(f"vllm_mode must be 'server' or 'colocate', got '{trainer.vllm_mode}'")
@@ -121,32 +120,53 @@ def _generate_rollout_completions_server(
 ) -> list[dict[str, Any]]:
     """Generate completions using vLLM server mode."""
     generation_kwargs = _build_server_generation_kwargs(trainer, generation_overrides)
+    accelerator = trainer.accelerator
+    all_prompts = gather_object(prompts)
+    if not all_prompts:
+        return []
 
     if as_chat is None:
-        as_chat = prompts and is_conversational({"prompt": prompts[0]})
+        as_chat = is_conversational({"prompt": all_prompts[0]})
 
-    with profiling_context(trainer, "vLLM.generate_rollout_server"):
-        if as_chat:
-            # Prompts are raw message dicts; use .chat() so the vLLM server applies the chat template
-            output = trainer.vllm_generation.vllm_client.chat(
-                messages=prompts,
-                **generation_kwargs,
-                chat_template_kwargs=trainer.chat_template_kwargs,
-                tools=trainer.tools or None,
-                chat_template=trainer.chat_template,
-            )
-        else:
-            output = trainer.vllm_generation.vllm_client.generate(prompts=prompts, **generation_kwargs)
+    if accelerator.is_main_process:
+        with profiling_context(trainer, "vLLM.generate_rollout_server"):
+            if as_chat:
+                # Prompts are raw message dicts; use .chat() so the vLLM server applies the chat template
+                output = trainer.vllm_generation.vllm_client.chat(
+                    messages=all_prompts,
+                    **generation_kwargs,
+                    chat_template_kwargs=trainer.chat_template_kwargs,
+                    tools=trainer.tools or None,
+                    chat_template=trainer.chat_template,
+                )
+            else:
+                output = trainer.vllm_generation.vllm_client.generate(prompts=all_prompts, **generation_kwargs)
+        payload = (output["prompt_ids"], output["completion_ids"], output["logprobs"])
+    else:
+        payload = None
+
+    # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
+    obj_list = [payload]
+    broadcast_object_list(obj_list, from_process=0)
+    all_prompt_ids, all_completion_ids, all_logprobs = obj_list[0]
+
+    process_slice = slice(
+        accelerator.process_index * len(prompts),
+        (accelerator.process_index + 1) * len(prompts),
+    )
+    prompt_ids = all_prompt_ids[process_slice]
+    completion_ids = all_completion_ids[process_slice]
+    logprobs = all_logprobs[process_slice]
 
     # Format results to match colocate output format
     results: list[dict[str, Any]] = []
     for i in range(len(prompts)):
         results.append(
             {
-                "prompt_ids": output["prompt_ids"][i],
-                "completion_ids": list(output["completion_ids"][i]),
-                "logprobs": list(output["logprobs"][i]),
-                "text": trainer.processing_class.decode(output["completion_ids"][i], skip_special_tokens=True),
+                "prompt_ids": prompt_ids[i],
+                "completion_ids": list(completion_ids[i]),
+                "logprobs": [lp[0] for lp in logprobs[i]],
+                "text": trainer.processing_class.decode(completion_ids[i], skip_special_tokens=True),
             }
         )
 
