@@ -292,7 +292,7 @@ training_args = SFTConfig(
     # required
     pad_to_multiple_of=2,    # Must equal sp_size
     # to get the most out of SP
-    max_seq_length=4096,
+    max_length=4096,
     packing=True,
     attn_implementation="flash_attention_2",
     per_device_train_batch_size=1,

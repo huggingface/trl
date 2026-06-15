@@ -238,7 +238,9 @@ class GFPOTrainer(_GRPOTrainer):
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 importance_sampling_ratio = torch.exp(old_per_token_logps - sampling_per_token_logps)
                 importance_sampling_ratio = torch.clamp(
-                    importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                    importance_sampling_ratio,
+                    min=self.vllm_importance_sampling_clip_min,
+                    max=self.vllm_importance_sampling_clip_max,
                 )
 
             # Compute the per-token log probabilities for the reference model
@@ -311,8 +313,8 @@ class GFPOTrainer(_GRPOTrainer):
             group_global_indices = group_row_offsets + group_local_indices
             group_global_indices = group_global_indices.flatten()
 
-            rewards = rewards[group_global_indices].contiguous()
-            rewards_per_func = rewards_per_func[group_global_indices, :].contiguous()
+            rewards = rewards[group_global_indices]
+            rewards_per_func = rewards_per_func[group_global_indices, :]
 
             num_inputs_in_device = int(len(prompts) / self.num_generations * self.num_remains_in_group)
 
@@ -352,23 +354,23 @@ class GFPOTrainer(_GRPOTrainer):
                 prompts
             )  # step is length of prompts
 
-            prompt_ids = prompt_ids[local_input_indices_to_keep].contiguous()
-            prompt_mask = prompt_mask[local_input_indices_to_keep].contiguous()
-            completion_ids = completion_ids[local_input_indices_to_keep].contiguous()
-            completion_mask = completion_mask[local_input_indices_to_keep].contiguous()
-            attention_mask = attention_mask[local_input_indices_to_keep].contiguous()
+            prompt_ids = prompt_ids[local_input_indices_to_keep]
+            prompt_mask = prompt_mask[local_input_indices_to_keep]
+            completion_ids = completion_ids[local_input_indices_to_keep]
+            completion_mask = completion_mask[local_input_indices_to_keep]
+            attention_mask = attention_mask[local_input_indices_to_keep]
             completion_lengths = completion_mask.sum(1)
             agg_completion_lengths = self.accelerator.gather(completion_lengths)
             num_items_in_batch = agg_completion_lengths.sum()
 
             if sampling_per_token_logps is not None:
-                sampling_per_token_logps = sampling_per_token_logps[local_input_indices_to_keep].contiguous()
+                sampling_per_token_logps = sampling_per_token_logps[local_input_indices_to_keep]
             if old_per_token_logps is not None:
-                old_per_token_logps = old_per_token_logps[local_input_indices_to_keep].contiguous()
+                old_per_token_logps = old_per_token_logps[local_input_indices_to_keep]
             if ref_per_token_logps is not None:
-                ref_per_token_logps = ref_per_token_logps[local_input_indices_to_keep].contiguous()
+                ref_per_token_logps = ref_per_token_logps[local_input_indices_to_keep]
             if self.use_vllm and self.vllm_importance_sampling_correction:
-                importance_sampling_ratio = importance_sampling_ratio[local_input_indices_to_keep].contiguous()
+                importance_sampling_ratio = importance_sampling_ratio[local_input_indices_to_keep]
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):

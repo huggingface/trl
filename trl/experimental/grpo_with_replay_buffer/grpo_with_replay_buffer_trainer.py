@@ -247,7 +247,9 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 importance_sampling_ratio = torch.exp(old_per_token_logps - sampling_per_token_logps)
                 importance_sampling_ratio = torch.clamp(
-                    importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                    importance_sampling_ratio,
+                    min=self.vllm_importance_sampling_clip_min,
+                    max=self.vllm_importance_sampling_clip_max,
                 )
 
             # Compute the per-token log probabilities for the reference model
@@ -473,7 +475,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         Args:
             groups_with_variance: Boolean tensor indicating which groups have reward variance
             group_advantages: Tensor of shape (num_groups, num_generations) containing advantage values
-            std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
+            group_std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
             prompt_ids: Tensor containing prompt token IDs
             prompt_mask: Tensor containing prompt attention masks
             completion_ids: Tensor containing completion token IDs
@@ -599,7 +601,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
 
         Args:
             group_advantages: Tensor of shape (num_groups, num_generations) containing advantage values
-            std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
+            group_std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
             prompt_ids: Tensor containing prompt token IDs
             prompt_mask: Tensor containing prompt attention masks
             completion_ids: Tensor containing completion token IDs
