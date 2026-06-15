@@ -414,6 +414,8 @@ def unpair_preference_dataset(
     """
     Unpair a preference dataset.
 
+    The output contains only `"prompt"`, `"completion"`, and `"label"`; all other columns are dropped.
+
     Args:
         dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
@@ -447,7 +449,13 @@ def unpair_preference_dataset(
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
     """
-    return dataset.map(_unpair_row, batched=True, remove_columns=["chosen", "rejected"], **map_kwargs)
+    if isinstance(dataset, DatasetDict):
+        column_names = next(iter(dataset.values())).column_names
+    elif isinstance(dataset, Dataset):
+        column_names = dataset.column_names
+    else:  # IterableDataset
+        column_names = dataset.column_names or list(next(iter(dataset)).keys())
+    return dataset.map(_unpair_row, batched=True, remove_columns=column_names, **map_kwargs)
 
 
 def maybe_unpair_preference_dataset(
