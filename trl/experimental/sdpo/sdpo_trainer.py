@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import inspect
+import math
 import re
 import textwrap
 from collections import defaultdict
@@ -1647,9 +1648,17 @@ class SDPOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {k: sum(v) / len(v) for k, v in self._metrics[mode].items() if v}
+        # Average the metrics
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            # Filter out NaN values before averaging. A reward function that returns None for all samples
+            # in a batch produces NaN for that batch's metric. With logging_steps > 1, a naive sum()/len()
+            # would let a single NaN contaminate valid data from other batches. Only return None when no
+            # valid values remain (e.g. JSON loggers crash on float NaN).
+            valid = [v for v in val if not math.isnan(v)]
+            metrics[key] = sum(valid) / len(valid) if valid else None
         if mode == "eval":
-            metrics = {f"eval_{k}": v for k, v in metrics.items()}
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
         logs = {**logs, **metrics}
         super().log(logs, start_time)
         self._metrics[mode].clear()
