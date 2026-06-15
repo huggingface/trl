@@ -29,18 +29,19 @@ def get_repetition_penalty_reward(ngram_size: int = 3, max_penalty: float = -1.0
     $$
 
     where \( p \) is `max_penalty`. A completion with no repeated n-gram gets a reward of `0.0`, while a fully repetitive
-    one approaches `max_penalty`. Words are obtained by lowercasing and splitting on whitespace, so the penalty is best
-    suited to whitespace-delimited languages. Completions with fewer than `ngram_size` words get a reward of `0.0`.
+    one approaches `max_penalty`. The n-grams are computed over the completion token ids (the paper applies the penalty
+    to repeated tokens), so the reward is tokenizer-defined and language-agnostic. Completions with fewer than
+    `ngram_size` tokens get a reward of `0.0`.
 
     Args:
         ngram_size (`int`, *optional*, defaults to `3`):
-            Size of the n-grams to consider.
+            Size of the token n-grams to consider.
         max_penalty (`float`, *optional*, defaults to `-1.0`):
             Most negative penalty, applied to a fully repetitive completion. Must be non-positive.
 
     Returns:
         `Callable`:
-            A reward function that takes a list of completions and returns a list of penalties (each in
+            A reward function that takes a list of completion token ids and returns a list of penalties (each in
             `[max_penalty, 0.0]`).
 
     Example:
@@ -48,8 +49,8 @@ def get_repetition_penalty_reward(ngram_size: int = 3, max_penalty: float = -1.0
     >>> from trl.rewards import get_repetition_penalty_reward
 
     >>> repetition_penalty = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
-    >>> completions = [[{"content": "the cat sat on the mat"}], [{"content": "the the the the the"}]]
-    >>> repetition_penalty(completions)
+    >>> completion_ids = [[1, 2, 3, 4], [5, 5, 5, 5, 5]]
+    >>> repetition_penalty(completion_ids)
     [0.0, -0.75]
     ```
     """
@@ -67,14 +68,13 @@ class _RepetitionPenalty:
         self.ngram_size = ngram_size
         self.max_penalty = max_penalty
 
-    def __call__(self, completions: list[list[dict[str, str]]], **kwargs) -> list[float]:
+    def __call__(self, completion_ids: list[list[int]], **kwargs) -> list[float]:
         rewards = []
-        for completion in completions:
-            words = completion[0]["content"].lower().split()
-            if len(words) < self.ngram_size:
+        for ids in completion_ids:
+            if len(ids) < self.ngram_size:
                 rewards.append(0.0)
                 continue
-            ngrams = list(zip(*[words[i:] for i in range(self.ngram_size)], strict=False))
+            ngrams = list(zip(*[ids[i:] for i in range(self.ngram_size)], strict=False))
             scaling = 1 - len(set(ngrams)) / len(ngrams)
             rewards.append(scaling * self.max_penalty if scaling else 0.0)
         return rewards
