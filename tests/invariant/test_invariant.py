@@ -26,6 +26,8 @@ import pytest
 import torch
 import transformers
 
+from ..testing_utils import is_bf16_supported
+
 
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 MODEL_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
@@ -255,6 +257,11 @@ def test_invariant(klass, config):
 
     if config.num_processes > 1 and torch.cuda.device_count() < config.num_processes:
         pytest.skip(f"requires {config.num_processes} GPUs, got {torch.cuda.device_count()}")
+
+    # FA2 members require bf16 (the kernels are bfloat16-only), and bf16=True raises on a device that
+    # does not support it (CPU, pre-Ampere GPU). Skip rather than error on such devices.
+    if config.args.get("bf16") == "True" and not is_bf16_supported():
+        pytest.skip("config requires bf16, which the current device does not support")
 
     trajectory = run(config)
     reference = load(ref_path)
