@@ -66,8 +66,8 @@ async def _retry_on_http_error(coro_factory: Callable[[], Awaitable], *, label: 
 
 @dataclass(slots=True)
 class RolloutGroup:
-    prompt: Messages
-    prompt_ids: list[int]
+    prompts: list[Messages]
+    prompt_ids: list[list[int]]
     reward_kwargs: dict[str, list[Any]]
     completions: list[Messages]
     completions_ids: list[list[int]]
@@ -318,45 +318,25 @@ class _AsyncRolloutLoop:
                     # task instruction). The reset() return was previously discarded, so an
                     # environment_factory whose task lives in the observation (not the dataset prompt) was
                     # generated against the bare prompt. Mirror GRPOTrainer: fold the observation into the
-                    # last prompt message. It is task-level (identical across the group's generations), so
-                    # inject it once, when the group is first created.
+                    # last prompt message. reset() may be stochastic, so this is done per generation (each
+                    # generation gets its own observation -> its own prompt and prompt_ids).
                     observation = self.environments[slot].reset(**row) if self.environments is not None else None
+                    prompt = row["prompt"]
+                    if observation is not None:
+                        # Rebuild the last message instead of mutating in place (as GRPOTrainer does): the
+                        # same row is reused across the group's generations and across epochs.
+                        last = prompt[-1]
+                        prompt = prompt[:-1] + [{**last, "content": last["content"] + observation}]
 
                     if group_id not in pending_groups:
-                        prompt = row["prompt"]
-                        if observation is not None:
-                            last = prompt[-1]
-                            if isinstance(last["content"], str) and isinstance(observation, str):
-                                content = last["content"] + observation
-                            else:
-                                obs = (
-                                    observation
-                                    if isinstance(observation, list)
-                                    else [{"type": "text", "text": observation}]
-                                )
-                                base = (
-                                    last["content"]
-                                    if isinstance(last["content"], list)
-                                    else [{"type": "text", "text": last["content"]}]
-                                )
-                                content = base + obs
-                            prompt = prompt[:-1] + [{**last, "content": content}]
-                        prompt_ids = self.tokenizer.apply_chat_template(
-                            prompt,
-                            return_dict=False,
-                            add_generation_prompt=True,
-                            tools=self.tools or None,  # `or None`: Llama bug: renders tool boilerplate for tools=[]
-                            chat_template=self.chat_template,
-                            **self.chat_template_kwargs,
-                        )
                         reward_kwargs = {
                             key: [row[key]] * self.num_generations
                             for key in row
                             if key not in {"prompt", "completion", "completion_ids"}
                         }
                         pending_groups[group_id] = RolloutGroup(
-                            prompt=prompt,
-                            prompt_ids=prompt_ids,
+                            prompts=[],
+                            prompt_ids=[],
                             reward_kwargs=reward_kwargs,
                             completions=[],
                             completions_ids=[],
@@ -368,10 +348,8 @@ class _AsyncRolloutLoop:
                         )
                         pending_completed[group_id] = 0
 
-                    task = asyncio.create_task(
-                        self._generate_one(pending_groups[group_id].prompt, tool_dict=self._sync_tool_dicts[slot])
-                    )
-                    inflight_tasks[task] = (group_id, slot)
+                    task = asyncio.create_task(self._generate_one(prompt, tool_dict=self._sync_tool_dicts[slot]))
+                    inflight_tasks[task] = (group_id, slot, prompt)
 
                 if not inflight_tasks:
                     if stop_event.is_set():
@@ -384,12 +362,13 @@ class _AsyncRolloutLoop:
                     continue
 
                 for task in done:
-                    group_id, slot = inflight_tasks.pop(task)
+                    group_id, slot, prompt = inflight_tasks.pop(task)
                     free_slots.add(slot)
                     if task.exception() is not None:
                         raise task.exception()
 
                     (
+                        prompt_ids,
                         completion,
                         completion_ids,
                         completion_logprobs,
@@ -398,6 +377,8 @@ class _AsyncRolloutLoop:
                         tool_failure_count,
                     ) = task.result()
                     group = pending_groups[group_id]
+                    group.prompts.append(prompt)
+                    group.prompt_ids.append(prompt_ids)
                     group.completions.append(completion)
                     group.completions_ids.append(completion_ids)
                     group.completions_logprobs.append(completion_logprobs)
@@ -504,12 +485,14 @@ class _AsyncRolloutLoop:
 
     async def _generate_one(
         self, prompt: Messages, tool_dict: dict[str, Callable]
-    ) -> tuple[list[dict[str, str]], list[int], list[float], list[int], int, int]:
+    ) -> tuple[list[int], list[dict[str, str]], list[int], list[float], list[int], int, int]:
         completion, completion_ids, completion_logprobs, tool_mask = [], [], [], []
         tool_call_count = 0
         tool_failure_count = 0
         iteration_num = 0
         max_iterations = self.max_tool_calling_iterations
+        # Initial prompt tokens, returned so the scorer can reconstruct input_ids = prompt_ids + completion_ids.
+        # `running_ids` accumulates the turns/tool deltas fed back to the model; `prompt_ids` stays the prompt.
         prompt_ids = self.tokenizer.apply_chat_template(
             prompt,
             return_dict=False,
@@ -518,8 +501,9 @@ class _AsyncRolloutLoop:
             chat_template=self.chat_template,
             **self.chat_template_kwargs,
         )
+        running_ids = prompt_ids
         while True:
-            turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
+            turn_ids, turn_logprobs = await self._generate_one_turn(running_ids)
             assistant_message = parse_response(self.tokenizer, turn_ids)
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
@@ -527,7 +511,15 @@ class _AsyncRolloutLoop:
             tool_mask.extend([1] * len(turn_ids))
             tool_calls = assistant_message.get("tool_calls")
             if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
-                return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
+                return (
+                    prompt_ids,
+                    completion,
+                    completion_ids,
+                    completion_logprobs,
+                    tool_mask,
+                    tool_call_count,
+                    tool_failure_count,
+                )
 
             tool_messages, n_calls, n_failures = self._execute_tool_calls(tool_calls, tool_dict)
             tool_call_count += n_calls
@@ -537,7 +529,7 @@ class _AsyncRolloutLoop:
             completion_ids.extend(suffix_ids)
             completion_logprobs.extend([0.0] * len(suffix_ids))
             tool_mask.extend([0] * len(suffix_ids))
-            prompt_ids = prompt_ids + turn_ids + suffix_ids
+            running_ids = running_ids + turn_ids + suffix_ids
             iteration_num += 1
 
     def _get_tool_suffix_ids(self, tool_messages: list[dict[str, Any]]) -> list[int]:
@@ -615,8 +607,8 @@ class _AsyncRolloutLoop:
     async def _score_group(self, group: RolloutGroup) -> list[RolloutSample]:
         kwargs = dict(
             completions=group.completions,
-            prompt=group.prompt,
-            prompts=[group.prompt] * len(group.completions),
+            prompt=group.prompts[0],
+            prompts=group.prompts,
             completion_ids=group.completions_ids,
             **group.reward_kwargs,
         )
@@ -667,11 +659,11 @@ class _AsyncRolloutLoop:
         per_func_rewards = np.array(all_rewards, dtype=float)
         return [
             RolloutSample(
-                prompt=group.prompt,
+                prompt=prompt,
                 completion=completion,
-                input_ids=group.prompt_ids + completion_ids,
-                completion_mask=[0] * len(group.prompt_ids) + tool_mask,
-                old_log_probs=[0.0] * len(group.prompt_ids) + logprobs,
+                input_ids=prompt_ids + completion_ids,
+                completion_mask=[0] * len(prompt_ids) + tool_mask,
+                old_log_probs=[0.0] * len(prompt_ids) + logprobs,
                 advantage=advantage,
                 model_version=group.model_version,
                 metrics={
@@ -684,8 +676,20 @@ class _AsyncRolloutLoop:
                     **tm,
                 },
             )
-            for i, (completion, completion_ids, logprobs, tool_mask, advantage, reward, tm) in enumerate(
+            for i, (
+                prompt,
+                prompt_ids,
+                completion,
+                completion_ids,
+                logprobs,
+                tool_mask,
+                advantage,
+                reward,
+                tm,
+            ) in enumerate(
                 zip(
+                    group.prompts,
+                    group.prompt_ids,
                     group.completions,
                     group.completions_ids,
                     group.completions_logprobs,
