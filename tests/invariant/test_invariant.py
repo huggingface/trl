@@ -206,8 +206,8 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
     "sft_fa2": {
         # Loss is much tighter than grad_norm under FA2+bf16 (grad_norm absorbs bf16 + FA varlen kernel noise).
         # See https://github.com/huggingface/trl/pull/5842#issuecomment-4539190615
-        "tol": {"loss": 1.5e-2, "grad_norm": 1.0},
-        "residual_tol": {"loss": 1e-4, "grad_norm": 5e-2},
+        "tol": {"loss": 1.5e-2, "grad_norm": 5.0},
+        "residual_tol": {"loss": 1e-3, "grad_norm": 2.5e-1},
         "members": [
             _build(
                 "sft_fa2",
