@@ -136,15 +136,15 @@ def get_cosine_scaled_reward(
     R_{\text{cosine}}(y) = v_{\min} + \frac{1}{2}(v_{\max} - v_{\min})\left(1 + \cos\left(\frac{|y|}{L_{\max}}\pi\right)\right)
     $$
 
-    For a **correct** completion, $ (v_{\min}, v_{\max}) = (\texttt{min\_value\_correct}, \texttt{max\_value\_correct}) $,
+    For a **correct** completion, $(v_{\min}, v_{\max}) = (\texttt{min\_value\_correct}, \texttt{max\_value\_correct})$,
     so a shorter completion is rewarded more. For a **wrong** completion, the bounds are swapped to
-    \( (v_{\min}, v_{\max}) = (\texttt{max\_value\_wrong}, \texttt{min\_value\_wrong}) \), so a shorter completion is
+    $(v_{\min}, v_{\max}) = (\texttt{max\_value\_wrong}, \texttt{min\_value\_wrong})$, so a shorter completion is
     penalized more (a longer wrong completion is penalized less, preserving exploration). When the gold solution is not
     parseable, the example is skipped (reward `None`), as in [`~rewards.accuracy_reward`].
 
     Args:
         max_len (`int`):
-            Maximum completion length (in tokens) used to normalize the cosine schedule,  \( L_{\max} \).
+            Maximum completion length (in tokens) used to normalize the cosine schedule, $L_{\max}$.
         min_value_wrong (`float`, *optional*, defaults to `-1.0`):
             Reward of a wrong completion at the shortest length.
         max_value_wrong (`float`, *optional*, defaults to `-0.5`):
