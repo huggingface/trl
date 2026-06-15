@@ -17,6 +17,7 @@
 import logging
 import math
 import os
+import shutil
 from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
@@ -249,6 +250,8 @@ class VLLMGeneration:
         max_completion_length: int = 16,
         logprobs: int | None = 0,
         generation_kwargs: dict | None = None,
+        lora_sync: bool = False,
+        lora_sync_output_dir: str | None = None,
     ):
         self.model = model
         self.accelerator = accelerator
@@ -283,6 +286,10 @@ class VLLMGeneration:
         self.max_completion_length = max_completion_length
         self.logprobs = logprobs
         self.generation_kwargs = generation_kwargs or {}
+        self.lora_sync = lora_sync
+        self.lora_name = "trl_lora_adapter"
+        self.lora_sync_output_dir = lora_sync_output_dir
+        self._lora_sync_version = 0
 
         self._init_vllm()
 
@@ -306,7 +313,8 @@ class VLLMGeneration:
                 self.vllm_client = VLLMClient(
                     base_url=base_url, group_port=self.group_port, connection_timeout=self.server_timeout
                 )
-                self.vllm_client.init_communicator(device=torch.cuda.current_device())
+                if not self.lora_sync:
+                    self.vllm_client.init_communicator(device=torch.cuda.current_device())
 
         elif self.mode == "colocate":
             # Make sure tensor_parallel_size group size evenly divides the world size - each group should have
@@ -436,6 +444,42 @@ class VLLMGeneration:
         elif self._dist.fsdp_version == 2:
             self._sync_fsdp2_params_to_vllm(model)
 
+    def _save_lora_adapter(self) -> str:
+        """Save the active PEFT adapter to a versioned directory and return its path."""
+        model = self.model
+        accelerator = self.accelerator
+        adapter_name = model.active_adapters[0]
+        self._lora_sync_version += 1
+        root_dir = os.path.join(self.lora_sync_output_dir or os.getcwd(), ".vllm_lora_sync")
+        adapter_dir = os.path.join(root_dir, f"sync_{self._lora_sync_version}")
+
+        with self._dist.gather_params([p for p in model.parameters() if p.requires_grad]):
+            with self._dist.summon_full_params(model, recurse=True, writeback=False):
+                state_dict = {
+                    name: param
+                    for name, param in model.state_dict().items()
+                    if "lora_" in name and f".{adapter_name}." in name
+                }
+                state_dict = {
+                    name: param.full_tensor().detach().cpu() if hasattr(param, "full_tensor") else param.detach().cpu()
+                    for name, param in state_dict.items()
+                }
+                if accelerator.is_main_process:
+                    os.makedirs(adapter_dir, exist_ok=True)
+                    model.save_pretrained(
+                        adapter_dir,
+                        selected_adapters=[adapter_name],
+                        state_dict=state_dict,
+                        safe_serialization=True,
+                    )
+
+        accelerator.wait_for_everyone()
+        if accelerator.is_main_process and self._lora_sync_version > 2:
+            old_dir = os.path.join(root_dir, f"sync_{self._lora_sync_version - 2}")
+            shutil.rmtree(old_dir, ignore_errors=True)
+        accelerator.wait_for_everyone()
+        return adapter_dir
+
     def sync_weights(self):
         """Synchronize model weights to vLLM.
 
@@ -450,6 +494,14 @@ class VLLMGeneration:
 
         model = self.model
         accelerator = self.accelerator
+
+        if self.lora_sync:
+            adapter_path = self._save_lora_adapter()
+            if accelerator.is_main_process:
+                self.vllm_client.load_lora_adapter(self.lora_name, adapter_path, load_inplace=True)
+                self.vllm_client.reset_prefix_cache()
+            accelerator.wait_for_everyone()
+            return
 
         if is_peft_model(model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as

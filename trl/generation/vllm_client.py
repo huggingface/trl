@@ -717,6 +717,18 @@ class VLLMClient:
             result["actual_token_ids"] = all_actual_ids
         return result
 
+    def load_lora_adapter(self, lora_name: str, lora_path: str, load_inplace: bool = True):
+        """
+        Loads a LoRA adapter into the vLLM server.
+        """
+        url = f"{self.base_url}/v1/load_lora_adapter"
+        response = self.session.post(
+            url,
+            json={"lora_name": lora_name, "lora_path": lora_path, "load_inplace": load_inplace},
+        )
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
     def reset_prefix_cache(self):
         """
         Resets the prefix cache for the model.
