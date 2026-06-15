@@ -482,6 +482,11 @@ class SDPOTrainer(_BaseTrainer):
                     "vocabulary, so `full_logits` is unavailable. Note `topk_logits` distills over the teacher's own "
                     "top-k support (the server cannot score the student's top-k indices)."
                 )
+            if args.use_liger_kernel:
+                raise ValueError(
+                    "`use_teacher_server=True` is incompatible with `use_liger_kernel`: the server returns top-k "
+                    "logprobs while the Liger fused loss needs full-vocabulary hidden states."
+                )
         # Liger fused JSD loss for `full_logits`: same generalized JSD as `compute_divergence`, so alpha maps to beta.
         self.use_liger_loss = False
         if args.use_liger_kernel:
@@ -542,7 +547,6 @@ class SDPOTrainer(_BaseTrainer):
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
                 accelerator=self.accelerator,
-                is_fsdp_enabled=self.is_fsdp_enabled,
                 processing_class=self.processing_class,
                 mode=args.vllm_mode,
                 server_base_url=args.vllm_server_base_url,

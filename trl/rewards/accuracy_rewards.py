@@ -39,7 +39,7 @@ def accuracy_reward(
         completions (`list[list[dict[str, str]]]`):
             List of completions to be evaluated. Each completion must be a list of one message, i.e. a dictionary
             containing the key `"content"` with the value being the text of the completion.
-        solution: (`list[str]`):
+        solution (`list[str]`):
             List of the raw-text solutions to the questions/problems/prompts.
         log_extra (`callable`, *optional*):
             Callable to log extra columns to the completions table, provided automatically by the trainer. Defaults to
@@ -130,7 +130,7 @@ def reasoning_accuracy_reward(
         completions (`list[list[dict[str, str]]]`):
             List of completions to be evaluated. Each completion must be a list of one message, i.e. a dictionary
             containing the key `"content"` with the value being the text of the completion.
-        solution: (`list[str]`):
+        solution (`list[str]`):
             List of the raw-text solutions to the questions/problems/prompts.
         reasoning_delimiters (`list[str]]`, *optional*):
             List of strings indicating where the reasoning content ends. The final answer is assumed to be after the

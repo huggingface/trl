@@ -22,13 +22,13 @@ from pathlib import Path
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
 from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
+from torch.nn import functional as F
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoProcessor,
@@ -110,12 +110,15 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
             Token ID to use for padding `input_ids` sequences.
         max_length (`int`, *optional*):
             Maximum sequence length after assembly. Sequences longer than `max_length` are truncated from the end.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
     """
 
     pad_token_id: int
     max_length: int | None = None
+    pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -141,16 +144,19 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                 [torch.tensor(ids, dtype=torch.int64) for ids in full_ids_list],
                 padding_value=self.pad_token_id,
                 padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
             )
             batch[f"{prefix}_attention_mask"] = pad(
                 [torch.ones(len(ids), dtype=torch.int64) for ids in full_ids_list],
                 padding_value=0,
                 padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
             )
             batch[f"{prefix}_mask"] = pad(
                 [torch.tensor(m, dtype=torch.int64) for m in completion_mask_list],
                 padding_value=0,
                 padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
             )
 
         if "ref_logps" in examples[0]:
@@ -563,16 +569,12 @@ class KTOTrainer(_BaseTrainer):
                 pad_token_id=self._tokenizer.pad_token_id,
                 max_length=args.max_length,
             )
-            self.use_dpo_data_collator = True
         elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionUnpairedPreference(
                 processor=processing_class,
                 max_length=args.max_length,
                 calculate_kl=calculate_kl,
             )
-            self.use_dpo_data_collator = True
-        else:
-            self.use_dpo_data_collator = False
 
         # Training arguments
         self.beta = args.beta
@@ -705,7 +707,7 @@ class KTOTrainer(_BaseTrainer):
                 raise ValueError(
                     "You cannot use `use_liger_kernel=True` with Peft models. Please set `use_liger_kernel=False`."
                 )
-            self.kto_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
+            self.liger_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
         if self.precompute_ref_logps:
             if isinstance(self.train_dataset, IterableDataset) or isinstance(
@@ -758,9 +760,14 @@ class KTOTrainer(_BaseTrainer):
             `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
         """
         if isinstance(input, list):  # conversational: list of message dicts
+            if self._is_vlm:
+                input = prepare_multimodal_messages(input)
             result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
         else:  # non-conversational: plain text string
             result = processing_class(text=input)
+        # VLMs emit a batch dimension even for single examples; unwrap it
+        if self._is_vlm:
+            return {k: v[0] for k, v in result.items()}
         return result
 
     def _get_kl_dataset(
@@ -1050,83 +1057,6 @@ class KTOTrainer(_BaseTrainer):
 
         return completion_logps, KL_logps
 
-    def kto_loss(
-        self,
-        policy_chosen_logps: torch.FloatTensor,
-        policy_rejected_logps: torch.FloatTensor,
-        policy_KL_logps: torch.FloatTensor,
-        ref_chosen_logps: torch.FloatTensor,
-        ref_rejected_logps: torch.FloatTensor,
-        ref_KL_logps: torch.FloatTensor,
-    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        """Compute the KTO loss for a batch of policy and reference model log probabilities.
-
-        Args:
-            policy_chosen_logps:
-                Log probabilities of the policy model for the chosen responses. Shape: (num(chosen) in batch_size,)
-            policy_rejected_logps:
-                Log probabilities of the policy model for the rejected responses. Shape: (num(rejected) in batch_size,)
-            policy_KL_logps: Log probabilities of the policy model for the KL responses. Shape: (batch_size,)
-            ref_chosen_logps:
-                Log probabilities of the reference model for the chosen responses. Shape: (num(chosen) in batch_size,)
-            ref_rejected_logps:
-                Log probabilities of the reference model for the rejected responses. Shape: (num(rejected) in
-                batch_size,)
-            ref_KL_logps: Log probabilities of the reference model for the KL responses. Shape: (batch_size,)
-
-        Returns:
-            A tuple of four tensors: (losses, chosen_rewards, rejected_rewards, KL). The losses tensor contains the KTO
-            loss for each example in the batch. The chosen_rewards and rejected_rewards tensors contain the rewards for
-            the chosen and rejected responses, respectively. The KL tensor contains the detached KL divergence estimate
-            between the policy and reference models.
-        """
-        if self.calculate_KL:
-            kl = (policy_KL_logps - ref_KL_logps).mean().detach()
-            kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
-        else:
-            kl = torch.zeros(1).to(policy_chosen_logps.device)
-
-        # Chosen losses
-        if policy_chosen_logps.shape[0] != 0 or ref_chosen_logps.shape[0] != 0:
-            chosen_logratios = policy_chosen_logps - ref_chosen_logps
-
-            if self.loss_type == "kto":
-                # Eqn (7) of the KTO paper (https://huggingface.co/papers/2402.01306)
-                chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - kl))
-            elif self.loss_type == "apo_zero_unpaired":
-                # Unpaired variant of Eqn (7) of the APO paper (https://huggingface.co/papers/2408.06266)
-                # Use this loss when you believe the chosen outputs are better than your model's default output
-                chosen_losses = 1 - F.sigmoid(self.beta * chosen_logratios)
-
-            chosen_rewards = self.beta * chosen_logratios.detach()
-
-        else:
-            # lists can't be empty -- if they are, then accelerate.gather will hang
-            chosen_losses = torch.Tensor([]).to(self.accelerator.device)
-            chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
-
-        # Rejected losses
-        if policy_rejected_logps.shape[0] != 0 or ref_rejected_logps.shape[0] != 0:
-            rejected_logratios = policy_rejected_logps - ref_rejected_logps
-
-            if self.loss_type == "kto":
-                rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
-            elif self.loss_type == "apo_zero_unpaired":
-                rejected_losses = F.sigmoid(self.beta * rejected_logratios)
-
-            rejected_rewards = self.beta * rejected_logratios.detach()
-        else:
-            # lists can't be empty -- if they are, then accelerate.gather will hang
-            rejected_losses = torch.Tensor([]).to(self.accelerator.device)
-            rejected_rewards = torch.Tensor([]).to(self.accelerator.device)
-
-        losses = torch.cat(
-            (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses),
-            0,
-        )
-
-        return losses, chosen_rewards, rejected_rewards, kl
-
     def _compute_kl_logps(self, model, batch):
         """Compute KL log probabilities for a given batch."""
         KL_logps = None
@@ -1234,7 +1164,7 @@ class KTOTrainer(_BaseTrainer):
                 chosen_rewards_sum,
                 rejected_rewards_sum,
             ),
-        ) = self.kto_loss_fn(
+        ) = self.liger_loss_fn(
             _input=outputs.last_hidden_state[:, :-1],
             lin_weight=lm_head.weight,
             target=target,
@@ -1359,13 +1289,46 @@ class KTOTrainer(_BaseTrainer):
             ref_chosen_logps = ref_completion_logps.index_select(0, chosen_idx)
             ref_rejected_logps = ref_completion_logps.index_select(0, rejected_idx)
 
-        losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
-            policy_chosen_logps,
-            policy_rejected_logps,
-            policy_KL_logps,
-            ref_chosen_logps,
-            ref_rejected_logps,
-            ref_KL_logps,
+        if self.calculate_KL:
+            kl = (policy_KL_logps - ref_KL_logps).mean().detach()
+            kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
+        else:
+            kl = torch.zeros(1).to(policy_chosen_logps.device)
+        # Chosen losses
+        if policy_chosen_logps.shape[0] != 0 or ref_chosen_logps.shape[0] != 0:
+            chosen_logratios = policy_chosen_logps - ref_chosen_logps
+
+            if self.loss_type == "kto":
+                # Eqn (7) of the KTO paper (https://huggingface.co/papers/2402.01306)
+                chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - kl))
+            elif self.loss_type == "apo_zero_unpaired":
+                # Unpaired variant of Eqn (7) of the APO paper (https://huggingface.co/papers/2408.06266)
+                # Use this loss when you believe the chosen outputs are better than your model's default output
+                chosen_losses = 1 - F.sigmoid(self.beta * chosen_logratios)
+
+            chosen_rewards = self.beta * chosen_logratios.detach()
+
+        else:
+            # lists can't be empty -- if they are, then accelerate.gather will hang
+            chosen_losses = torch.Tensor([]).to(self.accelerator.device)
+            chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
+        # Rejected losses
+        if policy_rejected_logps.shape[0] != 0 or ref_rejected_logps.shape[0] != 0:
+            rejected_logratios = policy_rejected_logps - ref_rejected_logps
+
+            if self.loss_type == "kto":
+                rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
+            elif self.loss_type == "apo_zero_unpaired":
+                rejected_losses = F.sigmoid(self.beta * rejected_logratios)
+
+            rejected_rewards = self.beta * rejected_logratios.detach()
+        else:
+            # lists can't be empty -- if they are, then accelerate.gather will hang
+            rejected_losses = torch.Tensor([]).to(self.accelerator.device)
+            rejected_rewards = torch.Tensor([]).to(self.accelerator.device)
+        losses = torch.cat(
+            (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses),
+            0,
         )
 
         self._metrics[mode]["kl"].append(kl.item())

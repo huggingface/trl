@@ -40,7 +40,6 @@ from datasets import Dataset, IterableDataset
 from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, create_repo
 from packaging.version import Version
 from torch import nn
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import Sampler
 from transformers import (
     AutoModelForSequenceClassification,
@@ -64,6 +63,7 @@ from ..chat_template_utils import (
     supports_tool_calling,
 )
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
+from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..import_utils import is_jmespath_available, is_liger_kernel_available
@@ -565,7 +565,8 @@ class GRPOTrainer(_BaseTrainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
         self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
-        self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
+        self.vllm_importance_sampling_clip_max = args.vllm_importance_sampling_clip_max
+        self.vllm_importance_sampling_clip_min = args.vllm_importance_sampling_clip_min
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
@@ -766,7 +767,6 @@ class GRPOTrainer(_BaseTrainer):
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
                 accelerator=self.accelerator,
-                is_fsdp_enabled=self.is_fsdp_enabled,
                 processing_class=self.processing_class,
                 # vLLM configuration
                 mode=args.vllm_mode,
@@ -821,6 +821,7 @@ class GRPOTrainer(_BaseTrainer):
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
+        self._dist = DistributedBackend(self.accelerator)
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
@@ -1374,7 +1375,7 @@ class GRPOTrainer(_BaseTrainer):
                     self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
                 ) as unwrapped_model,
                 torch.no_grad(),
-                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+                self._dist.summon_full_params(self.model_wrapped, recurse=False),
             ):
                 # Cast to the appropriate dtype based on training configuration
                 if self.args.bf16:
@@ -1417,7 +1418,7 @@ class GRPOTrainer(_BaseTrainer):
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                 ) as unwrapped_model,
                 torch.no_grad(),
-                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+                self._dist.summon_full_params(self.model_wrapped, recurse=False),
             ):
                 prompt_completion_ids = unwrapped_model.generate(
                     **generate_inputs, generation_config=self.generation_config
@@ -2088,11 +2089,27 @@ class GRPOTrainer(_BaseTrainer):
 
                 if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
                     vllm_importance_sampling_ratio = torch.clamp(
-                        vllm_importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                        vllm_importance_sampling_ratio,
+                        min=self.vllm_importance_sampling_clip_min,
+                        max=self.vllm_importance_sampling_clip_max,
                     )
                 elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
+                    min_val = (
+                        self.vllm_importance_sampling_clip_min
+                        if self.vllm_importance_sampling_clip_min is not None
+                        else -math.inf
+                    )
+                    max_val = (
+                        self.vllm_importance_sampling_clip_max
+                        if self.vllm_importance_sampling_clip_max is not None
+                        else math.inf
+                    )
+
+                    invalid_mis_mask = (vllm_importance_sampling_ratio < min_val) | (
+                        vllm_importance_sampling_ratio > max_val
+                    )
                     vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
-                        vllm_importance_sampling_ratio > self.vllm_importance_sampling_cap, value=0.0
+                        invalid_mis_mask, value=0.0
                     )
                 else:
                     raise ValueError(

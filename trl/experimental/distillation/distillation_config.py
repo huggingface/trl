@@ -60,6 +60,9 @@ class DistillationConfig(_BaseConfig):
             `beta == 0` or `loss_top_k != 1`.
         max_completion_length (`int`, *optional*, defaults to `512`):
             Maximum number of tokens to generate per completion during on-policy generation.
+        max_prompt_length (`int` or `None`, *optional*):
+            Maximum number of tokens for the prompt. If `None`, auto-computed as `max_length - max_completion_length`.
+            Prompts are truncated according to the tokenizer's `truncation_side` setting.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the student model during training.
 
@@ -342,18 +345,6 @@ class DistillationConfig(_BaseConfig):
     )
 
     # W&B
-    wandb_entity: str | None = field(
-        default=None,
-        metadata={"help": "The W&B entity to store runs under."},
-    )
-    wandb_project: str | None = field(
-        default=None,
-        metadata={"help": "The W&B project to store runs under."},
-    )
-    wandb_run_group: str | None = field(
-        default=None,
-        metadata={"help": "The W&B group to store runs under."},
-    )
 
     # Logging
     log_completions: bool = field(
