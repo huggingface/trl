@@ -18,7 +18,7 @@ This trainer was contributed by [Quentin Gallouédec](https://huggingface.co/qga
 
 ## How it differs from [`GRPOTrainer`]
 
-In the standard [`GRPOTrainer`], generation and training are sequential: generate a batch, compute the loss, update weights, repeat. Even in [vLLM colocate mode](grpo_trainer#speed-up-training-with-vllm), where generation runs on the same GPUs, one phase must finish before the other begins.
+In the standard [`GRPOTrainer`], generation and training are sequential: generate a batch, compute the loss, update weights, repeat. Even in [vLLM colocate mode](grpo_trainer#speed-up-training-with-vllm-powered-generation), where generation runs on the same GPUs, one phase must finish before the other begins.
 
 [`AsyncGRPOTrainer`] separates these two concerns:
 

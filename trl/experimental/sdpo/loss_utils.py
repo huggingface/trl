@@ -14,19 +14,10 @@
 
 """Pure helper functions for self-distillation loss computation."""
 
-from __future__ import annotations
-
 import torch
 import torch.nn.functional as F
 
-
-def select_token_log_probs(
-    logits: torch.Tensor,
-    token_ids: torch.Tensor,
-) -> torch.Tensor:
-    logsumexp = torch.logsumexp(logits, dim=-1, keepdim=True)
-    indices = token_ids.unsqueeze(-1)
-    return (torch.gather(logits, dim=-1, index=indices) - logsumexp).squeeze(-1)
+from ...trainer.utils import selective_log_softmax
 
 
 def compute_divergence(
@@ -50,23 +41,16 @@ def compute_divergence(
     return kl.sum(-1)
 
 
-def add_tail(log_probs: torch.Tensor) -> torch.Tensor:
+def add_tail_bucket(log_probs: torch.Tensor) -> torch.Tensor:
+    """Append a bucket holding the leftover probability mass to a top-k log-prob support.
+
+    `log_probs` are true log-probabilities over a top-k subset, so they sum to the captured mass `P_topk <= 1`. This
+    appends one extra category equal to the tail mass `1 - P_topk`, yielding a distribution that sums to exactly 1.
+    """
     log_s = torch.logsumexp(log_probs, dim=-1, keepdim=True)
     log_s = torch.clamp(log_s, max=-1e-7)
     tail_log = torch.log(-torch.expm1(log_s))
     return torch.cat([log_probs, tail_log], dim=-1)
-
-
-def renorm_topk_log_probs(log_probs: torch.Tensor) -> torch.Tensor:
-    return log_probs - torch.logsumexp(log_probs, dim=-1, keepdim=True)
-
-
-def compute_token_level_distillation_loss(
-    student_log_probs: torch.Tensor,
-    teacher_log_probs: torch.Tensor,
-) -> torch.Tensor:
-    log_ratio = student_log_probs - teacher_log_probs
-    return log_ratio.detach() * student_log_probs
 
 
 def apply_importance_sampling_clipping(
@@ -102,12 +86,15 @@ def compute_topk_self_distillation_loss(
     topk_teacher_logits = torch.gather(teacher_logits, dim=-1, index=topk_indices)
     topk_teacher_log_probs = topk_teacher_logits - teacher_logsumexp
 
+    # Top-k log-probs sum to the captured mass P_topk <= 1; the rest (1 - P_topk) is the "tail".
     if distillation_add_tail:
-        topk_student_log_probs = add_tail(topk_student_log_probs)
-        topk_teacher_log_probs = add_tail(topk_teacher_log_probs)
+        # Lump the tail into one bucket so the divergence approximates the full-vocab divergence.
+        topk_student_log_probs = add_tail_bucket(topk_student_log_probs)
+        topk_teacher_log_probs = add_tail_bucket(topk_teacher_log_probs)
     else:
-        topk_student_log_probs = renorm_topk_log_probs(topk_student_log_probs)
-        topk_teacher_log_probs = renorm_topk_log_probs(topk_teacher_log_probs)
+        # Drop the tail and renormalize the top-k to sum to 1: divergence over the top-k conditional only.
+        topk_student_log_probs = topk_student_log_probs - torch.logsumexp(topk_student_log_probs, dim=-1, keepdim=True)
+        topk_teacher_log_probs = topk_teacher_log_probs - torch.logsumexp(topk_teacher_log_probs, dim=-1, keepdim=True)
 
     return compute_divergence(topk_student_log_probs, topk_teacher_log_probs, distillation_alpha)
 
@@ -142,6 +129,7 @@ def compute_sampled_token_self_distillation_loss(
             f"`distillation_mode='sampled_token'`, got alpha={distillation_alpha}"
         )
 
-    student_per_token_logps = select_token_log_probs(student_logits, completion_ids)
-    teacher_per_token_logps = select_token_log_probs(teacher_logits, completion_ids)
-    return compute_token_level_distillation_loss(student_per_token_logps, teacher_per_token_logps)
+    student_per_token_logps = selective_log_softmax(student_logits, completion_ids)
+    teacher_per_token_logps = selective_log_softmax(teacher_logits, completion_ids)
+    log_ratio = student_per_token_logps - teacher_per_token_logps
+    return log_ratio.detach() * student_per_token_logps

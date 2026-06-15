@@ -56,7 +56,6 @@ from trl import GRPOConfig, GRPOTrainer
 # Based on the Open-R1 recipe for Qwen-7B
 training_args = GRPOConfig(
     learning_rate=4.0e-5,
-    max_prompt_length=4096,
     max_completion_length=32768, # Support for long Chain-of-Thought
     num_generations=16,          # Sample 16 outputs per prompt for group relative advantage
     beta=0.001,                  # KL coefficient
@@ -278,6 +277,8 @@ Note that when using gradient accumulation, the loss is aggregated over the tota
 
 **📰 Blog**: https://fengyao.notion.site/off-policy-rl
 
+**📜 Paper**: https://huggingface.co/papers/1606.02647
+
 Online policy learning methods commonly use an optimized inference framework for rollout generation (e.g vLLM) that is separate from the training backend. This introduces a rollout-training mismatch, exemplified in the following PPO objective:
 
 $$
@@ -300,7 +301,7 @@ $$
 \small{
 \mathbb{E}_{a\sim\textcolor{red}{\pi_{\text{inference}}}(\theta_{\mathrm{old}})}
 \Bigl[
-\underbrace{\min(\frac{\textcolor{blue}{\pi_{\text{training}}}(a, \theta_{\mathrm{old}})}{\textcolor{red}{\pi_{\text{inference}}}(a, \theta_{\mathrm{old}})}, C)}_{\text{truncated importance ratio}} \cdot
+\underbrace{\text{clip}\bigl(\frac{\textcolor{blue}{\pi_{\text{training}}}(a, \theta_{\mathrm{old}})}{\textcolor{red}{\pi_{\text{inference}}}(a, \theta_{\mathrm{old}})}, C_{\min}, C_{\max}\bigr)}_{\text{truncated importance ratio}} \cdot
 \nabla_\theta
 \min\Bigl(
 \frac{\textcolor{blue}{\pi_{\text{training}}}(a, \theta)}{\textcolor{blue}{\pi_{\text{training}}}(a, \theta_{\mathrm{old}})}\,\hat A,
@@ -310,7 +311,7 @@ $$
 }
 $$
 
-where  \\( C \\) is a hyper-parameter. TIS is implemented in GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `truncate`, such as `"sequence_truncate"` or `"token_truncate"`.
+where  \\( C_{\min} \\) and  \\( C_{\max} \\) are hyper-parameters. TIS is implemented in GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `truncate`, such as `"sequence_truncate"` or `"token_truncate"`.
 
 ```python
 from trl import GRPOConfig
@@ -320,7 +321,7 @@ training_args = GRPOConfig(
     use_vllm=True,
     vllm_importance_sampling_correction=True, # default True
     vllm_importance_sampling_mode="sequence_truncate", # or "token_truncate"
-    vllm_importance_sampling_cap=2.0, # hyper-parameter C
+    vllm_importance_sampling_clip_max=2.0, # hyper-parameter C_max
 )
 ```
 
@@ -328,9 +329,11 @@ training_args = GRPOConfig(
 
 **📰 Blog**: https://ringtech.notion.site/icepop
 
+**📜 Paper**: https://huggingface.co/papers/2510.18855
+
 **📰 Blog**: https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda
 
-Masked Importance Sampling (MIS) addresses the same issue as [Truncated Importance Sampling](#truncated-importance-sampling) but replaces clipping with masking. MIS takes a more decisive stance by discarding updates whose discrepancy exceeds a threshold  \\( C \\). We apply upper-side masking, so any ratio above  \\( C \\) is removed from the update.
+Masked Importance Sampling (MIS) addresses the same issue as [Truncated Importance Sampling](#truncated-importance-sampling) but replaces clipping with masking. MIS takes a more decisive stance by discarding updates whose discrepancy falls outside the range  \\( [C_{\min}, C_{\max}] \\).
 
 
 $$
@@ -338,9 +341,9 @@ $$
 \mathbb{E}_{a\sim\textcolor{red}{\pi_{\text{inference}}}(\theta_{\mathrm{old}})}
 \Bigl[
 \underbrace{\mathbf{1}\left[
-\frac{\pi_{\text{training}}(a, \theta_{\mathrm{old}})}
+C_{\min} \le \frac{\pi_{\text{training}}(a, \theta_{\mathrm{old}})}
 {\pi_{\text{inference}}(a, \theta_{\mathrm{old}})}
-\le C
+\le C_{\max}
 \right]
 \cdot
 \frac{\pi_{\text{training}}(a, \theta_{\mathrm{old}})}
@@ -364,7 +367,8 @@ training_args = GRPOConfig(
     use_vllm=True,
     vllm_importance_sampling_correction=True, # default True
     vllm_importance_sampling_mode="sequence_mask", # or "token_mask"
-    vllm_importance_sampling_cap=2.0, # hyper-parameter C
+    vllm_importance_sampling_clip_max=2.0, # hyper-parameter C_max
+    vllm_importance_sampling_clip_min=0.5, # hyper-parameter C_min
 )
 ```
 
@@ -667,6 +671,34 @@ trainer.train()
 ```
 
 The official code [sail-sg/Stable-RL](https://github.com/sail-sg/Stable-RL)
+
+## Optimal Advantage Regression
+
+Papers relating to the [`experimental.a2po.A2POTrainer`].
+
+### Accelerating RL for LLM Reasoning with Optimal Advantage Regression
+
+**📜 Paper**: https://huggingface.co/papers/2505.20686
+
+A\*-PO (Optimal Advantage Regression) is a two-stage RL method for LLM reasoning that avoids both an online critic and multi-sample group rollouts. Stage 1 estimates the optimal value `V*(x) = β·log E_{y∼π_ref}[exp(r(x, y)/β)]` offline from reference-policy samples; Stage 2 performs on-policy updates with a single generation per prompt using a squared-error regression loss `(β·log(π(y|x)/π_ref(y|x)) − (r(x, y) − V*(x)))²`. This yields faster training and lower peak memory than PPO/GRPO/REBEL. The method assumes a binary verifiable reward and cannot exceed the reference policy's Pass@K. See [A2PO](a2po_trainer). The official code can be found in [ZhaolinGao/A-PO](https://github.com/ZhaolinGao/A-PO).
+
+```python
+from trl.experimental.a2po import A2POConfig, A2POTrainer
+
+# Hyperparameters from the paper (Qwen2.5, GSM8K/MATH)
+training_args = A2POConfig(
+    beta1=0.5,  # KL temperature for offline V* estimation
+    beta2=1e-3,  # KL temperature for the on-policy regression target
+    num_value_samples=8,  # N samples per prompt from the reference policy
+)
+trainer = A2POTrainer(
+    model=...,
+    reward_funcs=...,  # should return a binary reward in {0, 1}
+    args=training_args,
+    train_dataset=...,
+)
+trainer.train()
+```
 
 ## Direct Policy Optimization
 
@@ -1314,10 +1346,10 @@ from trl import RLOOConfig
 
 training_args = RLOOConfig(
     per_device_train_batch_size=512,  # section C Training Detail of the paper
-    steps_per_generation=2  # section C Training Detail of the paper
-    beta=0.03  # section C Training Detail of the paper
+    steps_per_generation=2,  # section C Training Detail of the paper
+    beta=0.03,  # section C Training Detail of the paper
     num_generations=2,  # experiments of paper different num_generations={2,4}
-    learning_rate=1e-6  # section C Training Detail of the paper
+    learning_rate=1e-6,  # section C Training Detail of the paper
 )
 ```
 
@@ -1701,8 +1733,7 @@ training_args = SDPOConfig(
     distillation_mode="topk_logits",       # Explicitly select top-K logit distillation
     distillation_topk=100,                 # Required for top-K logit distillation
     distillation_is_clip=2.0,              # Importance sampling clipping
-    distillation_weight=1.0,               # Weight for self-distillation loss
-    sdpo_policy_loss_mode="distillation_only",
+    distillation_weight=1.0,               # Convex weight: (1-w)*policy + w*distillation; 1.0 = pure distillation
     use_successful_as_teacher=True,        # Use successful rollouts as teacher
     teacher_model_kind="ema",              # Supported: "base", "live", "ema"
     teacher_update_rate=0.05,              # EMA update rate
