@@ -396,15 +396,15 @@ def maybe_apply_chat_template(
         return example
 
 
-def _unpair_row(examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
-    batch_size = len(examples["chosen"])
-    new_rows = {
-        "completion": examples["chosen"] + examples["rejected"],
+def _unpair_row(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
+    batch_size = len(batch["chosen"])
+    new_batch = {
+        "completion": batch["chosen"] + batch["rejected"],
         "label": [True] * batch_size + [False] * batch_size,
     }
-    if "prompt" in examples:
-        new_rows["prompt"] = examples["prompt"] + examples["prompt"]
-    return new_rows
+    if "prompt" in batch:
+        new_batch["prompt"] = batch["prompt"] + batch["prompt"]
+    return new_batch
 
 
 def unpair_preference_dataset(
