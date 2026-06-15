@@ -1110,7 +1110,10 @@ class TestSFTTrainer(TrlTestCase):
         dataset = dataset.with_transform(add_suffix)
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
 
-        with pytest.raises(ValueError, match=r"Dataset\.with_transform\(\).*skip_prepare_dataset"):
+        with pytest.raises(
+            ValueError,
+            match=r"Dataset\.with_transform\(\).*skip_prepare_dataset.*trainer-ready",
+        ):
             SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )

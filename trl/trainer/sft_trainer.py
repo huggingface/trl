@@ -1421,8 +1421,9 @@ class SFTTrainer(_BaseTrainer):
             raise ValueError(
                 "SFTTrainer cannot prepare a dataset that uses `Dataset.with_transform()`. The preparation pipeline "
                 "calls `Dataset.map()`, which reads through the transform and can bake a random or stateful transform "
-                "into the tokenized columns. Pass `dataset_kwargs={'skip_prepare_dataset': True}` and provide already "
-                "tokenized examples, or materialize the transform with `Dataset.map()` before constructing the trainer."
+                "into the tokenized columns. Pass `dataset_kwargs={'skip_prepare_dataset': True}` and make the "
+                "transform return trainer-ready examples, including tokenized fields, or materialize deterministic "
+                "transforms with `Dataset.map()` before constructing the trainer."
             )
 
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
