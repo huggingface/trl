@@ -313,13 +313,14 @@ def _patch_chunked_ce_lm_head(
 
         lm_head_weight = lm_head.weight
         lm_head_bias = lm_head.bias
-        # Under FSDP2 + PEFT, LoRA's dtype cast inside the backbone breaks the DTensor(Replicate)
-        # chain, so hidden_states exit as a plain tensor while lm_head.weight remains a
-        # DTensor(Replicate). Convert to local to match the consistent types of the non-PEFT path.
+        # Under FSDP2 + PEFT, the outer FSDP module wraps PeftModel while lm_head.weight
+        # belongs to the nested causal-LM FSDP module, which is never entered directly inside
+        # _chunked_ce_forward. The weight therefore stays in Shard(0) placement; full_tensor()
+        # all-gathers the shards into the complete weight before the chunked matmul.
         if with_peft and isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
-            lm_head_weight = lm_head_weight.to_local()
+            lm_head_weight = lm_head_weight.full_tensor()
             if lm_head_bias is not None:
-                lm_head_bias = lm_head_bias.to_local()
+                lm_head_bias = lm_head_bias.full_tensor()
         loss, num_correct_tokens, entropy_sum, num_valid_tokens = _chunked_cross_entropy_loss(
             hidden_states,
             lm_head_weight,
