@@ -1417,6 +1417,52 @@ class SFTTrainer(_BaseTrainer):
         formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
+        # Reject datasets that use Dataset.with_transform before any map-based prep runs.
+        # `with_transform` (format_type == "custom") defers augmentation to access time, but every
+        # `dataset.map` call also reads its input *through* the transform.  That means each
+        # successive map step (add_eos, tokenize, …) fires the augmentation on an already-mutated
+        # row, baking stale randomness into the stored columns and making the final `input_ids`
+        # unrelated to the user's intended augmentation.
+        #
+        # Three failure modes result (all silent by default):
+        #   1. Multi-step map prep stacks transform invocations, producing garbled stored data.
+        #   2. `Trainer._remove_unused_columns` removes the raw text column, leaving the transform
+        #      with no data to read → `KeyError` at batch time.
+        #   3. Even with `remove_unused_columns=False`, `input_ids` is frozen to a single
+        #      random draw made during tokenization, so augmentation appears live on `text` but
+        #      the model always trains on the same garbled sequence.
+        #
+        # The correct approach is to include add-EOS and tokenization inside the user's own
+        # transform and skip `_prepare_dataset` entirely via
+        # `SFTConfig(dataset_kwargs={"skip_prepare_dataset": True})`.
+        if isinstance(dataset, Dataset) and dataset._format_type == "custom":
+            transform_fn = dataset._format_kwargs.get("transform")
+            if transform_fn is not None:
+                raise ValueError(
+                    f"The {dataset_name} dataset has a custom transform applied via "
+                    "`Dataset.with_transform(...)`. `SFTTrainer._prepare_dataset` uses "
+                    "`Dataset.map` internally, which reads input rows *through* the transform "
+                    "before writing them back — causing the transform to fire multiple times "
+                    "on already-mutated data and freezing `input_ids` to a single random draw "
+                    "made at prep time. In the worst case the raw text column is later removed "
+                    "by `Trainer._remove_unused_columns`, leaving the transform with no data to "
+                    "read and raising a `KeyError` at training time.\n\n"
+                    "To fix this, move add-EOS and tokenization inside your transform and pass "
+                    "`dataset_kwargs={'skip_prepare_dataset': True}` to `SFTConfig` so that "
+                    "`_prepare_dataset` is skipped entirely:\n\n"
+                    "    from transformers import AutoTokenizer\n"
+                    "    tok = AutoTokenizer.from_pretrained(...)\n\n"
+                    "    def my_transform(batch):\n"
+                    "        # your augmentation here\n"
+                    "        batch['text'] = [t + tok.eos_token for t in batch['text']]\n"
+                    "        return tok(batch['text'], truncation=True)\n\n"
+                    "    ds = ds.with_transform(my_transform)\n"
+                    "    trainer = SFTTrainer(\n"
+                    "        ...,\n"
+                    "        args=SFTConfig(dataset_kwargs={'skip_prepare_dataset': True}),\n"
+                    "    )\n"
+                )
+
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = get_dataset_column_names(dataset)
         is_processed = "input_ids" in column_names

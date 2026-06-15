@@ -2013,6 +2013,33 @@ class TestSFTTrainer(TrlTestCase):
                 raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
 
 
+    def test_with_transform_raises_clear_error(self):
+        """SFTTrainer must raise ValueError (not silently corrupt) when Dataset.with_transform is used.
+
+        Regression test for https://github.com/huggingface/trl/issues/6039 — before the fix,
+        _prepare_dataset would silently bake in stale randomness and freeze input_ids to a single
+        draw made during map-based tokenization.
+        """
+        import random
+        from datasets import Dataset
+
+        random.seed(42)
+        ds = Dataset.from_dict({"text": ["hello world"] * 4})
+
+        def augment(batch):
+            batch["text"] = [t + f" <TAG{random.randint(0, 999)}>" for t in batch["text"]]
+            return batch
+
+        ds_with_transform = ds.with_transform(augment)
+
+        with pytest.raises(ValueError, match="with_transform"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                train_dataset=ds_with_transform,
+                args=SFTConfig(output_dir=self.tmp_dir, report_to="none", use_cpu=True, bf16=False),
+            )
+
+
 @pytest.mark.slow
 @require_torch_accelerator
 @require_peft
