@@ -89,6 +89,32 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         assert "train_loss" in trainer.state.log_history[-1]
 
+    def test_evaluate(self):
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_eval_batch_size=2,
+            max_new_tokens=8,
+            use_cpu=True,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train").select(range(2))
+
+        trainer = OnlineDPOTrainer(
+            model=self.model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+            processing_class=self.tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+
+        metrics = trainer.evaluate()
+
+        assert metrics["eval_loss"] >= 0
+        assert all(param.grad is None for param in self.model.parameters())
+        assert all(len(values) == 0 for values in trainer.stats.values())
+
     def test_train_with_ref_model(self):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
