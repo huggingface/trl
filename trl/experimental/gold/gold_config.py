@@ -152,22 +152,10 @@ class GOLDConfig(SFTConfig):
             `True`.
         num_completions_to_print (`int` or `None`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
-        wandb_entity (`str` or `None`, *optional*):
-            The entity to store runs under.
-        wandb_project (`str` or `None`, *optional*):
-            The project to store runs under.
-        wandb_run_group (`str` or `None`, *optional*):
-            The group to store runs under.
         wandb_log_unique_prompts (`bool`, *optional*, defaults to `True`):
             Whether to log the unique prompts to wandb. This will create a new run for each unique prompt.
         callbacks (`list[str]`, *optional*, defaults to `[]`):
             The callbacks to run during training.
-        hub_model_revision (`str` or `None`, *optional*, defaults to `"main"`):
-            The Hub model branch to push the model to.
-        overwrite_hub_revision (`bool`, *optional*, defaults to `False`):
-            Whether to overwrite the Hub revision.
-        push_to_hub_revision (`bool`, *optional*, defaults to `False`):
-            Whether to push to a Hub revision/branch.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -437,18 +425,6 @@ class GOLDConfig(SFTConfig):
         default=None,
         metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
-    wandb_entity: str | None = field(
-        default=None,
-        metadata={"help": ("The entity to store runs under.")},
-    )
-    wandb_project: str | None = field(
-        default=None,
-        metadata={"help": ("The project to store runs under.")},
-    )
-    wandb_run_group: str | None = field(
-        default=None,
-        metadata={"help": ("The group to store runs under.")},
-    )
     wandb_log_unique_prompts: bool = field(
         default=True,
         metadata={
@@ -459,11 +435,6 @@ class GOLDConfig(SFTConfig):
         default_factory=lambda: [],
         metadata={"help": "The callbacks to run during training."},
     )
-    hub_model_revision: str | None = field(
-        default="main", metadata={"help": "The Hub model branch to push the model to."}
-    )
-    overwrite_hub_revision: bool = field(default=False, metadata={"help": "Whether to overwrite the Hub revision."})
-    push_to_hub_revision: bool = field(default=False, metadata={"help": "Whether to push to a Hub revision/branch."})
 
     def __post_init__(self):
         super().__post_init__()
