@@ -14,8 +14,8 @@
 
 """Tests for the Harbor x TRL integration that don't need a running Harbor sandbox.
 
-`harbor` is imported lazily (only when an env is *started*), so spec construction, agent resolution,
-dataset building, and the reward function are all testable without `harbor` / a sandbox backend.
+`harbor` is imported lazily (only when an env is *started*), so spec construction, agent resolution, dataset building,
+and the reward function are all testable without `harbor` / a sandbox backend.
 """
 
 from pathlib import Path

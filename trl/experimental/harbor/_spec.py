@@ -55,9 +55,9 @@ from ._env import AGENTS, HarborEnv
 def _outcome_reward_func(environments=None, environment_reward=None, **_) -> list[float]:
     """Default reward: the Harbor verifier's scalar per rollout.
 
-    `GRPOTrainer` passes the live env instances as `environments=` (read `env.reward`); `AsyncGRPOTrainer`
-    runs envs in its rollout worker and passes the already-captured per-rollout rewards as
-    `environment_reward=`. Support both so the same spec plugs into either trainer.
+    `GRPOTrainer` passes the live env instances as `environments=` (read `env.reward`); `AsyncGRPOTrainer` runs envs in
+    its rollout worker and passes the already-captured per-rollout rewards as `environment_reward=`. Support both so
+    the same spec plugs into either trainer.
     """
     if environment_reward is not None:
         return [float(r) for r in environment_reward]
