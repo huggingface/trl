@@ -882,20 +882,19 @@ def test_merge_probabilities_multiplies_split_tokens():
     config = build_config()
     # Use simple 3-token vocabulary to validate merging behaviour
     # probs[0] = P(token | context) at position 0 for all vocab tokens
-    # probs[1] = P(token | context) at position 1 for all vocab tokens
+    # probs[1] = P(token | context, token_0) at position 1 for all vocab tokens
     probs = torch.tensor([[0.6, 0.3, 0.1], [0.2, 0.5, 0.3]])
     loss = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
 
-    # token_ids[1] = 1 means the actual token at position 1 is token ID 1
-    # So we should extract P(token_id=1 | ...) = probs[1, 1] = 0.5
+    # token_ids[0] = 0 means the actual token at position 0 is token ID 0
     token_ids = [0, 1]  # Actual generated tokens
 
     merged = loss._merge_probabilities_with_alignment_groups(probs, [[0, 1]], token_ids=token_ids)
 
-    # Expected: P_merged(y) = P(y | context_0) × P(token_1=1 | context_1)
-    # For each vocab token y, multiply marginal prob at pos 0 by scalar conditional prob of actual token at pos 1
-    expected = probs[0] * probs[1, 1]  # probs[1, 1] = 0.5
-    # Expected unnormalized: [0.6 * 0.5, 0.3 * 0.5, 0.1 * 0.5] = [0.3, 0.15, 0.05]
+    # Expected: last position's full distribution × scalar prob of actual token at earlier position
+    # P_merged(y) = probs[1](y) × probs[0, token_ids[0]] = probs[1] × probs[0, 0]
+    expected = probs[1] * probs[0, 0]  # probs[0, 0] = 0.6
+    # Expected unnormalized: [0.2 * 0.6, 0.5 * 0.6, 0.3 * 0.6] = [0.12, 0.30, 0.18]
 
     torch.testing.assert_close(merged[0], expected)
 

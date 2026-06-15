@@ -404,9 +404,9 @@ class ULDLoss(nn.Module):
                 distillation_losses.append(loss_i)
                 continue
 
-            # Extract answer logits
-            student_answer_logits = student_logits[i, student_start : student_start + student_size]
-            teacher_answer_logits = teacher_logits[i, teacher_start : teacher_start + teacher_size]
+            # Extract answer logits (start one position earlier so probs[k] predicts token_ids[k])
+            student_answer_logits = student_logits[i, student_start - 1 : student_start + student_size - 1]
+            teacher_answer_logits = teacher_logits[i, teacher_start - 1 : teacher_start + teacher_size - 1]
 
             # Convert to probabilities
             student_probs = F.softmax(student_answer_logits / self.student_temperature, dim=-1)
@@ -496,20 +496,19 @@ class ULDLoss(nn.Module):
 
     def _merge_probabilities_with_alignment_groups(self, probs, alignment_groups, token_ids=None):
         """
-        Merge probabilities based on alignment groups with corrected conditional probability handling.
+        Merge probabilities based on alignment groups using the last position's conditional distribution.
 
         For a group merging tokens at positions [i, i+1, ..., i+k], we compute:
-            P_merged(y | x) = P(y | x) × P(token_{i+1} | token_i, x) × ... × P(token_{i+k} | ..., x)
+            P_merged(y | x) = P(token_i | x) × ... × P(token_{i+k-1} | ..., x) × P(y | token_i, ..., token_{i+k-1}, x)
 
         Where:
-        - P(y | x) is the marginal probability distribution over all vocabulary tokens at position i
-        - token_{i+1}, ..., token_{i+k} are the ACTUAL tokens that were generated
-        - The conditional probabilities P(token_j | ..., x) are extracted as SCALARS
-        - y ranges over all vocabulary tokens at position i
+        - P(y | token_i, ..., token_{i+k-1}, x) is the full distribution at the LAST position, conditioned on the
+          actual prefix tokens that were generated
+        - token_i, ..., token_{i+k-1} are the ACTUAL tokens at earlier positions, extracted as SCALARS
+        - y ranges over all vocabulary tokens at the last position
 
-        This ensures the probability of the actual generated sequence is correct (by the chain rule), while introducing
-        a known bias for counterfactual tokens (since we don't have P(token_{i+k} | y, x) for y != token_i). The merged
-        distribution is unnormalized but preserves correct relative probabilities.
+        The last position's distribution is valid for all vocabulary entries because it conditions on the actual prefix
+        tokens. The merged distribution is unnormalized but preserves correct relative probabilities.
 
         Args:
             probs: Probability tensor [seq_len, vocab_size]
@@ -543,24 +542,19 @@ class ULDLoss(nn.Module):
                         "This is required for mathematically correct probability merging."
                     )
 
-                # Start with the marginal distribution at the first position
-                first_pos = group[0]
-                marginal_probs = probs[first_pos]  # P(y | x₀) for all y
+                # Use the last position's full distribution (conditioned on actual prefix tokens)
+                last_pos = group[-1]
+                last_pos_probs = probs[last_pos]
 
-                # For each subsequent token in the group, extract the SCALAR conditional probability
+                # For each earlier token in the group, extract the SCALAR probability
                 # of the actual token that was generated, and multiply
                 conditional_prob_product = 1.0
-                for idx in group[1:]:
-                    # Get the actual token ID that was generated at this position
+                for idx in group[:-1]:
                     actual_token_id = token_ids[idx]
-                    # Extract its probability (scalar)
                     token_prob = probs[idx, actual_token_id].clamp_min(eps)
                     conditional_prob_product *= token_prob
 
-                # Merge: multiply the scalar conditional prob product with the entire marginal distribution
-                # This gives: P(y | x_0) × P(token_1 | token_0, x) × ... × P(token_k | ..., x)
-                # Note: This is unnormalized, but preserves the correct joint probability for the actual sequence
-                merged_probs = marginal_probs * conditional_prob_product
+                merged_probs = last_pos_probs * conditional_prob_product
                 aligned_probs[group_idx] = merged_probs
 
             elif len(group) == 1:
