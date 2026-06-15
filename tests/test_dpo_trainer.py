@@ -23,7 +23,12 @@ from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer
-from trl.trainer.dpo_trainer import DataCollatorForPreference, DataCollatorForVisionPreference
+from trl.trainer.dpo_trainer import (
+    DataCollatorForPreference,
+    DataCollatorForVisionPreference
+    flatten_batch_for_padding_free,
+    restore_padding_from_flattened,
+)
 
 from .testing_utils import (
     TrlTestCase,
