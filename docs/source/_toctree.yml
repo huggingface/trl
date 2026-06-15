@@ -51,6 +51,8 @@
     title: Kernels Hub
   - local: liger_kernel_integration
     title: Liger Kernel
+  - local: harbor
+    title: Harbor
   - local: openenv
     title: OpenEnv
   - local: openreward
