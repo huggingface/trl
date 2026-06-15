@@ -15,6 +15,7 @@
 import copy
 import textwrap
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -22,6 +23,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
+from accelerate import PartialState
 from packaging.version import Version
 from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.testing_utils import torch_device
@@ -49,6 +51,7 @@ from trl.trainer.utils import (
     split_tensor_dict,
     unsplit_pixel_values_by_grid,
     use_adapter,
+    warn_if_fp32_with_mixed_precision,
 )
 
 from .testing_utils import TrlTestCase, require_peft, require_rich, require_torch_accelerator
@@ -1378,3 +1381,34 @@ class TestAdjustedMfu(TrlTestCase):
         f_med = adjusted_mfu(100.0, cfg, 16384)
         f_long = adjusted_mfu(100.0, cfg, 65536)
         assert f_short > f_med > f_long
+
+
+class TestWarnIfFp32WithMixedPrecision(TrlTestCase):
+    # Each case is (bf16, fp16, model_init_kwargs, should_warn).
+    @pytest.mark.parametrize(
+        ("bf16", "fp16", "model_init_kwargs", "should_warn"),
+        [
+            (True, False, {}, True),  # bf16 on, no dtype set → silent fp32 + autocast → warn
+            (False, True, {}, True),  # fp16 on, no dtype set → warn
+            (True, False, None, True),  # model_init_kwargs is None counts as "no dtype set"
+            (True, False, {"dtype": "bfloat16"}, False),  # explicit dtype → user chose, stay silent
+            (True, False, {"dtype": "auto"}, False),  # "auto" is still an explicit choice
+            (False, False, {}, False),  # no mixed precision → nothing to warn about
+        ],
+    )
+    def test_warns_only_on_silent_fp32(self, caplog, bf16, fp16, model_init_kwargs, should_warn):
+        # The accelerate-backed logger in `trl.trainer.utils` requires the distributed state to
+        # exist before it emits, exactly as it does once a trainer has been constructed.
+        PartialState()
+        args = SimpleNamespace(bf16=bf16, fp16=fp16)
+        with caplog.at_level("WARNING", logger="trl.trainer.utils"):
+            warn_if_fp32_with_mixed_precision(args, model_init_kwargs)
+        warned = "float32" in caplog.text
+        assert warned is should_warn
+
+    def test_message_points_to_dtype_kwarg(self, caplog):
+        PartialState()
+        args = SimpleNamespace(bf16=True, fp16=False)
+        with caplog.at_level("WARNING", logger="trl.trainer.utils"):
+            warn_if_fp32_with_mixed_precision(args, {})
+        assert "model_init_kwargs" in caplog.text and "dtype" in caplog.text
