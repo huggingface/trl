@@ -644,18 +644,12 @@ class OnlineDPOTrainer(_BaseTrainer):
             all_images = gather_object(images)
 
         if self.accelerator.is_main_process:
-            # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-            # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-            # prompt individually.
-            ordered_set_of_prompts = all_prompts[:: self.num_generations]
             if has_images:
-                ordered_set_of_images = [
-                    [img] if img is not None else None for img in all_images[:: self.num_generations]
-                ]
+                ordered_set_of_images = [[img] if img is not None else None for img in all_images]
             else:
                 ordered_set_of_images = None
             completion_ids = self.vllm_client.generate(
-                prompts=ordered_set_of_prompts,
+                prompts=all_prompts,
                 images=ordered_set_of_images,
                 n=self.num_generations,
                 repetition_penalty=self.repetition_penalty,
@@ -669,20 +663,27 @@ class OnlineDPOTrainer(_BaseTrainer):
                 else None,
                 generation_kwargs=self.args.generation_kwargs,
             )["completion_ids"]
-            # Flatten: each prompt generates 2 completions
-            completion_ids = [[comp_id] for prompt_completions in completion_ids for comp_id in prompt_completions]
+            # The server returns completions grouped by prompt. Online DPO expects them grouped by generation.
+            completion_ids = [
+                completion_ids[prompt_index * self.num_generations + generation_index]
+                for generation_index in range(self.num_generations)
+                for prompt_index in range(len(all_prompts))
+            ]
         else:
-            completion_ids = [None] * (len(all_prompts) * 2)
+            completion_ids = [None] * (len(all_prompts) * self.num_generations)
 
         # Broadcast completions to all processes
         completion_ids = broadcast_object_list(completion_ids, from_process=0)
 
         # Each process takes its slice
-        process_slice = slice(
-            self.accelerator.process_index * len(prompts) * 2,
-            (self.accelerator.process_index + 1) * len(prompts) * 2,
-        )
-        completion_ids = completion_ids[process_slice]
+        process_start = self.accelerator.process_index * len(prompts)
+        process_end = process_start + len(prompts)
+        process_indices = [
+            generation_index * len(all_prompts) + prompt_index
+            for generation_index in range(self.num_generations)
+            for prompt_index in range(process_start, process_end)
+        ]
+        completion_ids = [completion_ids[index] for index in process_indices]
 
         # Create prompt_ids by tokenizing locally
         prompt_inputs = self.processing_class(
@@ -692,9 +693,8 @@ class OnlineDPOTrainer(_BaseTrainer):
             padding_side="left",
             add_special_tokens=False,
         )
-        prompt_ids = []
-        for prompt_tokens in prompt_inputs["input_ids"]:
-            prompt_ids.extend([prompt_tokens.tolist(), prompt_tokens.tolist()])  # 2 copies for 2 completions
+        prompt_token_ids = [prompt_tokens.tolist() for prompt_tokens in prompt_inputs["input_ids"]]
+        prompt_ids = [prompt_tokens for _ in range(self.num_generations) for prompt_tokens in prompt_token_ids]
         return completion_ids, prompt_ids
 
     def _generate_vllm_colocate(self, prompts, images=None):
