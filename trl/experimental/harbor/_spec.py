@@ -47,8 +47,6 @@ from functools import cached_property, partial
 from pathlib import Path
 from typing import Any
 
-import tomllib
-
 from ._env import AGENTS, HarborEnv
 
 
@@ -99,6 +97,8 @@ def _resolve_agent(agent: str | type[HarborEnv]) -> type[HarborEnv]:
 def _read_task_meta(task_dir: Path) -> dict[str, Any]:
     """Pull a few useful fields out of ``task.toml`` for the dataset rows / reward funcs."""
     try:
+        import tomllib  # stdlib on Python 3.11+; lazy so the module imports on 3.10 (e.g. doc build)
+
         cfg = tomllib.loads((task_dir / "task.toml").read_text())
     except Exception:  # noqa: BLE001
         return {}
