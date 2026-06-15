@@ -95,7 +95,9 @@
 - sections:
   - local: experimental_overview
     title: Experimental Overview
-  - local: async_grpo_trainer # Sorted alphabetically
+  - local: a2po_trainer # Sorted alphabetically
+    title: A2PO
+  - local: async_grpo_trainer
     title: Asynchronous GRPO
   - local: bema_for_reference_model
     title: BEMA for Reference Model
