@@ -18,7 +18,6 @@
 dataset building, and the reward function are all testable without `harbor` / a sandbox backend.
 """
 
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -34,17 +33,17 @@ def _write_task(tasks_dir: Path, task_id: str, gold: str, difficulty: int) -> No
     (d / "environment").mkdir(parents=True)
     (d / "tests").mkdir()
     (d / "instruction.md").write_text(f"Solve task {task_id}.")
-    (d / "task.toml").write_text(
-        textwrap.dedent(f"""
-        [task]
-        name = "{task_id}"
-        [metadata]
-        gold_answer = "{gold}"
-        reward_mode_initial = "exact_short"
-        difficulty_level = {difficulty}
-        kaggle_dataset_name = "owner/{task_id}"
-        """)
-    )
+    # Built from a joined list (not a triple-quoted block) so doc-builder doesn't reflow the TOML.
+    lines = [
+        "[task]",
+        f'name = "{task_id}"',
+        "[metadata]",
+        f'gold_answer = "{gold}"',
+        'reward_mode_initial = "exact_short"',
+        f"difficulty_level = {difficulty}",
+        f'kaggle_dataset_name = "owner/{task_id}"',
+    ]
+    (d / "task.toml").write_text("\n".join(lines))
 
 
 class TestResolveAgent(TrlTestCase):
@@ -121,3 +120,8 @@ class TestRewardFunc(TrlTestCase):
                 self.reward = r
 
         assert _outcome_reward_func([_Env(1.0), _Env(0.0)]) == [1.0, 0.0]
+
+    def test_outcome_reward_uses_environment_reward_when_passed(self):
+        # AsyncGRPOTrainer captures rewards in its rollout worker and passes them as a list, with no
+        # live env instances. The reward func must use them directly.
+        assert _outcome_reward_func(environment_reward=[0.25, 0.75]) == [0.25, 0.75]
