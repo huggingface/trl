@@ -1564,7 +1564,7 @@ class DistillationTrainer(_BaseTrainer):
 
         labels_mask = inputs["labels"] != -100
         masked_input_ids = torch.where(labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100))
-        true_labels = masked_input_ids[:, 1:].contiguous().reshape(-1)
+        true_labels = masked_input_ids[:, 1:].reshape(-1)
 
         student_head = unwrapped_student.get_output_embeddings()
         teacher_head = unwrapped_teacher.get_output_embeddings()
