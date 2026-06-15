@@ -316,6 +316,9 @@ class GRPOConfig(_BaseConfig):
             Whether to use the unbiased KL divergence estimator with importance sampling correction. This corrects the
             KL divergence estimate by multiplying it with the importance sampling ratio. This is described in the
             [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556).
+        kl_log_ratio_clip (`float`, *optional*):
+            Maximum value for the log-ratio used by the KL estimator before exponentiation. This can prevent overflow
+            when the policy and reference model drift far apart. If `None`, the log-ratio is not clipped.
 
         > Parameters that control the logging
 
@@ -860,6 +863,13 @@ class GRPOConfig(_BaseConfig):
             "This is described in the [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556)."
         },
     )
+    kl_log_ratio_clip: float | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum value for the log-ratio used by the KL estimator before exponentiation. This can prevent "
+            "overflow when the policy and reference model drift far apart. If `None`, the log-ratio is not clipped."
+        },
+    )
 
     # Parameters that control the logging
     log_completions: bool = field(
@@ -936,6 +946,12 @@ class GRPOConfig(_BaseConfig):
                 "log_completions_hub_repo is set, but log_completions is False. Enable log_completions to upload "
                 "completions to the Hub, or unset log_completions_hub_repo."
             )
+
+        if self.kl_log_ratio_clip is not None:
+            if self.kl_log_ratio_clip <= 0:
+                raise ValueError("kl_log_ratio_clip must be greater than 0.")
+            if self.use_liger_kernel:
+                raise ValueError("kl_log_ratio_clip is not supported with use_liger_kernel=True.")
 
         num_processes = self.world_size
         # The current default effective batch size

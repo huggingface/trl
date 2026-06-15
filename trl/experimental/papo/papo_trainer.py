@@ -19,7 +19,7 @@ import torch
 from datasets import Dataset, IterableDataset
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
 
-from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc
+from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc, _compute_kl
 from ...trainer.utils import nanmax, nanmin
 from .papo_config import PAPOConfig
 
@@ -242,9 +242,7 @@ class PAPOTrainer(GRPOTrainer):
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
+            per_token_kl = _compute_kl(ref_per_token_logps - per_token_logps, self.args.kl_log_ratio_clip)
 
         # Compute the loss
         advantages = inputs["advantages"]
