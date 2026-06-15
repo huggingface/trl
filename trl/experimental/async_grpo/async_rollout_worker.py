@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import copy
 import inspect
 import multiprocessing as mp
 import os
@@ -69,7 +70,7 @@ class RolloutGroup:
     prompt: Messages
     prompt_ids: list[int]
     reward_kwargs: dict[str, list[Any]]
-    env_rewards: list[Any]
+    environments: list[object]
     completions: list[Messages]
     completions_ids: list[list[int]]
     completions_logprobs: list[list[float]]
@@ -333,7 +334,7 @@ class _AsyncRolloutLoop:
                             prompt=prompt,
                             prompt_ids=prompt_ids,
                             reward_kwargs=reward_kwargs,
-                            env_rewards=[],
+                            environments=[],
                             completions=[],
                             completions_ids=[],
                             completions_logprobs=[],
@@ -385,8 +386,7 @@ class _AsyncRolloutLoop:
                     group.tool_call_counts.append(tool_call_count)
                     group.tool_failure_counts.append(tool_failure_count)
                     if self.environments is not None:
-                        env = self.environments[slot]
-                        group.env_rewards.append(await asyncio.to_thread(lambda env=env: env.reward))
+                        group.environments.append(copy.copy(self.environments[slot]))
                     self._total_completion_tokens += sum(tool_mask)
                     pending_completed[group_id] += 1
 
@@ -603,8 +603,8 @@ class _AsyncRolloutLoop:
             completion_ids=group.completions_ids,
             **group.reward_kwargs,
         )
-        if group.env_rewards:
-            kwargs["environment_reward"] = group.env_rewards
+        if group.environments:
+            kwargs["environments"] = group.environments
         all_rewards = await asyncio.gather(
             *[
                 reward_func(**kwargs)

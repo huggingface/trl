@@ -13,18 +13,24 @@
 # limitations under the License.
 
 import asyncio
+from dataclasses import dataclass
 
 from accelerate.state import PartialState
 
 from trl.experimental.async_grpo.async_rollout_worker import RolloutGroup, _AsyncRolloutLoop
 
 
-def test_score_group_passes_environment_reward():
+@dataclass
+class EnvSnapshot:
+    reward: float
+
+
+def test_score_group_passes_environments():
     captured = {}
 
-    def reward_func(completions, environment_reward, **kwargs):
-        captured["environment_reward"] = environment_reward
-        return environment_reward
+    def reward_func(completions, environments, **kwargs):
+        captured["environments"] = environments
+        return [env.reward for env in environments]
 
     rollout_loop = _AsyncRolloutLoop.__new__(_AsyncRolloutLoop)
     rollout_loop.reward_funcs = [reward_func]
@@ -35,7 +41,7 @@ def test_score_group_passes_environment_reward():
         prompt=[{"role": "user", "content": "hi"}],
         prompt_ids=[1, 2],
         reward_kwargs={},
-        env_rewards=[0.25, 0.75],
+        environments=[EnvSnapshot(0.25), EnvSnapshot(0.75)],
         completions=[
             [{"role": "assistant", "content": "left"}],
             [{"role": "assistant", "content": "right"}],
@@ -50,5 +56,5 @@ def test_score_group_passes_environment_reward():
 
     samples = asyncio.run(rollout_loop._score_group(group))
 
-    assert captured["environment_reward"] == [0.25, 0.75]
+    assert [env.reward for env in captured["environments"]] == [0.25, 0.75]
     assert [sample.metrics["reward"] for sample in samples] == [0.25, 0.75]
