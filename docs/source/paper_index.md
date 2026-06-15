@@ -164,6 +164,24 @@ trainer = GRPOTrainer(
 )
 ```
 
+### Demystifying Long Chain-of-Thought Reasoning in LLMs
+
+**📜 Paper**: https://huggingface.co/papers/2502.03373
+
+To encourage concise reasoning, this paper scales the correctness reward by completion length following a cosine schedule (Appendix C.1): a correct completion is rewarded more when it is shorter, while a wrong completion is penalized less when it is longer (preserving exploration). Use [`~rewards.get_cosine_scaled_reward`], typically alongside a repetition penalty to avoid the degenerate, repetitive completions that length shaping can induce:
+
+```python
+from trl import GRPOTrainer
+from trl.rewards import get_cosine_scaled_reward
+
+# max_len should match the generation budget (in tokens)
+cosine_scaled_reward = get_cosine_scaled_reward(max_len=4096)
+trainer = GRPOTrainer(
+    ...,
+    reward_funcs=[cosine_scaled_reward],
+)
+```
+
 ### INTELLECT-2: A Reasoning Model Trained Through Globally Decentralized Reinforcement Learning
 
 **📜 Paper**: https://huggingface.co/papers/2505.07291
