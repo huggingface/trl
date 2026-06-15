@@ -28,7 +28,7 @@ def get_repetition_penalty_reward(ngram_size: int = 3, max_penalty: float = -1.0
     R_{\text{repetition}}(y) = \left(1 - \frac{\#\,\text{unique } n\text{-grams}}{\#\,\text{total } n\text{-grams}}\right) \times p
     $$
 
-    where \( p \) is `max_penalty`. A completion with no repeated n-gram gets a reward of `0.0`, while a fully repetitive
+    where $p$ is `max_penalty`. A completion with no repeated n-gram gets a reward of `0.0`, while a fully repetitive
     one approaches `max_penalty`. The n-grams are computed over the completion token ids (the paper applies the penalty
     to repeated tokens), so the reward is tokenizer-defined and language-agnostic. Completions with fewer than
     `ngram_size` tokens get a reward of `0.0`.
