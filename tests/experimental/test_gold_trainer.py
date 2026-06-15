@@ -429,7 +429,7 @@ def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_promp
     assert trainer.vllm_generation.sync_calls == 1
     assert captured["completion_ids"] == [[42]]
     assert captured["prompt_ids_list"] == [[5, 9, 6]]
-    assert captured["prompts_text"] == ["A B"]
+    assert captured["prompts_text"] == ["A <eos> B"]
 
 
 def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens():
@@ -506,7 +506,7 @@ def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens()
     assert torch.equal(buffered_inputs["labels"], torch.tensor([[-100, -100, -100, 42]], dtype=torch.long))
     assert buffered_inputs["original_prompt_text"] == ["A <special> B"]
     assert buffered_inputs["original_completion_text"] == ["C"]
-    assert trainer._buffered_text_logs[0] == (["A B"], ["C"])
+    assert trainer._buffered_text_logs[0] == (["A <special> B"], ["C"])
 
 
 def test_on_policy_prompt_text_reflects_truncated_prompt():
