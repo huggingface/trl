@@ -429,7 +429,7 @@ class RLOOTrainer(_BaseTrainer):
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
 
-        # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in the model config.
+        # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in the model config
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.router_aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.router_aux_loss_coef == 0.0:
@@ -744,7 +744,7 @@ class RLOOTrainer(_BaseTrainer):
 
             model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
 
-            # MoE models: request router logits so the model returns `outputs.aux_loss`.
+            # MoE models: request router logits so the model returns `outputs.aux_loss`
             if compute_aux_loss:
                 model_inputs["output_router_logits"] = True
 
@@ -1462,7 +1462,7 @@ class RLOOTrainer(_BaseTrainer):
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
-        # RLOO returns an unscaled loss (the HF Trainer divides by gradient accumulation), so add the aux term unscaled.
+        # RLOO returns an unscaled loss (the HF Trainer divides by gradient accumulation), so add the aux term unscaled
         if self.aux_loss_enabled:
             loss = loss + self.router_aux_loss_coef * aux_loss
             self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())

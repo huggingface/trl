@@ -416,7 +416,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
-        # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in `model_init_kwargs`.
+        # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in `model_init_kwargs`
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.router_aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.router_aux_loss_coef == 0.0:
@@ -624,7 +624,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # loss = loss / max(per_token_loss.size(0), 1)
         loss = loss / self.current_gradient_accumulation_steps
 
-        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too.
+        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
         if self.aux_loss_enabled:
             aux_loss = outputs["aux_loss"]
             loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps

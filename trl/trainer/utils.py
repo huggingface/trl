@@ -1342,14 +1342,17 @@ def patch_chunked_lm_head(
 
         aux_loss = None
         if output_router_logits:
-            # `load_balancing_loss_func` lives in mixtral; every MoE family reuses it via the modular system.
+            # Mirror the per-family MoE forward: add `router_aux_loss_coef * load_balancing_loss_func(...)` to
+            # the main loss. Mixtral is the source of truth — every MoE family (Qwen3Moe, GptOss, OLMoE,
+            # Qwen2Moe, DBRX, JetMoE, PhiMoE, …) pulls this function from mixtral via the modular system, so a
+            # single import keeps us in lockstep with upstream for every family we test.
             from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
 
             if Version(transformers.__version__) < Version("5.0.0"):
                 num_experts = self.num_experts
                 num_experts_per_tok = self.num_experts_per_tok
             else:
-                # Upstream bug: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
+                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
                 if self.config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
                     transformers.__version__
                 ) < Version("5.6.0"):

@@ -571,7 +571,7 @@ class GRPOTrainer(_BaseTrainer):
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
 
-        # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in the model config.
+        # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in the model config
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.router_aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.router_aux_loss_coef == 0.0:
@@ -1125,7 +1125,7 @@ class GRPOTrainer(_BaseTrainer):
 
             model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
 
-            # MoE models: request router logits so the model returns `outputs.aux_loss`.
+            # MoE models: request router logits so the model returns `outputs.aux_loss`
             if compute_aux_loss:
                 model_inputs["output_router_logits"] = True
 
@@ -2661,7 +2661,7 @@ class GRPOTrainer(_BaseTrainer):
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
-        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too.
+        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
         if self.aux_loss_enabled:
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
             loss = loss + self.router_aux_loss_coef * aux_loss / normalizer
