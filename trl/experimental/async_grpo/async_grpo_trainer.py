@@ -322,6 +322,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             environment by name, and only that environment's tools are exposed in its prompt — letting a single run mix
             tasks (e.g. a coding environment and a game). This feature is experimental and may change or be removed at
             any time without prior notice.
+        rollout_worker (`RolloutWorkerProtocol`, *optional*):
+            Custom rollout worker implementing [`RolloutWorkerProtocol`]. If `None`, a default [`AsyncRolloutWorker`]
+            is created, which spawns a CUDA-free child process and scores completions with the trainer's
+            `reward_funcs`. Pass a custom worker to plug in a different rollout/scoring backend instead — for example,
+            one that runs reward models on their own GPUs.
     """
 
     _tag_names = ["trl", "async-grpo"]
@@ -446,7 +451,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                         "dtype_names": weight_dtype_names,
                         "shapes": weight_shapes,
                         "packed": True,
-                        "is_checkpoint_format": True,
                     },
                 )
                 self.rollout_worker = AsyncRolloutWorker(
