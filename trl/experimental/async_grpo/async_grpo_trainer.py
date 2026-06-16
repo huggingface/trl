@@ -402,16 +402,32 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Model
         model_name = model
+        model_init_kwargs = self.args.model_init_kwargs or {}
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = AutoModelForCausalLM.from_pretrained(
-            model, device_map=None, dtype=torch.float32, attn_implementation="kernels-community/flash-attn3"
+            model_name,
+            device_map=None,
+            dtype=torch.float32,
+            attn_implementation="kernels-community/flash-attn3",
+            **model_init_kwargs,
         )
 
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
-        patch_chunked_lm_head(model, chunk_size=8192, temperature=self.temperature)
+        # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in `model_init_kwargs`.
+        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+        self.router_aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        if self.aux_loss_enabled and self.router_aux_loss_coef == 0.0:
+            logger.warning(
+                "You set `output_router_logits=True` in the model config, but `router_aux_loss_coef` is `0.0`, so the "
+                "auxiliary loss has no effect. Set `router_aux_loss_coef > 0.0` to enable it."
+            )
+
+        patch_chunked_lm_head(
+            model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
+        )
 
         # Processing class
         if processing_class is None:
@@ -608,6 +624,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # loss = loss / max(per_token_loss.size(0), 1)
         loss = loss / self.current_gradient_accumulation_steps
 
+        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too.
+        if self.aux_loss_enabled:
+            aux_loss = outputs["aux_loss"]
+            loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
+
         with torch.no_grad():
             valid_mask = completion_mask > 0
             local_count = valid_mask.sum().float()
@@ -641,6 +662,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["kl"].append((global_kl_sum / global_count).item())
             self._metrics["train"]["entropy"].append((global_entropy_sum / global_count).item())
             self._metrics["train"]["clip_ratio"].append((global_clip_sum / global_count).item())
+
+            if self.aux_loss_enabled:
+                gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
+                self._metrics["train"]["aux_loss"].append((gathered_aux / world_size).item())
 
             # Logging metrics from the rollout worker (reward, reward_std, etc.).
             # inputs["metrics"] is a dict keyed by metric name; each value is this rank's row of per-sample values,
