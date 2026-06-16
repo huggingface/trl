@@ -481,6 +481,37 @@ class TestDistillationTrainer(TrlTestCase):
         assert train_result.metrics["train_loss"] >= 0.0
         assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
 
+    @pytest.mark.parametrize("loss_top_k", [0, 1])
+    def test_loss_normalizes_by_num_items_in_batch(self, loss_top_k):
+        # When `num_items_in_batch` is passed (as under gradient accumulation), the divergence loss must be reduced as
+        # sum / num_items_in_batch rather than the local per-microbatch mean. See issue #4719. Both the full-vocabulary
+        # JSD path (loss_top_k=0) and the default mixed top-1 path (loss_top_k=1) route through
+        # `_reduce_divergence_loss`, so both must honor `num_items_in_batch`.
+        trainer = self._make_local_trainer(beta=0.5, loss_top_k=loss_top_k)
+
+        # Diverge the teacher from the student so the divergence is well above fp noise (else the loss is ~0).
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for p in trainer.teacher_model.parameters():
+                p.add_(0.5 * torch.randn_like(p))
+
+        batch = self._move_batch_to_device(self._make_batch(trainer), trainer.accelerator.device)
+
+        # Number of valid (non-ignored) tokens in the local batch, sliced the same way `compute_loss` does.
+        prompt_length = trainer._compute_prompt_length(batch)
+        num_valid = (batch["labels"][:, prompt_length:] != -100).sum()
+
+        trainer.model.eval()
+        with torch.no_grad():
+            loss_mean = trainer.compute_loss(trainer.model, batch)  # num_items_in_batch=None -> local mean
+            loss_global = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid)
+            loss_double = trainer.compute_loss(trainer.model, batch, num_items_in_batch=num_valid * 2)
+
+        # With num_items_in_batch equal to the local valid-token count, sum/N equals the local mean.
+        torch.testing.assert_close(loss_global, loss_mean, rtol=1e-4, atol=1e-6)
+        # Doubling the global count exactly halves the loss (sum / num_items is linear in 1/num_items).
+        torch.testing.assert_close(loss_double, loss_mean / 2, rtol=1e-4, atol=1e-6)
+
     @require_liger_kernel
     @require_torch_accelerator
     def test_distillation_trainer_with_liger(self):
