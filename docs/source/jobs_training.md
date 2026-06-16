@@ -208,7 +208,8 @@ run_uv_job(
 
 </hfoption>
 </hfoptions>
-See the full list of examples in [Maintained examples](example_overview#maintained-examples).
+
+See the full list of examples in [Example Scripts](example_overview#scripts).
 
 ### Docker Images
 
