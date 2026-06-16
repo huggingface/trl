@@ -1312,6 +1312,6 @@ class SDFTTrainer(_BaseTrainer):
         metrics = {k: sum(v) / len(v) for k, v in self._metrics[mode].items() if v}
         if mode == "eval":
             metrics = {f"eval_{k}": v for k, v in metrics.items()}
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
