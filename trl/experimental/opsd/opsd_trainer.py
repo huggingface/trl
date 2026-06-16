@@ -149,6 +149,17 @@ class SolutionTeacherContextBuilder:
             )
         if isinstance(privileged_context, str):
             return privileged_context
+        if isinstance(privileged_context, list) and privileged_context and isinstance(privileged_context[0], dict):
+            chunks = []
+            for message in privileged_context:
+                content = message.get("content", "")
+                if isinstance(content, list):
+                    text = " ".join(part.get("text", "") for part in content if part.get("type") == "text")
+                else:
+                    text = str(content)
+                if text:
+                    chunks.append(text)
+            return "\n".join(chunks)
         return str(privileged_context)
 
     def _compose_teacher_prompt(self, prompt: Any, privileged_context: Any) -> Any:
