@@ -576,12 +576,14 @@ class KTOTrainer(_BaseTrainer):
             data_collator = DataCollatorForUnpairedPreference(
                 pad_token_id=self._tokenizer.pad_token_id,
                 max_length=args.max_length,
+                pad_to_multiple_of=args.pad_to_multiple_of,
             )
         elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionUnpairedPreference(
                 processor=processing_class,
                 max_length=args.max_length,
                 calculate_kl=calculate_kl,
+                pad_to_multiple_of=args.pad_to_multiple_of,
             )
 
         # Training arguments
