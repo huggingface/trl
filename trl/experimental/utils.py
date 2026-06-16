@@ -489,7 +489,7 @@ def first_true_indices(bools: torch.Tensor, dtype=torch.long) -> torch.Tensor:
     Args:
         bools (`torch.Tensor`):
             An N-dimensional boolean tensor.
-        dtype (`torch.dtype`, optional):
+        dtype (`torch.dtype`, *optional*):
             The desired data type of the output tensor. Defaults to `torch.long`.
 
     Returns:
@@ -735,7 +735,8 @@ def create_reference_model(
     Args:
         model ([`nn.Module`]): The model to be copied.
         num_shared_layers (`int`, *optional*):
-            The number of initial layers that are shared between both models and kept frozen.
+            The number of initial layers that are shared between both models and kept frozen. Shared layers reference
+            the same storage as the source model, so they are not duplicated in memory.
         pattern (`str`, *optional*): The shared layers are selected with a string pattern
             (e.g. "transformer.h.{layer}" for GPT2) and if a custom pattern is necessary it can be passed here.
 
@@ -783,12 +784,16 @@ def create_reference_model(
         else:
             unshared_param_list.append(name)
 
-    # create reference of the original parameter if they are shared
+    # Freeze the shared layers in the source model, then point the reference parameter at the same
+    # storage instead of keeping the `deepcopy` duplicate. The shared (frozen) layers are thus held in
+    # memory only once; because they are frozen in the model, the reference stays static during training.
     for param_name in shared_param_list:
         param = model.get_parameter(param_name)
         param.requires_grad = False
 
-        _ref_param = ref_model.get_parameter(param_name)
+        ref_param = ref_model.get_parameter(param_name)
+        ref_param.data = param.data
+        ref_param.requires_grad = False
 
     # for all other parameters just make sure they don't use gradients
     for param_name in unshared_param_list:
