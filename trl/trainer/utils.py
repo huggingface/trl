@@ -1337,8 +1337,8 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
         labels = labels[:, 1:]  # [B, S-1]
 
         b, s, h = hidden_states.shape
-        hidden_flat = hidden_states.reshape(b * s, h).contiguous()
-        targets_flat = labels.reshape(b * s).contiguous()
+        hidden_flat = hidden_states.reshape(b * s, h)
+        targets_flat = labels.reshape(b * s)
 
         # Filter to completion tokens only to avoid expensive matmuls on prompt tokens and tool results
         valid_mask = None
