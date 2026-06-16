@@ -240,9 +240,9 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
             Maximum sequence length. Sequences longer than `max_length` are truncated before padding, which avoids
             allocating oversized tensors for batches containing very long sequences. Only `"keep_start"` truncation
             applies to vision datasets; `"keep_end"` is rejected upstream.
-        pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
+        pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
-        return_tensors (`str`, optional, defaults to `"pt"`):
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
 
     Example:

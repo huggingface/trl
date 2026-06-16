@@ -184,33 +184,72 @@ class _EmptyIterableDataset(torch.utils.data.IterableDataset):
 
 @dataclass
 class DataCollatorForRollout(DataCollatorMixin):
+    """
+    Padding-free collator for rollout samples. Splits the global batch into `num_processes` groups (one per rank) and
+    concatenates each group's samples into a single packed row, with `position_ids` resetting per sequence and
+    advantages expanded per-token. Rows are padded only to the longest group, so the batch stays rectangular for
+    `DataLoaderDispatcher` to scatter row `i` -> rank `i`; this inter-rank padding is stripped per-rank in
+    `compute_loss`.
+
+    Args:
+        pad_token_id (`int`):
+            Token id used to pad `input_ids`.
+        num_processes (`int`, *optional*, defaults to `1`):
+            Number of ranks; the global batch is packed into this many rows.
+    """
+
     pad_token_id: int
+    num_processes: int = 1
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        input_ids = [torch.tensor(example["input_ids"], dtype=torch.long) for example in examples]
-        attention_mask = [torch.ones(len(ids), dtype=torch.long) for ids in input_ids]
-        completion_mask = [torch.tensor(example["completion_mask"], dtype=torch.float32) for example in examples]
-        old_log_probs = [torch.tensor(example["old_log_probs"], dtype=torch.float32) for example in examples]
-        advantages = torch.tensor([example["advantage"] for example in examples], dtype=torch.float32)
+        groups = [examples[i :: self.num_processes] for i in range(self.num_processes)]
+
+        input_ids, attention_mask, completion_mask, old_log_probs, position_ids, advantages = [], [], [], [], [], []
+        for group in groups:
+            seq_lengths = [len(example["input_ids"]) for example in group]
+            ids = [token for example in group for token in example["input_ids"]]
+            input_ids.append(torch.tensor(ids, dtype=torch.long))
+            attention_mask.append(torch.ones(len(ids), dtype=torch.long))
+            completion_mask.append(
+                torch.tensor([m for example in group for m in example["completion_mask"]], dtype=torch.long)
+            )
+            old_log_probs.append(
+                torch.tensor([lp for example in group for lp in example["old_log_probs"]], dtype=torch.float32)
+            )
+            position_ids.append(torch.cat([torch.arange(n) for n in seq_lengths]))
+            advantages.append(
+                torch.cat(
+                    [torch.full((n,), example["advantage"]) for example, n in zip(group, seq_lengths, strict=False)]
+                )
+            )
 
         input_ids = pad(input_ids, padding_value=self.pad_token_id)
         attention_mask = pad(attention_mask, padding_value=0)
         completion_mask = pad(completion_mask, padding_value=0)
-        old_log_probs = pad(old_log_probs, padding_value=0)
+        old_log_probs = pad(old_log_probs, padding_value=0.0)
+        position_ids = pad(position_ids, padding_value=0)
+        advantages = pad(advantages, padding_value=0.0)
 
         # Total valid completion tokens across all samples in the full batch.
-        # Repeated per sample so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
-        global_n_tokens = completion_mask.sum()
-        global_n_tokens_repeated = torch.full((len(examples),), global_n_tokens.item(), dtype=torch.float32)
+        # Repeated per rank so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
+        global_n_tokens = sum(sum(example["completion_mask"]) for example in examples)
+        global_n_tokens = torch.full((self.num_processes,), float(global_n_tokens), dtype=torch.float32)
 
-        # Convert per-sample metrics dicts to a dict of 1D tensors so that Accelerate's
-        # recursive broadcast (dispatch_batches=True) can handle them — it traverses nested
-        # dicts of tensors but chokes on plain Python floats.
+        # Per-sample metrics grouped per rank, as a dict of 2D tensors (one row per rank) so that Accelerate's
+        # recursive broadcast (dispatch_batches=True) can scatter them — it traverses nested dicts of tensors but
+        # chokes on plain Python floats. Rows are padded with NaN so padded slots are ignored by the nan-aware
+        # aggregation in `compute_loss`.
         metrics_list = [example["metrics"] for example in examples]
         metrics = (
             {
-                key: torch.tensor([m.get(key, 0.0) for m in metrics_list], dtype=torch.float32)
+                key: pad(
+                    [
+                        torch.tensor([example["metrics"].get(key, 0.0) for example in group], dtype=torch.float32)
+                        for group in groups
+                    ],
+                    padding_value=float("nan"),
+                )
                 for key in metrics_list[0]
             }
             if metrics_list and metrics_list[0]
@@ -222,8 +261,9 @@ class DataCollatorForRollout(DataCollatorMixin):
             "attention_mask": attention_mask,
             "completion_mask": completion_mask,
             "old_log_probs": old_log_probs,
+            "position_ids": position_ids,
             "advantages": advantages,
-            "global_n_tokens": global_n_tokens_repeated,
+            "global_n_tokens": global_n_tokens,
             "metrics": metrics,
         }
 
@@ -362,7 +402,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Model
         model_name = model
-        model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.float32)
+        # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
+        # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
+        model = AutoModelForCausalLM.from_pretrained(
+            model, device_map=None, dtype=torch.float32, attn_implementation="kernels-community/flash-attn3"
+        )
 
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
@@ -496,7 +540,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             DataLoader(
                 dataset,
                 batch_size=self.args.per_device_train_batch_size * self.accelerator.num_processes,
-                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id),
+                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id, self.accelerator.num_processes),
                 num_workers=0,
                 # NOTE(@aminediro):
                 # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
@@ -515,31 +559,28 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "attention_mask",
                 "completion_mask",
                 "old_log_probs",
+                "position_ids",
                 "advantages",
                 "global_n_tokens",
                 "metrics",
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
-        completion_mask = inputs["completion_mask"]
-        old_log_probs = inputs["old_log_probs"]
-        advantages = inputs["advantages"]
-
-        # The collator pads to the global batch max length (across all ranks). After DataLoaderDispatcher slices and
-        # sends rows to each rank, the local slice is still padded to that global max. Truncate to the longest real
-        # sequence in this rank's slice so we don't run the forward pass over pure-padding columns.
-        local_max_len = attention_mask.sum(dim=1).max()
-        input_ids = input_ids[:, :local_max_len]
-        attention_mask = attention_mask[:, :local_max_len]
-        completion_mask = completion_mask[:, :local_max_len]
-        old_log_probs = old_log_probs[:, :local_max_len]
+        # Padding-free: the collator already packed this rank's samples into a single row (real tokens concatenated,
+        # `position_ids` resetting per sequence, advantages expanded per-token), then padded the row to the longest
+        # rank's length so DataLoaderDispatcher could scatter rectangular rows. Strip that trailing inter-rank padding
+        # here.
+        mask_bool = inputs["attention_mask"].bool()
+        input_ids = inputs["input_ids"][mask_bool].unsqueeze(0)
+        completion_mask = inputs["completion_mask"][mask_bool].unsqueeze(0)
+        old_log_probs = inputs["old_log_probs"][mask_bool].unsqueeze(0)
+        position_ids = inputs["position_ids"][mask_bool].unsqueeze(0)
+        per_token_advantages = inputs["advantages"][mask_bool].unsqueeze(0)
 
         forward_start = time.time()
         outputs = model(
             input_ids=input_ids,
-            attention_mask=attention_mask,
+            position_ids=position_ids,
             labels=input_ids,
             completion_mask=completion_mask,
             use_cache=False,
@@ -549,11 +590,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         completion_mask = completion_mask[:, 1:]
         old_log_probs = old_log_probs[:, 1:]
-        advantages = advantages.unsqueeze(1)
+        per_token_advantages = per_token_advantages[:, 1:]
         log_ratio = log_probs - old_log_probs
         ratio = torch.exp(log_ratio)
         clipped = torch.clamp(ratio, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss = -torch.min(ratio * advantages, clipped * advantages)
+        per_token_loss = -torch.min(ratio * per_token_advantages, clipped * per_token_advantages)
 
         # DDP/FSDP averages gradients across ranks (world_size).
         # To get correct per-token normalization we scale by 1/tokens_per_rank
@@ -602,11 +643,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["clip_ratio"].append((global_clip_sum / global_count).item())
 
             # Logging metrics from the rollout worker (reward, reward_std, etc.).
-            # inputs["metrics"] is a dict of 1D tensors keyed by metric name.
-            sample_metrics = inputs["metrics"]  # dict[str, Tensor(shape=[B_local])]
+            # inputs["metrics"] is a dict keyed by metric name; each value is this rank's row of per-sample values,
+            # NaN-padded (the nan-aware aggregation below ignores both padding and unscorable samples).
+            sample_metrics = inputs["metrics"]  # dict[str, Tensor(shape=[1, n_samples_local])]
             keys = list(sample_metrics.keys())
             device = completion_mask.device
-            n_samples = torch.tensor(completion_mask.shape[0], dtype=torch.float32, device=device)
+            n_samples = (position_ids == 0).sum().to(torch.float32)
             if keys:
                 # nan-aware per key: unscorable samples carry NaN, so a plain .sum() would poison the whole metric.
                 local_sums = torch.stack([torch.nansum(sample_metrics[k].to(device)) for k in keys])
@@ -621,8 +663,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     metric = (global_sum / global_count).item() if global_count > 0 else float("nan")
                     self._metrics["train"][k].append(metric)
 
-            completion_length = completion_mask.sum(dim=1).float()
-            length_stats = torch.stack([completion_length.sum(), n_samples])
+            length_stats = torch.stack([completion_mask.sum().float(), n_samples])
             length_stats = self.accelerator.reduce(length_stats, reduction="sum")
             self._metrics["train"]["completions/mean_length"].append((length_stats[0] / length_stats[1]).item())
 
@@ -636,7 +677,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
             self._metrics["train"]["forward_time_s"].append(self._last_forward_time_s)
             # NOTE: in dynamic mbs setup, we would need to agg across DP ranks.
-            self._metrics["train"]["train_seq_len"].append(float(local_max_len))
+            self._metrics["train"]["train_seq_len"].append(float(position_ids.max() + 1))
         return loss
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
