@@ -21,8 +21,6 @@ All environments plug into the same `environment_factory` slot, so they are inte
 | [OpenReward](openreward) | An integration with ORS-speaking environments (the [openreward.ai](https://openreward.ai) catalog or your own ORS server); tasks **and** rewards are served over HTTP. | You want to train against an ORS environment: the catalog (e.g. `Eigent/SETA`), one you self-host on your own infra, or a local server you're developing. |
 | [Harbor](harbor) | An integration with Harbor task suites: each task is an instruction, a real sandbox image (`docker`, `e2b`, ...), and an in-sandbox verifier. | You want to train against a Harbor task suite: a tree of tasks, each a self-contained sandbox plus verifier (e.g. a data-analysis agent that explores files in a sandbox and writes an answer a grader checks). |
 
-Rule of thumb: a Hub environment or your own against the open standard → OpenEnv; an ORS environment (catalog or self-hosted) → [OpenReward](openreward); a Harbor task suite (sandbox plus verifier) → [Harbor](harbor). For a deeper, framework-agnostic comparison across the wider ecosystem, see [The ultimate guide to RL environments](https://huggingface.co/spaces/AdithyaSK/rl-environments-guide).
-
 ## Installation
 
 OpenEnv environments are hosted as Hugging Face Spaces, which are also pip-installable Git repositories:
