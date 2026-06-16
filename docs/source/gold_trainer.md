@@ -105,7 +105,7 @@ trainer.train()
 
 ### Expected dataset type
 
-GOLD requires a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language_modeling) dataset, e.g.:
+GOLD requires a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language-modeling) dataset, e.g.:
 
 ```python
 {"messages": [{"role": "user", "content": "What color is the sky?"},
