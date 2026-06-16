@@ -26,6 +26,7 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -130,6 +131,23 @@ class _SupportsReset(Protocol):
 
 
 EnvironmentFactory = Callable[[], _SupportsReset]
+
+
+@dataclass
+class _GRPOLossComponents:
+    loss: torch.Tensor
+    mode: str
+    mask: torch.Tensor
+    advantages: torch.Tensor
+    per_token_logps: torch.Tensor
+    old_per_token_logps: torch.Tensor
+    entropies: torch.Tensor
+    log_ratio: torch.Tensor
+    coef_1: torch.Tensor
+    per_token_loss: torch.Tensor
+    per_token_kl: torch.Tensor | None = None
+    phi_seq: torch.Tensor | None = None
+    aux_loss: torch.Tensor | None = None
 
 
 class GRPOTrainer(_BaseTrainer):
@@ -2582,7 +2600,7 @@ class GRPOTrainer(_BaseTrainer):
 
         return phi_seq  # (B, 1)
 
-    def _compute_loss(self, model, inputs):
+    def _compute_loss_components(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
@@ -2658,6 +2676,7 @@ class GRPOTrainer(_BaseTrainer):
         coef_1 = torch.exp(log_importance_weights)
 
         # Compute the KL divergence between the model and the reference model
+        per_token_kl = None
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
             per_token_kl = (
@@ -2669,6 +2688,7 @@ class GRPOTrainer(_BaseTrainer):
 
         # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
+        phi_seq = None
         if self.loss_type == "cispo":
             clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
             per_token_loss = -clamped_ratios * advantages * per_token_logps
@@ -2740,9 +2760,28 @@ class GRPOTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
             loss = loss + self.router_aux_loss_coef * aux_loss / normalizer
-            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
+        return _GRPOLossComponents(
+            loss=loss,
+            mode=mode,
+            mask=mask,
+            advantages=advantages,
+            per_token_logps=per_token_logps,
+            old_per_token_logps=old_per_token_logps,
+            entropies=entropies,
+            log_ratio=log_ratio,
+            coef_1=coef_1,
+            per_token_loss=per_token_loss,
+            per_token_kl=per_token_kl,
+            phi_seq=phi_seq,
+            aux_loss=aux_loss,
+        )
 
-        # Log the metrics
+    def _log_loss_metrics(self, components: _GRPOLossComponents):
+        mode = components.mode
+        mask = components.mask
+        advantages = components.advantages
+        entropies = components.entropies
+        coef_1 = components.coef_1
         completion_token_count = mask.sum().clamp(min=1.0)
 
         def masked_batch_mean(x):
@@ -2751,7 +2790,14 @@ class GRPOTrainer(_BaseTrainer):
             else:
                 return (x * mask).sum() / completion_token_count
 
+        if self.aux_loss_enabled:
+            aux_loss = components.aux_loss
+            assert aux_loss is not None
+            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
+
         if self.beta != 0.0:
+            per_token_kl = components.per_token_kl
+            assert per_token_kl is not None
             mean_kl = masked_batch_mean(per_token_kl)
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
@@ -2782,10 +2828,15 @@ class GRPOTrainer(_BaseTrainer):
             gathered_cispo_clip_ratio = self.accelerator.gather(cispo_clip_ratio)
             self._metrics[mode]["cispo_clip_ratio"].append(gathered_cispo_clip_ratio.nanmean().item())
         elif self.loss_type == "vespo":
+            phi_seq = components.phi_seq
+            assert phi_seq is not None
             gathered_phi_seq = self.accelerator.gather(phi_seq)
             self._metrics[mode]["vespo/phi_seq_mean"].append(gathered_phi_seq.nanmean().item())
 
-        return loss
+    def _compute_loss(self, model, inputs):
+        components = self._compute_loss_components(model, inputs)
+        self._log_loss_metrics(components)
+        return components.loss
 
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
     # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
