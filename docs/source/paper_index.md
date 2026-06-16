@@ -137,7 +137,7 @@ $$
 
 where  \\( w_{i,t}(\theta) \\) is the per-token importance ratio. In practice the product and clipping are computed in log space for numerical stability, and the clip range  \\( (\epsilon_1, \epsilon_2) = (e^{-0.4}, e^{0.4}) \\) is markedly wider than GRPO/DAPO to encourage exploration.
 
-TRL provides an experimental implementation, available through the `trl.experimental.gmpo` module:
+TRL provides an experimental implementation, see [Experimental - GMPO](gmpo):
 
 ```python
 from trl.experimental.gmpo import GMPOConfig, GMPOTrainer
