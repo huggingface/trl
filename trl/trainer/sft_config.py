@@ -98,10 +98,11 @@ class SFTConfig(_BaseConfig):
             Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
             on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
             `False`, loss is computed on the entire sequence.
-        loss_type (`str`, *optional*, defaults to `"nll"`):
-            Type of loss to use. Possible values are:
+        loss_type (`str`, *optional*, defaults to `"chunked_nll"`):
+            Type of loss to use. When left unset, it defaults to `"chunked_nll"`, except when `use_liger_kernel=True`,
+            in which case it defaults to `"nll"`. Possible values are:
 
-            - `"nll"`: standard negative log-likelihood (default).
+            - `"nll"`: standard negative log-likelihood.
             - `"dft"`: Dynamic Fine-Tuning, as described in
               [this paper](https://huggingface.co/papers/2508.05629).
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
@@ -109,6 +110,7 @@ class SFTConfig(_BaseConfig):
               in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`. Under
               FSDP2, set `fsdp_reshard_after_forward false` in the accelerate config — the chunked path otherwise
               re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time.
+
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
 
@@ -261,15 +263,19 @@ class SFTConfig(_BaseConfig):
             )
         },
     )
-    loss_type: str = field(
-        default="nll",
+    loss_type: str | None = field(
+        default=None,
         metadata={
-            "help": "Type of loss to use. Possible values are `'nll'` (negative log-likelihood, default), `'dft'` "
-            "(Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), and `'chunked_nll'` (same math as "
-            "`'nll'`, but the `lm_head` projection is computed on non-ignored tokens only and the cross-entropy is "
-            "processed in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`. "
-            "Under FSDP2, set `fsdp_reshard_after_forward false` in the accelerate config — the chunked path "
-            "otherwise re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time."
+            "help": "Type of loss to use. When left unset, it defaults to `'chunked_nll'`, except when "
+            "`use_liger_kernel=True`, in which case it defaults to `'nll'`. Possible values are `'nll'` (standard "
+            "negative log-likelihood), `'dft'` (Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), and "
+            "`'chunked_nll'` (same math as `'nll'`, but the `lm_head` projection is computed on non-ignored tokens "
+            "only — positions with `labels == -100` are dropped before the matmul — and the cross-entropy is "
+            "processed in chunks of tokens to reduce peak activation memory; not compatible with `use_liger_kernel`; "
+            "under FSDP2, set `fsdp_reshard_after_forward false` in the accelerate config — the chunked path "
+            "otherwise re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time; the "
+            "patched `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level "
+            "`lm_head`, architectures with a non-standard head are not supported)."
         },
     )
     activation_offloading: bool = field(
@@ -309,3 +315,7 @@ class SFTConfig(_BaseConfig):
                 stacklevel=3,
             )
             self.packing_strategy = "bfd_split"
+
+        # When unset, default to "chunked_nll" unless `use_liger_kernel=True`, in which case default to "nll".
+        if self.loss_type is None:
+            self.loss_type = "nll" if self.use_liger_kernel else "chunked_nll"

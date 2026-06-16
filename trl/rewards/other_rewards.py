@@ -45,18 +45,29 @@ def get_soft_overlong_punishment(max_completion_len: int, soft_punish_cache: int
     print(rewards)  # [-0.5]
     ```
     """
+    return _SoftOverlongPunishment(max_completion_len, soft_punish_cache)
 
-    def soft_overlong_punishment_reward(completion_ids: list[list[int]], **kwargs) -> list[float]:
-        """Reward function that penalizes overlong completions."""
+
+class _SoftOverlongPunishment:
+    # Callable class rather than a closure so the reward stays picklable: the async GRPO rollout
+    # worker forwards reward funcs to a spawned child process, and closures can't be pickled.
+    # `__name__` mirrors the old inner-function name so metric logging keys are unchanged.
+    __name__ = "soft_overlong_punishment_reward"
+
+    def __init__(self, max_completion_len: int, soft_punish_cache: int):
+        self.max_completion_len = max_completion_len
+        self.soft_punish_cache = soft_punish_cache
+
+    def __call__(self, completion_ids: list[list[int]], **kwargs) -> list[float]:
         rewards = []
         for ids in completion_ids:
             completion_length = len(ids)
-            if completion_length <= max_completion_len - soft_punish_cache:
+            if completion_length <= self.max_completion_len - self.soft_punish_cache:
                 rewards.append(0.0)
-            elif max_completion_len - soft_punish_cache < completion_length <= max_completion_len:
-                rewards.append((max_completion_len - soft_punish_cache - completion_length) / soft_punish_cache)
+            elif self.max_completion_len - self.soft_punish_cache < completion_length <= self.max_completion_len:
+                rewards.append(
+                    (self.max_completion_len - self.soft_punish_cache - completion_length) / self.soft_punish_cache
+                )
             else:
                 rewards.append(-1.0)
         return rewards
-
-    return soft_overlong_punishment_reward

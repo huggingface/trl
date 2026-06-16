@@ -36,14 +36,14 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
     target_parser = argparse.ArgumentParser(add_help=False)
     target_parser.add_argument(
         "--target",
-        required=True,
+        default="agents",
         help=f"Installation target: agent name ({', '.join(list_agent_names())}) or directory path",
     )
     target_parser.add_argument(
         "--scope",
         choices=["project", "global"],
         default="project",
-        help="Scope when using --target with agent name: project (./agent/skills/) or global (user-level like ~/.agent/skills/)",
+        help="Scope when using --target with agent name: project (./agents/skills/) or global (user-level like ~/.agents/skills/)",
     )
 
     # trl skills list (no target required - lists TRL's built-in skills by default)
@@ -60,7 +60,7 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
         "--scope",
         choices=["project", "global"],
         default="project",
-        help="Scope when using --target with agent name: project (./agent/skills/) or global (user-level like ~/.agent/skills/)",
+        help="Scope when using --target with agent name: project (./agents/skills/) or global (user-level like ~/.agents/skills/)",
     )
     list_parser.set_defaults(func=cmd_list)
 
@@ -69,7 +69,7 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
         "install",
         parents=[target_parser],
         help="Install skill",
-        description="Install TRL skill to to target",
+        description="Install TRL skill to target",
     )
     install_parser.add_argument("skill", nargs="?", help="Skill name to install (omit to use --all)")
     install_parser.add_argument("--all", action="store_true", help="Install all available TRL skills")

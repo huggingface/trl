@@ -91,6 +91,11 @@ def is_ampere_or_newer(device_index=0):
     if not torch.cuda.is_available():
         return False
 
+    # "Ampere" is an NVIDIA architecture; an AMD (ROCm) GPU is never Ampere. On ROCm,
+    # torch.cuda.get_device_capability returns the gfx version, which would spuriously compare >= (8, 0).
+    if torch.version.hip is not None:
+        return False
+
     major, minor = torch.cuda.get_device_capability(device_index)
     # Ampere starts at compute capability 8.0 (e.g., A100 = 8.0, RTX 30xx = 8.6)
     return (major, minor) >= (8, 0)
