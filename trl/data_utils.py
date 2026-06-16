@@ -584,11 +584,15 @@ def extract_prompt(example: dict[str, Sequence]) -> dict[str, Sequence]:
      'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
     ```
     """
-    for idx in range(min(len(example["chosen"]), len(example["rejected"]))):
-        if example["chosen"][idx] != example["rejected"][idx]:
-            if example["chosen"][idx - 1] == " ":  # remove space before the prompt
-                idx -= 1
+    # Find the first index where the chosen and rejected completions diverge. If one is a prefix of the other (no
+    # divergence within the common length), the prompt is the whole common part.
+    idx = min(len(example["chosen"]), len(example["rejected"]))
+    for i in range(idx):
+        if example["chosen"][i] != example["rejected"][i]:
+            idx = i
             break
+    if idx > 0 and example["chosen"][idx - 1] == " ":  # remove space before the prompt
+        idx -= 1
     return {
         "prompt": example["chosen"][:idx],
         "chosen": example["chosen"][idx:],

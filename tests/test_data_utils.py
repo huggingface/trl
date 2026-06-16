@@ -1145,6 +1145,34 @@ class TestExtractPrompt(TrlTestCase):
         example_extracted_prompt = maybe_extract_prompt(self.example_explicit_prompt_standard)
         assert example_extracted_prompt == self.example_explicit_prompt_standard, "The prompt should remain unchanged."
 
+    def test_extract_prompt_diverge_at_start(self):
+        # Chosen and rejected diverge at the very first token: there is no shared prompt. A trailing space in chosen
+        # must not be mistaken for a space before the prompt (which previously wrapped the index to -1).
+        example = {"chosen": "Paris ", "rejected": "London"}
+        assert extract_prompt(example) == {"prompt": "", "chosen": "Paris ", "rejected": "London"}
+
+    def test_extract_prompt_chosen_is_prefix_of_rejected(self):
+        # When chosen is a prefix of rejected, the whole chosen is the shared prompt.
+        example = {
+            "chosen": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+            "rejected": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+                {"role": "user", "content": "Are you sure?"},
+            ],
+        }
+        assert extract_prompt(example) == {
+            "prompt": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+            "chosen": [],
+            "rejected": [{"role": "user", "content": "Are you sure?"}],
+        }
+
 
 class TestPackDatasetWrapped(TrlTestCase):
     def test_with_dataset(self):
