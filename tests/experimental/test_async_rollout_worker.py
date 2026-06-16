@@ -13,19 +13,34 @@
 # limitations under the License.
 
 import asyncio
-from dataclasses import dataclass
+import copy
 
 from accelerate.state import PartialState
 
 from trl.experimental.async_grpo.async_rollout_worker import RolloutGroup, _AsyncRolloutLoop
 
 
-@dataclass
-class EnvSnapshot:
-    reward: float
+class CounterEnv:
+    """Environment mirroring the documented `environment_factory` contract: a `reset` method plus a
+    public tool method that mutates state the reward function reads back via `env.reward`.
+    """
+
+    def __init__(self):
+        self.reward = 0.0
+
+    def reset(self, **kwargs):
+        self.reward = 0.0
+        return "Counter reset."
+
+    def increment(self, step: float) -> float:
+        self.reward += step
+        return self.reward
 
 
-def test_score_group_passes_environments():
+def test_score_group_scores_per_completion_environment_snapshots():
+    # The worker keeps one environment instance per slot and reuses it across groups. Each finished
+    # completion is scored against a `copy.copy` snapshot taken at completion time, so resetting the
+    # instance for the next rollout must not corrupt rewards already captured for earlier completions.
     captured = {}
 
     def reward_func(completions, environments, **kwargs):
@@ -37,11 +52,24 @@ def test_score_group_passes_environments():
     rollout_loop.reward_func_names = ["reward_func"]
     PartialState()
 
+    # One reused environment instance produces two completions with different rewards; snapshot each
+    # exactly as the rollout loop does when a completion finishes.
+    env = CounterEnv()
+    snapshots = []
+    for step in (0.25, 0.75):
+        env.reset()
+        env.increment(step)
+        snapshots.append(copy.copy(env))
+
+    # Reusing/resetting the live instance for the next rollout must leave the snapshots untouched.
+    env.reset()
+    env.increment(99.0)
+
     group = RolloutGroup(
         prompt=[{"role": "user", "content": "hi"}],
         prompt_ids=[1, 2],
         reward_kwargs={},
-        environments=[EnvSnapshot(0.25), EnvSnapshot(0.75)],
+        environments=snapshots,
         completions=[
             [{"role": "assistant", "content": "left"}],
             [{"role": "assistant", "content": "right"}],
