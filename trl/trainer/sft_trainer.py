@@ -237,9 +237,7 @@ def _chunked_cross_entropy_loss(
     return loss, correct, entropy_sum, n_valid_tensor
 
 
-def _patch_chunked_ce_lm_head(
-    model: torch.nn.Module, chunk_size: int, is_vlm: bool = False, with_peft: bool = False
-) -> None:
+def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: bool = False) -> None:
     """
     Patch `model.forward` to compute the LM loss via [`_chunked_cross_entropy_loss`].
 
@@ -313,11 +311,11 @@ def _patch_chunked_ce_lm_head(
 
         lm_head_weight = lm_head.weight
         lm_head_bias = lm_head.bias
-        # Under FSDP2 + PEFT, the outer FSDP module wraps PeftModel while lm_head.weight
-        # belongs to the nested causal-LM FSDP module, which is never entered directly inside
-        # _chunked_ce_forward. The weight therefore stays in Shard(0) placement; full_tensor()
-        # all-gathers the shards into the complete weight before the chunked matmul.
-        if with_peft and isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
+        # Under FSDP2, lm_head.weight is a DTensor (Shard(0) or Replicate). Passing it directly
+        # into the gradient-checkpointed chunk loop causes FSDP2 to re-gather it once per chunk
+        # during backward recomputation. full_tensor() converts it to a plain tensor once; all
+        # chunks reference that tensor, so only one all-gather occurs (in full_tensor()'s backward).
+        if isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
             lm_head_weight = lm_head_weight.full_tensor()
             if lm_head_bias is not None:
                 lm_head_bias = lm_head_bias.full_tensor()
@@ -1319,9 +1317,7 @@ class SFTTrainer(_BaseTrainer):
                             "`lm_head` from `target_modules`, or switch to `loss_type='nll'`. If this is a real use "
                             "case for you, please open an issue at https://github.com/huggingface/trl/issues."
                         )
-                _patch_chunked_ce_lm_head(
-                    target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm, with_peft=is_peft_model(model)
-                )
+                _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
             else:
                 raise ValueError(
                     f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
