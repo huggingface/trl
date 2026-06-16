@@ -489,7 +489,7 @@ def first_true_indices(bools: torch.Tensor, dtype=torch.long) -> torch.Tensor:
     Args:
         bools (`torch.Tensor`):
             An N-dimensional boolean tensor.
-        dtype (`torch.dtype`, optional):
+        dtype (`torch.dtype`, *optional*):
             The desired data type of the output tensor. Defaults to `torch.long`.
 
     Returns:

@@ -60,7 +60,7 @@ class SFTConfig(_BaseConfig):
         eos_token (`str`, *optional*):
             Token used to indicate the end of a turn or sequence. If `None`, it defaults to
             `processing_class.eos_token`.
-        max_length (`int` or `None`, *optional*, defaults to `1024`):
+        max_length (`int`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left
             or right depending on `truncation_mode`. If `None`, no truncation is applied. When packing is enabled,
             this value sets the sequence length.
