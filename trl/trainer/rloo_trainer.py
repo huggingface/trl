@@ -21,7 +21,6 @@ import textwrap
 import time
 from collections import defaultdict, deque
 from collections.abc import Callable
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +34,6 @@ from accelerate.utils import gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch import nn
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import Sampler
 from transformers import (
     AutoModelForSequenceClassification,
@@ -52,6 +50,7 @@ from transformers import (
 from transformers.utils import is_peft_available, is_rich_available
 
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
+from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
@@ -506,7 +505,6 @@ class RLOOTrainer(_BaseTrainer):
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
                 accelerator=self.accelerator,
-                is_fsdp_enabled=self.is_fsdp_enabled,
                 processing_class=self.processing_class,
                 # vLLM configuration
                 mode=args.vllm_mode,
@@ -561,6 +559,7 @@ class RLOOTrainer(_BaseTrainer):
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
+        self._dist = DistributedBackend(self.accelerator)
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
@@ -984,7 +983,7 @@ class RLOOTrainer(_BaseTrainer):
                     self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
                 ) as unwrapped_model,
                 torch.no_grad(),
-                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+                self._dist.summon_full_params(self.model_wrapped, recurse=False),
             ):
                 # Cast to the appropriate dtype based on training configuration
                 if self.args.bf16:
@@ -1024,7 +1023,7 @@ class RLOOTrainer(_BaseTrainer):
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                 ) as unwrapped_model,
                 torch.no_grad(),
-                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+                self._dist.summon_full_params(self.model_wrapped, recurse=False),
             ):
                 prompt_completion_ids = unwrapped_model.generate(
                     **generate_inputs, generation_config=self.generation_config
@@ -1266,8 +1265,14 @@ class RLOOTrainer(_BaseTrainer):
         rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
         num_generations = self.num_generations if mode == "train" else self.num_generations_eval
 
+        # A completion for which every reward function returned None is unscorable. nansum would collapse it to 0,
+        # which both biases the leave-one-out baseline and hands the completion a spurious advantage. Mark these rows
+        # NaN so they're excluded from the (nan-aware) baseline below; their advantage is forced to 0 afterwards.
+        unscorable_mask = torch.isnan(rewards_per_func).all(dim=1)
+
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+        rewards[unscorable_mask] = torch.nan
 
         # Apply reward clipping if specified
         if self.reward_clip_range:
@@ -1282,24 +1287,30 @@ class RLOOTrainer(_BaseTrainer):
             rewards = rewards - self.beta * kl
 
         grouped_rewards = rewards.view(-1, num_generations)
-        mean_grouped_rewards = grouped_rewards.mean(dim=1)
+        mean_grouped_rewards = torch.nanmean(grouped_rewards, dim=1)
         if num_generations > 1:
-            std_rewards = grouped_rewards.std(dim=1)
+            std_rewards = nanstd(grouped_rewards, dim=1)
         else:  # doesn't occur during training, but could occur in eval when num_generations_eval=1
             std_rewards = torch.zeros_like(mean_grouped_rewards)
 
-        # RLOO advantages computation
-        grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)  # (num_prompts, 1)
+        # RLOO advantages computation. The leave-one-out baseline averages over scorable siblings only: nansum drops
+        # unscorable rewards and the divisor is (scorable count − 1). A group with a single scorable completion yields
+        # 0/0 = NaN, and unscorable rows stay NaN; both are zeroed by nan_to_num below.
+        scorable_counts = (~torch.isnan(grouped_rewards)).sum(dim=1, keepdim=True)  # (num_prompts, 1)
+        grouped_sum = torch.nansum(grouped_rewards, dim=1, keepdim=True)  # (num_prompts, 1)
         if num_generations > 1:
-            baselines = (grouped_sum - grouped_rewards) / (num_generations - 1)  # (num_prompts, num_generations)
+            baselines = (grouped_sum - grouped_rewards) / (scorable_counts - 1)  # (num_prompts, num_generations)
             baselines = baselines.view(-1)  # Flatten back to match rewards shape
             advantages = rewards - baselines
         else:  # this case doesn't occur during training, but could in eval when num_generations_eval=1
             advantages = torch.zeros_like(rewards)
 
-        # Normalize advantages
+        # Normalize advantages over the scorable subset only (unscorable advantages are still NaN here).
         if self.normalize_advantages:
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-4)
+            advantages = (advantages - torch.nanmean(advantages)) / (nanstd(advantages) + 1e-4)
+
+        # Unscorable completions carry no learning signal: zero their advantage to keep them from moving the policy.
+        advantages = torch.nan_to_num(advantages, nan=0.0)
 
         is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 
@@ -1323,8 +1334,9 @@ class RLOOTrainer(_BaseTrainer):
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
         rewards = (rewards_per_func * self.reward_weights.to(rewards_per_func.device).unsqueeze(0)).nansum(dim=1)
-        self._metrics[mode]["reward"].append(rewards.mean().item())
-        self._metrics[mode]["reward_std"].append(rewards.std().item())
+        rewards[unscorable_mask] = torch.nan  # exclude unscorable rows from the logged reward stats
+        self._metrics[mode]["reward"].append(torch.nanmean(rewards).item())
+        self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
