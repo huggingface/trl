@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from ...trainer.grpo_config import GRPOConfig
 
+
 @dataclass
 class GMPOConfig(GRPOConfig):
     # docstyle-ignore

@@ -31,7 +31,7 @@ class GMPOTrainer(GRPOTrainer):
     syncing, metric logging) is inherited unchanged
     """
 
-    _tag_names = ['trl', 'gmpo']
+    _tag_names = ["trl", "gmpo"]
 
     def __init__(self, model, reward_funcs, args=None, **kwargs):
         if args is None:
@@ -39,14 +39,14 @@ class GMPOTrainer(GRPOTrainer):
             args = GMPOConfig(f"{model_name.split('/')[-1]}-GMPO")
 
         super().__init__(model, reward_funcs, args=args, **kwargs)
-    
+
     def _compute_loss(self, model, inputs):
-        # compute the per-token log probabilities for the model
-        prompt_ids, prompt_mask = inputs['prompt_ids'], inputs['prompt_mask']
-        completion_ids, completion_mask = inputs['completion_ids'], inputs['completion_mask']
+        # Compute the per-token log probabilities for the model
+        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1) # we only need to complete the logits for the completion tokens
+        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
 
         # Compute the per_token_logps and the entropy at each position in the completion
@@ -71,15 +71,15 @@ class GMPOTrainer(GRPOTrainer):
         else:
             entropy_mask = None
 
-        advantages = inputs['advantages']
+        advantages = inputs["advantages"]
         # When num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps,
         # old_per_token_logps == per_token_logps, so we skip its computation and use per_token_logps.detach() instead.
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
         # GMPO Objective
-        # Per-token log importance ratio 
-        log_ratio = per_token_logps - old_per_token_logps 
+        # Per-token log importance ratio
+        log_ratio = per_token_logps - old_per_token_logps
 
         # Token-level clipping, performed in *log space* for numerical stability. The clip range in
         # ratio space is (exp(-epsilon_low), exp(epsilon_high)); the paper recommends exp(±0.4), markedly wider than
@@ -102,17 +102,16 @@ class GMPOTrainer(GRPOTrainer):
         log_importance_weights = (clipped_log_ratio * seq_mask).sum(-1) / seq_mask.sum(-1).clamp(min=1.0)  # (B,)
         coef = torch.exp(log_importance_weights)  # (B,) sequence-level (geometric-mean) importance weight
 
-        per_sequence_loss = -coef * advantages # (B,)
+        per_sequence_loss = -coef * advantages  # (B,)
 
         # KL regularization toward the reference model (optional; sequence-averaged to match GMPO's sequence-level
         # objective). Disabled by default (beta == 0)
-
         if self.beta != 0.0:
-            ref_per_token_logps = inputs['ref_per_token_logps']
+            ref_per_token_logps = inputs["ref_per_token_logps"]
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
-            seq_kl = (per_token_kl * mask).sum(-1) / mask.sum(-1).clamp(min=1.0) # (B,)
+            seq_kl = (per_token_kl * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)  # (B,)
             per_sequence_loss = per_sequence_loss + self.beta * seq_kl
 
         # GMPO aggregates with a plain mean over sequences, per token-norm
@@ -149,5 +148,5 @@ class GMPOTrainer(GRPOTrainer):
         self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
         gathered_clip_ratio = self.accelerator.gather(clip_ratio)
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
-        
+
         return loss
