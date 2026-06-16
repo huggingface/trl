@@ -11,6 +11,18 @@ This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv its
 
 [`GRPOTrainer`] can be used to train agents. For agentic tasks, it supports two modes: **tools**, where the model can call external functions but each call is stateless and independent, and **environments**, which maintain state across turns, enabling genuine multi-turn interaction where the agent's actions shape future observations. Use environments when continuity matters — for example, navigating a game, browsing a web page, or any task where what the agent sees next depends on what it did before.
 
+## Choosing an environment integration
+
+All environments plug into the same `environment_factory` slot, so they are interchangeable at the TRL level: pick the one whose ecosystem fits your task. OpenEnv is the native path documented here, and two further integrations conform to the same contract:
+
+| Integration | What it is | Use it when |
+|---|---|---|
+| OpenEnv | The open environment standard (Gymnasium-style API, served over WebSocket or containerised execution), backed by Hugging Face and the community. | You're using a ready-made OpenEnv environment from the Hub, or defining your own against the open standard (e.g. Wordle, Sudoku, Catch). |
+| [OpenReward](openreward) | An integration with ORS-speaking environments (the [openreward.ai](https://openreward.ai) catalog or your own ORS server); tasks **and** rewards are served over HTTP. | You want to train against an ORS environment: the catalog (e.g. `Eigent/SETA`), one you self-host on your own infra, or a local server you're developing. |
+| [Harbor](harbor) | An integration with Harbor task suites: each task is an instruction, a real sandbox image (`docker`, `e2b`, ...), and an in-sandbox verifier. | You want to train against a Harbor task suite: a tree of tasks, each a self-contained sandbox plus verifier (e.g. a data-analysis agent that explores files in a sandbox and writes an answer a grader checks). |
+
+Rule of thumb: a Hub environment or your own against the open standard → OpenEnv; an ORS environment (catalog or self-hosted) → [OpenReward](openreward); a Harbor task suite (sandbox plus verifier) → [Harbor](harbor). For a deeper, framework-agnostic comparison across the wider ecosystem, see [The ultimate guide to RL environments](https://huggingface.co/spaces/AdithyaSK/rl-environments-guide).
+
 ## Installation
 
 OpenEnv environments are hosted as Hugging Face Spaces, which are also pip-installable Git repositories:
