@@ -138,12 +138,6 @@ class DistillationConfig(_BaseConfig):
 
         > Parameters that control logging
 
-        wandb_entity (`str` or `None`, *optional*):
-            The W&B entity to store runs under.
-        wandb_project (`str` or `None`, *optional*):
-            The W&B project to store runs under.
-        wandb_run_group (`str` or `None`, *optional*):
-            The W&B group to store runs under.
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `log_completions_steps` steps. If `rich` is
             installed, it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb`
@@ -351,18 +345,6 @@ class DistillationConfig(_BaseConfig):
     )
 
     # W&B
-    wandb_entity: str | None = field(
-        default=None,
-        metadata={"help": "The W&B entity to store runs under."},
-    )
-    wandb_project: str | None = field(
-        default=None,
-        metadata={"help": "The W&B project to store runs under."},
-    )
-    wandb_run_group: str | None = field(
-        default=None,
-        metadata={"help": "The W&B group to store runs under."},
-    )
 
     # Logging
     log_completions: bool = field(
