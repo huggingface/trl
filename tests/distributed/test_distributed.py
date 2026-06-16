@@ -76,6 +76,8 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+        if config == "fsdp2":
+            raise AssertionError("AVM")
 
     @pytest.mark.parametrize(
         "config",
@@ -112,6 +114,8 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+        if config == "fsdp2":
+            raise AssertionError("AVM")
 
     @pytest.mark.parametrize(
         "config",
