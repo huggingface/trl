@@ -95,7 +95,7 @@ training_args = GRPOConfig(
 
 Note that this method only has an effect when training goes slightly off-policy—for example, when `steps_per_generation > gradient_accumulation_steps` or `num_iterations > 1`. Otherwise, it is effectively equivalent to no modification.
 
-TRL also provide an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](experimental#gspo-token).
+TRL also provide an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](gspo_token).
 
 #### Policy ratio: GRPO vs. GSPO
 
@@ -271,7 +271,7 @@ training_args = GRPOConfig(
 )
 ```
 
-Note that when using gradient accumulation, the loss is aggregated over the total number of tokens in the batch, but not over the accumulated batch. For more details, see the [GRPO Trainer - Loss types](grpo_trainer#loss_types).
+Note that when using gradient accumulation, the loss is aggregated over the total number of tokens in the batch, but not over the accumulated batch. For more details, see the [GRPO Trainer - Loss types](grpo_trainer#loss-types).
 
 ### Truncated Importance Sampling
 
@@ -408,7 +408,7 @@ TRL exposes the Importance Sampling granularity level through the `vllm_importan
 
 **📜 Paper**: https://huggingface.co/papers/2508.09726
 
-See [Experimental - GFPO](experimental#gfpo).
+See [Experimental - GFPO](gfpo).
 
 ### Perception-Aware Policy Optimization for Multimodal Reasoning
 
@@ -1717,7 +1717,7 @@ trainer = MiniLLMTrainer(
 trainer.train()
 ```
 
-For more details, see the [MiniLLM Trainer documentation](minillm) documentation.
+For more details, see the [MiniLLM Trainer documentation](minillm_trainer).
 
 ### Reinforcement Learning via Self-Distillation
 
