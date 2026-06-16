@@ -491,7 +491,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                         "dtype_names": weight_dtype_names,
                         "shapes": weight_shapes,
                         "packed": True,
-                        "is_checkpoint_format": True,
                     },
                 )
                 self.rollout_worker = AsyncRolloutWorker(
