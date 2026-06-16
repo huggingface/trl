@@ -25,6 +25,7 @@ from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed
 @pytest.mark.skipif(not is_deepspeed_available(), reason="deepspeed is not installed")
 @pytest.mark.parametrize("stage", [1, 2, 3])
 def test_prepare_deepspeed_strips_optimizer_for_cpu_offload(stage):
+    pytest.importorskip("deepspeed")
     # prepare_deepspeed initializes eval-only models without an optimizer. If the deep-copied config still carries the
     # training-only blocks, DeepSpeed builds a CPUAdam on GPU params (`optimizer` + `offload_optimizer: cpu`) or an LR
     # scheduler with no optimizer (`scheduler`), and the run dies before training. They must be dropped before
