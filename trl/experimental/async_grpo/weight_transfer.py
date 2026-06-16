@@ -21,7 +21,7 @@ from accelerate.logging import get_logger
 from ...import_utils import is_vllm_available
 
 
-if is_vllm_available(min_version="0.17.1"):
+if is_vllm_available(min_version="0.22.0"):
     from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
     from vllm.utils.network_utils import get_ip, get_open_port
 
@@ -37,9 +37,9 @@ class WeightTransferClient:
         server_timeout: float = 240.0,
         init_weight_transfer_timeout: int = 1800,
     ):
-        if not is_vllm_available(min_version="0.17.1"):
+        if not is_vllm_available(min_version="0.22.0"):
             raise ImportError(
-                "vLLM >= 0.17.1 is required to use WeightTransferClient. Install it with: pip install 'vllm>=0.17.1'"
+                "vLLM >= 0.22.0 is required to use WeightTransferClient. Install it with: pip install 'vllm>=0.22.0'"
             )
         self.vllm_server_url = vllm_server_url.rstrip("/")
         self.server_timeout = server_timeout
@@ -103,25 +103,27 @@ class WeightTransferClient:
         if self.model_update_group is None:
             return
         t0 = time.time()
+        # Prepare the workers for the reload; must complete before any weights are sent.
+        requests.post(
+            f"{self.vllm_server_url}/start_weight_update",
+            json={"is_checkpoint_format": True},
+            timeout=1800,
+        )
+        # The /update_weights POST drives the workers' blocking NCCL recv, so it runs on a thread
+        # concurrently with the trainer-side broadcast.
         t_update = threading.Thread(
             target=requests.post,
             args=(f"{self.vllm_server_url}/update_weights",),
             kwargs={"json": {"update_info": self._weight_update_info}, "timeout": 1800},
         )
         t_update.start()
-        logger.debug(f"[weight_sync] /update_weights POST sent ({time.time() - t0:.1f}s)")
-        t_nccl = time.time()
         NCCLWeightTransferEngine.trainer_send_weights(
             iterator=iterator,
             trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
         )
-        logger.debug(f"[weight_sync] NCCL transfer took {time.time() - t_nccl:.1f}s")
-        t_join = time.time()
         t_update.join()
-        logger.debug(
-            f"[weight_sync] /update_weights join took {time.time() - t_join:.1f}s "
-            f"(total send_weights: {time.time() - t0:.1f}s)"
-        )
+        requests.post(f"{self.vllm_server_url}/finish_weight_update", timeout=1800)
+        logger.debug(f"[weight_sync] send_weights took {time.time() - t0:.1f}s")
 
     def pause(self) -> None:
         t0 = time.time()
