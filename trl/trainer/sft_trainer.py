@@ -1431,6 +1431,15 @@ class SFTTrainer(_BaseTrainer):
         formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
+        if isinstance(dataset, Dataset) and dataset.format["type"] == "custom":
+            raise ValueError(
+                "SFTTrainer cannot prepare a dataset that uses `Dataset.with_transform()`. The preparation pipeline "
+                "calls `Dataset.map()`, which reads through the transform and can bake a random or stateful transform "
+                "into the tokenized columns. Pass `dataset_kwargs={'skip_prepare_dataset': True}` and make the "
+                "transform return trainer-ready examples, including tokenized fields, or materialize deterministic "
+                "transforms with `Dataset.map()` before constructing the trainer."
+            )
+
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = get_dataset_column_names(dataset)
         is_processed = "input_ids" in column_names
