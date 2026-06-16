@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import accelerate
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -1356,24 +1355,6 @@ class SFTTrainer(_BaseTrainer):
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-
-        # Under FSDP2 with `reshard_after_forward=True` (accelerate's default), the chunked CE path triggers a
-        # redundant `lm_head.weight` all-gather per chunk during backward, adding significant wall-time. Setting
-        # `reshard_after_forward=False` keeps the un-wrapped `lm_head` resident and closes the gap without meaningfully
-        # affecting peak memory.
-        # `AcceleratorState.is_fsdp2` was added in accelerate 1.6.0; guard so older (but still-supported) versions
-        # don't `AttributeError` on every SFTTrainer init.
-        if (
-            args.loss_type == "chunked_nll"
-            and Version(accelerate.__version__) >= Version("1.6.0")
-            and self.accelerator.state.is_fsdp2
-            and self.accelerator.state.fsdp_plugin.reshard_after_forward
-        ):
-            logger.warning(
-                "`loss_type='chunked_nll'` under FSDP2 with `reshard_after_forward=True` is significantly slower than "
-                "necessary due to per-chunk all-gathers of `lm_head.weight`. Consider passing "
-                "`--fsdp_reshard_after_forward false` to `accelerate launch` (or equivalent in your FSDP config)."
-            )
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
