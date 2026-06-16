@@ -185,7 +185,9 @@ class SolutionTeacherContextBuilder:
             self._compose_teacher_prompt(prompt, privileged_context)
             for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
         ]
-        teacher_prompt_ids_list = self.trainer._tokenize_prompts(
+        # Score the teacher on the full prompt: the problem leads the teacher template, so left-truncating to
+        # max_prompt_length (correct for the student generation prompt) would drop it. Matches SDPO.
+        teacher_prompt_ids_list = self.trainer._tokenize_prompts_untruncated(
             teacher_prompts, chat_template_kwargs=self.trainer.teacher_chat_template_kwargs
         )
         device = completion_ids.device
@@ -734,7 +736,7 @@ class OPSDTrainer(_BaseTrainer):
             for ids, length in zip(batch["completion_ids"].detach().cpu(), raw_completion_lengths, strict=True)
         ]
 
-    def _tokenize_prompts(
+    def _tokenize_prompts_untruncated(
         self, prompts: list[Any], chat_template_kwargs: dict[str, Any] | None = None
     ) -> list[list[int]]:
         if is_conversational({"prompt": prompts[0]}):
@@ -748,6 +750,12 @@ class OPSDTrainer(_BaseTrainer):
             prompt_ids = tokenized["input_ids"]
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
+        return prompt_ids
+
+    def _tokenize_prompts(
+        self, prompts: list[Any], chat_template_kwargs: dict[str, Any] | None = None
+    ) -> list[list[int]]:
+        prompt_ids = self._tokenize_prompts_untruncated(prompts, chat_template_kwargs=chat_template_kwargs)
         if self.max_prompt_length is not None:
             prompt_ids = [ids[-self.max_prompt_length :] for ids in prompt_ids]
         return prompt_ids
