@@ -1412,3 +1412,19 @@ class TestWarnIfFp32WithMixedPrecision(TrlTestCase):
         with caplog.at_level("WARNING", logger="trl.trainer.utils"):
             warn_if_fp32_with_mixed_precision(args, {})
         assert "model_init_kwargs" in caplog.text and "dtype" in caplog.text
+
+    # The suggested `dtype` must match the enabled precision, otherwise the hint steers an fp16 user
+    # toward bfloat16 (or vice versa). Each case is (bf16, fp16, expected_dtype).
+    @pytest.mark.parametrize(
+        ("bf16", "fp16", "expected_dtype"),
+        [
+            (True, False, "bfloat16"),
+            (False, True, "float16"),
+        ],
+    )
+    def test_suggested_dtype_matches_precision(self, caplog, bf16, fp16, expected_dtype):
+        PartialState()
+        args = SimpleNamespace(bf16=bf16, fp16=fp16)
+        with caplog.at_level("WARNING", logger="trl.trainer.utils"):
+            warn_if_fp32_with_mixed_precision(args, {})
+        assert f'"dtype": "{expected_dtype}"' in caplog.text

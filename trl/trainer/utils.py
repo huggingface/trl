@@ -1051,11 +1051,12 @@ def warn_if_fp32_with_mixed_precision(args, model_init_kwargs: dict | None) -> N
     dtype_unset = "dtype" not in (model_init_kwargs or {})
     if mixed_precision and dtype_unset:
         precision = "bf16" if args.bf16 else "fp16"
+        suggested_dtype = "bfloat16" if args.bf16 else "float16"
         logger.warning(
             f"The model will be loaded in float32 because no `dtype` was specified, while {precision} "
             "mixed-precision training is enabled. This keeps float32 master weights under autocast, which "
             "can differ from pure low-precision training. To load the model directly in low precision, pass "
-            'e.g. `model_init_kwargs={"dtype": "bfloat16"}` in the trainer config.'
+            f'e.g. `model_init_kwargs={{"dtype": "{suggested_dtype}"}}` in the trainer config.'
         )
 
 
