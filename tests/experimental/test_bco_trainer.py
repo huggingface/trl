@@ -81,6 +81,30 @@ class TestBCOTrainer(TrlTestCase):
                 assert not torch.equal(param.cpu(), new_param.cpu())
 
     @require_sklearn
+    def test_train_processing_class_autoloaded(self):
+        # processing_class is documented as optional: when omitted it should be
+        # auto-loaded from the model, consistent with DPOTrainer / RewardTrainer.
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = BCOConfig(
+            output_dir=self.tmp_dir,
+            remove_unused_columns=False,
+            learning_rate=0.1,
+            report_to="none",
+        )
+        trainer = BCOTrainer(
+            model=model,
+            ref_model=ref_model,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer.processing_class is not None
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @require_sklearn
     def test_train_with_precompute(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
