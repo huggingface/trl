@@ -735,7 +735,13 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # GLM's native template doesn't terminate an assistant turn with an end-of-turn token; the turn is ended
+            # by the following message's role marker. The training template appends that terminator to the final
+            # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
+            assert after == before + "<|user|>"
+        else:
+            assert before == after
 
     def test_behavior_unchanged_final_assistant_with_reasoning_content(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
@@ -753,7 +759,13 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # GLM's native template doesn't terminate an assistant turn with an end-of-turn token; the turn is ended
+            # by the following message's role marker. The training template appends that terminator to the final
+            # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
+            assert after == before + "<|user|>"
+        else:
+            assert before == after
 
     def test_behavior_unchanged_final_assistant_with_existing_think_tags(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
@@ -770,7 +782,13 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # GLM's native template doesn't terminate an assistant turn with an end-of-turn token; the turn is ended
+            # by the following message's role marker. The training template appends that terminator to the final
+            # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
+            assert after == before + "<|user|>"
+        else:
+            assert before == after
 
     def test_behavior_unchanged_assistant_with_tool_calls(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
@@ -791,7 +809,13 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages_before, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # GLM's native template doesn't terminate an assistant turn with an end-of-turn token; the turn is ended
+            # by the following message's role marker. The training template appends that terminator to the final
+            # assistant turn so the stop token is trained — here `<|observation|>`, which closes a tool call.
+            assert after == before + "<|observation|>"
+        else:
+            assert before == after
 
     def test_behavior_unchanged_with_tools_with_and_without_system_message(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)

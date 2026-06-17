@@ -110,12 +110,15 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
             Token ID to use for padding `input_ids` sequences.
         max_length (`int`, *optional*):
             Maximum sequence length after assembly. Sequences longer than `max_length` are truncated from the end.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
     """
 
     pad_token_id: int
     max_length: int | None = None
+    pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -141,16 +144,19 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                 [torch.tensor(ids, dtype=torch.int64) for ids in full_ids_list],
                 padding_value=self.pad_token_id,
                 padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
             )
             batch[f"{prefix}_attention_mask"] = pad(
                 [torch.ones(len(ids), dtype=torch.int64) for ids in full_ids_list],
                 padding_value=0,
                 padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
             )
             batch[f"{prefix}_mask"] = pad(
                 [torch.tensor(m, dtype=torch.int64) for m in completion_mask_list],
                 padding_value=0,
                 padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
             )
 
         if "ref_logps" in examples[0]:
@@ -192,6 +198,8 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
             Maximum sequence length. Sequences longer than `max_length` are truncated.
         calculate_kl (`bool`, *optional*, defaults to `True`):
             Whether to produce KL sequences by cycling completions within the batch.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             The tensor type to return. Only `"pt"` is supported.
     """
@@ -199,9 +207,15 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
     processor: ProcessorMixin
     max_length: int | None = None
     calculate_kl: bool = True
+    pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        if self.pad_to_multiple_of is not None:
+            raise NotImplementedError(
+                "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
+                "prompt-completion data."
+            )
         if "image" in examples[0]:
             for example in examples:
                 example["images"] = [example.pop("image")]
@@ -562,12 +576,14 @@ class KTOTrainer(_BaseTrainer):
             data_collator = DataCollatorForUnpairedPreference(
                 pad_token_id=self._tokenizer.pad_token_id,
                 max_length=args.max_length,
+                pad_to_multiple_of=args.pad_to_multiple_of,
             )
         elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionUnpairedPreference(
                 processor=processing_class,
                 max_length=args.max_length,
                 calculate_kl=calculate_kl,
+                pad_to_multiple_of=args.pad_to_multiple_of,
             )
 
         # Training arguments
