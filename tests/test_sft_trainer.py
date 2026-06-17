@@ -627,10 +627,10 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_moe_model_with_aux_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
+        # MoE aux loss is on by default (router_aux_loss_coef defaults to 0.001)
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             report_to="none",
-            model_init_kwargs={"output_router_logits": True},
         )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
