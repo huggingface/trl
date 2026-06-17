@@ -175,6 +175,102 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             }
 
 
+def _balance_by_squared_length(examples: list[dict[str, Any]], num_groups: int) -> list[list[dict[str, Any]]]:
+    """Greedily partition `examples` into `num_groups` rows (one per DP rank), balancing each row's Σ Lᵢ².
+
+    Attention is O(L²) while the FFN is O(L), so equal token counts wouldn't equalize wall-time; balancing Σ Lᵢ² keeps
+    the per-micro-batch all-reduce free of stragglers. Samples are placed longest-first into the row with the smallest
+    running Σ Lᵢ² (LPT scheduling). With at least `num_groups` samples every row ends up non-empty.
+    """
+    groups = [[] for _ in range(num_groups)]
+    squared_loads = [0] * num_groups
+    for example in sorted(examples, key=lambda e: len(e["input_ids"]), reverse=True):
+        n = len(example["input_ids"])
+        i = min(range(num_groups), key=lambda j: squared_loads[j])
+        groups[i].append(example)
+        squared_loads[i] += n * n
+    return groups
+
+
+class FixedCountBatcher(torch.utils.data.IterableDataset):
+    """Fixed-count batcher (the planner) wrapping [`RolloutQueueDataset`].
+
+    Buffers `microbatch_size` (= `per_device_train_batch_size × num_processes`) samples, then partitions them across
+    the `num_processes` rows (one per DP rank) balanced by Σ Lᵢ² (attention cost) so no rank straggles at the
+    per-micro-batch all-reduce. The sample count is fixed, so this does not bound peak memory — use
+    [`TokenBudgetBatcher`] for that. With `microbatch_size >= num_processes` every row is non-empty.
+
+    Args:
+        dataset ([`RolloutQueueDataset`]):
+            Source yielding single rollout-sample dicts.
+        num_processes (`int`):
+            Number of DP ranks; the number of rows (one per rank) in each micro-batch.
+        microbatch_size (`int`):
+            Number of samples buffered into each micro-batch before it is partitioned and emitted.
+    """
+
+    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, microbatch_size: int):
+        self.dataset = dataset
+        self.num_processes = num_processes
+        self.microbatch_size = microbatch_size
+
+    def __iter__(self):
+        batch = []
+        for sample in self.dataset:
+            batch.append(sample)
+            if len(batch) == self.microbatch_size:
+                yield _balance_by_squared_length(batch, self.num_processes)
+                batch = []
+
+
+class TokenBudgetBatcher(torch.utils.data.IterableDataset):
+    """Token-budgeted dynamic batcher (the planner) wrapping [`RolloutQueueDataset`].
+
+    Keeps `num_processes` open rows (one per DP rank) and pulls single samples from the source one at a time, dropping
+    each into the row with the smallest running Σ Lᵢ² (attention cost) that still fits within `token_budget` tokens.
+    When the next sample fits in no row, the current micro-batch is emitted — a list of `num_processes` groups, already
+    partitioned per rank — and a fresh one is started with that sample. The number of samples per row is therefore
+    dynamic: short samples pack many per row, long ones pack few, while every row stays within `token_budget` tokens.
+    This bounds peak memory independently of `per_device_train_batch_size` and keeps the rows Σ Lᵢ²-balanced so no rank
+    straggles at the per-micro-batch all-reduce.
+
+    Every emitted micro-batch has all `num_processes` rows non-empty (a rank forwarding zero tokens would desync
+    FSDP/EP collectives); this holds as long as each sample is at most `token_budget` tokens.
+
+    Args:
+        dataset ([`RolloutQueueDataset`]):
+            Source yielding single rollout-sample dicts.
+        num_processes (`int`):
+            Number of DP ranks; the number of rows (one per rank) in each micro-batch.
+        token_budget (`int`):
+            Maximum real tokens packed into a single row (one rank's forward).
+    """
+
+    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, token_budget: int):
+        self.dataset = dataset
+        self.num_processes = num_processes
+        self.token_budget = token_budget
+
+    def __iter__(self):
+        rows = [[] for _ in range(self.num_processes)]
+        squared_loads = [0] * self.num_processes  # Σ Lᵢ² per row, drives the balancing
+        token_counts = [0] * self.num_processes  # tokens per row, drives the budget
+        for sample in self.dataset:
+            n = len(sample["input_ids"])
+            fits = [i for i in range(self.num_processes) if token_counts[i] + n <= self.token_budget]
+            if not fits:
+                # No row has room for this sample: close the micro-batch and start a fresh one.
+                yield rows
+                rows = [[] for _ in range(self.num_processes)]
+                squared_loads = [0] * self.num_processes
+                token_counts = [0] * self.num_processes
+                fits = list(range(self.num_processes))
+            i = min(fits, key=lambda j: squared_loads[j])
+            rows[i].append(sample)
+            squared_loads[i] += n * n
+            token_counts[i] += n
+
+
 class _EmptyIterableDataset(torch.utils.data.IterableDataset):
     """Placeholder for non-rank-0 processes. Never actually iterated."""
 
@@ -185,25 +281,31 @@ class _EmptyIterableDataset(torch.utils.data.IterableDataset):
 @dataclass
 class DataCollatorForRollout(DataCollatorMixin):
     """
-    Padding-free collator for rollout samples. Splits the global batch into `num_processes` groups (one per rank) and
-    concatenates each group's samples into a single packed row, with `position_ids` resetting per sequence and
-    advantages expanded per-token. Rows are padded only to the longest group, so the batch stays rectangular for
+    Padding-free collator (the packer) for rollout samples. Packs a micro-batch into `num_processes` rows (one per DP
+    rank): each row concatenates its samples into a single sequence, with `position_ids` resetting per sequence and
+    advantages expanded per-token. Rows are padded only to the longest row, so the batch stays rectangular for
     `DataLoaderDispatcher` to scatter row `i` -> rank `i`; this inter-rank padding is stripped per-rank in
     `compute_loss`.
+
+    The micro-batch arrives already partitioned into `num_processes` rows by the upstream planner
+    ([`FixedCountBatcher`] or [`TokenBudgetBatcher`]) — which balances each row's Σ Lᵢ² (attention cost) to avoid
+    stragglers at the gradient all-reduce — so the collator only tensorizes the given rows.
 
     Args:
         pad_token_id (`int`):
             Token id used to pad `input_ids`.
         num_processes (`int`, *optional*, defaults to `1`):
-            Number of ranks; the global batch is packed into this many rows.
+            Number of DP ranks; the micro-batch is packed into this many rows.
     """
 
     pad_token_id: int
     num_processes: int = 1
     return_tensors: str = "pt"
 
-    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        groups = [examples[i :: self.num_processes] for i in range(self.num_processes)]
+    def torch_call(self, examples: list[Any]) -> dict[str, Any]:
+        # The dataloader uses batch_size=1 over a planner that pre-partitions each micro-batch into `num_processes`
+        # rows, so `examples` is a length-1 list holding that single micro-batch (one group per rank).
+        (groups,) = examples
 
         input_ids, attention_mask, completion_mask, old_log_probs, position_ids, advantages = [], [], [], [], [], []
         for group in groups:
@@ -231,16 +333,17 @@ class DataCollatorForRollout(DataCollatorMixin):
         position_ids = pad(position_ids, padding_value=0)
         advantages = pad(advantages, padding_value=0.0)
 
+        all_examples = [example for group in groups for example in group]
+
         # Total valid completion tokens across all samples in the full batch.
         # Repeated per rank so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
-        global_n_tokens = sum(sum(example["completion_mask"]) for example in examples)
+        global_n_tokens = sum(sum(example["completion_mask"]) for example in all_examples)
         global_n_tokens = torch.full((self.num_processes,), float(global_n_tokens), dtype=torch.float32)
 
         # Per-sample metrics grouped per rank, as a dict of 2D tensors (one row per rank) so that Accelerate's
         # recursive broadcast (dispatch_batches=True) can scatter them — it traverses nested dicts of tensors but
         # chokes on plain Python floats. Rows are padded with NaN so padded slots are ignored by the nan-aware
         # aggregation in `compute_loss`.
-        metrics_list = [example["metrics"] for example in examples]
         metrics = (
             {
                 key: pad(
@@ -250,9 +353,9 @@ class DataCollatorForRollout(DataCollatorMixin):
                     ],
                     padding_value=float("nan"),
                 )
-                for key in metrics_list[0]
+                for key in all_examples[0]["metrics"]
             }
-            if metrics_list and metrics_list[0]
+            if all_examples[0]["metrics"]
             else {}
         )
 
@@ -525,6 +628,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
 
     def get_train_dataloader(self) -> DataLoader:
+        num_processes = self.accelerator.num_processes
         if self.accelerator.is_main_process:
             dataset = RolloutQueueDataset(
                 rollout_queue=self.rollout_queue,
@@ -533,14 +637,26 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
             )
+            # The planner partitions the rollout stream into Σ Lᵢ²-balanced micro-batches of `num_processes` rows.
+            # TokenBudgetBatcher caps each row at `token_budget` tokens (dynamic count, bounds peak memory);
+            # FixedCountBatcher uses a fixed `per_device_train_batch_size × num_processes` samples per micro-batch.
+            if self.args.token_budget > 0:
+                dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget)
+            else:
+                dataset = FixedCountBatcher(
+                    dataset, num_processes, self.args.per_device_train_batch_size * num_processes
+                )
         else:
             dataset = _EmptyIterableDataset()
 
+        # Each planner item is one complete micro-batch (`num_processes` pre-packed rows), so the dataloader pulls them
+        # one at a time (batch_size=1) and the collator tensorizes each into a rectangular `(num_processes, T_max)`
+        # batch that DataLoaderDispatcher scatters row `i` -> rank `i`.
         return self.accelerator.prepare(
             DataLoader(
                 dataset,
-                batch_size=self.args.per_device_train_batch_size * self.accelerator.num_processes,
-                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id, self.accelerator.num_processes),
+                batch_size=1,
+                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id, num_processes),
                 num_workers=0,
                 # NOTE(@aminediro):
                 # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset

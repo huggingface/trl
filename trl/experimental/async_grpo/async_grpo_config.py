@@ -58,6 +58,13 @@ class AsyncGRPOConfig(_BaseConfig):
             Lower-bound epsilon value for clipping.
         epsilon_high (`float`, *optional*, defaults to `0.2`):
             Upper-bound epsilon value for clipping.
+        token_budget (`int`, *optional*, defaults to `-1`):
+            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic
+            token-budgeted micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches
+            whose rows each stay within this budget, bounding peak memory independently of
+            `per_device_train_batch_size` (the number of samples per row becomes dynamic). When `<= 0` (default),
+            each micro-batch holds a fixed `per_device_train_batch_size × num_processes` samples, Σ Lᵢ²-balanced
+            across the rows.
 
         > Parameters that control the async rollout pipeline
 
@@ -159,6 +166,16 @@ class AsyncGRPOConfig(_BaseConfig):
     epsilon_high: float = field(
         default=0.2,
         metadata={"help": "Upper-bound epsilon value for clipping."},
+    )
+    token_budget: int = field(
+        default=-1,
+        metadata={
+            "help": "Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic "
+            "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches "
+            "whose rows each stay within this budget, bounding peak memory independently of "
+            "`per_device_train_batch_size`. When <= 0 (default), each micro-batch holds a fixed "
+            "`per_device_train_batch_size × num_processes` samples, Σ Lᵢ²-balanced across the rows."
+        },
     )
 
     # Parameters that control the async rollout pipeline
