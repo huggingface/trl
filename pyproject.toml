@@ -49,7 +49,7 @@ bco = [
     "joblib"
 ]
 deepspeed = [
-    "deepspeed>=0.14.4",
+    "deepspeed>=0.14.4,<0.19.2",  # temporary hotfix for #6089
     "transformers!=5.1.0",  # see transformers#43780
 ]
 kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
@@ -106,7 +106,7 @@ dev = [
     "scikit-learn",
     "joblib",
     # deepspeed
-    "deepspeed>=0.14.4",
+    "deepspeed>=0.14.4,<0.19.2",  # temporary hotfix for #6089
     # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
