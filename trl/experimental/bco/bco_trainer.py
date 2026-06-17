@@ -40,6 +40,7 @@ from torch import autocast
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
+    AutoTokenizer,
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
@@ -59,7 +60,12 @@ from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe
 from ...import_utils import is_joblib_available
 from ...models.utils import prepare_deepspeed
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, selective_log_softmax
+from ...trainer.utils import (
+    disable_dropout_in_model,
+    get_config_model_id,
+    log_table_to_comet_experiment,
+    selective_log_softmax,
+)
 from ..utils import DPODataCollatorWithPadding, create_reference_model, pad_to_length, peft_module_casting_to_bf16
 from .bco_config import BCOConfig
 
@@ -567,9 +573,7 @@ class BCOTrainer(_BaseTrainer):
             self.ref_model = create_reference_model(model)
 
         if processing_class is None:
-            raise ValueError(
-                "max_length or a processing_class must be specified when using the default DPODataCollatorWithPadding"
-            )
+            processing_class = AutoTokenizer.from_pretrained(get_config_model_id(model.config))
         if args.max_length is None:
             logger.warning(
                 "When using DPODataCollatorWithPadding, you should set `max_length` in the `BCOConfig`. "
