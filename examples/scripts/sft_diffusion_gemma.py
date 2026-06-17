@@ -16,6 +16,7 @@
 # dependencies = [
 #     "trl",
 #     "peft",
+#     "transformers>=5.12.0",
 # ]
 # ///
 
@@ -23,7 +24,7 @@
 Supervised fine-tuning of DiffusionGemma, a block-diffusion language model, on GSM8K with LoRA.
 
 DiffusionGemma ([`google/diffusiongemma-26B-A4B-it`](https://huggingface.co/google/diffusiongemma-26B-A4B-it), requires
-`transformers >= 5.11`) couples a causal encoder with a bidirectional decoder: the encoder reads clean context tokens
+`transformers >= 5.12`) couples a causal encoder with a bidirectional decoder: the encoder reads clean context tokens
 into a KV cache, and the decoder denoises a block of response tokens (the "canvas") with bidirectional attention,
 cross-attending to that cache. Training therefore differs from autoregressive SFT:
 
@@ -35,8 +36,8 @@ cross-attending to that cache. Training therefore differs from autoregressive SF
 4. The loss is plain mean cross-entropy between the decoder logits and the clean tokens over the whole canvas
    (corrupted and uncorrupted positions alike), plus an autoregressive co-loss on the encoder.
 
-Requires transformers from main, with https://github.com/huggingface/transformers/pull/46568 for training support
-and https://github.com/huggingface/transformers/pull/46572 for gradient checkpointing.
+Requires transformers >= 5.12.0 (https://github.com/huggingface/transformers/pull/46568, for training support).
+Gradient checkpointing additionally needs https://github.com/huggingface/transformers/pull/46572.
 
 The script trains with `assistant_only_loss`, so [`SFTTrainer`] swaps in TRL's DiffusionGemma training chat template
 (`trl/chat_templates/diffusion_gemma_training.jinja`), whose `{% generation %}` markers cover the assistant content
