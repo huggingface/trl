@@ -186,7 +186,7 @@ def reward_func(environments, **kwargs) -> list[float]:
     return [env.reward for env in environments]
 ```
 
-For more information on reward functions, see the [GRPO - Custom Reward Functions](grpo_trainer#custom-reward-functions).
+For more information on reward functions, see the [GRPO - Custom Reward Functions](grpo_trainer#using-a-custom-reward-function).
 
 ### Tips for reward functions
 
