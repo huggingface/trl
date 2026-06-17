@@ -109,6 +109,8 @@
     title: GFPO
   - local: gkd_trainer
     title: GKD
+  - local: gmpo
+    title: GMPO
   - local: gold_trainer
     title: GOLD
   - local: grpo_with_replay_buffer
@@ -144,3 +146,4 @@
   - local: xpo_trainer
     title: XPO
   title: Experimental
+  isExpanded: false
