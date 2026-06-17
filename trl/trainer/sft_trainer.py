@@ -1359,14 +1359,13 @@ class SFTTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in the model config
-        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-        if self.aux_loss_enabled and getattr(model.config, "router_aux_loss_coef", 0.0) == 0.0:
-            warnings.warn(
-                "You set `output_router_logits=True` in the model config, but `router_aux_loss_coef` is `0.0`, so the "
-                "auxiliary loss has no effect. Set `router_aux_loss_coef > 0.0` to enable it.",
-                stacklevel=2,
-            )
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        is_moe = getattr(model.config, "output_router_logits", None) is not None
+        self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
+        if self.aux_loss_enabled:
+            # The native and chunked forwards compute the aux loss from the model config, so propagate the coef there.
+            model.config.output_router_logits = True
+            model.config.router_aux_loss_coef = self.args.router_aux_loss_coef
 
         # Under FSDP2 with `reshard_after_forward=True` (accelerate's default), the chunked CE path triggers a
         # redundant `lm_head.weight` all-gather per chunk during backward, adding significant wall-time. Setting
