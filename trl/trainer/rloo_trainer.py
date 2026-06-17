@@ -452,28 +452,24 @@ class RLOOTrainer(_BaseTrainer):
             optimizers=optimizers,
         )
 
-        # Reference model
         self.beta = args.beta
-        if self.beta == 0.0:
-            # If beta is 0.0, the reference model is not needed
-            self.ref_model = None
-        elif is_peft_model(model):
-            # If PEFT is used, the reference model is not needed since the adapter can be disabled
-            # to revert to the initial model.
-            self.ref_model = None
-        else:
+        # Reference model: create one from the model path unless:
+        # - beta is 0.0, the reference model is not needed
+        # - or model is PEFT, which recovers the reference by disabling the adapter
+        ref_model = None
+        if self.beta != 0.0 and not is_peft_model(model):
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
             model_init_kwargs = args.model_init_kwargs or {}
             # Distributed training requires device_map=None ("auto" fails)
             if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
-            self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
+            ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
         # Disable dropout in the models
         if args.disable_dropout:
             disable_dropout_in_model(model)
-            if self.ref_model is not None:
-                disable_dropout_in_model(self.ref_model)
+            if ref_model is not None:
+                disable_dropout_in_model(ref_model)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -564,13 +560,13 @@ class RLOOTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
-        if self.ref_model is not None:
+        if ref_model is not None:
             if self.is_deepspeed_enabled:
-                self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+                ref_model = prepare_deepspeed(ref_model, self.accelerator)
             elif self.is_fsdp_enabled:
-                self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
+                ref_model = prepare_fsdp(ref_model, self.accelerator)
             else:
-                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+                ref_model = self.accelerator.prepare_model(ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
             if self.beta == 0.0:
@@ -588,7 +584,15 @@ class RLOOTrainer(_BaseTrainer):
                     "you need a synced reference model. If you need `sync_ref_model` to work with PEFT, please open a "
                     "feature request at https://github.com/huggingface/trl/issues."
                 )
-            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+            self.add_callback(SyncRefModelCallback(ref_model=ref_model, accelerator=self.accelerator))
+
+        # Reference model:
+        # - None if self.beta == 0.0, else
+        # - ref_model
+        # - Or self.model
+        #   - If PEFT, we trigger adapter switching on self.model for the reference forward passes
+        #   - If non-PEFT, self.model is used to precompute_ref_log_probs because no training step has run yet
+        self.ref_model = None if self.beta == 0.0 else (ref_model or self.model)
 
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
@@ -1227,7 +1231,22 @@ class RLOOTrainer(_BaseTrainer):
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
-                if self.ref_model is not None:
+                if is_peft_model(self.ref_model):
+                    # When training a PEFT adapter, how we obtain the reference depends on the setup:
+                    # - New adapter: disabling adapters yields the base model.
+                    # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
+                    model = self.accelerator.unwrap_model(self.ref_model)
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                            self.ref_model,
+                            prompt_completion_ids,
+                            attention_mask,
+                            logits_to_keep,
+                            batch_size=batch_size,
+                            num_images=num_images,
+                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
+                        )
+                else:
                     ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                         self.ref_model,
                         prompt_completion_ids,
@@ -1237,21 +1256,6 @@ class RLOOTrainer(_BaseTrainer):
                         num_images=num_images,
                         **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
                     )
-                else:
-                    # When training a PEFT adapter, how we obtain the reference depends on the setup:
-                    # - New adapter: disabling adapters yields the base model.
-                    # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
-                    model = self.accelerator.unwrap_model(self.model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
-                            self.model,
-                            prompt_completion_ids,
-                            attention_mask,
-                            logits_to_keep,
-                            batch_size=batch_size,
-                            num_images=num_images,
-                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
-                        )
             else:
                 ref_per_token_logps = None
 
