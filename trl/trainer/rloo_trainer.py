@@ -429,9 +429,10 @@ class RLOOTrainer(_BaseTrainer):
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
 
-        # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in the model config
-        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-        self.router_aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        # MoE load-balancing auxiliary loss; `get_text_config()` reads from `text_config` on VLMs, the config itself otherwise
+        text_config = model.config.get_text_config()
+        self.aux_loss_enabled = getattr(text_config, "output_router_logits", False)
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.router_aux_loss_coef == 0.0:
             warnings.warn(
                 "You set `output_router_logits=True` in the model config, but `router_aux_loss_coef` is `0.0`, so the "

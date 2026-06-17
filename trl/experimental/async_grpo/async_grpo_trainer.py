@@ -417,8 +417,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
         # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in `model_init_kwargs`
-        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-        self.router_aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        text_config = model.config.get_text_config()
+        self.aux_loss_enabled = getattr(text_config, "output_router_logits", False)
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.router_aux_loss_coef == 0.0:
             logger.warning(
                 "You set `output_router_logits=True` in the model config, but `router_aux_loss_coef` is `0.0`, so the "
