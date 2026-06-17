@@ -16,7 +16,7 @@
 
 A custom [`~trl.experimental.harbor.HarborEnv`] subclass exposing a stateful Python kernel
 (variables/imports persist across cells) plus a shell tool. Point a trainer at it with
-``HarborSpec(dataset, agent="examples/scripts/harbor/harnesses/jupyter.py:JupyterEnv")``.
+``HarborSpec(dataset, agent="examples/scripts/harbor/harnesses/jupyter/env.py:JupyterEnv")``.
 
 The kernel is a tiny HTTP server (`kernel_server.py`, uploaded to /opt/ and started in `_setup`); each
 cell runs via `python3 /opt/run_cell.py` (see `run_cell.py`). Submission is by writing

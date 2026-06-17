@@ -16,7 +16,7 @@
 
 A custom [`~trl.experimental.harbor.HarborEnv`] subclass with a richer toolset than the bash harness:
 six shell tools (including background processes) and a persistent note-taking toolkit. Point a trainer
-at it with ``HarborSpec(dataset, agent="examples/scripts/harbor/harnesses/terminal_notes.py:TerminalNotesEnv")``.
+at it with ``HarborSpec(dataset, agent="examples/scripts/harbor/harnesses/terminal_notes/env.py:TerminalNotesEnv")``.
 Submission is by writing ``/workdir/answer.txt`` (same verifier as the bash harness).
 
 Notes live in-env (a dict) and survive across turns of the same rollout. They're recalled on demand via

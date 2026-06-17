@@ -103,6 +103,7 @@ The built-in `"bash"` harness ([`~trl.experimental.harbor.HarborBashEnv`]) expos
 
 ```python
 HarborSpec(dataset, agent="examples/scripts/harbor/harnesses/jupyter/env.py:JupyterEnv")
+HarborSpec(dataset, agent="examples/scripts/harbor/harnesses/terminal_notes/env.py:TerminalNotesEnv")
 ```
 
 To write your own harness, subclass [`~trl.experimental.harbor.HarborEnv`] and add tool methods — every public method becomes a tool (TRL discovers them with `inspect.getmembers`), so give each a typed signature and a docstring (used to build the tool schema). Keep helpers underscore-prefixed. Use `self._exec(cmd)` to run shell commands in the sandbox, and set `PROMPT_SUFFIX` to append harness guidance to the task instruction:
