@@ -171,6 +171,14 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         prefix_len = torch.where(span_starts, positions, -1).amax(dim=1).clamp(min=0)
         response_len = (span_end - prefix_len + 1) * (span_end >= 0)
 
+        # An example clipped to `max_length` can lose its assistant turn terminator, so its response has no real end
+        # and the EOS fill below would train the model to stop at the truncation boundary. Flag those examples to keep
+        # the fill out of their loss.
+        if self.args.max_length is None:
+            truncated = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        else:
+            truncated = attention_mask.sum(dim=1) >= self.args.max_length
+
         # One canvas per step: select one response block per example. The encoder reads the full clean sequence (its
         # autoregressive co-loss covers it all), but the decoder may only see the prompt and the clean response
         # blocks *before* the selected one, so the decoder mask cuts the cache off there.
@@ -211,8 +219,10 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         outputs = model(**model_kwargs)
 
         # Flat cross-entropy over all canvas positions, corrupted and uncorrupted (no 1/t weighting: the uniform
-        # corruption kernel has a flat ELBO)
-        diffusion_loss = F.cross_entropy(outputs.logits.flatten(0, 1), canvas_target.flatten())
+        # corruption kernel has a flat ELBO). For truncated turns the EOS fill is not a real terminator, so it is
+        # dropped from the loss while the surviving response tokens are still supervised.
+        diffusion_target = canvas_target.masked_fill(truncated[:, None] & ~in_response, -100)
+        diffusion_loss = F.cross_entropy(outputs.logits.flatten(0, 1), diffusion_target.flatten(), ignore_index=-100)
 
         # Autoregressive co-loss on the encoder, over all valid next-token pairs
         lm_head = self.model.lm_head
