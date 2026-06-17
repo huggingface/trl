@@ -237,7 +237,9 @@ def _chunked_cross_entropy_loss(
     return loss, correct, entropy_sum, n_valid_tensor
 
 
-def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: bool = False) -> None:
+def _patch_chunked_ce_lm_head(
+    model: torch.nn.Module, chunk_size: int, is_vlm: bool = False, with_peft: bool = False
+) -> None:
     """
     Patch `model.forward` to compute the LM loss via [`_chunked_cross_entropy_loss`].
 
@@ -309,16 +311,26 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         )
         hidden_states = outputs.last_hidden_state
 
+        lm_head_weight = lm_head.weight
+        lm_head_bias = lm_head.bias
+        # Under FSDP2 + PEFT, the outer FSDP module wraps PeftModel while lm_head.weight
+        # belongs to the nested causal-LM FSDP module, which is never entered directly inside
+        # _chunked_ce_forward. The weight therefore stays in Shard(0) placement; full_tensor()
+        # all-gathers the shards into the complete weight before the chunked matmul.
+        if with_peft and isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
+            lm_head_weight = lm_head_weight.full_tensor()
+            if lm_head_bias is not None:
+                lm_head_bias = lm_head_bias.full_tensor()
         loss, num_correct_tokens, entropy_sum, num_valid_tokens = _chunked_cross_entropy_loss(
             hidden_states,
-            lm_head.weight,
+            lm_head_weight,
             chunk_size,
             labels=labels,
             shift_labels=shift_labels,
             num_items_in_batch=num_items_in_batch,
             logit_scale=logit_scale,
             final_logit_softcapping=final_logit_softcapping,
-            lm_head_bias=lm_head.bias,
+            lm_head_bias=lm_head_bias,
         )
 
         aux_loss = None
@@ -607,17 +619,17 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         processor ([`~transformers.ProcessorMixin`]):
             The processor used to tokenize text and process images. It must be a subclass of
             [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
-        max_length (`int` or `None`, optional, defaults to `None`):
+        max_length (`int`, *optional*):
             Maximum sequence length for input tokens. If `None`, no truncation is applied.
         completion_only_loss (`bool`, *optional*, defaults to `False`):
             Whether to compute loss only on the completion part of the sequence. When `True`, the labels for the prompt
             part are set to -100. It requires the dataset type to be prompt-completion.
-        pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
+        pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
-        dataset_text_field (`str`, optional, defaults to `"text"`):
+        dataset_text_field (`str`, *optional*, defaults to `"text"`):
             Name of the column that contains text data in the dataset. This parameter is only relevant for [standard
             datasets format](dataset_formats#standard).
-        return_tensors (`str`, optional, defaults to `"pt"`):
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
 
     Example:
@@ -1307,7 +1319,9 @@ class SFTTrainer(_BaseTrainer):
                             "`lm_head` from `target_modules`, or switch to `loss_type='nll'`. If this is a real use "
                             "case for you, please open an issue at https://github.com/huggingface/trl/issues."
                         )
-                _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
+                _patch_chunked_ce_lm_head(
+                    target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm, with_peft=is_peft_model(model)
+                )
             else:
                 raise ValueError(
                     f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
@@ -1417,6 +1431,15 @@ class SFTTrainer(_BaseTrainer):
         formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
+        if isinstance(dataset, Dataset) and dataset.format["type"] == "custom":
+            raise ValueError(
+                "SFTTrainer cannot prepare a dataset that uses `Dataset.with_transform()`. The preparation pipeline "
+                "calls `Dataset.map()`, which reads through the transform and can bake a random or stateful transform "
+                "into the tokenized columns. Pass `dataset_kwargs={'skip_prepare_dataset': True}` and make the "
+                "transform return trainer-ready examples, including tokenized fields, or materialize deterministic "
+                "transforms with `Dataset.map()` before constructing the trainer."
+            )
+
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = get_dataset_column_names(dataset)
         is_processed = "input_ids" in column_names
