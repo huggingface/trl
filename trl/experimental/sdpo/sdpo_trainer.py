@@ -1657,9 +1657,13 @@ class SDPOTrainer(_BaseTrainer):
             # valid values remain (e.g. JSON loggers crash on float NaN).
             valid = [v for v in val if not math.isnan(v)]
             metrics[key] = sum(valid) / len(valid) if valid else None
+
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
-        logs = {**logs, **metrics}
+
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
