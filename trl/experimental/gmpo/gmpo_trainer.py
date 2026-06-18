@@ -89,13 +89,31 @@ class GMPOTrainer(GRPOTrainer):
         # sign-aware, one-sided clipping = PPO's trust-region "min" trick written in log-spaces:
         advantages_col = advantages.unsqueeze(1)
         clipped_log_ratio = torch.where(
-            advantages_col > 0,
+            advantages_col >= 0,
             torch.minimum(log_ratio, clamped_log_ratio),
             torch.maximum(log_ratio, clamped_log_ratio),
         )
 
         # Optionally drop low-entropy tokens from the geometric mean
         seq_mask = mask * entropy_mask if entropy_mask is not None else mask
+
+        # Off-policy sequence masking (DeepSeek-V3.2, Eq 9): masks out tokens with high KL divergence for
+        # negative-advantage sequences. Applied to seq_mask so masked tokens are excluded from the geometric mean.
+        if self.off_policy_mask_threshold is not None:
+            sampling_per_token_logps = inputs.get("sampling_per_token_logps", old_per_token_logps)
+            off_policy_mask = self.get_off_policy_mask(
+                advantages=advantages,
+                per_token_logps=per_token_logps,
+                sampling_per_token_logps=sampling_per_token_logps,
+                mask=mask,
+                off_policy_threshold=self.off_policy_mask_threshold,
+            )
+            seq_mask = seq_mask * off_policy_mask
+
+        # vLLM importance sampling correction: apply per-token IS ratio as weights inside the geometric mean.
+        # This is the sequence-level equivalent of GRPO's per-token loss * IS ratio.
+        if self.use_vllm and self.vllm_importance_sampling_correction:
+            seq_mask = seq_mask * inputs["importance_sampling_ratio"]
 
         # Geometric mean of the clipped token ratios = exp(mean of clipped log-ratios over valid tokens). The 1/|o_i|
         # exponent is the geometric-mean normalization; the paper's ablation shows it is essential.
