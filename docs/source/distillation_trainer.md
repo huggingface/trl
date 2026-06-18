@@ -94,7 +94,7 @@ When using the teacher server:
 
 ### Expected dataset type
 
-The dataset should be formatted as a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language_modeling) dataset:
+The dataset should be formatted as a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language-modeling) dataset:
 
 ```python
 {"messages": [{"role": "user", "content": "What color is the sky?"},

@@ -233,15 +233,14 @@ class TestCLIArgumentParsing:
         args = parser.parse_args(["list", "--target", "claude"])
         assert args.target == "claude"
 
-    def test_install_command_requires_target(self):
-        """Test that install command requires target."""
+    def test_default_target_is_agents(self):
+        """Test that default target is 'agents'."""
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
         add_skills_subcommands(subparsers)
 
-        # Should fail without target
-        with pytest.raises(SystemExit):
-            parser.parse_args(["install", "trl-training"])
+        args = parser.parse_args(["install", "trl-training"])
+        assert args.target == "agents"
 
     def test_scope_choices(self):
         """Test that scope parameter accepts valid choices."""
