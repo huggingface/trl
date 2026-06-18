@@ -377,6 +377,8 @@ class RewardTrainer(_BaseTrainer):
                     "to output a single scalar reward per sequence. Please instantiate your model with `num_labels=1` "
                     "or pass a model name as a string to have it configured automatically."
                 )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
+        _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         # Processing class
         if processing_class is None:
