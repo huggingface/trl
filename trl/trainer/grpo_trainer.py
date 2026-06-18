@@ -585,6 +585,17 @@ class GRPOTrainer(_BaseTrainer):
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
+
+        # MoE load-balancing auxiliary loss; `get_text_config()` reads from `text_config` on VLMs, the config itself otherwise
+        text_config = model.config.get_text_config()
+        self.aux_loss_enabled = getattr(text_config, "output_router_logits", False)
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0)
+        if self.aux_loss_enabled and self.router_aux_loss_coef == 0.0:
+            warnings.warn(
+                "You set `output_router_logits=True` in the model config, but `router_aux_loss_coef` is `0.0`, so the "
+                "auxiliary loss has no effect. Set `router_aux_loss_coef > 0.0` to enable it.",
+                stacklevel=2,
+            )
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.off_policy_mask_threshold = args.off_policy_mask_threshold
@@ -1076,6 +1087,7 @@ class GRPOTrainer(_BaseTrainer):
         logits_to_keep,
         batch_size=None,
         compute_entropy=False,
+        compute_aux_loss=False,
         pixel_values=None,
         image_grid_thw=None,
         num_images=None,
@@ -1084,11 +1096,12 @@ class GRPOTrainer(_BaseTrainer):
         token_type_ids=None,
         mm_token_type_ids=None,
         image_position_ids=None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Compute log-probs and (optionally) entropies for each token."""
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        """Compute log-probs, (optionally) entropies, and (optionally) the MoE load-balancing aux loss."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
+        all_aux_losses = []
         for start in range(0, input_ids.size(0), batch_size):
             input_ids_batch = input_ids[start : start + batch_size]
             attention_mask_batch = attention_mask[start : start + batch_size]
@@ -1128,7 +1141,12 @@ class GRPOTrainer(_BaseTrainer):
 
             model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
 
-            logits = model(**model_inputs).logits
+            # MoE models: request router logits so the model returns `outputs.aux_loss`
+            if compute_aux_loss:
+                model_inputs["output_router_logits"] = True
+
+            outputs = model(**model_inputs)
+            logits = outputs.logits
             # Exclude the last value: it corresponds to the next token pred
             logits = logits[:, :-1, :]  # (B, L-1, H)
             # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
@@ -1145,9 +1163,13 @@ class GRPOTrainer(_BaseTrainer):
                     entropies = entropy_from_logits(logits)
                 all_entropies.append(entropies)
 
+            if compute_aux_loss:
+                all_aux_losses.append(outputs.aux_loss)
+
         logps = torch.cat(all_logps, dim=0)
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
-        return logps, entropies
+        aux_loss = torch.stack(all_aux_losses).mean() if compute_aux_loss else None
+        return logps, entropies, aux_loss
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
@@ -2072,7 +2094,7 @@ class GRPOTrainer(_BaseTrainer):
             if self.args.gradient_accumulation_steps % generate_every != 0 or (
                 self.use_vllm and self.vllm_importance_sampling_correction
             ):
-                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                old_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,
                     attention_mask,
@@ -2134,7 +2156,7 @@ class GRPOTrainer(_BaseTrainer):
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:
-                    ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                         self.ref_model,
                         prompt_completion_ids,
                         attention_mask,
@@ -2149,7 +2171,7 @@ class GRPOTrainer(_BaseTrainer):
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
                     model = self.accelerator.unwrap_model(self.model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                        ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                             self.model,
                             prompt_completion_ids,
                             attention_mask,
@@ -2511,12 +2533,13 @@ class GRPOTrainer(_BaseTrainer):
         mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
 
         # Compute the per_token_logps and the entropy at each position in the completion
-        per_token_logps, entropies = self._get_per_token_logps_and_entropies(
+        per_token_logps, entropies, aux_loss = self._get_per_token_logps_and_entropies(
             model,
             input_ids,
             attention_mask,
             logits_to_keep,
             compute_entropy=True,
+            compute_aux_loss=self.aux_loss_enabled,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
             num_images=inputs.get("num_images"),
@@ -2653,6 +2676,12 @@ class GRPOTrainer(_BaseTrainer):
             loss = loss / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
+
+        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
+        if self.aux_loss_enabled:
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+            loss = loss + self.router_aux_loss_coef * aux_loss / normalizer
+            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         # Log the metrics
         completion_token_count = mask.sum().clamp(min=1.0)
