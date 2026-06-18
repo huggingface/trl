@@ -297,6 +297,31 @@ Under MIS, ratios outside of this range are set to zero, so those samples do not
 
 Importance sampling is the principled algorithmic response to the training–inference mismatch. However, there are also more direct approaches that attempt to reduce the mismatch between the two engines themselves. Most of these are engineering solutions. For example, [MiniMax M1 uses an FP32 language model head](https://huggingface.co/papers/2506.13585) in the inference engine. Thinking Machines has explored [deterministic inference kernels](https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/), although this comes with a significant efficiency cost. vLLM has shown [bitwise consistent policies](https://blog.vllm.ai/2025/11/10/bitwise-consistent-train-inference.html) by building on the batch invariant deterministic kernels from Thinking Machines, but as of November 2025 there remains a substantial throughput penalty relative to standard vLLM inference.
 
+### Speed up training with transformers continuous batching
+
+As an alternative to vLLM, you can use transformers' built-in continuous batching engine for faster generation. Continuous batching removes finished sequences from the batch immediately rather than waiting for the slowest one to finish. For tasks with variable completion lengths (e.g., math reasoning), this yields faster generation and lower VRAM usage than the default `generate()` at large batch sizes (N≥32).
+
+> [!TIP]
+> Continuous batching is a drop-in upgrade with no server setup or weight synchronization. It runs in-process and is well-suited for single-GPU training or memory-constrained environments. For maximum generation throughput at scale, use vLLM instead.
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    use_transformers_continuous_batching=True,
+    transformers_continuous_batching_config={
+        "use_cuda_graph": False,
+        "max_memory_percent": 0.4,  # lower values leave more VRAM for the training backward pass
+    },
+)
+```
+
+> [!TIP]
+> TRL defaults `max_memory_percent` to `0.5` (instead of transformers' `0.9`) to leave enough VRAM for the training backward pass. Tune it down to `0.3`–`0.4` for large generation batches (N≥32) or if you see out-of-memory errors.
+
+For a full training example, see [`examples/scripts/grpo_continuous_batching.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_continuous_batching.py).
+
 ### GRPO at scale: train a 70B+ Model on multiple nodes
 
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
