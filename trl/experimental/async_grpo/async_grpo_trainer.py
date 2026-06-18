@@ -610,7 +610,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         log_ratio = log_probs - old_log_probs
         coef_1 = torch.exp(log_ratio)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss = -torch.min(coef_1 * advantages, coef_2 * advantages)
+        per_token_loss = -torch.min(coef_1 * per_token_advantages, coef_2 * per_token_advantages)
 
         # DDP/FSDP averages gradients across ranks (world_size).
         # To get correct per-token normalization we scale by 1/tokens_per_rank
