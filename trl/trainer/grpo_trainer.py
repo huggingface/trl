@@ -368,15 +368,17 @@ class GRPOTrainer(_BaseTrainer):
         elif is_peft_model(model) and args.beta != 0.0:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during GRPO training. PEFT only
-            # supports one adapter per model when the LoRA config uses `target_parameters`, so in that case we skip
-            # the "ref" adapter and compute the reference log probs with adapters disabled, i.e. with the base model.
+            # supports one adapter per model when the LoRA config uses `target_parameters` (see peft#3340), so in that
+            # case we skip the "ref" adapter and compute the reference log probs with adapters disabled, i.e. with the
+            # base model.
             default_config = model.peft_config["default"]
             if isinstance(default_config, LoraConfig) and default_config.target_parameters:
                 logger.warning(
-                    "PEFT doesn't support adding a second adapter when the LoRA config uses `target_parameters`, so "
-                    "the reference log probs will be computed with adapters disabled, i.e. with the base model. This "
-                    "is equivalent for a freshly initialized adapter, but differs if the adapter has already been "
-                    "trained."
+                    "PEFT can't add a frozen reference adapter alongside one that uses `target_parameters` "
+                    "(peft#3340), so the reference log probs are computed from the base model (adapters disabled). "
+                    "If you wrapped the model only to apply LoRA, pass a `peft_config` to the trainer instead; if you "
+                    "wrapped it deliberately (pretrained adapter or custom init), note that the base model matches "
+                    "your adapter only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
                 )
             else:
                 model.add_adapter("ref", default_config)
