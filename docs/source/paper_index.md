@@ -1821,6 +1821,45 @@ Expected dataset columns:
 
 For more details, see the [SDFT Trainer documentation](sdft_trainer).
 
+### Self-Distilled Reasoner: On-Policy Self-Distillation for Large Language Models
+
+**📜 Paper**: https://huggingface.co/papers/2601.18734
+
+On-Policy Self-Distillation (OPSD) trains a single model as both student and teacher: the student samples on-policy completions from the bare problem, while the teacher (the same network, by default frozen at the initial weights) scores those completions conditioned on the problem plus the ground-truth solution from `privileged_context`. The full-vocabulary divergence between the two next-token distributions is minimized along the student trajectory, with a pointwise per-vocabulary-entry KL clip (`distillation_kl_clip`) that keeps high-divergence style tokens from dominating the signal.
+
+```python
+from datasets import Dataset
+
+from trl.experimental.opsd import OPSDConfig, OPSDTrainer
+
+dataset = Dataset.from_dict(
+    {
+        "prompt": [[{"role": "user", "content": "Solve 2+2."}]],
+        "privileged_context": ["The answer is 4."],
+    }
+)
+
+training_args = OPSDConfig(
+    distillation_alpha=0.0,  # forward KL, the official OPSD setting
+    distillation_kl_clip=0.05,
+    max_completion_length=1024,
+)
+
+trainer = OPSDTrainer(
+    model="Qwen/Qwen3-1.7B",
+    args=training_args,
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
+Expected dataset columns:
+
+- `prompt`
+- `privileged_context` containing the ground-truth solution shown only to the teacher
+
+For more details, see the [OPSD Trainer documentation](opsd_trainer).
+
 ### Embarrassingly Simple Self-Distillation Improves Code Generation
 
 **📜 Paper**: https://huggingface.co/papers/2604.01193

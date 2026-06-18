@@ -36,7 +36,7 @@ from ..testing_utils import TrlTestCase
 if is_peft_available():
     from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
 
-    from trl.experimental.sdft.teacher_sync import PEFTAdapterEMACallback
+    from trl.experimental.callbacks import PEFTAdapterEMACallback
 
 
 class TestSelfDistillationTrainerBehavior(TrlTestCase):

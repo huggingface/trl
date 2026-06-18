@@ -55,8 +55,12 @@ def remove_hooks(model: "DeepSpeedEngine") -> None:
     else:
         raise RuntimeError("The model optimizer is None, which is not yet supported.")
 
+    from deepspeed.runtime.zero.partition_parameters import is_zero_param
+
     for param in iter_params(optimizer_offload.module, recurse=True):
-        param.ds_active_sub_modules.clear()
+        # Parameters created after deepspeed.initialize (e.g. an extra PEFT adapter) are not DeepSpeed-managed.
+        if is_zero_param(param):
+            param.ds_active_sub_modules.clear()
 
     for hook in optimizer_offload.forward_hooks:
         hook.remove()

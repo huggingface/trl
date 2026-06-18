@@ -26,7 +26,6 @@ from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
@@ -40,6 +39,7 @@ from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available
 
 from ...data_utils import is_conversational
+from ...distributed import DistributedBackend
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
@@ -54,6 +54,7 @@ from ...trainer.utils import (
     split_tensor_dict,
     use_adapter,
 )
+from ..callbacks import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 from ..utils import prepare_peft_model
 from .loss_utils import (
     add_tail_bucket,
@@ -64,7 +65,6 @@ from .loss_utils import (
     compute_topk_self_distillation_loss,
 )
 from .sdft_config import SDFTConfig
-from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 
 
 if is_peft_available():
@@ -191,7 +191,9 @@ class DemonstrationTeacherContextBuilder:
             self._compose_teacher_prompt(prompt, privileged_context)
             for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
         ]
-        teacher_prompt_ids_list = self.trainer._tokenize_prompts(teacher_prompts)
+        # Score the teacher on the full prompt: the problem leads the teacher template, so left-truncating to
+        # max_prompt_length (correct for the student generation prompt) would drop it. Matches SDPO.
+        teacher_prompt_ids_list = self.trainer._tokenize_prompts_untruncated(teacher_prompts)
         device = completion_ids.device
         teacher_prompt_ids = [torch.tensor(ids) for ids in teacher_prompt_ids_list]
         teacher_prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in teacher_prompt_ids]
@@ -293,6 +295,12 @@ class SDFTTrainer(_BaseTrainer):
                 )
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
+
+        # The EMA teacher adapter must exist before accelerate/DeepSpeed wraps the model: ZeRO-3 registers every
+        # module exactly once at initialization and cannot adopt modules added afterwards.
+        if args.teacher_model_kind == "ema" and is_peft_model(model) and is_pure_lora_training(model):
+            active_adapter = model.active_adapter or "default"
+            model.add_adapter("teacher", model.peft_config[active_adapter])
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
@@ -456,6 +464,8 @@ class SDFTTrainer(_BaseTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
+        self._dist = DistributedBackend(self.accelerator)
+
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
@@ -499,6 +509,12 @@ class SDFTTrainer(_BaseTrainer):
 
         Must be called after `super().__init__` so that `self.callback_handler` is available.
         """
+        if is_peft_model(self.model) and self._dist.is_zero3:
+            raise ValueError(
+                "PEFT with DeepSpeed ZeRO-3 is currently unsupported: the teacher forward on the shared model "
+                "invalidates the ZeRO-3 parameter coordinator trace and training crashes at backward recompute. "
+                "Use FSDP2 or ZeRO-2 with PEFT, or full fine-tuning under ZeRO-3."
+            )
 
         teacher_model_kind = self.args.teacher_model_kind
 
@@ -724,7 +740,7 @@ class SDFTTrainer(_BaseTrainer):
             for ids, length in zip(batch["completion_ids"].detach().cpu(), raw_completion_lengths, strict=True)
         ]
 
-    def _tokenize_prompts(self, prompts: list[Any]) -> list[list[int]]:
+    def _tokenize_prompts_untruncated(self, prompts: list[Any]) -> list[list[int]]:
         if is_conversational({"prompt": prompts[0]}):
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
@@ -736,6 +752,10 @@ class SDFTTrainer(_BaseTrainer):
             prompt_ids = tokenized["input_ids"]
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
+        return prompt_ids
+
+    def _tokenize_prompts(self, prompts: list[Any]) -> list[list[int]]:
+        prompt_ids = self._tokenize_prompts_untruncated(prompts)
         if self.max_prompt_length is not None:
             prompt_ids = [ids[-self.max_prompt_length :] for ids in prompt_ids]
         return prompt_ids
@@ -778,7 +798,7 @@ class SDFTTrainer(_BaseTrainer):
                 generation_kwargs=self.generation_kwargs,
             ) as unwrapped_model,
             torch.no_grad(),
-            FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+            self._dist.summon_full_params(self.model_wrapped, recurse=False),
         ):
             prompt_completion_ids = unwrapped_model.generate(
                 **generate_inputs, generation_config=self.generation_config
@@ -1234,11 +1254,8 @@ class SDFTTrainer(_BaseTrainer):
         if not self.use_liger_loss:
             return nullcontext()
 
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
+        if not self._dist.is_zero3:
             return nullcontext()
-
-        import deepspeed
 
         unwrapped_student = self.accelerator.unwrap_model(model)
         unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
@@ -1249,7 +1266,7 @@ class SDFTTrainer(_BaseTrainer):
             params.append(student_head.bias)
         if teacher_head.bias is not None:
             params.append(teacher_head.bias)
-        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
+        return self._dist.gather_params(params)
 
     def _get_teacher_context_for_self_distillation(self):
         """Return the context manager that routes the teacher forward to the correct weights.
@@ -1301,6 +1318,6 @@ class SDFTTrainer(_BaseTrainer):
         metrics = {k: sum(v) / len(v) for k, v in self._metrics[mode].items() if v}
         if mode == "eval":
             metrics = {f"eval_{k}": v for k, v in metrics.items()}
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
