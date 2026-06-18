@@ -317,6 +317,11 @@ class GRPOTrainer(_BaseTrainer):
                 get_config_model_id(model.config), truncation_side="left", padding_side="left"
             )
 
+        if args.use_transformers_continuous_batching and isinstance(processing_class, ProcessorMixin):
+            raise ValueError(
+                "`use_transformers_continuous_batching` does not support multimodal models. Use `use_vllm` instead."
+            )
+
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
             self._tokenizer = processing_class.tokenizer
@@ -574,7 +579,22 @@ class GRPOTrainer(_BaseTrainer):
         self.top_k = args.top_k
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
-        self.use_transformers_paged = args.use_transformers_paged
+        self.use_transformers_continuous_batching = args.use_transformers_continuous_batching
+        if self.use_transformers_continuous_batching:
+            if not Version(transformers.__version__) >= Version("5.8.0"):
+                raise ImportError(
+                    "Using `use_transformers_continuous_batching` requires transformers>=5.8.0. "
+                    "Please upgrade with `pip install --upgrade transformers`."
+                )
+            from transformers.generation import ContinuousBatchingConfig
+
+            cb_kwargs = dict(args.transformers_continuous_batching_config or {})
+            # The transformers default (0.9) leaves almost no VRAM for the training backward pass;
+            # use a training-aware default unless the user has set it explicitly.
+            cb_kwargs.setdefault("max_memory_percent", 0.5)
+            self.continuous_batching_config = ContinuousBatchingConfig(**cb_kwargs)
+        else:
+            self.continuous_batching_config = None
         self.pad_to_multiple_of = args.pad_to_multiple_of
         self.use_vllm = args.use_vllm
         self.vllm_mode = args.vllm_mode
@@ -1407,7 +1427,7 @@ class GRPOTrainer(_BaseTrainer):
             # vLLM returns per-token top-k logprobs; keep only the top-1 (sampled token) logprob
             logprobs = [[lp[0] for lp in seq] for seq in logprobs]
 
-        elif self.use_transformers_paged:
+        elif self.use_transformers_continuous_batching:
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
@@ -1423,13 +1443,15 @@ class GRPOTrainer(_BaseTrainer):
                     unwrapped_model.to(torch.float16)
                 if self.args.cast_lm_head_to_fp32:
                     unwrapped_model.lm_head.to(torch.float32)
-                # Continuous batching API expects 'inputs' arg only
                 all_outputs = unwrapped_model.generate_batch(
-                    prompt_ids, generation_config=self.generation_config, progress_bar=False
+                    prompt_ids,
+                    generation_config=self.generation_config,
+                    continuous_batching_config=self.continuous_batching_config,
+                    progress_bar=False,
                 )
-                unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
+                unwrapped_model.train()
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
-            logprobs = None  # not used in this case
+            logprobs = None
 
         else:
             # Regular generation path: left-pad token IDs into tensors
