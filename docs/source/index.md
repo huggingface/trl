@@ -14,7 +14,7 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 **TRL v1:** We released TRL v1 — a major milestone that marks a real shift in what TRL is. Read the [blog post](https://huggingface.co/blog/trl-v1) to learn more.
 
-**🌍 Environment integrations:** Train agents against real environments via [`GRPOTrainer`]'s `environment_factory` — pick from [OpenEnv](openenv), [OpenReward](openreward), and [Harbor](harbor) task suites.
+**🚢 Harbor:** We now support [Harbor](harbor) — train agents against sandboxed task suites (instruction + sandbox image + in-sandbox verifier) via [`GRPOTrainer`]'s `environment_factory`.
 
 ## Taxonomy
 

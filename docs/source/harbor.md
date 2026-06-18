@@ -152,9 +152,13 @@ def my_reward(environments, **kwargs) -> list[float]:
     return [env.reward for env in environments]
 ```
 
-## HarborSpec
+## API
 
 [[autodoc]] trl.experimental.harbor.HarborSpec
+
+[[autodoc]] trl.experimental.harbor.HarborEnv
+
+[[autodoc]] trl.experimental.harbor.HarborBashEnv
 
 ## Limitations
 

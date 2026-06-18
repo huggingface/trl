@@ -24,7 +24,7 @@
 
 **TRL v1:** We released TRL v1 — a major milestone that marks a real shift in what TRL is. Read the [blog post](https://huggingface.co/blog/trl-v1) to learn more.
 
-**🌍 Environment integrations:** Train agents against real environments via [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer)'s `environment_factory` — pick from [OpenEnv](https://huggingface.co/docs/trl/openenv), [OpenReward](https://huggingface.co/docs/trl/openreward), and [Harbor](https://huggingface.co/docs/trl/harbor) task suites.
+**🚢 Harbor:** We now support [Harbor](https://huggingface.co/docs/trl/harbor) — train agents against sandboxed task suites (instruction + sandbox image + in-sandbox verifier) via [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer)'s `environment_factory`.
 
 ## Overview
 
