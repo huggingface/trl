@@ -4,7 +4,7 @@
 
 TRL supports the Binary Classifier Optimization (BCO).
 The [BCO](https://huggingface.co/papers/2404.04656) authors train a binary classifier whose logit serves as a reward so that the classifier maps {prompt, chosen completion} pairs to 1 and {prompt, rejected completion} pairs to 0.
-For a full example have a look at  [`examples/scripts/bco.py`].
+For a full example have a look at [`examples/scripts/bco.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/bco.py).
 
 ## Expected dataset type
 

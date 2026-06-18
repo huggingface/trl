@@ -28,7 +28,7 @@ class GRPOTrainer(_GRPOTrainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         # Compute the per_token_logps and the entropy at each position in the completion
-        per_token_logps, entropies = self._get_per_token_logps_and_entropies(
+        per_token_logps, entropies, _ = self._get_per_token_logps_and_entropies(
             model,
             input_ids,
             attention_mask,
