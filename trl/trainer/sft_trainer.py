@@ -639,17 +639,17 @@ class DataCollatorForMultimodalLanguageModeling(DataCollatorMixin):
         processor ([`~transformers.ProcessorMixin`]):
             The processor used to tokenize text and process images / audio. It must be a subclass of
             [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
-        max_length (`int` or `None`, optional, defaults to `None`):
+        max_length (`int`, *optional*):
             Maximum sequence length for input tokens. If `None`, no truncation is applied.
         completion_only_loss (`bool`, *optional*, defaults to `False`):
             Whether to compute loss only on the completion part of the sequence. When `True`, the labels for the prompt
             part are set to -100. It requires the dataset type to be prompt-completion.
-        pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
+        pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
-        dataset_text_field (`str`, optional, defaults to `"text"`):
+        dataset_text_field (`str`, *optional*, defaults to `"text"`):
             Name of the column that contains text data in the dataset. This parameter is only relevant for [standard
             datasets format](dataset_formats#standard).
-        return_tensors (`str`, optional, defaults to `"pt"`):
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
 
     Example:
@@ -1421,7 +1421,14 @@ class SFTTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
+        # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in the model config
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+        if self.aux_loss_enabled and getattr(model.config, "router_aux_loss_coef", 0.0) == 0.0:
+            warnings.warn(
+                "You set `output_router_logits=True` in the model config, but `router_aux_loss_coef` is `0.0`, so the "
+                "auxiliary loss has no effect. Set `router_aux_loss_coef > 0.0` to enable it.",
+                stacklevel=2,
+            )
 
         # Under FSDP2 with `reshard_after_forward=True` (accelerate's default), the chunked CE path triggers a
         # redundant `lm_head.weight` all-gather per chunk during backward, adding significant wall-time. Setting

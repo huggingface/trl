@@ -221,7 +221,7 @@ class PAPOTrainer(GRPOTrainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         # Compute the per_token_logps and the entropy at each position in the completion
-        per_token_logps, entropies = self._get_per_token_logps_and_entropies(
+        per_token_logps, entropies, _ = self._get_per_token_logps_and_entropies(
             model,
             input_ids,
             attention_mask,
@@ -293,7 +293,7 @@ class PAPOTrainer(GRPOTrainer):
             raise ValueError(f"Unknown loss type: {self.loss_type}")
         # >>> 2. Implicit Perception Loss
         inputs["pixel_values"] = self._mask_image(inputs["pixel_values"], self.mask_ratio)
-        mask_img_per_token_logps, mask_img_entropies = self._get_per_token_logps_and_entropies(
+        mask_img_per_token_logps, mask_img_entropies, _ = self._get_per_token_logps_and_entropies(
             model,
             input_ids,
             attention_mask,
