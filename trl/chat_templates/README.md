@@ -41,6 +41,10 @@ Original GLM-4-MoE chat template.
 
 Original GPT-OSS chat template.
 
+### `idefics3.jinja`
+
+Original Idefics3 chat template (as shipped by `HuggingFaceM4/Idefics3-8B-Llama3`). Does not support tool calling.
+
 ### `llama3.jinja`
 
 Original Llama 3 chat template.
@@ -151,6 +155,12 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched GPT-OSS template. Diff vs `gptoss.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `idefics3_training.jinja`
+
+Patched Idefics3 template. Diff vs `idefics3.jinja`:
+
+Split the assistant message into its own branch so the `{% generation %}` / `{% endgeneration %}` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
 
 ### `llama3_training.jinja`
 
