@@ -568,13 +568,15 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
         pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
         pytest.param(
-            "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion", id="diffusion_gemma", marks=[
-                  require_vision,
-                  pytest.mark.skipif(
-                      Version(transformers.__version__) < Version("5.11.0"),
-                      reason="DiffusionGemma was introduced in transformers 5.11.0",
-                  ),
-              ]
+            "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion",
+            id="diffusion_gemma",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="DiffusionGemma was introduced in transformers 5.11.0",
+                ),
+            ],
         ),
         pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
         pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
