@@ -78,6 +78,7 @@ _CHUNKED_LM_HEAD_CHUNK_SIZE = 256
 
 
 if is_peft_available():
+    import peft
     from peft import PeftConfig, PeftModel, PeftType, get_peft_model
 
 
@@ -1112,11 +1113,16 @@ class SFTTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
-                autocast_adapter_dtype = False
-            else:
-                autocast_adapter_dtype = True
-            model = get_peft_model(model, peft_config, autocast_adapter_dtype=autocast_adapter_dtype)
+            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
+            get_peft_model_kwargs = {}
+            if (
+                args.deepspeed_plugin is not None
+                and args.deepspeed_plugin.zero_stage == 3
+                and not _is_quantized_model
+                and Version(peft.__version__) >= Version("0.12.0")
+            ):
+                get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
         # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703
