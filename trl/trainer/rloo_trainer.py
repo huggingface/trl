@@ -1303,6 +1303,10 @@ class RLOOTrainer(_BaseTrainer):
 
         # Include the KL penalty in the reward
         if self.beta != 0.0:
+            # RLOO uses the first-order log ratio for the per-token KL estimate, following the original RLOO paper
+            # (Ahmadian et al., 2024, https://huggingface.co/papers/2405.14782). Unlike GRPOTrainer's Schulman
+            # approximation (always >= 0), this can be negative per token. The divergence is intentional: RLOO applies
+            # KL as a reward penalty (summed across tokens per sequence), while GRPO adds it to the per-token loss.
             per_token_kl = old_per_token_logps - ref_per_token_logps
             # Apply sequence-level KL penalty to rewards (sum KL across tokens first, then apply to each sequence)
             kl = (per_token_kl * completion_mask).sum(-1)
