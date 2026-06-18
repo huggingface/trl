@@ -652,6 +652,43 @@ class TestDPOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_peft
+    def test_train_moe_peft_model(self):
+        # Regression test for https://github.com/huggingface/trl/issues/5222. PEFT only supports one adapter per model
+        # when the LoRA config uses `target_parameters` (see peft#3340), so no "ref" adapter can be created and the
+        # reference log probs are computed with adapters disabled instead.
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+
+        lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
+        model = get_peft_model(model, lora_config)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert "ref" not in trainer.model.peft_config
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     # In practice, this test is the same as `test_train_dense_with_peft_config_lora`, since gradient checkpointing is
     # enabled by default in `DPOTrainer`. We keep it as a regression guard: if the default ever changes, we still
     # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
