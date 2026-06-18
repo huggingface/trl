@@ -1139,7 +1139,7 @@ class GOLDTrainer(SFTTrainer):
 
         prompts_text = self.processing_class.batch_decode(
             prompt_ids_list,
-            skip_special_tokens=True,
+            skip_special_tokens=False,
         )
 
         if not self.use_vllm:
@@ -1725,7 +1725,7 @@ class GOLDTrainer(SFTTrainer):
                 masked_input_ids = torch.where(
                     labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100)
                 )
-                true_labels = masked_input_ids[:, 1:].contiguous().reshape(-1)
+                true_labels = masked_input_ids[:, 1:].reshape(-1)
 
                 student_head = unwrapped_student.get_output_embeddings()
                 teacher_head = unwrapped_teacher.get_output_embeddings()

@@ -60,7 +60,7 @@ A more explicit setup might look like this when you need to customise model load
 
 ```python
 from datasets import load_dataset
-from trl import GOLDConfig, GOLDTrainer
+from trl.experimental.gold import GOLDConfig, GOLDTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 student_name = "meta-llama/Llama-3.2-1B-Instruct"
@@ -105,7 +105,7 @@ trainer.train()
 
 ### Expected dataset type
 
-GOLD requires a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language_modeling) dataset, e.g.:
+GOLD requires a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language-modeling) dataset, e.g.:
 
 ```python
 {"messages": [{"role": "user", "content": "What color is the sky?"},

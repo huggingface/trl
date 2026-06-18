@@ -48,11 +48,13 @@ jobs:
           uv pip install --upgrade setuptools wheel
 
       - name: Install dependencies
+        env:
+          TRANSFORMERS_REF: ${{ inputs.transformers_ref }}
         run: |
           source .venv/bin/activate
           uv pip install -U \
             ".[dev]" \
-            "transformers @ git+https://github.com/huggingface/transformers.git@${{ inputs.transformers_ref }}"
+            "transformers @ git+https://github.com/huggingface/transformers.git@${TRANSFORMERS_REF}"
 
       - name: Test with pytest
         run: |
@@ -102,11 +104,13 @@ jobs:
           uv pip install --upgrade setuptools wheel
 
       - name: Install dependencies
+        env:
+          TRANSFORMERS_REF: ${{ inputs.transformers_ref }}
         run: |
           source .venv/bin/activate
           uv pip install -U \
             ".[dev]" \
-            "transformers @ git+https://github.com/huggingface/transformers.git@${{ inputs.transformers_ref }}"
+            "transformers @ git+https://github.com/huggingface/transformers.git@${TRANSFORMERS_REF}"
 
       - name: Run distributed smoke tests
         run: |
