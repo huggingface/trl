@@ -19,7 +19,6 @@ import inspect
 import math
 import textwrap
 import time
-import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from pathlib import Path
