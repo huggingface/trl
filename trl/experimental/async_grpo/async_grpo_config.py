@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from trl.trainer.base_config import _BaseConfig
 
@@ -28,6 +29,13 @@ class AsyncGRPOConfig(_BaseConfig):
     in this class may differ from those in [`~transformers.TrainingArguments`].
 
     Parameters:
+        > Parameters that control the model
+
+        model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
+            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
+            model from a path. For MoE models, set `{"output_router_logits": True, "router_aux_loss_coef": <coef>}` here
+            to enable the load-balancing auxiliary loss.
+
         > Parameters that control generation
 
         num_generations (`int`, *optional*, defaults to `8`):
@@ -98,6 +106,18 @@ class AsyncGRPOConfig(_BaseConfig):
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
+
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    # Parameters that control the model
+    model_init_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when instantiating "
+            "the model from a path. For MoE models, set `output_router_logits` and `router_aux_loss_coef` here to "
+            "enable the load-balancing auxiliary loss."
+        },
+    )
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
