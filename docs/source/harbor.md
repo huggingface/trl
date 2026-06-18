@@ -17,6 +17,14 @@ This guide covers **how to integrate Harbor with TRL**. For Harbor itself, see t
 pip install trl[harbor]
 ```
 
+> [!IMPORTANT]
+> Harbor drives generation through vLLM and uses `environment_factory`, which requires `vllm>=0.22.0` and `transformers>=5.2.0`. The `trl[vllm]` extra currently pins `vllm<=0.19` (which in turn pins `transformers<5`), so install these explicitly. Their constraints conflict, so install vLLM first and then force-install transformers:
+>
+> ```bash
+> pip install 'vllm>=0.22.0'
+> pip install 'transformers>=5.2.0' --no-deps
+> ```
+
 This installs the `harbor` framework (Python >= 3.12). The integration imports `harbor` lazily and runs it **in-process**, so users who don't touch `trl.experimental.harbor` aren't affected.
 
 A sandbox backend must also be installed and reachable at train time. Harbor keeps cloud backends behind its own extras, so install the one you intend to use and provide its credentials:

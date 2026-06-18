@@ -47,12 +47,12 @@
 - sections:
   - local: deepspeed_integration
     title: DeepSpeed
+  - local: harbor
+    title: Harbor
   - local: kernels_hub
     title: Kernels Hub
   - local: liger_kernel_integration
     title: Liger Kernel
-  - local: harbor
-    title: Harbor
   - local: openenv
     title: OpenEnv
   - local: openreward
