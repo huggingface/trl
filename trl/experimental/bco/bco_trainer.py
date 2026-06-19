@@ -463,6 +463,8 @@ class BCOTrainer(_BaseTrainer):
                 model_init_kwargs["dtype"] = dtype
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
