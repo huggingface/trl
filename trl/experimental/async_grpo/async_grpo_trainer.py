@@ -415,15 +415,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
-        # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in `model_init_kwargs`
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
         text_config = model.config.get_text_config()
-        self.aux_loss_enabled = getattr(text_config, "output_router_logits", False)
-        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0)
-        if self.aux_loss_enabled and self.router_aux_loss_coef == 0.0:
-            logger.warning(
-                "You set `output_router_logits=True` in the model config, but `router_aux_loss_coef` is `0.0`, so the "
-                "auxiliary loss has no effect. Set `router_aux_loss_coef > 0.0` to enable it."
-            )
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
+        self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = self.args.router_aux_loss_coef
 
         patch_chunked_lm_head(
             model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
