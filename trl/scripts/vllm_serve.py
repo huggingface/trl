@@ -76,10 +76,14 @@ class WeightSyncWorkerExtension:
 
         if is_vllm_ascend_available():
             try:
-                from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
+                from vllm_ascend.distributed.device_communicators.pyhccl import (
+                    PyHcclCommunicator as PyNcclCommunicator,
+                )
             except ModuleNotFoundError:
                 logger = logging.getLogger(__name__)
-                logger.warning("vllm_ascend metadata is present but the module is not importable; falling back to NCCL.")
+                logger.warning(
+                    "vllm_ascend metadata is present but the module is not importable; falling back to NCCL."
+                )
 
         if self.communicator is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
