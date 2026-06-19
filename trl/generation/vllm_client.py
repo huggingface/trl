@@ -44,6 +44,11 @@ if is_vllm_available():
     if is_vllm_ascend_available():
         from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
 
+if is_vllm_available(min_version="0.22.0"):
+    # Native weight-transfer engine, used when talking to native `vllm serve` (see `_relaunch_with_native_vllm_serve`).
+    from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
+    from vllm.utils.network_utils import get_ip, get_open_port
+
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +168,21 @@ class VLLMClient:
             self.server_port = server_port
             self.base_url = f"http://{self.host}:{self.server_port}"
         self.group_port = group_port
+
+        # Dual-mode: with vLLM >= 0.22.0, `trl vllm-serve` hands off to native `vllm serve` (see
+        # `_relaunch_with_native_vllm_serve`), which exposes vLLM's native OpenAI + weight-transfer APIs instead of
+        # TRL's custom endpoints. We select the matching client protocol from the installed vLLM version.
+        self.use_native_server = is_vllm_available(min_version="0.22.0")
+        self.model_update_group = None  # native-mode NCCLWeightTransferEngine group, set in init_communicator
+
         self.check_server(connection_timeout)  # check server and fail after timeout
+
+        # In native mode, generation requests must carry the served model name; discover it from `/v1/models`.
+        if self.use_native_server:
+            response = self.session.get(f"{self.base_url}/v1/models")
+            if response.status_code != 200:
+                raise Exception(f"Request failed: {response.status_code}, {response.text}")
+            self.model_name = response.json()["data"][0]["id"]
 
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
         """
@@ -176,7 +195,8 @@ class VLLMClient:
             total_timeout (`float`, *optional*, defaults to `0.0`):
                 Total timeout duration in seconds.
         """
-        url = f"{self.base_url}/health/"
+        # Native `vllm serve` exposes `/health` (no trailing slash); TRL's server uses `/health/`.
+        url = f"{self.base_url}/health" if self.use_native_server else f"{self.base_url}/health/"
         start_time = time.time()  # Record the start time
 
         while True:
@@ -262,6 +282,22 @@ class VLLMClient:
                 - `logprob_token_ids` (`list[list[list[int]]]`):
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
+        if self.use_native_server:
+            return self._generate_native(
+                prompts=prompts,
+                images=images,
+                n=n,
+                repetition_penalty=repetition_penalty,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                max_tokens=max_tokens,
+                logprobs=logprobs,
+                structured_outputs_regex=structured_outputs_regex,
+                generation_kwargs=generation_kwargs,
+            )
+
         url = f"{self.base_url}/generate/"
 
         # Convert PIL images to base64 strings. Each element is a list of images for the corresponding prompt,
@@ -298,6 +334,77 @@ class VLLMClient:
             }
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+    def _generate_native(
+        self,
+        prompts: list[str] | list[list[int]],
+        images: list | None,
+        n: int,
+        repetition_penalty: float,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+        min_p: float,
+        max_tokens: int,
+        logprobs: int | None,
+        structured_outputs_regex: str | None,
+        generation_kwargs: dict | None,
+    ) -> dict[str, list[list[int]]]:
+        """
+        `generate` implementation against native `vllm serve`'s OpenAI-compatible `/v1/completions` endpoint.
+
+        Maps the native response (`token_ids`, `prompt_token_ids`, `logprobs.token_logprobs`) back to TRL's
+        `{prompt_ids, completion_ids, logprobs, logprob_token_ids}` shape. Only the `logprobs=0` path is supported:
+        native `top_logprobs` returns token *strings* rather than ids, so TRL's `logprob_token_ids` cannot be
+        reconstructed for N>0.
+        """
+        if images:
+            raise NotImplementedError(
+                "Image inputs are not yet supported with native `vllm serve`; use `/v1/chat/completions` routing "
+                "(not yet implemented in VLLMClient native mode)."
+            )
+        if structured_outputs_regex is not None:
+            raise NotImplementedError("Structured outputs are not yet supported in VLLMClient native mode.")
+        if logprobs not in (0, None):
+            raise NotImplementedError(
+                "Native `vllm serve` mode supports only `logprobs=0`; top-N logprobs return token strings, not ids, "
+                "so they cannot be mapped to TRL's `logprob_token_ids`."
+            )
+
+        payload = {
+            "model": self.model_name,
+            "prompt": prompts,
+            "n": n,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "logprobs": 0,
+            # vLLM extensions to the OpenAI completions API.
+            "top_k": top_k,
+            "min_p": min_p,
+            "repetition_penalty": repetition_penalty,
+            "return_token_ids": True,
+            **(generation_kwargs or {}),
+        }
+        response = self.session.post(f"{self.base_url}/v1/completions", json=payload)
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+        # vLLM returns `n` choices per prompt, flattened and globally indexed; sort to restore submission order.
+        choices = sorted(response.json()["choices"], key=lambda choice: choice["index"])
+        completion_ids = [choice["token_ids"] for choice in choices]
+        # With logprobs=0, the only logprob per position is the sampled token's, whose id is the completion id itself.
+        out_logprobs = [[[lp] for lp in choice["logprobs"]["token_logprobs"]] for choice in choices]
+        logprob_token_ids = [[[tok] for tok in choice["token_ids"]] for choice in choices]
+        # `n` consecutive choices share a prompt; keep one `prompt_token_ids` per prompt.
+        prompt_ids = [choices[i * n]["prompt_token_ids"] for i in range(len(prompts))]
+
+        return {
+            "prompt_ids": prompt_ids,
+            "completion_ids": completion_ids,
+            "logprobs": out_logprobs,
+            "logprob_token_ids": logprob_token_ids,
+        }
 
     def chat(
         self,
@@ -367,6 +474,12 @@ class VLLMClient:
                 - `logprob_token_ids` (`list[list[list[int]]]`):
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
+        if self.use_native_server:
+            raise NotImplementedError(
+                "VLLMClient.chat() is not yet implemented for native `vllm serve` mode (vLLM >= 0.22.0). It will be "
+                "routed to `/v1/chat/completions` in a follow-up."
+            )
+
         if chat_template is not None:
             raise NotImplementedError("Custom chat templates are not yet implemented in VLLMClient.chat().")
 
@@ -422,6 +535,9 @@ class VLLMClient:
                 Device of trainer main process. It's the device that will be used for the weights synchronization. Can
                 be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
         """
+        if self.use_native_server:
+            return self._init_communicator_native(device)
+
         # Get the world size from the server
         url = f"{self.base_url}/get_world_size/"
         response = requests.get(url)
@@ -486,6 +602,97 @@ class VLLMClient:
         # When the client object is deleted, close the weight update group
         atexit.register(self.close_communicator)
 
+    def _init_communicator_native(self, device: torch.device | str | int = 0):
+        """
+        `init_communicator` against native `vllm serve`, using vLLM's `NCCLWeightTransferEngine`.
+
+        Mirrors `trl.experimental.async_grpo.weight_transfer.WeightTransferClient.init_weight_transfer`: the trainer
+        joins the inference workers in a single NCCL group (client at rank 0, workers offset by 1) over which weights
+        are later streamed by `update_model_params`.
+        """
+        import threading
+
+        # Normalize to a torch.device for the later `.to(device)` in the weight iterator.
+        self.device = torch.device("cuda", device) if isinstance(device, int) else torch.device(device)
+
+        response = self.session.get(f"{self.base_url}/get_world_size")
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        inference_world_size = response.json()["world_size"]
+        world_size = inference_world_size + 1  # add the client to the world
+
+        master_address = get_ip()
+        master_port = get_open_port()
+        init_info = {
+            "master_address": master_address,
+            "master_port": master_port,
+            "rank_offset": 1,  # client is rank 0; vLLM workers start at rank 1
+            "world_size": world_size,
+        }
+        # The server-side init blocks until the trainer joins the NCCL group, so issue it on a thread and join after
+        # the trainer side has connected.
+        thread = threading.Thread(
+            target=self.session.post,
+            args=(f"{self.base_url}/init_weight_transfer_engine",),
+            kwargs={"json": {"init_info": init_info}},
+        )
+        thread.start()
+        self.model_update_group = NCCLWeightTransferEngine.trainer_init(
+            {"master_address": master_address, "master_port": master_port, "world_size": world_size}
+        )
+        thread.join()
+
+        # When the client object is deleted, close the weight update group
+        atexit.register(self.close_communicator)
+
+    def _update_model_params_native(self, model: nn.Module):
+        """
+        `update_model_params` against native `vllm serve`: a single bulk transfer of all parameters over the NCCL
+        group, mirroring `WeightTransferClient.send_weights`.
+
+        Parameter metadata (names, dtypes, shapes) is sent up-front via `/update_weights`; the tensors themselves are
+        streamed lazily so that, under FSDP2, each parameter is all-gathered and freed one at a time rather than
+        materializing the full model at once.
+        """
+        import threading
+
+        from torch.distributed.tensor import DTensor
+
+        names, dtype_names, shapes = [], [], []
+        for name, param in model.named_parameters():
+            name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+            names.append(name)
+            dtype_names.append(str(param.dtype).split(".")[-1])
+            shapes.append(list(param.shape))
+        update_info = {"names": names, "dtype_names": dtype_names, "shapes": shapes, "packed": True}
+
+        def weights_iterator():
+            for name, param in model.named_parameters():
+                name = name.removeprefix("module.")
+                # For FSDP2 (DTensor), `full_tensor()` all-gathers just this parameter, then frees it once the
+                # generator advances.
+                full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
+                if full.device != self.device:
+                    full = full.to(self.device)
+                yield name, full
+
+        # Prepare the workers for the reload; must complete before any weights are sent.
+        self.session.post(f"{self.base_url}/start_weight_update", json={"is_checkpoint_format": True})
+        # The /update_weights POST drives the workers' blocking NCCL recv, so it runs on a thread concurrently with the
+        # trainer-side send.
+        thread = threading.Thread(
+            target=self.session.post,
+            args=(f"{self.base_url}/update_weights",),
+            kwargs={"json": {"update_info": update_info}},
+        )
+        thread.start()
+        NCCLWeightTransferEngine.trainer_send_weights(
+            iterator=weights_iterator(),
+            trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
+        )
+        thread.join()
+        self.session.post(f"{self.base_url}/finish_weight_update")
+
     def update_named_param(self, name: str, weights: torch.Tensor):
         """
         Updates a specific named parameter in the model and broadcasts it to other processes.
@@ -496,6 +703,12 @@ class VLLMClient:
             weights (`torch.Tensor`):
                 Tensor containing the updated weights.
         """
+        if self.use_native_server:
+            raise NotImplementedError(
+                "Native `vllm serve` mode uses a single bulk weight transfer; call `update_model_params(model)` "
+                "instead of per-parameter `update_named_param()`."
+            )
+
         dtype, shape = str(weights.dtype), tuple(weights.shape)
         url = f"{self.base_url}/update_named_param/"
         response = self.session.post(url, json={"name": name, "dtype": dtype, "shape": shape})
@@ -519,6 +732,9 @@ class VLLMClient:
             model (`nn.Module`):
                 Model whose parameters (weights/biases) are to be updated.
         """
+        if self.use_native_server:
+            return self._update_model_params_native(model)
+
         for name, param in model.named_parameters():
             # Update each parameter individually
             self.update_named_param(name, param.data)
@@ -571,6 +787,12 @@ class VLLMClient:
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        if self.use_native_server:
+            raise NotImplementedError(
+                "VLLMClient.get_sequence_logprobs() is not yet implemented for native `vllm serve` mode "
+                "(vLLM >= 0.22.0). The custom top-k / binary logprob endpoint has no native equivalent yet."
+            )
 
         if temperature <= 0:
             raise ValueError(f"temperature must be positive, got {temperature}")
@@ -721,7 +943,12 @@ class VLLMClient:
         """
         Resets the prefix cache for the model.
         """
-        url = f"{self.base_url}/reset_prefix_cache/"
+        # Native `vllm serve` exposes `/reset_prefix_cache` (no trailing slash); TRL's server uses `/reset_prefix_cache/`.
+        url = (
+            f"{self.base_url}/reset_prefix_cache"
+            if self.use_native_server
+            else f"{self.base_url}/reset_prefix_cache/"
+        )
         response = self.session.post(url)
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
@@ -730,6 +957,14 @@ class VLLMClient:
         """
         Closes the weight update group and cleans up the communication group.
         """
+        if self.use_native_server:
+            # Native mode: tear down the NCCLWeightTransferEngine group (mirrors WeightTransferClient.destroy).
+            if self.model_update_group is not None:
+                self.model_update_group.group.store = None
+                self.model_update_group.group.socket = None
+                self.model_update_group = None
+            return
+
         url = f"{self.base_url}/close_communicator/"
 
         try:
