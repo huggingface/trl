@@ -1379,9 +1379,11 @@ class SFTTrainer(_BaseTrainer):
         text_config = model.config.get_text_config()
         is_moe = getattr(text_config, "output_router_logits", None) is not None
         self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
-        if self.aux_loss_enabled:
-            # The native and chunked forwards compute the aux loss from the model config, so propagate the coef there.
-            text_config.output_router_logits = True
+        if is_moe:
+            # The native and chunked forwards add the aux loss from the model config, so keep the config in sync with
+            # the coef: enable it (and propagate the coef) when non-zero, disable it otherwise. This overrides any
+            # `output_router_logits` the model was loaded with, so `router_aux_loss_coef=0.0` reliably turns it off.
+            text_config.output_router_logits = self.aux_loss_enabled
             text_config.router_aux_loss_coef = self.args.router_aux_loss_coef
 
         # Initialize the metrics
