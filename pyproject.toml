@@ -98,6 +98,9 @@ math_verify = [
 openreward = [
     "openreward>=0.1.109; python_version >= '3.11'",  # openreward requires Python 3.11+
 ]
+harbor = [
+    "harbor>=0.13.0; python_version >= '3.12'",  # harbor requires Python 3.12+ (pulls its sandbox backends)
+]
 dev = [
     # bco
     "scikit-learn",
