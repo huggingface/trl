@@ -66,8 +66,8 @@ class SDFTConfig(_BaseConfig):
             of the `SDFTTrainer` is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoProcessor.from_pretrained`], for both the student and teacher.
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`],
+            for both the student and teacher.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the student and teacher models.
 
