@@ -72,6 +72,29 @@ class TestSDFTTrainer(TrlTestCase):
             for name, previous_param in previous_trainable_params.items()
         )
 
+    def test_trust_remote_code(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            SDFTTrainer(
+                model=model_id,
+                args=SDFTConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = SDFTTrainer(
+            model=model_id,
+            args=SDFTConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     def test_train(self):
         dataset = Dataset.from_dict(
             {

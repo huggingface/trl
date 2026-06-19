@@ -155,9 +155,7 @@ def main():
         model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
-    model = AutoModelForImageTextToText.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-    )
+    model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     ################
     # Dataset
