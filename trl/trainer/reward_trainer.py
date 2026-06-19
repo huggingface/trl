@@ -497,6 +497,8 @@ class RewardTrainer(_BaseTrainer):
                 "in the vocabulary before using it as a padding token."
             )
         processing_class.pad_token = pad_token
+        # SequenceClassification models need `config.pad_token_id` to locate the last non-pad token.
+        model.config.pad_token_id = processing_class.pad_token_id
 
         # Data collator
         if data_collator is None:

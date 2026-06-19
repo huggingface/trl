@@ -1549,6 +1549,17 @@ class DPOTrainer(_BaseTrainer):
                 }
             else:
                 eval_dataset = self._prepare_dataset(eval_dataset, self.processing_class, self.args, "eval")
+            # With `precompute_ref_log_probs`, `_compute_loss` reads the reference log-probs from the batch, so they
+            # must be precomputed here as well, mirroring `__init__`.
+            if self.precompute_ref_logps:
+                batch_size = self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
+                if isinstance(eval_dataset, dict):
+                    eval_dataset = {
+                        name: self._precompute_ref_logps(dataset, name, batch_size)
+                        for name, dataset in eval_dataset.items()
+                    }
+                else:
+                    eval_dataset = self._precompute_ref_logps(eval_dataset, "eval", batch_size)
         return super().evaluate(
             eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
         )
