@@ -18,7 +18,7 @@ import time
 import requests
 from accelerate.logging import get_logger
 
-from trl.import_utils import is_vllm_available
+from ...import_utils import is_vllm_available
 
 
 if is_vllm_available(min_version="0.22.0"):
