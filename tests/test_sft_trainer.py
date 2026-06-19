@@ -1547,6 +1547,36 @@ class TestSFTTrainer(TrlTestCase):
 
         assert trainer.state.log_history[0]["eval_loss"] is not None
 
+    def test_evaluate_with_raw_dataset(self):
+        # `evaluate` should accept the same (unprocessed) dataset types as the trainer, e.g. a held-out test set
+        # passed directly to `evaluate`. See https://github.com/huggingface/trl/issues/6115.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+        )
+
+        metrics = trainer.evaluate(eval_dataset=dataset["test"])
+        assert metrics["eval_loss"] is not None
+
+    def test_evaluate_with_raw_dataset_dict(self):
+        # Same as above, but passing a dict of raw datasets to `evaluate`.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+        )
+
+        metrics = trainer.evaluate(eval_dataset={"data1": dataset["test"], "data2": dataset["test"]})
+        assert metrics["eval_data1_loss"] is not None
+        assert metrics["eval_data2_loss"] is not None
+
     def test_train_with_metric_for_best_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
