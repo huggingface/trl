@@ -160,6 +160,24 @@ class TestRewardTrainer(TrlTestCase):
         metrics = trainer.evaluate(eval_dataset=dataset)
         assert metrics["eval_loss"] is not None
 
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            RewardTrainer(
+                model=model_id,
+                args=RewardConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = RewardTrainer(
+            model=model_id,
+            args=RewardConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForSequenceClassification"
+
     @pytest.mark.parametrize(
         "config_name",
         [

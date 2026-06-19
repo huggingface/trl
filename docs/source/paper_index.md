@@ -189,6 +189,24 @@ trainer = GRPOTrainer(
 )
 ```
 
+### Demystifying Long Chain-of-Thought Reasoning in LLMs
+
+**📜 Paper**: https://huggingface.co/papers/2502.03373
+
+To stabilize long chain-of-thought RL, this paper adds an n-gram repetition penalty that discourages the degenerate, repetitive completions that emerge as a reward-hacking strategy under length-shaping rewards (Appendix C.2). Use [`~rewards.get_repetition_penalty_reward`] as an auxiliary reward alongside your correctness reward:
+
+```python
+from trl import GRPOTrainer
+from trl.rewards import get_repetition_penalty_reward
+
+# Penalize repeated 3-grams, down to -1.0 for fully repetitive completions
+repetition_penalty = get_repetition_penalty_reward(ngram_size=3, max_penalty=-1.0)
+trainer = GRPOTrainer(
+    ...,
+    reward_funcs=[..., repetition_penalty],
+)
+```
+
 ### INTELLECT-2: A Reasoning Model Trained Through Globally Decentralized Reinforcement Learning
 
 **📜 Paper**: https://huggingface.co/papers/2505.07291
