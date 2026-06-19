@@ -17,7 +17,7 @@
 #     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
-#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
+#     "openenv-browsergym-env @ git+https://huggingface.co/spaces/openenv/browsergym_env",
 # ]
 # ///
 
@@ -30,7 +30,7 @@ to see the page visually after each action.
 
 Setup:
 ```sh
-pip install "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env"
+pip install "openenv-browsergym-env @ git+https://huggingface.co/spaces/openenv/browsergym_env"
 ```
 
 Usage:
@@ -65,6 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GRPO training with BrowserGym VLM environment.")
     parser.add_argument("--model-id", default="Qwen/Qwen3.5-2B")
     parser.add_argument("--space-url", default="https://openenv-browsergym-env.hf.space")
+    parser.add_argument("--task-name", default="click-test", help="BrowserGym task name to pass to reset().")
     parser.add_argument("--dataset-prompt", default="Complete the web task successfully.")
     parser.add_argument("--dataset-size", type=int, default=1000)
     parser.add_argument("--max-steps", type=int, default=10)
@@ -138,7 +139,7 @@ def main() -> None:
             self.reward = 0.0
             self.done = False
             self._step_count = 0
-            result = self.client.reset()
+            result = self.client.reset(task_name=args.task_name)
             self.done = result.done
             return self._format_observation(result.observation)
 
