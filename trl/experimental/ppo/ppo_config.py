@@ -111,6 +111,10 @@ class PPOConfig(_BaseConfig):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
             capacity of a single GPU, albeit at the cost of slower generation.
+        save_value_model (`bool`, *optional*, defaults to `False`):
+            Whether to save the value model (critic) alongside the policy when calling :meth:`save_model` or at each
+            checkpoint. When enabled, the value model is written to a ``value_model/`` sub-directory inside the
+            checkpoint directory. Useful for inference-time quality estimation, continued critic training, and research.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -276,5 +280,13 @@ class PPOConfig(_BaseConfig):
             "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for "
             "generation, improving generation speed. However, disabling this option allows training models that "
             "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation."
+        },
+    )
+    save_value_model: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to save the value model (critic) alongside the policy when calling `save_model` or "
+            "at each checkpoint. When enabled the value model is written to a `value_model/` sub-directory inside "
+            "the checkpoint directory."
         },
     )

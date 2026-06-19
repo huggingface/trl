@@ -605,6 +605,17 @@ class PPOTrainer(_BaseTrainer):
 
         super().save_model(output_dir, _internal_call)
 
+        if self.args.save_value_model and hasattr(backup_model, "value_model"):
+            # Save the value model (critic) to a `value_model/` sub-directory.
+            value_model_dir = os.path.join(
+                output_dir if output_dir is not None else self.args.output_dir,
+                "value_model",
+            )
+            self.model = backup_model.value_model
+            if self.is_deepspeed_enabled:
+                self.deepspeed = self.model
+            super().save_model(value_model_dir, _internal_call)
+
         self.model = backup_model
         if self.is_deepspeed_enabled:
             self.deepspeed = backup_deepspeed
