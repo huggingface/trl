@@ -46,7 +46,7 @@ jobs:
           path: skills-repo
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
 
       - name: Copy generated files
         run: cp trl/skills/trl-training/SKILL.md skills-repo/skills/trl-training/
