@@ -1011,6 +1011,7 @@ class GRPOTrainer(_BaseTrainer):
         pixel_values=None,
         image_grid_thw=None,
         pixel_attention_mask=None,
+        spatial_shapes=None,
         image_sizes=None,
         image_position_ids=None,
     ):
@@ -1029,6 +1030,9 @@ class GRPOTrainer(_BaseTrainer):
         # For SmolVLM2
         if pixel_attention_mask is not None:
             model_inputs["pixel_attention_mask"] = pixel_attention_mask
+        # For LFM2-VL
+        if spatial_shapes is not None:
+            model_inputs["spatial_shapes"] = spatial_shapes
         # For LLaVa-Next
         if image_sizes is not None:
             model_inputs["image_sizes"] = image_sizes
@@ -2445,6 +2449,7 @@ class GRPOTrainer(_BaseTrainer):
             inputs.get("pixel_values"),
             inputs.get("image_grid_thw"),
             inputs.get("pixel_attention_mask"),
+            inputs.get("spatial_shapes"),
             inputs.get("image_sizes"),
             inputs.get("image_position_ids"),
         )
