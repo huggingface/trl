@@ -888,7 +888,11 @@ class PPOTrainer(_BaseTrainer):
                     empty_cache()
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
-                mean_entropy = (-logprobs).sum(1).mean()
+                # Exclude padding tokens (filled with INVALID_LOGPROB=1.0) from the entropy
+                # sum.  Without masking, each padding position contributes -1.0 to the sum,
+                # which can drive `objective/entropy` negative — impossible for a discrete
+                # distribution.  See https://github.com/huggingface/trl/issues/2022
+                mean_entropy = ((-logprobs) * (~padding_mask).float()).sum(1).mean()
                 mean_non_score_reward = non_score_reward.sum(1).mean()
                 rlhf_reward = mean_non_score_reward + scores.mean()
                 eps = int(self.state.episode / (time.time() - start_time))
