@@ -146,7 +146,8 @@ class OnlineDPOConfig(_BaseConfig):
             string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`].
+            [`~transformers.AutoModelForCausalLM.from_pretrained`]. Also applied to reward-model and reward-tokenizer
+            loads.
         reward_weights (`list[float]`, *optional*):
             Weights for combining multiple reward functions. Must match the number of reward functions. If `None`, all
             reward functions are equally weighted.
@@ -363,7 +364,7 @@ class OnlineDPOConfig(_BaseConfig):
         default=False,
         metadata={
             "help": "Whether to allow loading models that ship custom Python code from the Hub. Forwarded to "
-            "`AutoModelForCausalLM.from_pretrained`."
+            "`AutoModelForCausalLM.from_pretrained`. Also applied to reward-model and reward-tokenizer loads."
         },
     )
     reward_weights: list[float] | None = field(
