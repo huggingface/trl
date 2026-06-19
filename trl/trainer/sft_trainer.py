@@ -900,7 +900,7 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
     Rectification](https://huggingface.co/papers/2508.05629)
     """
     labels = nn.functional.pad(labels, (0, 1), value=-100)
-    shift_labels = labels[..., 1:].contiguous()
+    shift_labels = labels[..., 1:]
     loss_mask = shift_labels != -100
     shift_labels[~loss_mask] = 0
     logprobs = selective_log_softmax(outputs.logits, shift_labels)
@@ -1057,6 +1057,7 @@ class SFTTrainer(_BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
@@ -1069,7 +1070,9 @@ class SFTTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
+            processing_class = AutoProcessor.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            )
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
