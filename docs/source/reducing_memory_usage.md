@@ -193,7 +193,6 @@ training_args = SFTConfig(..., loss_type="nll")  # opt out of the default chunke
 ```
 
 Expect **typically ~30 % less peak VRAM, up to ~50 %** on large-vocab models (measured on `Qwen3-1.7B`, vocab ≈ 151k — ~30 % on single-GPU, up to ~50 % under FSDP2 × 4 GPUs) with wall time typically neutral or slightly faster. See the [PR #5575](https://github.com/huggingface/trl/pull/5575) for the full benchmark across single-GPU, DDP, FSDP2, packing, long-context, and fp32 configurations.
-Under FSDP2, pass `--fsdp_reshard_after_forward false` to `accelerate launch` — the chunked path otherwise re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time.
 
 Not compatible with `use_liger_kernel=True`, PEFT, or VLM.
 
