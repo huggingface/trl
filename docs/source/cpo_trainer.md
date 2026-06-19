@@ -1,118 +1,271 @@
 # CPO Trainer
 
-[![model badge](https://img.shields.io/badge/All_models-CPO-blue)](https://huggingface.co/models?other=cpo,trl)
+[![All_models-CPO-blue](https://img.shields.io/badge/All_models-CPO-blue)](https://huggingface.co/models?other=cpo,trl)
 
 ## Overview
 
-Contrastive Preference Optimization (CPO) as introduced in the paper [Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation](https://huggingface.co/papers/2401.08417) by [Haoran Xu](https://huggingface.co/haoranxu), [Amr Sharaf](https://huggingface.co/amrsharaf), [Yunmo Chen](https://huggingface.co/yunmochen), Weiting Tan, Lingfeng Shen, Benjamin Van Durme, [Kenton Murray](https://huggingface.co/Kenton), and [Young Jin Kim](https://huggingface.co/ykim362). At a high level, CPO trains models to avoid generating adequate, but not perfect, translations in Machine Translation (MT) tasks. However, CPO is a general approximation of the DPO loss and can be applied to other domains, such as chat.
-
-CPO aims to mitigate two fundamental shortcomings of SFT. First, SFT’s methodology of minimizing the discrepancy between predicted outputs and gold-standard references inherently caps model performance at the quality level of the training data. Secondly, SFT lacks a mechanism to prevent the model from rejecting mistakes in translations. The CPO objective is derived from the DPO objective.
-
-## Quick start
-
-This example demonstrates how to train a model using the CPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model. We use the preference data from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the data in the dataset here:
-
-<iframe
-  src="https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized/embed/viewer/default/train?row=0"
-  frameborder="0"
-  width="100%"
-  height="560px"
-></iframe>
-
-Below is the script to train the model:
-
-```python
-# train_cpo.py
-from datasets import load_dataset
-from trl.experimental.cpo import CPOConfig, CPOTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
-
-training_args = CPOConfig(output_dir="Qwen2-0.5B-CPO")
-trainer = CPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
-trainer.train()
-```
-
-Execute the script using the following command:
-
-```bash
-accelerate launch train_cpo.py
-```
-
-## Expected dataset type
-
-CPO requires a [preference dataset](dataset_formats#preference). The [`experimental.cpo.CPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
-
-## Example script
-
-We provide an example script to train a model using the CPO method. The script is available in [`examples/scripts/cpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/cpo.py)
-
-To test the CPO script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) on the [UltraFeedback dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized), run the following command:
-
-```bash
-accelerate launch examples/scripts/cpo.py \
-    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
-    --dataset_name trl-lib/ultrafeedback_binarized \
-    --num_train_epochs 1 \
-    --output_dir Qwen2-0.5B-CPO
-```
-
-## Logged metrics
-
-While training and evaluating, we record the following reward metrics:
-
-* `rewards/chosen`: the mean log probabilities of the policy model for the chosen responses scaled by beta
-* `rewards/rejected`: the mean log probabilities of the policy model for the rejected responses scaled by beta
-* `rewards/accuracies`: mean of how often the chosen rewards are > than the corresponding rejected rewards
-* `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
-* `nll_loss`: the mean negative log likelihood loss of the policy model for the chosen responses
-
-## CPO variants
-
-### Simple Preference Optimization (SimPO)
-
-[Simple Preference Optimization](https://huggingface.co/papers/2405.14734) (SimPO) by [Yu Meng](https://huggingface.co/yumeng5), [Mengzhou Xia](https://huggingface.co/mengzhouxia), and [Danqi Chen](https://huggingface.co/cdq10131) proposes a simpler and more effective preference optimization algorithm than DPO without using a reference model. The key designs in SimPO are (1) using length-normalized log likelihood as the implicit reward, and (2) incorporating a target reward margin in the Bradley-Terry ranking objective. The official code can be found at [princeton-nlp/SimPO](https://github.com/princeton-nlp/SimPO).
+TRL supports the Contrastive Preference Optimization (CPO) Trainer for training language models, as described in the paper [Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation](https://huggingface.co/papers/2401.08417) by [Haoran Xu](https://huggingface.co/haoranxu), [Amr Sharaf](https://huggingface.co/amrsharaf), [Yunmo Chen](https://huggingface.co/yunmochen), Weiting Tan, Lingfeng Shen, Benjamin Van Durme, [Kenton Murray](https://huggingface.co/Kenton), and [Young Jin Kim](https://huggingface.co/ykim362).
 
 The abstract from the paper is the following:
 
-> Direct Preference Optimization (DPO) is a widely used offline preference optimization algorithm that reparameterizes reward functions in reinforcement learning from human feedback (RLHF) to enhance simplicity and training stability. In this work, we propose SimPO, a simpler yet more effective approach. The effectiveness of SimPO is attributed to a key design: using the average log probability of a sequence as the implicit reward. This reward formulation better aligns with model generation and eliminates the need for a reference model, making it more compute and memory efficient. Additionally, we introduce a target reward margin to the Bradley-Terry objective to encourage a larger margin between the winning and losing responses, further enhancing the algorithm's performance. We compare SimPO to DPO and its latest variants across various state-of-the-art training setups, including both base and instruction-tuned models like Mistral and Llama3. We evaluated on extensive instruction-following benchmarks, including AlpacaEval 2, MT-Bench, and the recent challenging Arena-Hard benchmark. Our results demonstrate that SimPO consistently and significantly outperforms existing approaches without substantially increasing response length. Specifically, SimPO outperforms DPO by up to 6.4 points on AlpacaEval 2 and by up to 7.5 points on Arena-Hard. Our top-performing model, built on Llama3-8B-Instruct, achieves a remarkable 44.7 length-controlled win rate on AlpacaEval 2 -- surpassing Claude 3 Opus on the leaderboard, and a 33.8 win rate on Arena-Hard -- making it the strongest 8B open-source model.
+> Moderate-sized large language models (LLMs) -- those with 7B or 13B parameters -- exhibit promising machine translation (MT) performance. However, even the top-performing 13B LLM-based translation models, like ALMA, does not match the performance of state-of-the-art conventional encoder-decoder translation models or larger-scale LLMs such as GPT-4. In this study, we bridge this performance gap. We first assess the shortcomings of supervised fine-tuning for LLMs in the MT task, emphasizing the quality issues present in the reference data, despite being human-generated. Then, in contrast to SFT which mimics reference translations, we introduce Contrastive Preference Optimization (CPO), a novel approach that trains models to avoid generating adequate but not perfect translations. Applying CPO to ALMA models with only 22K parallel sentences and 12M parameters yields significant improvements. The resulting model, called ALMA-R, can match or exceed the performance of the WMT competition winners and GPT-4 on WMT'21, WMT'22 and WMT'23 test datasets.
 
-The SimPO loss is integrated in the [`experimental.cpo.CPOTrainer`], as it's an alternative loss that adds a reward margin, allows for length normalization, and does not use BC regularization. To use this loss, just turn on `loss_type="simpo"` and `cpo_alpha=0.0` in the [`experimental.cpo.CPOConfig`] and set the `simpo_gamma` to a recommended value.
+> [!WARNING]
+> **Migrating from the pre-refactor CPO API.** This refactor rebuilds [`experimental.cpo.CPOTrainer`] on top of the DPO trainer, which introduces breaking changes:
+>
+> - The following [`experimental.cpo.CPOConfig`] fields were removed: `label_smoothing`, `generate_during_eval`, `is_encoder_decoder`, `max_completion_length`. Passing them now raises `TypeError`.
+> - `max_length` default changed from `None` (no truncation) to `1024`. Existing scripts that relied on the old default should set `max_length=None` explicitly.
+> - `loss_type` is now `list[str]` instead of `str`. A bare string is auto-wrapped, so `loss_type="sigmoid"` still works, but `args.loss_type == "sigmoid"` checks will now compare a list to a string.
 
-### CPO-SimPO
 
-We also offer the combined use of CPO and SimPO, which enables more stable training and improved performance. Learn more details at [CPO-SimPO GitHub](https://github.com/fe1ixxu/CPO_SIMPO). To use this method, simply enable SimPO by setting `loss_type="simpo"` and a non-zero `cpo_alpha` in the [`experimental.cpo.CPOConfig`].
+## Quick start
 
-### AlphaPO
+This example demonstrates how to train a language model using the [`experimental.cpo.CPOTrainer`] from TRL. We train a [Qwen 3 0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) model on the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback).
 
-The [AlphaPO -- Reward shape matters for LLM alignment](https://huggingface.co/papers/2501.03884) (AlphaPO) method by Aman Gupta, Shao Tang, Qingquan Song, Sirou Zhu, [Jiwoo Hong](https://huggingface.co/JW17), Ankan Saha, Viral Gupta, Noah Lee, Eunki Kim, Jason Zhu, Natesh Pillai, and S. Sathiya Keerthi is also implemented in the [`experimental.cpo.CPOTrainer`]. AlphaPO is an alternative method that applies a transformation to the reward function shape in the context of SimPO loss. The abstract from the paper is the following:
+```python
+from trl.experimental.cpo import CPOTrainer
+from datasets import load_dataset
 
-> Reinforcement Learning with Human Feedback (RLHF) and its variants have made huge strides toward the effective alignment of large language models (LLMs) to follow instructions and reflect human values. More recently, Direct Alignment Algorithms (DAAs) have emerged in which the reward modeling stage of RLHF is skipped by characterizing the reward directly as a function of the policy being learned. Some popular examples of DAAs include Direct Preference Optimization (DPO) and Simple Preference Optimization (SimPO). These methods often suffer from likelihood displacement, a phenomenon by which the probabilities of preferred responses are often reduced undesirably. In this paper, we argue that, for DAAs the reward (function) shape matters. We introduce AlphaPO, a new DAA method that leverages an α-parameter to help change the shape of the reward function beyond the standard log reward. AlphaPO helps maintain fine-grained control over likelihood displacement and overoptimization. Compared to SimPO, one of the best performing DAAs, AlphaPO leads to about 7% to 10% relative improvement in alignment performance for the instruct versions of Mistral-7B and Llama3-8B while achieving 15% to 50% relative improvement over DPO on the same models. The analysis and results presented highlight the importance of the reward shape and how one can systematically change it to affect training dynamics, as well as improve alignment performance.
+trainer = CPOTrainer(
+    model="Qwen/Qwen3-0.6B",
+    train_dataset=load_dataset("trl-lib/ultrafeedback_binarized", split="train"),
+)
+trainer.train()
+```
 
-To use this loss as described in the paper, we can set the `loss_type="alphapo"` which automatically sets `loss_type="simpo"` and `cpo_alpha=0.0`, together with `alpha` and `simpo_gamma` to recommended values in the [`experimental.cpo.CPOConfig`]. Alternatively, you can manually set `loss_type="simpo"`, `cpo_alpha=0.0`, together with `alpha` and `simpo_gamma` to recommended values. Other variants of this method are also possible, such as setting `loss_type="ipo"` and `alpha` to any non-zero value.
+## Expected dataset type and format
 
-## Loss functions
+CPO requires a [preference](dataset_formats#preference) dataset. The [`experimental.cpo.CPOTrainer`] is compatible with both [standard](dataset_formats#standard) and [conversational](dataset_formats#conversational) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
-The CPO algorithm supports several loss functions. The loss function can be set using the `loss_type` parameter in the [`experimental.cpo.CPOConfig`]. The following loss functions are supported:
+```python
+# Standard format
+## Explicit prompt (recommended)
+preference_example = {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."}
+# Implicit prompt
+preference_example = {"chosen": "The sky is blue.", "rejected": "The sky is green."}
+
+# Conversational format
+## Explicit prompt (recommended)
+preference_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}],
+                      "chosen": [{"role": "assistant", "content": "It is blue."}],
+                      "rejected": [{"role": "assistant", "content": "It is green."}]}
+## Implicit prompt
+preference_example = {"chosen": [{"role": "user", "content": "What color is the sky?"},
+                                 {"role": "assistant", "content": "It is blue."}],
+                      "rejected": [{"role": "user", "content": "What color is the sky?"},
+                                   {"role": "assistant", "content": "It is green."}]}
+```
+
+If your dataset is not in one of these formats, you can preprocess it to convert it into the expected format. Here is an example with the [Vezora/Code-Preference-Pairs](https://huggingface.co/datasets/Vezora/Code-Preference-Pairs) dataset:
+
+```python
+from datasets import load_dataset
+
+dataset = load_dataset("Vezora/Code-Preference-Pairs")
+
+
+def preprocess_function(example):
+    return {
+        "prompt": [{"role": "user", "content": example["input"]}],
+        "chosen": [{"role": "assistant", "content": example["accepted"]}],
+        "rejected": [{"role": "assistant", "content": example["rejected"]}],
+    }
+
+
+dataset = dataset.map(preprocess_function, remove_columns=["instruction", "input", "accepted", "ID"])
+print(next(iter(dataset["train"])))
+```
+
+```json
+{
+    "prompt": [{"role": "user", "content": "Create a nested loop to print every combination of numbers [...]"}],
+    "chosen": [{"role": "assistant", "content": "Here is an example of a nested loop in Python [...]"}],
+    "rejected": [{"role": "assistant", "content": "Here is an example of a nested loop in Python [...]"}],
+}
+```
+
+## Looking deeper into the CPO method
+
+Contrastive Preference Optimization (CPO) is a training method designed to align a language model with preference data. Instead of supervised input–output pairs, the model is trained on pairs of completions to the same prompt, where one completion is preferred over the other. The objective directly optimizes the model to widen the margin between the log-likelihoods of preferred and dispreferred completions, **without requiring a reference model**. To recover the regularization signal that the reference model would otherwise provide, CPO adds an SFT-style negative-log-likelihood (NLL) term on the chosen completions, weighted by `cpo_alpha`.
+
+This section breaks down how CPO works in practice, covering the key steps: **preprocessing** and **loss computation**.
+
+### Preprocessing and tokenization
+
+During training, each example is expected to contain a prompt along with a preferred (`chosen`) and a dispreferred (`rejected`) completion. For more details on the expected formats, see [Dataset formats](dataset_formats).
+The [`experimental.cpo.CPOTrainer`] tokenizes each input using the model's tokenizer.
+
+### Computing the loss
+
+The loss used in CPO is defined as follows:
+$$
+\mathcal{L}_{\mathrm{CPO}}(\theta) = -\mathbb{E}_{(x,y^{+},y^{-})}\!\left[\log \sigma\!\left(\beta\Big(\log \pi_{\theta}(y^{+}\!\mid x) - \log \pi_{\theta}(y^{-}\!\mid x)\Big)\right)\right] + \alpha \, \mathcal{L}_{\mathrm{NLL}}(\theta; y^{+})
+$$
+  
+where  \\( x \\)  is the prompt,  \\( y^+ \\) is the preferred completion and  \\( y^- \\)  is the dispreferred completion.  \\( \pi_{\theta} \\)  is the policy model being trained,  \\( \sigma \\)  is the sigmoid function,  \\( \beta > 0 \\)  is a hyperparameter that controls the strength of the preference signal, and  \\( \alpha \\)  (`cpo_alpha`) is the weight of the SFT NLL term on the chosen completion.
+
+#### Loss Types
+
+Several formulations of the objective have been proposed in the literature. Initially, the objective of CPO was defined as presented above.
 
 | `loss_type=` | Description |
 | --- | --- |
-| `"sigmoid"` (default) | Given the preference data, we can fit a binary classifier according to the Bradley-Terry model, and in fact, the [DPO](https://huggingface.co/papers/2305.18290) authors propose the sigmoid loss on the normalized likelihood via the `logsigmoid` to fit a logistic regression. |
+| `"sigmoid"` (default) | Given the preference data, we can fit a binary classifier according to the Bradley-Terry model and in fact the [DPO](https://huggingface.co/papers/2305.18290) authors propose the sigmoid loss on the normalized likelihood via the `logsigmoid` to fit a logistic regression. |
 | `"hinge"` | The [RSO](https://huggingface.co/papers/2309.06657) authors propose to use a hinge loss on the normalized likelihood from the [SLiC](https://huggingface.co/papers/2305.10425) paper. In this case, the `beta` is the reciprocal of the margin. |
-| `"ipo"` | The [IPO](https://huggingface.co/papers/2310.12036) authors provide a deeper theoretical understanding of the DPO algorithms and identify an issue with overfitting and propose an alternative loss. In this case, the `beta` is the reciprocal of the gap between the log-likelihood ratios of the chosen vs the rejected completion pair, and thus the smaller the `beta`, the larger this gap is. As per the paper, the loss is averaged over log-likelihoods of the completion (unlike DPO, which is summed only). |
-| `"simpo"` | The [SimPO](https://huggingface.co/papers/2405.14734) method is also implemented in the [`experimental.cpo.CPOTrainer`]. SimPO is an alternative loss that adds a reward margin, allows for length normalization, and does not use BC regularization. To use this loss, simply set `loss_type="simpo"` and `cpo_alpha=0.0` in the [`experimental.cpo.CPOConfig`] and `simpo_gamma` to a recommended value. |
-| `"alphapo"` | The [AlphaPO](https://huggingface.co/papers/2501.03884) method is also implemented in the [`experimental.cpo.CPOTrainer`]. This is syntactic sugar that automatically sets `loss_type="simpo"` and `cpo_alpha=0.0`. AlphaPO applies a transformation to the reward function shape in the context of SimPO loss when the `alpha` parameter is non-zero. |
+| `"ipo"` | The [IPO](https://huggingface.co/papers/2310.12036) authors argue the logit transform can overfit and propose the identity transform to optimize preferences directly; TRL exposes this as `loss_type="ipo"`. |
+| `"simpo"` | [SimPO](https://huggingface.co/papers/2405.14734) uses length-normalized log-probabilities as the implicit reward and adds a target reward margin γ (`simpo_gamma`) in the Bradley-Terry sigmoid. Typically combined with `cpo_alpha=0` (no NLL term). |
+| `"alphapo"` | Syntactic sugar for `loss_type=["simpo"]` with `cpo_alpha=0.0`. The actual [AlphaPO](https://huggingface.co/papers/2501.03884) reward reshaping `r = (1 - p^(-α)) / α` is controlled by the `alpha` config field and can be combined with any loss type. |
 
-### For Mixture of Experts Models: Enabling the auxiliary loss
+## Logged metrics
 
-MOEs are the most efficient if the load is about equally distributed between experts.  
-To ensure that we train MOEs similarly during preference-tuning, it is beneficial to add the auxiliary loss from the load balancer to the final loss.
+While training and evaluating we record the following reward metrics:
 
-This option is enabled by setting `output_router_logits=True` in the model config (e.g., [`~transformers.MixtralConfig`]).  
-To scale how much the auxiliary loss contributes to the total loss, use the hyperparameter `router_aux_loss_coef=...` (default: `0.001`) in the model config.
+* `global_step`: The total number of optimizer steps taken so far.
+* `epoch`: The current epoch number, based on dataset iteration.
+* `num_tokens`: The total number of tokens processed so far.
+* `loss`: The average cross-entropy loss computed over non-masked tokens in the current logging interval.
+* `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
+* `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the token from the chosen completion.
+* `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
+* `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
+* `logits/chosen`: The average logit values assigned by the model to the tokens in the chosen completion.
+* `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected completion.
+* `logps/chosen`: The average log-probability assigned by the model to the tokens in the chosen completion.
+* `logps/rejected`: The average log-probability assigned by the model to the tokens in the rejected completion.
+* `rewards/chosen`: The average implicit reward computed for the chosen completion, computed as  \\( \beta \log \pi_{\theta}(y^{+}\!\mid x) \\).
+* `rewards/rejected`: The average implicit reward computed for the rejected completion, computed as  \\( \beta \log \pi_{\theta}(y^{-}\!\mid x) \\).
+* `rewards/margins`: The average implicit reward margin between the chosen and rejected completions.
+* `rewards/accuracies`: The proportion of examples where the implicit reward for the chosen completion is higher than that for the rejected completion.
+
+## Customization
+
+### Compatibility and constraints
+
+Some argument combinations are intentionally restricted in the current [`experimental.cpo.CPOTrainer`] implementation:
+
+* With `use_liger_kernel=True`:
+  * only a single `loss_type` is supported,
+  * `compute_metrics` is not supported,
+  * training with PEFT models is not supported.
+
+### Multi-loss combinations
+
+The CPO trainer supports combining multiple loss functions with different weights. To combine multiple losses, specify the loss types and corresponding weights as lists:
+
+```python
+training_args = CPOConfig(
+    loss_type=["sigmoid", "hinge", "ipo"],  # loss types to combine
+    loss_weights=[1.0, 0.5, 0.5],  # corresponding weights
+)
+```
+
+### Model initialization
+
+You can directly pass the kwargs of the [`~transformers.AutoModelForCausalLM.from_pretrained()`] method to the [`experimental.cpo.CPOConfig`]. For example, if you want to load a model in a different precision, analogous to
+
+```python
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B", dtype=torch.bfloat16)
+```
+
+you can do so by passing the `model_init_kwargs={"dtype": torch.bfloat16}` argument to the [`experimental.cpo.CPOConfig`].
+
+```python
+from trl.experimental.cpo import CPOConfig
+
+training_args = CPOConfig(
+    model_init_kwargs={"dtype": torch.bfloat16},
+)
+```
+
+Note that all keyword arguments of [`~transformers.AutoModelForCausalLM.from_pretrained()`] are supported.
+
+### Train adapters with PEFT
+
+We support tight integration with 🤗 PEFT library, allowing any user to conveniently train adapters and share them on the Hub, rather than training the entire model.
+
+```python
+from datasets import load_dataset
+from trl.experimental.cpo import CPOTrainer
+from peft import LoraConfig
+
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+
+trainer = CPOTrainer(
+    "Qwen/Qwen3-0.6B",
+    train_dataset=dataset,
+    peft_config=LoraConfig(),
+)
+
+trainer.train()
+```
+
+You can also continue training your [`~peft.PeftModel`]. For that, first load a `PeftModel` outside [`experimental.cpo.CPOTrainer`] and pass it directly to the trainer without the `peft_config` argument being passed.
+
+```python
+from datasets import load_dataset
+from trl.experimental.cpo import CPOTrainer
+from peft import AutoPeftModelForCausalLM
+
+model = AutoPeftModelForCausalLM.from_pretrained("trl-lib/Qwen3-4B-LoRA", is_trainable=True)
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+
+trainer = CPOTrainer(
+    model=model,
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
+
+> [!TIP]
+> When training adapters, you typically use a higher learning rate (≈1e‑5) than full fine-tuning since only new parameters are being learned.
+>
+> ```python
+> CPOConfig(learning_rate=1e-5, ...)
+> ```
+
+### Train with Liger Kernel
+
+Liger Kernel is a collection of Triton kernels for LLM training that boosts multi-GPU throughput by 20%, cuts memory use by 60% (enabling up to 4× longer context), and works seamlessly with tools like FlashAttention, PyTorch FSDP, and DeepSpeed. For more information, see [Liger Kernel Integration](liger_kernel_integration).
+
+### Train with Unsloth
+
+Unsloth is an open‑source framework for fine‑tuning and reinforcement learning that trains LLMs (like Llama, Mistral, Gemma, DeepSeek, and more) up to 2× faster with up to 70% less VRAM, while providing a streamlined, Hugging Face–compatible workflow for training, evaluation, and deployment. For more information, see [Unsloth Integration](unsloth_integration).
+
+## Tool Calling with CPO
+
+The [`experimental.cpo.CPOTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
+
+* The conversation messages (prompt, chosen and rejected), including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
+* The list of available tools in the `tools` column, typically provided as JSON schemas
+
+For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
+
+## Training Vision Language Models
+
+[`experimental.cpo.CPOTrainer`] fully supports training Vision-Language Models (VLMs). To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision Dataset](dataset_formats#vision-dataset) section.
+An example of such a dataset is the [RLAIF-V Dataset](https://huggingface.co/datasets/HuggingFaceH4/rlaif-v_formatted) dataset.
+
+```python
+from trl.experimental.cpo import CPOConfig, CPOTrainer
+from datasets import load_dataset
+
+trainer = CPOTrainer(
+    model="Qwen/Qwen2.5-VL-3B-Instruct",
+    args=CPOConfig(max_length=None),
+    train_dataset=load_dataset("HuggingFaceH4/rlaif-v_formatted", split="train"),
+)
+trainer.train()
+```
+
+> [!TIP]
+> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_length=None` in the [`experimental.cpo.CPOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
+>
+> ```python
+> CPOConfig(max_length=None, ...)
+> ```
+>
+> Only use `max_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
 ## CPOTrainer
 
