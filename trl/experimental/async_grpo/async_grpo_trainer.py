@@ -396,7 +396,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Training arguments
         self.epsilon_low = self.args.epsilon
-        self.epsilon_high = self.args.epsilon_high
+        self.epsilon_high = self.args.epsilon_high if self.args.epsilon_high is not None else self.args.epsilon
         self.temperature = self.args.temperature
 
         # Model

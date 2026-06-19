@@ -70,8 +70,9 @@ class AsyncGRPOConfig(_BaseConfig):
 
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
-        epsilon_high (`float`, *optional*, defaults to `0.2`):
-            Upper-bound epsilon value for clipping.
+        epsilon_high (`float`, *optional*):
+            Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
+            specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
 
         > Parameters that control the async rollout pipeline
 
@@ -196,9 +197,12 @@ class AsyncGRPOConfig(_BaseConfig):
         default=0.2,
         metadata={"help": "Epsilon value for clipping."},
     )
-    epsilon_high: float = field(
-        default=0.2,
-        metadata={"help": "Upper-bound epsilon value for clipping."},
+    epsilon_high: float | None = field(
+        default=None,
+        metadata={
+            "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
+            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
+        },
     )
 
     # Parameters that control the async rollout pipeline
