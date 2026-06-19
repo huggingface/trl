@@ -880,8 +880,6 @@ class SFTTrainer(_BaseTrainer):
               config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-            When training a Mixture-of-Experts (MoE) model, the load-balancing auxiliary loss is included by default;
-            its weight is controlled by [`SFTConfig.router_aux_loss_coef`] (set it to `0.0` to disable).
         args ([`SFTConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
