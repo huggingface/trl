@@ -15,8 +15,8 @@
 
 import torch
 
-from trl import create_reference_model
 from trl.experimental.ppo import AutoModelForCausalLMWithValueHead
+from trl.experimental.utils import create_reference_model
 
 from ..testing_utils import TrlTestCase
 
@@ -97,3 +97,16 @@ class TestReferenceModel(TrlTestCase):
 
         # other layers in optimized model change
         assert not (second_layer_before == second_layer_after).all()
+
+    def test_shared_layers_share_memory(self):
+        # Shared layers must reference the same storage as the source model, not a `deepcopy` duplicate,
+        # so they are held in memory only once (see issue #2904).
+        layer_0 = self.layer_format.format(layer=0)
+        layer_1 = self.layer_format.format(layer=1)
+
+        ref_model = create_reference_model(self.model, num_shared_layers=1)
+
+        # the shared layer points at the same storage as the source model
+        assert ref_model.get_parameter(layer_0).data_ptr() == self.model.get_parameter(layer_0).data_ptr()
+        # an unshared layer is an independent copy
+        assert ref_model.get_parameter(layer_1).data_ptr() != self.model.get_parameter(layer_1).data_ptr()

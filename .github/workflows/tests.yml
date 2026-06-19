@@ -21,7 +21,9 @@ on:
 env:
   TQDM_DISABLE: 1
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  PYTORCH_ALLOC_CONF: "expandable_segments:True"
 
 jobs:
   check_code_quality:
@@ -29,12 +31,12 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: 3.12
-      - uses: pre-commit/action@v3.0.1
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd  # v3.0.1
         with:
           extra_args: --all-files
 
@@ -42,7 +44,7 @@ jobs:
     name: Tests
     strategy:
       matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13']
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
       fail-fast: false
     runs-on:
       group: aws-g4dn-2xlarge
@@ -55,10 +57,10 @@ jobs:
     if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -67,8 +69,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
 
       - name: Create Python virtual environment
         run: |
@@ -107,10 +108,10 @@ jobs:
     if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: '3.12'
 
@@ -119,8 +120,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
 
       - name: Create Python virtual environment
         run: |
@@ -130,11 +130,12 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install ".[dev]"
-          uv pip install -U git+https://github.com/huggingface/accelerate.git
-          uv pip install -U git+https://github.com/huggingface/datasets.git
-          uv pip install -U git+https://github.com/huggingface/transformers.git
-          uv pip install -U git+https://github.com/huggingface/peft.git
+          uv pip install -U \
+            ".[dev]" \
+            "accelerate @ git+https://github.com/huggingface/accelerate.git" \
+            "datasets @ git+https://github.com/huggingface/datasets.git" \
+            "transformers @ git+https://github.com/huggingface/transformers.git" \
+            "peft @ git+https://github.com/huggingface/peft.git"
 
       - name: Test with pytest
         run: |
@@ -163,10 +164,10 @@ jobs:
     if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: '3.12'
 
@@ -175,8 +176,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
 
       - name: Create Python virtual environment
         run: |
@@ -215,10 +215,10 @@ jobs:
     if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: '3.12'
 
@@ -227,8 +227,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
 
       - name: Create Python virtual environment
         run: |
@@ -238,10 +237,11 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install ".[dev]"
-          uv pip install accelerate==1.4.0
-          uv pip install datasets==3.0.0
-          uv pip install transformers==4.56.2
+          uv pip install \
+            ".[dev]" \
+            "accelerate==1.4.0" \
+            "datasets==4.7.0" \
+            "transformers==4.56.2"
 
       - name: Test with pytest
         run: |
@@ -272,10 +272,10 @@ jobs:
       CUDA_VISIBLE_DEVICES: "0,1"
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: '3.12'
 
@@ -284,8 +284,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
 
       - name: Create Python virtual environment
         run: |

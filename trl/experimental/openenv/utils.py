@@ -127,9 +127,14 @@ def _generate_rollout_completions_server(
 
     with profiling_context(trainer, "vLLM.generate_rollout_server"):
         if as_chat:
-            # For chat mode, we need to pass messages format
-            # Since prompts are already formatted strings, we use generate instead
-            output = trainer.vllm_generation.vllm_client.generate(prompts=prompts, **generation_kwargs)
+            # Prompts are raw message dicts; use .chat() so the vLLM server applies the chat template
+            output = trainer.vllm_generation.vllm_client.chat(
+                messages=prompts,
+                **generation_kwargs,
+                chat_template_kwargs=trainer.chat_template_kwargs,
+                tools=trainer.tools or None,
+                chat_template=trainer.chat_template,
+            )
         else:
             output = trainer.vllm_generation.vllm_client.generate(prompts=prompts, **generation_kwargs)
 

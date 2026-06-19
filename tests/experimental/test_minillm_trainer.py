@@ -24,10 +24,8 @@ from ..testing_utils import TrlTestCase
 @pytest.mark.low_priority
 class TestMiniLLMTrainer(TrlTestCase):
     def test_train(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        # Initialize the trainer
         training_args = MiniLLMConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -42,16 +40,13 @@ class TestMiniLLMTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
