@@ -981,8 +981,6 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["image_position_ids"][1], batch["image_position_ids"][1:])
 
     def test_split_by_spatial_shapes(self):
-        # LFM2-VL-style: no image_grid_thw/image_position_ids; pixel_values, pixel_attention_mask and
-        # spatial_shapes are all tile-indexed and split per sample using num_tiles (one tile count per sample).
         batch = {
             "num_images": [2, 1],
             "num_tiles": [3, 2],

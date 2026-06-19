@@ -784,8 +784,7 @@ class RLOOTrainer(_BaseTrainer):
                 model_inputs["pixel_values"] = pixel_values[img_start:img_end]
                 model_inputs["image_position_ids"] = image_position_ids[img_start:img_end]
             elif spatial_shapes is not None and pixel_values is not None:
-                # LFM2-VL: pixel_values/pixel_attention_mask/spatial_shapes are tile-indexed. Slice the contiguous
-                # tile range for this chunk using cumulative per-sample tile counts.
+                # LFM2-VL tensors are tile-indexed.
                 cum_tiles = torch.tensor([0] + num_tiles).cumsum(0)
                 tile_start, tile_end = cum_tiles[start], cum_tiles[start + batch_size]
                 model_inputs["pixel_values"] = pixel_values[tile_start:tile_end]
@@ -1270,10 +1269,7 @@ class RLOOTrainer(_BaseTrainer):
         else:
             forward_kwargs = {}
 
-        # LFM2-VL emits tile-indexed image tensors (pixel_values, pixel_attention_mask, spatial_shapes) with no
-        # image_grid_thw/image_position_ids. To split them per sample we need per-sample tile counts, which the full
-        # processor pops (image_rows/image_cols). Recover them via the image processor; this is one extra CPU pass,
-        # negligible against the GPU forward.
+        # Recover LFM2-VL tile counts; the full processor drops row/column metadata.
         num_tiles = None
         if images is not None and "spatial_shapes" in forward_kwargs:
             image_info = self.processing_class.image_processor(

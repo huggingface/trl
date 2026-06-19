@@ -890,8 +890,7 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
 
     For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values` belong
     to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
-    image count. For models with `spatial_shapes` (e.g. LFM2-VL), `pixel_values`, `pixel_attention_mask` and
-    `spatial_shapes` are all indexed by tile and are split using `num_tiles` (one entry per sample).
+    image count. For models with `spatial_shapes` (e.g. LFM2-VL), tile-indexed tensors are split using `num_tiles`.
     """
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
@@ -920,8 +919,6 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torc
         return {**batch, "pixel_values": split_pixel_values, "image_position_ids": split_image_position_ids}
 
     if "spatial_shapes" in batch:
-        # LFM2-VL: pixel_values, pixel_attention_mask and spatial_shapes are all indexed by tile (dim 0 = total
-        # tiles across the batch), not by sample. Split them per sample using num_tiles (one tile count per sample).
         num_tiles = batch["num_tiles"]
         pixel_attention_mask = batch["pixel_attention_mask"]
         spatial_shapes = batch["spatial_shapes"]
