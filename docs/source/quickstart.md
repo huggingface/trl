@@ -27,7 +27,7 @@ from datasets import load_dataset
 from trl.rewards import accuracy_reward
 
 trainer = GRPOTrainer(
-    model="Qwen/Qwen2.5-0.5B-Instruct",  # Start from SFT model
+    model="Qwen/Qwen2.5-0.5B-Instruct",
     train_dataset=load_dataset("trl-lib/DeepMath-103K", split="train"),
     reward_funcs=accuracy_reward,
 )
@@ -41,8 +41,7 @@ from trl import DPOTrainer
 from datasets import load_dataset
 
 trainer = DPOTrainer(
-    model="Qwen/Qwen2.5-0.5B-Instruct",  # Use your SFT model
-    ref_model="Qwen/Qwen2.5-0.5B-Instruct",  # Original base model
+    model="Qwen/Qwen2.5-0.5B-Instruct",
     train_dataset=load_dataset("trl-lib/ultrafeedback_binarized", split="train"),
 )
 trainer.train()
@@ -123,6 +122,18 @@ training_args = SFTConfig(
 training_args = DPOConfig(
     per_device_train_batch_size=1,  # Start small
     gradient_accumulation_steps=8,  # Maintain effective batch size
+)
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+```python
+training_args = GRPOConfig(
+    per_device_train_batch_size=1,  # Start small
+    gradient_accumulation_steps=8,  # Maintain effective batch size
+    num_generations=4,              # Reduce from default 8 (GRPO generates num_generations completions per prompt)
+    max_completion_length=256,      # Tune based on task; longer sequences cost more memory
 )
 ```
 

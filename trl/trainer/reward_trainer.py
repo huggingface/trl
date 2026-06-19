@@ -13,9 +13,11 @@
 # limitations under the License.
 
 import contextlib
+import json
 import logging
 import os
 import re
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -48,26 +50,30 @@ from transformers.utils import is_peft_available
 from ..chat_template_utils import clone_chat_template
 from ..data_utils import is_conversational
 from ..models import get_act_offloading_ctx_manager
-from .base_trainer import BaseTrainer
+from .base_trainer import _BaseTrainer
 from .reward_config import RewardConfig
-from .utils import create_model_from_path, disable_dropout_in_model, get_config_model_id, pad, remove_none_values
+from .utils import create_model_from_path, disable_dropout_in_model, get_config_model_id, pad
 
 
 if is_peft_available():
+    import peft
     from peft import PeftConfig, PeftModel, get_peft_model
 
 
 logger = get_logger(__name__)
 
 
-# AutoModelForSequenceClassification adds a new classification head when loading a CausalLM. That head is randomly
-# initialized and triggers a harmless warning about uninitialized weights. We suppress just that specific warning to
-# avoid confusing users.
+# Loading a CausalLM checkpoint into AutoModelForSequenceClassification triggers harmless warnings:
+#   - MISSING  score.weight    : the new seq-clf head was not in the checkpoint and is randomly initialized.
+#   - UNEXPECTED lm_head.weight: the causal LM head is in the checkpoint but absent from seq-clf (>= 4.57.0 only).
+# Both are expected consequences of intentional cross-architecture loading. We suppress them to avoid
+# confusing users.
 
 
 # Old approach using logging filter (for transformers < 4.57.0)
+# Note: in transformers < 4.57.0, only the MISSING score.weight warning is emitted; lm_head.weight is not reported.
 @contextmanager
-def suppress_from_pretrained_warning(logger: logging.Logger):
+def _suppress_seqcls_cross_arch_keys(logger: logging.Logger):
     pattern = re.compile(
         r"^Some weights of \S+ were not initialized from the model checkpoint at \S+ and are newly initialized: "
         r"\[.*\]\nYou should probably TRAIN this model on a down-stream task to be able to use it for predictions and "
@@ -88,18 +94,27 @@ def suppress_from_pretrained_warning(logger: logging.Logger):
 
 # New approach using scoped override (for transformers >= 4.57.0)
 @contextmanager
-def ignore_seqcls_score_missing_key():
-    # Scoped override: ignore only the expected seq-clf head key.
-    old = getattr(GenericForSequenceClassification, "_keys_to_ignore_on_load_missing", None)
-    merged = list(old) if old is not None else []
-    pattern = r"^score\.weight$"
-    if pattern not in merged:
-        merged.append(pattern)
-    GenericForSequenceClassification._keys_to_ignore_on_load_missing = merged
+def _ignore_seqcls_cross_arch_keys():
+    # Scoped override: ignore the expected seq-clf head key (newly added) and the causal LM head
+    # key (present in the checkpoint but absent from seq-clf).
+    old_missing = getattr(GenericForSequenceClassification, "_keys_to_ignore_on_load_missing", None)
+    old_unexpected = getattr(GenericForSequenceClassification, "_keys_to_ignore_on_load_unexpected", None)
+
+    merged_missing = list(old_missing) if old_missing is not None else []
+    if r"^score\.weight$" not in merged_missing:
+        merged_missing.append(r"^score\.weight$")
+
+    merged_unexpected = list(old_unexpected) if old_unexpected is not None else []
+    if r"^lm_head\." not in merged_unexpected:
+        merged_unexpected.append(r"^lm_head\.")
+
+    GenericForSequenceClassification._keys_to_ignore_on_load_missing = merged_missing
+    GenericForSequenceClassification._keys_to_ignore_on_load_unexpected = merged_unexpected
     try:
         yield
     finally:
-        GenericForSequenceClassification._keys_to_ignore_on_load_missing = old
+        GenericForSequenceClassification._keys_to_ignore_on_load_missing = old_missing
+        GenericForSequenceClassification._keys_to_ignore_on_load_unexpected = old_unexpected
 
 
 # Version-aware wrapper that chooses the appropriate approach
@@ -108,12 +123,12 @@ def suppress_seqcls_warning():
     # Use the new approach for transformers >= 4.57.0, old approach for earlier versions
     # The old approach is needed for 4.56.2 to avoid meta tensor issues with device_map=None
     if Version(transformers.__version__) >= Version("4.57.0"):
-        with ignore_seqcls_score_missing_key():
+        with _ignore_seqcls_cross_arch_keys():
             yield
     else:
         # Get the transformers logger
         transformers_logger = logging.getLogger("transformers.modeling_utils")
-        with suppress_from_pretrained_warning(transformers_logger):
+        with _suppress_seqcls_cross_arch_keys(transformers_logger):
             yield
 
 
@@ -126,10 +141,10 @@ class DataCollatorForPreference(DataCollatorMixin):
     """
     Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch.
 
-    This collator expects each example in the input list to be a dictionary containing the `"chosen_input_ids"` and
-    `"rejected_input_ids"` keys. The collator returns a dictionary containing the following keys:
+    This collator expects each example in the input list to be a dictionary containing the `"chosen_ids"` and
+    `"rejected_ids"` keys. The collator returns a dictionary containing the following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch. The first half of the batch
-        corresponds to the `"chosen_input_ids"` and the second half to the `"rejected_input_ids"`.
+        corresponds to the `"chosen_ids"` and the second half to the `"rejected_ids"`.
     - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
 
     Optionally, the examples can contain a `"margin"` key, in which case the returned dictionary will also contain a
@@ -149,8 +164,8 @@ class DataCollatorForPreference(DataCollatorMixin):
 
     >>> collator = DataCollatorForPreference(pad_token_id=0)
     >>> examples = [
-    ...     {"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5]},
-    ...     {"chosen_input_ids": [6, 7], "rejected_input_ids": [8]},
+    ...     {"chosen_ids": [1, 2, 3], "rejected_ids": [4, 5]},
+    ...     {"chosen_ids": [6, 7], "rejected_ids": [8]},
     ... ]
     >>> collator(examples)
     {'input_ids': tensor([[1, 2, 3],
@@ -163,8 +178,8 @@ class DataCollatorForPreference(DataCollatorMixin):
                                [1, 0, 0]])}
 
     >>> examples = [
-    ...     {"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5], "margin": 0.5},
-    ...     {"chosen_input_ids": [6, 7], "rejected_input_ids": [8], "margin": 0.0},
+    ...     {"chosen_ids": [1, 2, 3], "rejected_ids": [4, 5], "margin": 0.5},
+    ...     {"chosen_ids": [6, 7], "rejected_ids": [8], "margin": 0.0},
     ... ]
     >>> collator(examples)
     {'input_ids': tensor([[1, 2, 3],
@@ -185,11 +200,11 @@ class DataCollatorForPreference(DataCollatorMixin):
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         # Convert to tensor
-        chosen_input_ids = [torch.tensor(example["chosen_input_ids"]) for example in examples]
-        rejected_input_ids = [torch.tensor(example["rejected_input_ids"]) for example in examples]
+        chosen_ids = [torch.tensor(example["chosen_ids"]) for example in examples]
+        rejected_ids = [torch.tensor(example["rejected_ids"]) for example in examples]
         if "margin" in examples[0]:
             margins = torch.tensor([example["margin"] for example in examples], dtype=torch.float)
-        input_ids = chosen_input_ids + rejected_input_ids
+        input_ids = chosen_ids + rejected_ids
         attention_mask = [torch.ones_like(ids) for ids in input_ids]
 
         output = {}
@@ -212,7 +227,7 @@ class DataCollatorForPreference(DataCollatorMixin):
         return output
 
 
-class RewardTrainer(BaseTrainer):
+class RewardTrainer(_BaseTrainer):
     """
     Trainer for Outcome-supervised Reward Models (ORM).
 
@@ -257,8 +272,8 @@ class RewardTrainer(BaseTrainer):
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
 
-            The trainer also supports processed datasets (tokenized) as long as they contain an `chosen_input_ids` and
-            `rejected_input_ids` fields.
+            The trainer also supports processed datasets (tokenized) as long as they contain `chosen_ids` and
+            `rejected_ids` fields.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
@@ -325,9 +340,11 @@ class RewardTrainer(BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = RewardConfig(f"{model_name}-Reward")
 
-        # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
-        # batches from multiple processes, leading to mismatch errors.
-        if isinstance(train_dataset, IterableDataset):
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+        elif isinstance(train_dataset, IterableDataset):
+            # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
+            # batches from multiple processes, leading to mismatch errors.
             if args.accelerator_config.dispatch_batches is True:
                 logger.warning(
                     "You are using an `IterableDataset` for training with `dispatch_batches=True`. `dispatch_batches` "
@@ -361,6 +378,8 @@ class RewardTrainer(BaseTrainer):
                     "to output a single scalar reward per sequence. Please instantiate your model with `num_labels=1` "
                     "or pass a model name as a string to have it configured automatically."
                 )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
+        _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         # Processing class
         if processing_class is None:
@@ -368,15 +387,13 @@ class RewardTrainer(BaseTrainer):
 
         # Handle pad token for processors or tokenizers
         if args.eos_token is not None:
-            eos_token = args.eos_token
-            eos_token_id = processing_class.convert_tokens_to_ids(eos_token)
-            if eos_token_id is None:
+            if args.eos_token not in processing_class.get_vocab():
                 raise ValueError(
-                    f"The specified `eos_token` ('{eos_token}') is not found in the vocabulary of the given "
+                    f"The specified `eos_token` ('{args.eos_token}') is not found in the vocabulary of the given "
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `eos_token` exists "
                     "in the vocabulary before using it as an EOS token."
                 )
-            processing_class.eos_token_id = eos_token_id
+            processing_class.eos_token = args.eos_token
 
         if args.chat_template_path is not None:
             if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
@@ -390,8 +407,24 @@ class RewardTrainer(BaseTrainer):
         else:
             added_tokens = []
 
-        # PEFT configuration and model wrapping
+        # PEFT
         if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            if is_peft_model(model):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                    "with the new `peft_config` to the trainer."
+                )
             if added_tokens:
                 # Ensure that the added tokens are trainable
                 if peft_config.trainable_token_indices is None:
@@ -400,7 +433,6 @@ class RewardTrainer(BaseTrainer):
                     peft_config.trainable_token_indices["embed_tokens"] = added_tokens
                 else:
                     peft_config.trainable_token_indices["embed_tokens"].extend(added_tokens)
-
                 # Ensure that the lm_head is trainable
                 if peft_config.modules_to_save is None or "lm_head" not in peft_config.modules_to_save:
                     logger.warning(
@@ -414,29 +446,38 @@ class RewardTrainer(BaseTrainer):
                         peft_config.modules_to_save = ["lm_head"]
                     else:
                         peft_config.modules_to_save.append("lm_head")
-
-        if is_peft_available() and is_peft_model(model) and peft_config is not None:
-            raise ValueError(
-                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
-                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
-                "with the new `peft_config` to the trainer."
-            )
-
-        # Create PEFT model
-        if peft_config is not None:
-            model = get_peft_model(model, peft_config)
+            # Create PEFT model
+            # ZeRO-3 + PEFT for non-quantized models:
+            # - PEFT's default autocast_adapter_dtype=True upcasts LoRA adapter params to fp32 even when the base model is bf16.
+            # - ZeRO-3's _allgather_params_coalesced allocates output buffers using the dtype of the first persistent parameter,
+            #   so mixed-dtype persistent_parameters (bf16 base + fp32 LoRA) cause a TypeError on the first optimizer step.
+            # - Passing autocast_adapter_dtype=False keeps adapter params in the base model dtype (bf16), fixing the mismatch.
+            # - This is safe: the fp32 upcast is a QLoRA-specific concern (low-bit quantized base models), not needed for
+            #   non-quantized bf16 training.
+            # - See:
+            #   - TRL issue: https://github.com/huggingface/trl/issues/6089
+            #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
+            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
+            get_peft_model_kwargs = {}
+            if (
+                args.deepspeed_plugin is not None
+                and args.deepspeed_plugin.zero_stage == 3
+                and not _is_quantized_model
+                and Version(peft.__version__) >= Version("0.12.0")
+            ):
+                get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_available() and is_peft_model(model) and args.gradient_checkpointing:
+        if is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
-        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
-        if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
+        if _is_quantized_model:
             for param in model.parameters():
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
@@ -449,20 +490,18 @@ class RewardTrainer(BaseTrainer):
         # If not provided, use the one from the processing class or the eos token if the processing class does not have
         # a pad token.
         pad_token = args.pad_token or processing_class.pad_token or processing_class.eos_token
-        pad_token_id = processing_class.convert_tokens_to_ids(pad_token)
-        if pad_token_id is None:
+        if pad_token not in processing_class.get_vocab():
             raise ValueError(
                 f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
                 f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                 "in the vocabulary before using it as a padding token."
             )
-        model.config.pad_token_id = pad_token_id
-        processing_class.pad_token_id = pad_token_id
+        processing_class.pad_token = pad_token
 
         # Data collator
         if data_collator is None:
             data_collator = DataCollatorForPreference(
-                pad_token_id=pad_token_id,
+                pad_token_id=processing_class.pad_token_id,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
 
@@ -509,11 +548,14 @@ class RewardTrainer(BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
+
+        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
+        # self.model_accepts_loss_kwargs to False to enable scaling.
+        self.model_accepts_loss_kwargs = False
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
@@ -525,14 +567,20 @@ class RewardTrainer(BaseTrainer):
         args: RewardConfig,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
-        # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
-        # sampled data.
-        if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
-            dataset = dataset.with_transform(remove_none_values)
-
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = get_dataset_column_names(dataset)
-        is_processed = "chosen_input_ids" in column_names and "rejected_input_ids" in column_names
+        is_processed = "chosen_ids" in column_names and "rejected_ids" in column_names
+        has_legacy_processed_columns = "chosen_input_ids" in column_names and "rejected_input_ids" in column_names
+        if has_legacy_processed_columns and not is_processed:
+            warnings.warn(
+                "Detected legacy dataset columns `chosen_input_ids`/`rejected_input_ids`; they are deprecated and "
+                "will not be supported in v1. Please migrate to `chosen_ids`/`rejected_ids`.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            dataset = dataset.rename_column("chosen_input_ids", "chosen_ids")
+            dataset = dataset.rename_column("rejected_input_ids", "rejected_ids")
+            is_processed = True
 
         # Build the kwargs for the `map` function
         map_kwargs = {}
@@ -541,7 +589,7 @@ class RewardTrainer(BaseTrainer):
 
         with PartialState().main_process_first():
             if not is_processed:
-                # Add EOS token to the end of the sequences if needed
+                # Add EOS token if needed: non-conversational only
                 first_example = next(iter(dataset))
                 if not is_conversational(first_example):
                     if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -565,28 +613,30 @@ class RewardTrainer(BaseTrainer):
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
                 def tokenize_fn(example, processing_class):
+                    tools = example.get("tools")
+                    tools = json.loads(tools) if isinstance(tools, str) else tools
                     if "prompt" in example:  # explicit prompt case
                         example["chosen"] = example["prompt"] + example["chosen"]
                         example["rejected"] = example["prompt"] + example["rejected"]
 
                     if is_conversational(example):
-                        chosen_input_ids = processing_class.apply_chat_template(
+                        chosen_ids = processing_class.apply_chat_template(
                             example["chosen"],
-                            tools=example.get("tools"),
+                            tools=tools,
                             return_dict=True,
                             **example.get("chat_template_kwargs", {}),
                         )["input_ids"]
-                        rejected_input_ids = processing_class.apply_chat_template(
+                        rejected_ids = processing_class.apply_chat_template(
                             example["rejected"],
-                            tools=example.get("tools"),
+                            tools=tools,
                             return_dict=True,
                             **example.get("chat_template_kwargs", {}),
                         )["input_ids"]
-                        output = {"chosen_input_ids": chosen_input_ids, "rejected_input_ids": rejected_input_ids}
+                        output = {"chosen_ids": chosen_ids, "rejected_ids": rejected_ids}
                     else:
                         output = {
-                            "chosen_input_ids": processing_class(text=example["chosen"])["input_ids"],
-                            "rejected_input_ids": processing_class(text=example["rejected"])["input_ids"],
+                            "chosen_ids": processing_class(text=example["chosen"])["input_ids"],
+                            "rejected_ids": processing_class(text=example["rejected"])["input_ids"],
                         }
                     return output
 
@@ -597,8 +647,8 @@ class RewardTrainer(BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Filtering {dataset_name} >{args.max_length} tokens"
                 dataset = dataset.filter(
-                    lambda example: len(example["chosen_input_ids"]) <= args.max_length
-                    and len(example["rejected_input_ids"]) <= args.max_length,
+                    lambda example: len(example["chosen_ids"]) <= args.max_length
+                    and len(example["rejected_ids"]) <= args.max_length,
                     **map_kwargs,
                 )
 
@@ -609,7 +659,7 @@ class RewardTrainer(BaseTrainer):
         # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
         # and "attention_mask").
         if self._signature_columns is None:
-            self._signature_columns = ["chosen_input_ids", "rejected_input_ids", "margin"]
+            self._signature_columns = ["chosen_ids", "rejected_ids", "margin"]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
@@ -666,7 +716,7 @@ class RewardTrainer(BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 

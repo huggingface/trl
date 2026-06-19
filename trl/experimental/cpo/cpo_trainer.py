@@ -28,6 +28,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState, logging
+from accelerate.utils import is_peft_model
 from datasets import Dataset
 from packaging.version import Version
 from torch import autocast
@@ -48,20 +49,20 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_fx_proxy
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt
-from ...models.utils import peft_module_casting_to_bf16
-from ...trainer.base_trainer import BaseTrainer
-from ...trainer.utils import (
-    disable_dropout_in_model,
-    log_table_to_comet_experiment,
+from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, selective_log_softmax
+from ..utils import (
+    DPODataCollatorWithPadding,
+    add_bos_token_if_needed,
+    add_eos_token_if_needed,
     pad_to_length,
-    selective_log_softmax,
+    peft_module_casting_to_bf16,
 )
-from ..utils import DPODataCollatorWithPadding, add_bos_token_if_needed, add_eos_token_if_needed
 from .cpo_config import CPOConfig
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
 
 
 if is_wandb_available():
@@ -71,7 +72,7 @@ if is_wandb_available():
 logger = logging.get_logger(__name__)
 
 
-class CPOTrainer(BaseTrainer):
+class CPOTrainer(_BaseTrainer):
     r"""
     Initialize CPOTrainer.
 
@@ -101,7 +102,7 @@ class CPOTrainer(BaseTrainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        peft_config (`dict`, defaults to `None`):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
             a PEFT model.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -142,9 +143,12 @@ class CPOTrainer(BaseTrainer):
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
-        peft_config: dict | None = None,
+        peft_config: "PeftConfig | None" = None,
         compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
     ):
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
@@ -166,16 +170,22 @@ class CPOTrainer(BaseTrainer):
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
+        # PEFT
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
         self._peft_has_been_casted_to_bf16 = False
-
-        if not is_peft_available() and peft_config is not None:
-            raise ValueError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
-            )
-        elif is_peft_available() and peft_config is not None:
-            if isinstance(model, PeftModel):
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            if is_peft_model(model):
                 raise ValueError(
                     "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
                     "merge and unload the existing adapter, save the resulting base model, and then pass that base "
@@ -288,7 +298,6 @@ class CPOTrainer(BaseTrainer):
 
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
-        self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
         self.processing_class = processing_class
 
@@ -332,13 +341,15 @@ class CPOTrainer(BaseTrainer):
             # Extract the prompt if needed, and apply the chat template if needed
             train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
             train_dataset = train_dataset.map(
-                maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
+                maybe_apply_chat_template,
+                fn_kwargs={"processing_class": processing_class},
+                num_proc=args.dataset_num_proc,
             )
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
                 eval_dataset = eval_dataset.map(
                     maybe_apply_chat_template,
-                    fn_kwargs={"tokenizer": processing_class},
+                    fn_kwargs={"processing_class": processing_class},
                     num_proc=args.dataset_num_proc,
                 )
 
@@ -481,7 +492,7 @@ class CPOTrainer(BaseTrainer):
             # and length only differs by 1 at most
             num_diff_tokens = sum(
                 a != b
-                for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"], strict=True)
+                for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"], strict=False)
             )
             num_diff_len = abs(chosen_prompt_len_input_ids - rejected_prompt_len_input_ids)
             if num_diff_tokens > 1 or num_diff_len > 1:

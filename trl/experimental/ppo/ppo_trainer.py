@@ -48,17 +48,21 @@ from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
-from ...models.utils import create_reference_model, peft_module_casting_to_bf16, unwrap_model_for_generation
-from ...trainer.base_trainer import BaseTrainer
+from ...models.utils import prepare_deepspeed, unwrap_model_for_generation
+from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
-    empty_cache,
     log_table_to_comet_experiment,
     pad,
-    prepare_deepspeed,
     selective_log_softmax,
 )
-from ..utils import first_true_indices, get_reward
+from ..utils import (
+    create_reference_model,
+    empty_cache,
+    first_true_indices,
+    get_reward,
+    peft_module_casting_to_bf16,
+)
 from .ppo_config import PPOConfig
 
 
@@ -284,13 +288,21 @@ class PolicyAndValueWrapper(nn.Module):
         self.critic_backbone = getattr(value_model, value_model.base_model_prefix)
         self.is_gradient_checkpointing = policy.is_gradient_checkpointing
 
+    def gradient_checkpointing_enable(self, **kwargs):
+        self.policy.gradient_checkpointing_enable(**kwargs)
+        self.is_gradient_checkpointing = True
+
+    def gradient_checkpointing_disable(self):
+        self.policy.gradient_checkpointing_disable()
+        self.is_gradient_checkpointing = False
+
     def forward(self, **kwargs):
         output = self.critic_backbone(**kwargs)
         logits = self.value_model.score(output.hidden_states[-1])
         return self.policy(**kwargs), logits
 
 
-class PPOTrainer(BaseTrainer):
+class PPOTrainer(_BaseTrainer):
     """Trainer for Proximal Policy Optimization (PPO).
 
     For details on PPO, see the paper: [Proximal Policy Optimization
@@ -358,6 +370,9 @@ class PPOTrainer(BaseTrainer):
         callbacks: list[TrainerCallback] | None = None,
         peft_config: "PeftConfig | None" = None,
     ) -> None:
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+
         if ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
@@ -401,12 +416,18 @@ class PPOTrainer(BaseTrainer):
                 "[Approximating KL Divergence](http://joschu.net/blog/kl-approx.html) for details."
             )
 
-        # peft support
-        if not is_peft_available() and peft_config is not None:
-            raise ImportError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
-            )
-        elif is_peft_available() and peft_config is not None:
+        # PEFT
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
             if isinstance(self.policy_model, PeftModel):
                 raise ValueError(
                     "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
@@ -539,17 +560,13 @@ class PPOTrainer(BaseTrainer):
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
         if self.is_deepspeed_enabled:
-            self.reward_model = prepare_deepspeed(
-                self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
-            )
+            self.reward_model = prepare_deepspeed(self.reward_model, accelerator)
 
             if self.ref_model is None:
                 if not self.is_peft_model:
                     raise ValueError("No reference model and model is not a Peft model.")
             else:
-                self.ref_model = prepare_deepspeed(
-                    self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
-                )
+                self.ref_model = prepare_deepspeed(self.ref_model, accelerator)
         else:
             if self.ref_model is None:
                 if not self.is_peft_model:
@@ -580,8 +597,8 @@ class PPOTrainer(BaseTrainer):
 
     def save_model(self, output_dir: str | None = None, _internal_call: bool = False):
         backup_model = self.model
-        self.model = self.model.policy  # save only the policy
-
+        if hasattr(self.model, "policy"):
+            self.model = self.model.policy  # save only the policy for inference
         if self.is_deepspeed_enabled:
             backup_deepspeed = self.deepspeed
             self.deepspeed = self.model
@@ -589,7 +606,6 @@ class PPOTrainer(BaseTrainer):
         super().save_model(output_dir, _internal_call)
 
         self.model = backup_model
-
         if self.is_deepspeed_enabled:
             self.deepspeed = backup_deepspeed
 
@@ -940,6 +956,8 @@ class PPOTrainer(BaseTrainer):
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def generate_completions(self, sampling: bool = False):
+        if self.eval_dataset is None:
+            return  # no eval set to sample from (pass eval_dataset and eval_strategy != "no" for sample generations)
         args = self.args
         processing_class = self.processing_class
         generation_kwargs = {

@@ -12,16 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
 import inspect
+import json
 import os
 import random
 import textwrap
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from operator import itemgetter
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -29,8 +32,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState, logging
-from accelerate.utils import tqdm
+from accelerate import Accelerator, PartialState, logging
+from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset
 from packaging.version import Version
 from torch import autocast
@@ -54,21 +57,15 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ...import_utils import is_joblib_available
-from ...models.utils import create_reference_model, peft_module_casting_to_bf16, prepare_deepspeed
-from ...trainer.base_trainer import BaseTrainer
-from ...trainer.utils import (
-    RunningMoments,
-    disable_dropout_in_model,
-    log_table_to_comet_experiment,
-    pad_to_length,
-    selective_log_softmax,
-)
-from ..utils import DPODataCollatorWithPadding
+from ...models.utils import prepare_deepspeed
+from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, selective_log_softmax
+from ..utils import DPODataCollatorWithPadding, create_reference_model, pad_to_length, peft_module_casting_to_bf16
 from .bco_config import BCOConfig
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
 
 if is_wandb_available():
     import wandb
@@ -79,19 +76,96 @@ if is_sklearn_available():
 if is_joblib_available():
     import joblib
 
-if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizer
-
 logger = logging.get_logger(__name__)
 
 RUNNING_NAME = "running.json"
 CLF_NAME = "clf.pkl"
 
 
+@torch.no_grad()
+def get_global_statistics(
+    accelerator, xs: torch.Tensor, mask=None, device="cpu"
+) -> tuple[torch.Tensor, torch.Tensor, int]:
+    """
+    Computes element-wise mean and variance of the tensor across processes. Reference:
+    https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L57C1-L73C75
+    """
+    xs = xs.to(accelerator.device)
+    sum_and_count = torch.tensor([xs.sum(), (xs.numel() if mask is None else mask.sum())], device=xs.device)
+    sum_and_count = accelerator.reduce(sum_and_count)
+    global_sum, count = sum_and_count
+    global_mean = global_sum / count
+
+    sum_var = torch.sum(((xs - global_mean) ** 2).mul(1 if mask is None else mask))
+    sum_var = accelerator.reduce(sum_var)
+    global_var = sum_var / count
+
+    return global_mean.to(device), global_var.to(device), count.item()
+
+
+@dataclass
+class RunningMoments:
+    """
+    Calculates the running mean and standard deviation of a data stream. Reference:
+    https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
+    """
+
+    accelerator: Accelerator
+    mean: float = 0
+    std: float = 1
+    var: float = 1
+    count: float = 1e-24
+
+    @torch.no_grad()
+    def update(self, xs: torch.Tensor) -> tuple[float, float]:
+        """
+        Updates running moments from batch's moments computed across ranks
+        """
+        if self.accelerator.use_distributed:
+            xs_mean, xs_var, xs_count = get_global_statistics(self.accelerator, xs)
+        else:
+            xs_count = xs.numel()
+            xs_var, xs_mean = torch.var_mean(xs, unbiased=False)
+        xs_mean, xs_var = xs_mean.float(), xs_var.float()
+
+        delta = xs_mean - self.mean
+        tot_count = self.count + xs_count
+
+        new_sum = xs_var * xs_count
+        # correct old_sum deviation accounting for the new mean
+        old_sum = self.var * self.count + delta**2 * self.count * xs_count / tot_count
+        tot_sum = old_sum + new_sum
+
+        self.mean += (delta * xs_count / tot_count).item()
+        new_var = tot_sum / tot_count
+        self.std = (new_var * tot_count / (tot_count - 1)).float().sqrt().item()
+        self.var = new_var.item()
+        self.count = tot_count
+
+        return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
+
+    def save_to_json(self, json_path: str):
+        """Save the content of this instance in JSON format inside `json_path`."""
+        # save everything except accelerator
+        if self.accelerator.is_main_process:
+            save_dict = dataclasses.asdict(self, dict_factory=lambda x: {k: v for (k, v) in x if k != "accelerator"})
+            json_string = json.dumps(save_dict, indent=2, sort_keys=True) + "\n"
+            with open(json_path, "w", encoding="utf-8") as f:
+                f.write(json_string)
+
+    @classmethod
+    def load_from_json(cls, accelerator: Accelerator, json_path: str):
+        """Create an instance from the content of `json_path`."""
+        # load everything except accelerator
+        with open(json_path, encoding="utf-8") as f:
+            text = f.read()
+        return cls(accelerator=accelerator, **json.loads(text))
+
+
 def _tokenize(
     batch: dict[str, list[Any]],
-    tokenizer: "PreTrainedTokenizer",
-    embedding_tokenizer: Optional["PreTrainedTokenizer"] = None,
+    tokenizer: PreTrainedTokenizerBase,
+    embedding_tokenizer: PreTrainedTokenizerBase | None = None,
 ) -> dict[str, list[Any]]:
     """Tokenize a batch from a BCO specific dataset."""
     prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
@@ -269,7 +343,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     return batch
 
 
-class BCOTrainer(BaseTrainer):
+class BCOTrainer(_BaseTrainer):
     r"""
     Initialize BCOTrainer from [BCO](https://huggingface.co/papers/2404.04656) paper.
 
@@ -303,7 +377,7 @@ class BCOTrainer(BaseTrainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        peft_config (`dict`, defaults to `None`):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
             a PEFT model.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -313,6 +387,12 @@ class BCOTrainer(BaseTrainer):
             Name of the train target PEFT adapter, when using LoRA with multiple adapters.
         ref_adapter_name (`str`, defaults to `None`):
             Name of the reference PEFT adapter, when using LoRA with multiple adapters.
+        embedding_func (`Callable`, *optional*):
+            Function to compute prompt embeddings, used to train the underlying distribution matching (UDM) classifier
+            when the desirable and undesirable datasets have divergent prompt distributions. Requires the scikit-learn
+            and joblib libraries.
+        embedding_tokenizer ([`~transformers.PreTrainedTokenizerBase`], *optional*):
+            Tokenizer used to prepare prompts for `embedding_func`.
     """
 
     _tag_names = ["trl", "bco"]
@@ -347,7 +427,7 @@ class BCOTrainer(BaseTrainer):
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
-        peft_config: dict | None = None,
+        peft_config: "PeftConfig | None" = None,
         compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
         model_adapter_name: str | None = None,
         ref_adapter_name: str | None = None,
@@ -361,6 +441,9 @@ class BCOTrainer(BaseTrainer):
 
         if type(args) is TrainingArguments:
             raise ValueError("Please use `BCOConfig` instead `TrainingArguments`.")
+
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
 
         if not isinstance(model, str) and model is not None and ref_model is model:
             raise ValueError(
@@ -392,16 +475,22 @@ class BCOTrainer(BaseTrainer):
         if isinstance(ref_model, str):
             ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **model_init_kwargs)
 
+        # PEFT
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
         self._peft_has_been_casted_to_bf16 = False
-
-        if not is_peft_available() and peft_config is not None:
-            raise ValueError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it with `pip install peft` to use the PEFT models"
-            )
-        elif is_peft_available() and peft_config is not None:
-            if isinstance(model, PeftModel):
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            if is_peft_model(model):
                 raise ValueError(
                     "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
                     "merge and unload the existing adapter, save the resulting base model, and then pass that base "
@@ -466,13 +555,12 @@ class BCOTrainer(BaseTrainer):
         else:
             self.is_encoder_decoder = args.is_encoder_decoder
 
-        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = model_adapter_name
         self.ref_adapter_name = ref_adapter_name
 
         if ref_model:
             self.ref_model = ref_model
-        elif self.is_peft_model or args.precompute_ref_log_probs:
+        elif is_peft_model(model) or args.precompute_ref_log_probs:
             # The `model` with adapters turned off will be used as the reference model
             self.ref_model = None
         else:
@@ -527,7 +615,6 @@ class BCOTrainer(BaseTrainer):
 
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
-        self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
@@ -566,7 +653,9 @@ class BCOTrainer(BaseTrainer):
             )
             # Apply the chat template if needed
             train_dataset = train_dataset.map(
-                maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
+                maybe_apply_chat_template,
+                fn_kwargs={"processing_class": processing_class},
+                num_proc=args.dataset_num_proc,
             )
             if eval_dataset is not None:
                 # Extract the prompt if needed
@@ -579,7 +668,7 @@ class BCOTrainer(BaseTrainer):
                 )
                 eval_dataset = eval_dataset.map(
                     maybe_apply_chat_template,
-                    fn_kwargs={"tokenizer": processing_class},
+                    fn_kwargs={"processing_class": processing_class},
                     num_proc=args.dataset_num_proc,
                 )
 
@@ -598,7 +687,6 @@ class BCOTrainer(BaseTrainer):
                 "is_encoder_decoder": self.is_encoder_decoder,
                 "tokenizer": processing_class,
                 "max_length": self.max_length,
-                "truncation_mode": self.truncation_mode,
                 "max_completion_length": self.max_completion_length,
             }
             train_dataset = train_dataset.map(
@@ -624,7 +712,6 @@ class BCOTrainer(BaseTrainer):
                     "is_encoder_decoder": self.is_encoder_decoder,
                     "tokenizer": processing_class,
                     "max_length": self.max_length,
-                    "truncation_mode": self.truncation_mode,
                     "max_completion_length": self.max_completion_length,
                 }
                 eval_dataset = eval_dataset.map(
@@ -685,7 +772,7 @@ class BCOTrainer(BaseTrainer):
                 )
 
         if self.ref_model is None:
-            if not (self.is_peft_model or self.precompute_ref_log_probs):
+            if not (is_peft_model(model) or self.precompute_ref_log_probs):
                 raise ValueError(
                     "No reference model and model is not a Peft model. Try setting `precompute_ref_log_probs=True`"
                 )
@@ -857,7 +944,7 @@ class BCOTrainer(BaseTrainer):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
         with (
             self.accelerator.unwrap_model(self.model).disable_adapter()
-            if self.is_peft_model and not self.ref_adapter_name
+            if is_peft_model(self.model) and not self.ref_adapter_name
             else nullcontext()
         ):
             if self.ref_adapter_name:

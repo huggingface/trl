@@ -19,6 +19,8 @@
 # LICENSE file in the root directory of https://github.com/pytorch/torchtune.
 
 
+import sys
+
 import psutil
 import torch
 from accelerate import logging
@@ -303,6 +305,16 @@ class OffloadActivations(saved_tensors_hooks):
                     cpu_tensor = cpu_storage
                 else:
                     # No broadcast - use normal contiguous copy
+                    # .contiguous() can be a no-op for contiguous views with
+                    # non-zero storage_offset. Force a clone for those views
+                    # so later as_strided reconstruction stays in bounds.
+                    if not activation.is_contiguous() or activation.storage_offset() != 0:
+                        if activation.storage_offset() != 0:
+                            activation = activation.clone(memory_format=torch.contiguous_format)
+                        else:
+                            activation = activation.contiguous()
+                        original_stride = activation.stride()
+                        original_storage_offset = activation.storage_offset()
                     cpu_tensor = torch.empty_like(activation, pin_memory=self.use_pin_memory, device="cpu")
                     cpu_tensor.copy_(activation, non_blocking=True)
 
@@ -557,6 +569,56 @@ class OffloadActivations(saved_tensors_hooks):
                 continue
 
         self.param_storages = param_storages
+
+    def __enter__(self):
+        """Clear stale state and release BNB buffers before entering.
+
+        By the time __enter__ is called, the previous forward/backward has already completed, so anything still in
+        tracker, storage_to_tensor_id, or the stashes is leaked and safe to drop.
+
+        Two leak paths are handled:
+        1. MoE + sample_packing + torch.compile: dynamic expert routing may leave saved tensors on subgraphs whose
+           backward nodes never execute, so the unpack-then-delete logic never fires. tracker/stashes from the previous
+           step survive into the next.
+        2. QLoRA BNB dequantization buffers: tracker retains references to tensors sharing allocator blocks with BNB
+           buffers, and the allocator cache is never flushed between steps (~0.6 GiB/step, OOM after 30-40).
+
+        Returns super().__enter__() to register pack/unpack hooks via saved_tensors_hooks (PyTorch autograd engine).
+        """
+        self.tracker.clear()
+        self.storage_to_tensor_id.clear()
+        self.tensor_id = 0
+        self.is_first_forward_call = True
+        self.is_first_backward_call = True
+        if self.use_streams:
+            self.bwd_tensor_stash.clear()
+            self.bwd_ev_stash.clear()
+            self.fwd_stash.clear()
+        if "bitsandbytes" in sys.modules:
+            if self.accelerator_type == "xpu":
+                torch.xpu.empty_cache()
+            elif is_torch_npu_available() and self.accelerator_type == "npu":
+                torch.npu.empty_cache()
+            else:
+                torch.cuda.empty_cache()
+        return super().__enter__()
+
+    def __exit__(self, *args, **kwargs):
+        """Sync streams and clear stashes before parent cleanup.
+
+        try/finally ensures the saved_tensors_hooks parent cleanup runs even if stream sync raises — otherwise hooks
+        stay permanently installed, creating a silent memory leak.
+        """
+        try:
+            if self.use_streams:
+                self.s0.synchronize()
+                self.s1.synchronize()
+                self.bwd_tensor_stash.clear()
+                self.bwd_ev_stash.clear()
+                self.fwd_stash.clear()
+        finally:
+            result = super().__exit__(*args, **kwargs)
+        return result
 
 
 class NoOpManager(saved_tensors_hooks):

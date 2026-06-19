@@ -24,12 +24,14 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13"
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14"
 ]
 requires-python = ">=3.10"
 dependencies = [
     "accelerate>=1.4.0",
-    "datasets>=3.0.0",
+    "datasets>=4.7.0",  # Support Json type and on_mixed_types="use_json"
+    "jinja2",
     "packaging>20.0",
     "transformers>=4.56.2",
 ]
@@ -50,16 +52,12 @@ deepspeed = [
     "deepspeed>=0.14.4",
     "transformers!=5.1.0",  # see transformers#43780
 ]
-judges = [
-    "openai>=1.23.2",
-    "llm-blender>=0.0.2",
-    "transformers<5.0.0",  # see #4918
-]
-kernels = [
-    "kernels"
+kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
+    "transformers[kernels]",  # transformers >= 5.1.0
+    "transformers[hub-kernels]",  # transformers < 5.1.0
 ]
 liger = [
-    "liger-kernel>=0.6.4"
+    "liger-kernel>=0.8.0"
 ]
 peft = [
     "peft>=0.8.0"
@@ -82,9 +80,10 @@ test = [
     "pytest"
 ]
 vllm = [
-    "vllm>=0.10.2,<0.13.0",
+    "vllm>=0.13.0,<=0.19.0",
     "fastapi",
     "pydantic",
+    "aiohttp>=3.13.3",
     "requests",
     "uvicorn"
 ]
@@ -96,19 +95,25 @@ vlm = [
 math_verify = [
     "math-verify>=0.5.2",
 ]
+openreward = [
+    "openreward>=0.1.109; python_version >= '3.11'",  # openreward requires Python 3.11+
+]
+harbor = [
+    "harbor>=0.13.0; python_version >= '3.12'",  # harbor requires Python 3.12+ (pulls its sandbox backends)
+]
 dev = [
     # bco
     "scikit-learn",
     "joblib",
     # deepspeed
     "deepspeed>=0.14.4",
-    # judges
-    "openai>=1.23.2",
-    "llm-blender>=0.0.2",
-    # kernels
-    "kernels",
+    # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
+    "transformers[kernels]",  # transformers >= 5.1.0
+    "transformers[hub-kernels]",  # transformers < 5.1.0
     # liger
-    "liger-kernel>=0.6.4",
+    "liger-kernel>=0.8.0",
+    # openreward (requires Python 3.11+)
+    "openreward>=0.1.109; python_version >= '3.11'",
     # peft
     "peft>=0.8.0",
     # quality
@@ -159,6 +164,8 @@ extend-select = ["E", "F", "I", "W", "UP", "B", "T", "C"]
 # Allow prints in auxiliary scripts
 "examples/**.py" = ["T201"]
 "scripts/**.py" = ["T201"]
+"trl/cli/**.py" = ["T201"]
+"trl/skills/cli.py" = ["T201"]
 # Ignore import violations in all `__init__.py` files.
 "__init__.py" = ["F401"]
 
@@ -169,10 +176,12 @@ known-first-party = ["trl"]
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "low_priority: marks tests as low priority (deselect with '-m \"not low_priority\"')"
+    "low_priority: marks tests as low priority (deselect with '-m \"not low_priority\"')",
+    "invariant: training-invariant checks (run with '-m invariant')",
 ]
 norecursedirs = [
     "tests/experimental",
+    "tests/invariant",
 ]
 filterwarnings = [
     # SWIG deprecations from SWIG-generated C/C++ extensions: sentencepiece
@@ -183,6 +192,8 @@ filterwarnings = [
 
     # PyTorch JIT deprecations (upstream, not actionable in TRL)
     # Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/7835
+    # Upstream PR: https://github.com/deepspeedai/DeepSpeed/pull/7840
+    # Upstream fix released in deepspeed v0.18.6: https://github.com/deepspeedai/DeepSpeed/releases/tag/v0.18.6
     "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
     "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
 

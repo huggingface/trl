@@ -31,7 +31,8 @@ from transformers.utils import is_peft_available
 
 from ...models import prepare_deepspeed
 from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc, RolloutFunc
-from ...trainer.utils import disable_dropout_in_model, empty_cache, get_config_model_id
+from ...trainer.utils import disable_dropout_in_model, get_config_model_id
+from ..utils import empty_cache
 from .minillm_config import MiniLLMConfig
 
 
@@ -253,22 +254,20 @@ class MiniLLMTrainer(GRPOTrainer):
         https://huggingface.co/papers/2306.08543 for the definition.
 
         Args:
-            student_logits:
-                Tensor of shape (batch_size, sequence_length, vocab_size)
-            teacher_logits:
-                Tensor of shape (batch_size, sequence_length, vocab_size)
-            labels:
-                Tensor of shape (batch_size, sequence_length) with -100 for padding tokens to ignore when computing
-                loss
-            beta:
-                Interpolation coefficient between 0 and 1 (default: 0.5)
-            temperature:
-                Softmax temperature (default: 1.0)
+            student_log_probs:
+                Per-token log-probabilities from the student, of shape (batch_size, sequence_length)
+            teacher_log_probs:
+                Per-token log-probabilities from the teacher, of shape (batch_size, sequence_length)
+            mask:
+                Optional boolean tensor of shape (batch_size, sequence_length) selecting the tokens to include in the
+                loss (e.g. excluding padding)
             reduction:
-                Specifies the reduction to apply to the output (default: 'batchmean')
+                Specifies the reduction to apply to the output: 'batchmean' (default), 'sum' or 'mean'; any other value
+                returns the unreduced per-token loss
 
         Returns:
-            loss: Scalar tensor with the generalized JSD loss
+            loss: Scalar tensor with the single-step KL regularization loss (unreduced if `reduction` is not one of the
+            above)
         """
         reg_loss = F.kl_div(
             teacher_log_probs, student_log_probs, reduction="none", log_target=True

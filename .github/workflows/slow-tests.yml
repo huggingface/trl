@@ -11,6 +11,7 @@ env:
   RUN_SLOW: "yes"
   IS_GITHUB_CI: "1"
   SLACK_API_TOKEN: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
   TRL_EXPERIMENTAL_SILENCE: 1
 
 jobs:
@@ -28,15 +29,14 @@ jobs:
         shell: bash
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Install system dependencies
         run: |
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
 
       - name: Create Python virtual environment
         run: |
@@ -76,15 +76,14 @@ jobs:
         shell: bash
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Install system dependencies
         run: |
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
 
       - name: Create Python virtual environment
         run: |
@@ -109,4 +108,3 @@ jobs:
           source .venv/bin/activate
           uv pip install slack_sdk tabulate
           python scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
-          rm *.txt
