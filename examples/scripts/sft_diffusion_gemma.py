@@ -48,15 +48,21 @@ dense-MLP linears of the encoder and decoder layers only; the MoE experts, the r
 and the vision tower stay frozen.
 
 The default hyperparameters follow the reference fine-tuning configs of the released checkpoint (learning rate
-1.5e-4, Adam betas (0.95, 0.99), weight decay 1e-4, 25 warmup steps then cosine to 1.5e-5, global batch size 8,
-sequence length 1024, 800 steps, LoRA rank 16 with alpha 32), so a run only needs:
+1.5e-4, Adam betas (0.95, 0.99), weight decay 1e-4, 25 warmup steps then cosine to 10% of the initial learning rate,
+global batch size 8, sequence length 1024, 800 steps, LoRA rank 16 with alpha 32), so a run only needs:
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/sft_diffusion_gemma.py \
     --use_peft \
+    --gradient_checkpointing \
     --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
 
 Drop `--use_peft` for full fine-tuning, which keeps the MoE router frozen like the reference recipe.
+
+Hardware: the 26B parameters do not fit on a single 80 GB GPU, so this needs at least 2 GPUs to shard them
+across ranks with ZeRO-3. Gradient checkpointing (`--gradient_checkpointing`) is required to keep activations within
+memory; it relies on https://github.com/huggingface/transformers/pull/46572. Two 80 GB H100s are enough for the
+defaults above; more GPUs increase throughput.
 """
 
 from dataclasses import dataclass, field
@@ -68,6 +74,7 @@ from peft import LoraConfig
 from transformers import AutoTokenizer, DiffusionGemmaForBlockDiffusion
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser
+from trl.trainer.sft_trainer import _maybe_gather_lm_head_ctx
 
 
 @dataclass
@@ -96,7 +103,7 @@ class DiffusionGemmaSFTConfig(SFTConfig):
     > - `adam_beta1`/`adam_beta2`: Default to `0.95`/`0.99`.
     > - `weight_decay`: Defaults to `1e-4`.
     > - `warmup_steps`: Defaults to `25`.
-    > - `lr_scheduler_type`: Defaults to `"cosine_with_min_lr"` with `lr_scheduler_kwargs={"min_lr": 1.5e-5}`.
+    > - `lr_scheduler_type`: Defaults to `"cosine_with_min_lr"` with `lr_scheduler_kwargs={"min_lr_rate": 0.1}`.
     > - `max_steps`: Defaults to `800`.
     > - `per_device_train_batch_size`/`gradient_accumulation_steps`: Default to `1`/`8` (global batch size 8).
     > - `max_length`: Defaults to `1024`.
@@ -108,7 +115,7 @@ class DiffusionGemmaSFTConfig(SFTConfig):
     weight_decay: float = 1e-4
     warmup_steps: int = 25
     lr_scheduler_type: str = "cosine_with_min_lr"
-    lr_scheduler_kwargs: dict | None = field(default_factory=lambda: {"min_lr": 1.5e-5})
+    lr_scheduler_kwargs: dict | None = field(default_factory=lambda: {"min_lr_rate": 0.1})
     max_steps: int = 800
     per_device_train_batch_size: int = 1
     gradient_accumulation_steps: int = 8
@@ -222,11 +229,21 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         # corruption kernel has a flat ELBO). For truncated turns the EOS fill is not a real terminator, so it is
         # dropped from the loss while the surviving response tokens are still supervised.
         diffusion_target = canvas_target.masked_fill(truncated[:, None] & ~in_response, -100)
-        diffusion_loss = F.cross_entropy(outputs.logits.flatten(0, 1), diffusion_target.flatten(), ignore_index=-100)
+        if (diffusion_target != -100).any():
+            diffusion_loss = F.cross_entropy(
+                outputs.logits.flatten(0, 1), diffusion_target.flatten(), ignore_index=-100
+            )
+        else:
+            diffusion_loss = outputs.logits.sum() * 0.0
 
         # Autoregressive co-loss on the encoder, over all valid next-token pairs
         lm_head = self.model.lm_head
-        encoder_logits = lm_head(outputs.encoder_last_hidden_state.to(lm_head.weight.dtype)).float()
+        hidden_states = outputs.encoder_last_hidden_state.to(lm_head.weight.dtype)
+        with _maybe_gather_lm_head_ctx(lm_head.weight, lm_head.bias):
+            encoder_logits = hidden_states @ lm_head.weight.t()
+            if lm_head.bias is not None:
+                encoder_logits = encoder_logits + lm_head.bias
+        encoder_logits = encoder_logits.float()
         cap = self.final_logit_softcapping
         encoder_logits = torch.tanh(encoder_logits / cap) * cap
         ar_mask = attention_mask[:, :-1].bool() & attention_mask[:, 1:].bool()
