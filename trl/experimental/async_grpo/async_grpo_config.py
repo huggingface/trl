@@ -15,7 +15,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from trl.trainer.base_config import _BaseConfig
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
@@ -33,8 +33,11 @@ class AsyncGRPOConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
-            model from a path. For MoE models, set `{"output_router_logits": True, "router_aux_loss_coef": <coef>}` here
-            to enable the load-balancing auxiliary loss.
+            model from a path.
+        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
+            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
+            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
+            weight. Set to `0.0` to disable it.
 
         > Parameters that control generation
 
@@ -63,7 +66,7 @@ class AsyncGRPOConfig(_BaseConfig):
         > Parameters that control the training
 
         epsilon (`float`, *optional*, defaults to `0.2`):
-            Lower-bound epsilon value for clipping.
+            Epsilon value for clipping.
         epsilon_high (`float`, *optional*, defaults to `0.2`):
             Upper-bound epsilon value for clipping.
 
@@ -107,8 +110,15 @@ class AsyncGRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when instantiating "
-            "the model from a path. For MoE models, set `output_router_logits` and `router_aux_loss_coef` here to "
-            "enable the load-balancing auxiliary loss."
+            "the model from a path."
+        },
+    )
+    router_aux_loss_coef: float = field(
+        default=0.001,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
+            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
+            "training loss with this weight. Set to `0.0` to disable it."
         },
     )
 
@@ -174,7 +184,7 @@ class AsyncGRPOConfig(_BaseConfig):
     # Parameters that control the training
     epsilon: float = field(
         default=0.2,
-        metadata={"help": "Lower-bound epsilon value for clipping."},
+        metadata={"help": "Epsilon value for clipping."},
     )
     epsilon_high: float = field(
         default=0.2,
