@@ -95,8 +95,8 @@ class AsyncGRPOConfig(_BaseConfig):
 
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps.
-        num_completions_to_print (`int`, *optional*, defaults to `3`):
-            Number of completions to print when `log_completions=True`.
+        num_completions_to_print (`int`, *optional*):
+            Number of completions to print with `rich`. If `None`, all completions are logged.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -243,9 +243,9 @@ class AsyncGRPOConfig(_BaseConfig):
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
-    num_completions_to_print: int = field(
-        default=3,
-        metadata={"help": "Number of completions to print when `log_completions=True`."},
+    num_completions_to_print: int | None = field(
+        default=None,
+        metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
 
     def __post_init__(self):
