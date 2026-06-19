@@ -402,6 +402,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Model
         model_name = model
         model_init_kwargs = self.args.model_init_kwargs or {}
+        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = AutoModelForCausalLM.from_pretrained(
@@ -427,7 +428,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name)
+            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=self.args.trust_remote_code)
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
