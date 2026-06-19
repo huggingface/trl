@@ -1294,7 +1294,9 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None, None
 
 
-def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: float) -> None:
+def patch_chunked_lm_head(
+    model: torch.nn.Module, chunk_size: int, temperature: float, output_router_logits: bool = False
+) -> None:
     final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
 
     def _chunked_forward(
@@ -1308,7 +1310,10 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
     ) -> dict[str, torch.Tensor]:
         assert labels is not None, "requires labels to not be None for logprob computation"
 
-        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **kwargs)
+        decoder_kwargs = {"output_router_logits": True} if output_router_logits else {}
+        outputs = self.model(
+            input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **decoder_kwargs, **kwargs
+        )
         # NOTE(@aminediro): supporting Cohere2 models
         logit_scale = getattr(self.config, "logit_scale", 1.0)
         hidden_states = outputs.last_hidden_state  # [B, S+1, H]
@@ -1318,8 +1323,8 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
         labels = labels[:, 1:]  # [B, S-1]
 
         b, s, h = hidden_states.shape
-        hidden_flat = hidden_states.reshape(b * s, h).contiguous()
-        targets_flat = labels.reshape(b * s).contiguous()
+        hidden_flat = hidden_states.reshape(b * s, h)
+        targets_flat = labels.reshape(b * s)
 
         # Filter to completion tokens only to avoid expensive matmuls on prompt tokens and tool results
         valid_mask = None
@@ -1348,9 +1353,35 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
             logprobs = logprobs_valid
             entropy = entropy_valid
 
+        aux_loss = None
+        if output_router_logits:
+            # Mirror the per-family MoE forward: add `router_aux_loss_coef * load_balancing_loss_func(...)` to
+            # the main loss. Mixtral is the source of truth — every MoE family (Qwen3Moe, GptOss, OLMoE,
+            # Qwen2Moe, DBRX, JetMoE, PhiMoE, …) pulls this function from mixtral via the modular system, so a
+            # single import keeps us in lockstep with upstream for every family we test.
+            from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
+
+            if Version(transformers.__version__) < Version("5.0.0"):
+                num_experts = self.num_experts
+                num_experts_per_tok = self.num_experts_per_tok
+            else:
+                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
+                if self.config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
+                    transformers.__version__
+                ) < Version("5.6.0"):
+                    num_experts = self.num_experts
+                else:
+                    num_experts = self.config.num_experts
+                num_experts_per_tok = self.config.num_experts_per_tok
+            # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
+            aux_loss = load_balancing_loss_func(
+                outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
+            )
+
         return {
             "log_probs": logprobs.reshape(b, s),
             "entropy": entropy.reshape(b, s),
+            "aux_loss": aux_loss,
         }
 
     model.forward = types.MethodType(_chunked_forward, model)

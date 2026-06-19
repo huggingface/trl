@@ -46,10 +46,9 @@ python trl/experimental/sdft/sdft.py \
     --learning_rate 2e-5 \
     --max_prompt_length 1024 \
     --max_completion_length 512 \
-    --generate_from_teacher \
-    --sync_ref_model \
-    --ref_model_sync_steps 1 \
-    --ref_model_mixup_alpha 0.01 \
+    --teacher_model_kind ema \
+    --teacher_sync_steps 1 \
+    --teacher_update_rate 0.01 \
     --eval_strategy steps \
     --eval_steps 50 \
     --report_to wandb
@@ -86,10 +85,6 @@ DEFAULT_DEMONSTRATION_TEMPLATE = Template("""Example response: $output_text""")
 
 @dataclass
 class SDFTScriptArguments(ScriptArguments):
-    ref_model_name_or_path: str | None = field(
-        default=None,
-        metadata={"help": "Reference teacher model. Optional for PEFT runs, where the base model is used as teacher."},
-    )
     dataset_path: str | None = field(
         default=None,
         metadata={"help": "Optional local dataset path to load with `load_from_disk`. Overrides `dataset_name`."},
@@ -119,14 +114,6 @@ class SDFTScriptArguments(ScriptArguments):
     tool_eval_max_new_tokens: int = field(
         default=256,
         metadata={"help": "Maximum completion length for task evaluation generation."},
-    )
-
-
-@dataclass
-class ExampleSDFTConfig(SDFTConfig):
-    scale_rewards: str = field(
-        default="group",
-        metadata={"help": "Reward normalization mode. Supported: `group`, `batch`, `none`."},
     )
 
 
@@ -323,14 +310,11 @@ def _run_tooluse_eval(
 
 
 if __name__ == "__main__":
-    parser = TrlParser((SDFTScriptArguments, ExampleSDFTConfig, ModelConfig))
+    parser = TrlParser((SDFTScriptArguments, SDFTConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
 
     if model_args.model_name_or_path is None:
         raise ValueError("`model_name_or_path` is required.")
-    if script_args.ref_model_name_or_path is None and not model_args.use_peft:
-        script_args.ref_model_name_or_path = model_args.model_name_or_path
-
     if model_args.dtype in ["auto", None]:
         if training_args.bf16:
             dtype = torch.bfloat16
@@ -381,16 +365,10 @@ if __name__ == "__main__":
         eval_dataset = _prepare_split(raw_eval_dataset, script_args)
 
     model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
-    ref_model = None
-    if script_args.ref_model_name_or_path is not None:
-        ref_model = AutoModelForCausalLM.from_pretrained(script_args.ref_model_name_or_path, **model_kwargs)
     model.config.use_cache = False if training_args.gradient_checkpointing else True
-    if ref_model is not None:
-        ref_model.config.use_cache = True
 
     trainer = SDFTTrainer(
         model=model,
-        ref_model=ref_model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,

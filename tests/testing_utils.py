@@ -31,6 +31,7 @@ from transformers.utils import (
 )
 
 from trl.import_utils import (
+    is_harbor_available,
     is_jmespath_available,
     is_joblib_available,
     is_liger_kernel_available,
@@ -43,6 +44,7 @@ from trl.import_utils import (
 
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
+require_harbor = pytest.mark.skipif(not is_harbor_available(), reason="test requires harbor")
 require_jmespath = pytest.mark.skipif(not is_jmespath_available(), reason="test requires jmespath")
 require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test requires kernels")
 require_liger_kernel = pytest.mark.skipif(not is_liger_kernel_available(), reason="test requires liger-kernel")
@@ -87,6 +89,11 @@ require_torch_gpu_if_bnb_not_multi_backend_enabled = pytest.mark.skipif(
 
 def is_ampere_or_newer(device_index=0):
     if not torch.cuda.is_available():
+        return False
+
+    # "Ampere" is an NVIDIA architecture; an AMD (ROCm) GPU is never Ampere. On ROCm,
+    # torch.cuda.get_device_capability returns the gfx version, which would spuriously compare >= (8, 0).
+    if torch.version.hip is not None:
         return False
 
     major, minor = torch.cuda.get_device_capability(device_index)

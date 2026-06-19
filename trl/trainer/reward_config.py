@@ -38,9 +38,7 @@ class RewardConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`RewardTrainer`] is provided as a string. If you're training a MoE architecture and want
-            to include the load balancing/auxiliary loss as a part of the final loss, remember to set
-            `output_router_logits=True` in this dictionary.
+            argument of the [`RewardTrainer`] is provided as a string.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForSequenceClassification.from_pretrained`] and
@@ -106,9 +104,7 @@ class RewardConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `RewardTrainer` is provided as a string. If you're training a MoE architecture and want to include "
-            "the load balancing/auxiliary loss as a part of the final loss, remember to set "
-            "`output_router_logits=True` in this dictionary."
+            "the `RewardTrainer` is provided as a string."
         },
     )
     trust_remote_code: bool = field(
