@@ -33,6 +33,28 @@ if is_peft_available():
 
 @pytest.mark.low_priority
 class TestBCOTrainer(TrlTestCase):
+    @require_sklearn
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+
+        with pytest.raises(ValueError, match="custom code"):
+            BCOTrainer(
+                model=model_id,
+                args=BCOConfig(output_dir=self.tmp_dir, report_to="none"),
+                processing_class=tokenizer,
+                train_dataset=dataset,
+            )
+
+        trainer = BCOTrainer(
+            model=model_id,
+            args=BCOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     @pytest.mark.parametrize(
         "config_name",
         [

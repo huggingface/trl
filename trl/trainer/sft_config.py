@@ -39,6 +39,10 @@ class SFTConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
+            [`~transformers.AutoProcessor.from_pretrained`].
         router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
             Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
             (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
@@ -155,6 +159,13 @@ class SFTConfig(_BaseConfig):
             "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
             "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
             "training loss with this weight. Set to `0.0` to disable it."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
         },
     )
     chat_template_path: str | None = field(

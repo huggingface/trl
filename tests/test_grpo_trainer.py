@@ -369,6 +369,29 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        def reward_func(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        with pytest.raises(ValueError, match="custom code"):
+            GRPOTrainer(
+                model=model_id,
+                args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                reward_funcs=reward_func,
+                train_dataset=dataset,
+            )
+
+        trainer = GRPOTrainer(
+            model=model_id,
+            args=GRPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            reward_funcs=reward_func,
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
     @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"])
     def test_train_loss_types(self, loss_type, use_liger_kernel):
