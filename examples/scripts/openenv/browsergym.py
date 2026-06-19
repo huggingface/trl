@@ -18,7 +18,7 @@
 #     "peft",
 #     "trackio",
 #     "kernels",
-#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
+#     "openenv-browsergym-env @ git+https://huggingface.co/spaces/openenv/browsergym_env",
 # ]
 # ///
 
@@ -344,12 +344,13 @@ def rollout_once(
     env: BrowserGymEnv,
     tokenizer: AutoTokenizer,
     dataset_prompt: str,
+    task_name: str,
     max_steps: int,
     image_size: int = 0,
     debug: bool = False,
 ) -> dict[str, list]:
     """Run one episode and collect training data."""
-    result = env.reset()
+    result = env.reset(task_name=task_name)
     observation = result.observation
 
     prompt_ids: list[int] = []
@@ -541,6 +542,7 @@ def main() -> None:
                 env=client,
                 tokenizer=tokenizer,
                 dataset_prompt=prompt_text,
+                task_name=args.task_name,
                 max_steps=args.max_steps,
                 image_size=args.image_size,
                 debug=args.debug,
