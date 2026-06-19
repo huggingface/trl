@@ -703,6 +703,16 @@ class DPOTrainer(_BaseTrainer):
 
         # Training arguments
         self.beta = args.beta
+        # Adaptive Beta-DPO (arXiv:2407.08639): running EMA of per-batch margins used as M₀.
+        if args.adaptive_beta is not None:
+            if args.adaptive_beta != "beta-dpo":
+                raise ValueError(
+                    f"Unknown `adaptive_beta` value {args.adaptive_beta!r}. Only 'beta-dpo' is supported."
+                )
+            if args.beta_alpha is None:
+                raise ValueError("`beta_alpha` must be set when `adaptive_beta='beta-dpo'`.")
+        # None → EMA of observed batch margins; fixed M₀ from config when set.
+        self._running_margin: float | None = args.beta_reference_margin
         self.precompute_ref_logps = args.precompute_ref_log_probs
         self.loss_types = args.loss_type  # args.loss_type is already a list
         self.loss_weights = args.loss_weights or [1.0] * len(self.loss_types)
@@ -1169,7 +1179,7 @@ class DPOTrainer(_BaseTrainer):
 
         input_ids = model_kwargs["input_ids"]
         completion_mask = inputs["completion_mask"]
-        shift_completion_mask = completion_mask[:, 1:]
+        shift_completion_mask = completion_mask[:, 1:].contiguous()
         labels = input_ids[:, 1:].clone()
         labels[shift_completion_mask == 0] = -100
 
@@ -1279,6 +1289,22 @@ class DPOTrainer(_BaseTrainer):
         chosen_logratios = chosen_logps - ref_chosen_logps
         rejected_logratios = rejected_logps - ref_rejected_logps
 
+        # ── Adaptive Beta-DPO (arXiv:2407.08639) ────────────────────────────────────
+        if self.args.adaptive_beta == "beta-dpo" and mode == "train":
+            with torch.no_grad():
+                batch_margin = (chosen_logratios - rejected_logratios).mean().item()
+            if self._running_margin is None:
+                self._running_margin = batch_margin
+            else:
+                self._running_margin = 0.9 * self._running_margin + 0.1 * batch_margin
+            effective_beta = max(
+                (1.0 + self.args.beta_alpha * (batch_margin - self._running_margin)) * self.beta,
+                1e-6,
+            )
+        else:
+            effective_beta = self.beta
+        # ─────────────────────────────────────────────────────────────────────────────
+
         if self.f_divergence_type == "reverse_kl":  # standard DPO
             chosen_scores = chosen_logratios
             rejected_scores = rejected_logratios
@@ -1314,10 +1340,10 @@ class DPOTrainer(_BaseTrainer):
         loss = 0.0
         for loss_type, loss_weight in zip(self.loss_types, self.loss_weights, strict=True):
             if loss_type == "sigmoid":
-                per_sequence_loss = -F.logsigmoid(self.beta * delta_score)
+                per_sequence_loss = -F.logsigmoid(effective_beta * delta_score)
 
             elif loss_type == "hinge":
-                per_sequence_loss = torch.relu(1 - self.beta * delta_score)
+                per_sequence_loss = torch.relu(1 - effective_beta * delta_score)
 
             elif loss_type == "ipo":
                 # IPO uses sequence-level log-prob differences; in code these are token-summed over the completion,
@@ -1330,24 +1356,24 @@ class DPOTrainer(_BaseTrainer):
                 rejected_avg_score = rejected_scores / rejected_mask.sum(dim=1).clamp(min=1.0)
                 ipo_delta = chosen_avg_score - rejected_avg_score
                 # (Eq. 17) of the paper where beta is the regularization parameter for the IPO loss, denoted by τ.
-                per_sequence_loss = (ipo_delta - 1 / (2 * self.beta)) ** 2
+                per_sequence_loss = (ipo_delta - 1 / (2 * effective_beta)) ** 2
 
             elif loss_type == "exo_pair":
                 # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856, (Eq. 16)
                 # Minimize KL(p_fθ || p_rh) for K=2; p_fθ = softmax(βπ * (log πθ − log π_ref)) over {chosen, rejected}
                 # p_rh = [(1−ε), ε]; expanded KL gives the weighted logsigmoid form below
                 epsilon = torch.tensor(self.label_smoothing, device=device)
-                qw = torch.sigmoid(self.beta * delta_score)
-                log_qw = F.logsigmoid(self.beta * delta_score)
+                qw = torch.sigmoid(effective_beta * delta_score)
+                log_qw = F.logsigmoid(effective_beta * delta_score)
                 log_pw = torch.log1p(-epsilon)
-                ql = torch.sigmoid(-self.beta * delta_score)
-                log_ql = F.logsigmoid(-self.beta * delta_score)
+                ql = torch.sigmoid(-effective_beta * delta_score)
+                log_ql = F.logsigmoid(-effective_beta * delta_score)
                 log_pl = torch.log(epsilon)
                 per_sequence_loss = qw * (log_qw - log_pw) + ql * (log_ql - log_pl)
 
             elif loss_type == "nca_pair":
-                chosen_rewards = self.beta * chosen_scores
-                rejected_rewards = self.beta * rejected_scores
+                chosen_rewards = effective_beta * chosen_scores
+                rejected_rewards = effective_beta * rejected_scores
                 per_sequence_loss = (
                     -F.logsigmoid(chosen_rewards)
                     - 0.5 * F.logsigmoid(-chosen_rewards)
@@ -1355,13 +1381,13 @@ class DPOTrainer(_BaseTrainer):
                 )
 
             elif loss_type == "robust":
-                clean_loss_term = -(1 - self.label_smoothing) * F.logsigmoid(self.beta * delta_score)
-                flipped_loss_term = -self.label_smoothing * F.logsigmoid(-self.beta * delta_score)
+                clean_loss_term = -(1 - self.label_smoothing) * F.logsigmoid(effective_beta * delta_score)
+                flipped_loss_term = -self.label_smoothing * F.logsigmoid(-effective_beta * delta_score)
                 per_sequence_loss = (clean_loss_term - flipped_loss_term) / (1 - 2 * self.label_smoothing)
 
             elif loss_type == "bco_pair":
-                chosen_rewards = self.beta * chosen_scores
-                rejected_rewards = self.beta * rejected_scores
+                chosen_rewards = effective_beta * chosen_scores
+                rejected_rewards = effective_beta * rejected_scores
                 per_sequence_loss = -F.logsigmoid(chosen_rewards) - F.logsigmoid(-rejected_rewards)
 
             elif loss_type == "sppo_hard":
@@ -1369,8 +1395,8 @@ class DPOTrainer(_BaseTrainer):
                 # estimated using the PairRM score. The probability calculation is conducted outside of the trainer
                 # class. The version described here is the hard probability version, where P in Equation (4.7) of
                 # Algorithm 1 is set to 1 for the winner and 0 for the loser.
-                winner_margin_error = (chosen_scores - 0.5 / self.beta) ** 2
-                loser_margin_error = (rejected_scores + 0.5 / self.beta) ** 2
+                winner_margin_error = (chosen_scores - 0.5 / effective_beta) ** 2
+                loser_margin_error = (rejected_scores + 0.5 / effective_beta) ** 2
                 per_sequence_loss = winner_margin_error + loser_margin_error
 
             elif loss_type == "aot":
@@ -1380,8 +1406,8 @@ class DPOTrainer(_BaseTrainer):
                 ref_logratios_sorted, _ = torch.sort(ref_logratios, dim=0)
                 delta = logratios_sorted - ref_logratios_sorted
                 per_sequence_loss = (
-                    -F.logsigmoid(self.beta * delta) * (1 - self.label_smoothing)
-                    - F.logsigmoid(-self.beta * delta) * self.label_smoothing
+                    -F.logsigmoid(effective_beta * delta) * (1 - self.label_smoothing)
+                    - F.logsigmoid(-effective_beta * delta) * self.label_smoothing
                 )
 
             elif loss_type == "aot_unpaired":
@@ -1389,29 +1415,29 @@ class DPOTrainer(_BaseTrainer):
                 rejected_logratios_sorted, _ = torch.sort(rejected_logratios, dim=0)
                 delta = chosen_logratios_sorted - rejected_logratios_sorted
                 per_sequence_loss = (
-                    -F.logsigmoid(self.beta * delta) * (1 - self.label_smoothing)
-                    - F.logsigmoid(-self.beta * delta) * self.label_smoothing
+                    -F.logsigmoid(effective_beta * delta) * (1 - self.label_smoothing)
+                    - F.logsigmoid(-effective_beta * delta) * self.label_smoothing
                 )
 
             elif loss_type == "apo_zero":
                 # Eqn (7) of the APO paper (https://huggingface.co/papers/2408.06266)
                 # Use this loss when you believe the chosen outputs are better than your model's default output
                 # Increase chosen likelihood and decrease rejected likelihood
-                losses_chosen = 1 - torch.sigmoid(self.beta * chosen_logratios)
-                losses_rejected = torch.sigmoid(self.beta * rejected_logratios)
+                losses_chosen = 1 - torch.sigmoid(effective_beta * chosen_logratios)
+                losses_rejected = torch.sigmoid(effective_beta * rejected_logratios)
                 per_sequence_loss = losses_chosen + losses_rejected
 
             elif loss_type == "apo_down":
                 # Eqn (8) of the APO paper (https://huggingface.co/papers/2408.06266)
                 # Use this loss when you believe the chosen outputs are worse than your model's default output.
                 # Decrease chosen likelihood and decrease rejected likelihood more
-                losses_chosen = torch.sigmoid(self.beta * chosen_logratios)
-                losses_rejected = 1 - torch.sigmoid(self.beta * delta_score)
+                losses_chosen = torch.sigmoid(effective_beta * chosen_logratios)
+                losses_rejected = 1 - torch.sigmoid(effective_beta * delta_score)
                 per_sequence_loss = losses_chosen + losses_rejected
 
             elif loss_type == "discopop":
                 # Eqn (5) of the DiscoPOP paper (https://huggingface.co/papers/2406.08414)
-                logits = delta_score * self.beta
+                logits = delta_score * effective_beta
                 # Modulate the mixing coefficient based on the log ratio magnitudes
                 log_ratio_modulation = torch.sigmoid(logits / self.args.discopop_tau)
                 logistic_component = -F.logsigmoid(logits)
@@ -1435,7 +1461,7 @@ class DPOTrainer(_BaseTrainer):
                 chosen_avg_score = chosen_scores / chosen_mask.sum(dim=1).clamp(min=1.0)
                 rejected_avg_score = rejected_scores / rejected_mask.sum(dim=1).clamp(min=1.0)
                 delta = chosen_avg_score - rejected_avg_score
-                per_sequence_loss = -F.logsigmoid(self.beta * delta)
+                per_sequence_loss = -F.logsigmoid(effective_beta * delta)
 
             else:
                 raise ValueError(
@@ -1508,8 +1534,8 @@ class DPOTrainer(_BaseTrainer):
         self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         # Rewards for chosen and rejected completions
-        chosen_rewards = self.beta * chosen_logratios.detach()
-        rejected_rewards = self.beta * rejected_logratios.detach()
+        chosen_rewards = effective_beta * chosen_logratios.detach()
+        rejected_rewards = effective_beta * rejected_logratios.detach()
         agg_chosen_rewards = self.accelerator.gather(chosen_rewards)
         agg_rejected_rewards = self.accelerator.gather(rejected_rewards)
         self._metrics[mode]["rewards/chosen"].append(agg_chosen_rewards.mean().item())
@@ -1528,6 +1554,8 @@ class DPOTrainer(_BaseTrainer):
         # Average log probabilities for chosen and rejected completions
         self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
         self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
+        if self.args.adaptive_beta is not None:
+            self._metrics[mode]["beta/effective"].append(effective_beta)
 
         return (loss, outputs) if return_outputs else loss
 
