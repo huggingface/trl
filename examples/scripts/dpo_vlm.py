@@ -94,14 +94,11 @@ if __name__ == "__main__":
 
     model = AutoModelForImageTextToText.from_pretrained(
         model_args.model_name_or_path,
-        trust_remote_code=model_args.trust_remote_code,
         **model_kwargs,
     )
     peft_config = get_peft_config(model_args)
 
-    processor = AutoProcessor.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, do_image_splitting=False
-    )
+    processor = AutoProcessor.from_pretrained(model_args.model_name_or_path, do_image_splitting=False)
 
     if script_args.ignore_bias_buffers:
         # torch distributed hack

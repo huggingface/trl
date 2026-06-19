@@ -185,6 +185,7 @@ class GKDTrainer(SFTTrainer):
             )
 
         if isinstance(teacher_model, str):
+            teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
 
         # Disable dropout in the model

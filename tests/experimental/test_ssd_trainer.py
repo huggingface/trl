@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 from datasets import load_dataset
 from transformers.utils import is_peft_available
 
@@ -51,6 +52,24 @@ class TestSSDTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            SSDTrainer(
+                model=model_id,
+                args=SSDConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = SSDTrainer(
+            model=model_id,
+            args=SSDConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
 
     def test_train_with_chat_prompts(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
