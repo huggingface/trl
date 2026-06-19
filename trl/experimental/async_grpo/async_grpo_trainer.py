@@ -415,8 +415,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
-        is_moe = getattr(model.config, "output_router_logits", None) is not None
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise).
+        # `get_text_config()` reads from `text_config` on VLMs, the config itself otherwise.
+        text_config = model.config.get_text_config()
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
         self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
         self.router_aux_loss_coef = self.args.router_aux_loss_coef
 

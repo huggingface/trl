@@ -1376,12 +1376,13 @@ class SFTTrainer(_BaseTrainer):
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
         # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
-        is_moe = getattr(model.config, "output_router_logits", None) is not None
+        text_config = model.config.get_text_config()
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
         self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
         if self.aux_loss_enabled:
             # The native and chunked forwards compute the aux loss from the model config, so propagate the coef there.
-            model.config.output_router_logits = True
-            model.config.router_aux_loss_coef = self.args.router_aux_loss_coef
+            text_config.output_router_logits = True
+            text_config.router_aux_loss_coef = self.args.router_aux_loss_coef
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
