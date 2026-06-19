@@ -49,7 +49,7 @@ bco = [
     "joblib"
 ]
 deepspeed = [
-    "deepspeed>=0.14.4,<0.19.2",  # temporary hotfix for #6089
+    "deepspeed>=0.14.4",
     "transformers!=5.1.0",  # see transformers#43780
 ]
 kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
@@ -80,7 +80,7 @@ test = [
     "pytest"
 ]
 vllm = [
-    "vllm>=0.12.0,<=0.19.0",
+    "vllm>=0.13.0,<=0.19.0",
     "fastapi",
     "pydantic",
     "aiohttp>=3.13.3",
@@ -110,7 +110,7 @@ dev = [
     "scikit-learn",
     "joblib",
     # deepspeed
-    "deepspeed>=0.14.4,<0.19.2",  # temporary hotfix for #6089
+    "deepspeed>=0.14.4",
     # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
