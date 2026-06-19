@@ -396,12 +396,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Training arguments
         self.epsilon_low = self.args.epsilon
-        self.epsilon_high = self.args.epsilon_high
+        self.epsilon_high = self.args.epsilon_high if self.args.epsilon_high is not None else self.args.epsilon
         self.temperature = self.args.temperature
 
         # Model
         model_name = model
         model_init_kwargs = self.args.model_init_kwargs or {}
+        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = AutoModelForCausalLM.from_pretrained(
@@ -427,7 +428,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name)
+            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=self.args.trust_remote_code)
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
@@ -587,7 +588,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         completion_mask = inputs["completion_mask"][mask_bool].unsqueeze(0)
         old_log_probs = inputs["old_log_probs"][mask_bool].unsqueeze(0)
         position_ids = inputs["position_ids"][mask_bool].unsqueeze(0)
-        per_token_advantages = inputs["advantages"][mask_bool].unsqueeze(0)
+        advantages = inputs["advantages"][mask_bool].unsqueeze(0)
 
         forward_start = time.time()
         outputs = model(
@@ -602,11 +603,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         completion_mask = completion_mask[:, 1:]
         old_log_probs = old_log_probs[:, 1:]
-        per_token_advantages = per_token_advantages[:, 1:]
+        advantages = advantages[:, 1:]
         log_ratio = log_probs - old_log_probs
-        ratio = torch.exp(log_ratio)
-        clipped = torch.clamp(ratio, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss = -torch.min(ratio * per_token_advantages, clipped * per_token_advantages)
+        coef_1 = torch.exp(log_ratio)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        per_token_loss1 = coef_1 * advantages
+        per_token_loss2 = coef_2 * advantages
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
 
         # DDP/FSDP averages gradients across ranks (world_size).
         # To get correct per-token normalization we scale by 1/tokens_per_rank
@@ -630,11 +633,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             local_count = valid_mask.sum().float()
 
             local_ratio_sum = (
-                ratio[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
+                coef_1[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
             # Approx KL: http://joschu.net/blog/kl-approx.html
             local_kl_sum = (
-                ((ratio[valid_mask] - 1) - log_ratio[valid_mask]).sum()
+                ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
                 if valid_mask.any()
                 else torch.zeros((), device=completion_mask.device)
             )
@@ -643,7 +646,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
 
-            clipped = (ratio < 1 - self.epsilon_low) | (ratio > 1 + self.epsilon_high)
+            clipped = (coef_1 < 1 - self.epsilon_low) | (coef_1 > 1 + self.epsilon_high)
             local_clip_sum = (
                 clipped[valid_mask].float().sum()
                 if valid_mask.any()

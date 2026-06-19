@@ -82,20 +82,16 @@ if __name__ == "__main__":
         model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-    )
+    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     if training_args.reward_model_path is not None:
         reward_model = AutoModelForSequenceClassification.from_pretrained(
             training_args.reward_model_path,
             num_labels=1,
-            trust_remote_code=model_args.trust_remote_code,
             **model_kwargs,
         )
         reward_tokenizer = AutoTokenizer.from_pretrained(
             training_args.reward_model_path,
-            trust_remote_code=model_args.trust_remote_code,
             truncation=True,
             truncation_side="left",  # since we judge the completion, truncating left is more appropriate
         )
@@ -108,7 +104,6 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         padding_side="left",
-        trust_remote_code=model_args.trust_remote_code,
         **model_kwargs,
     )
     if tokenizer.pad_token_id is None:
