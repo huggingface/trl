@@ -645,13 +645,28 @@ class VLLMClient:
         # When the client object is deleted, close the weight update group
         atexit.register(self.close_communicator)
 
-    def _send_weights_native(self, names, dtype_names, shapes, weights_iterator):
+    def update_weights(self, names, dtype_names, shapes, weights):
         """
-        Bulk-transfer weights to native `vllm serve` over the NCCL group, mirroring `WeightTransferClient.send_weights`.
+        Bulk-stream model weights to native `vllm serve` over the NCCL group (vLLM >= 0.22.0), mirroring
+        `WeightTransferClient.send_weights`.
 
-        Parameter metadata (`names`, `dtype_names`, `shapes`) is sent up-front via `/update_weights`; `weights_iterator`
-        then yields the `(name, tensor)` pairs in the same order, streamed over NCCL.
+        Parameter metadata is sent up-front via `/update_weights`; `weights` then yields the `(name, tensor)` pairs in
+        the same order, streamed over NCCL. The caller is expected to gather one parameter at a time so that only a
+        single full parameter is materialized at once (no full-model buffer).
+
+        Args:
+            names (`list[str]`):
+                Ordered parameter names.
+            dtype_names (`list[str]`):
+                Short dtype name per parameter (e.g. `"bfloat16"`), aligned with `names`.
+            shapes (`list[list[int]]`):
+                Full (unsharded) shape per parameter, aligned with `names`.
+            weights (`Iterable[tuple[str, torch.Tensor]]`):
+                Iterable yielding `(name, full_tensor)` pairs in the same order as `names`.
         """
+        if not self.use_native_server:
+            raise NotImplementedError("`update_weights` is only available in native `vllm serve` mode (vLLM >= 0.22.0).")
+
         import threading
 
         update_info = {"names": names, "dtype_names": dtype_names, "shapes": shapes, "packed": True}
@@ -667,7 +682,7 @@ class VLLMClient:
         )
         thread.start()
         NCCLWeightTransferEngine.trainer_send_weights(
-            iterator=weights_iterator,
+            iterator=iter(weights),
             trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
         )
         thread.join()
@@ -675,9 +690,8 @@ class VLLMClient:
 
     def _update_model_params_native(self, model: nn.Module):
         """
-        `update_model_params` against native `vllm serve`: a single bulk transfer of all parameters over the NCCL
-        group. Tensors are streamed lazily so that, under FSDP2, each parameter is all-gathered and freed one at a
-        time rather than materializing the full model at once.
+        `update_model_params` against native `vllm serve`: stream all parameters over the NCCL group, all-gathering
+        (FSDP2) one parameter at a time rather than materializing the full model at once.
         """
         from torch.distributed.tensor import DTensor
 
@@ -688,36 +702,15 @@ class VLLMClient:
             dtype_names.append(str(param.dtype).split(".")[-1])
             shapes.append(list(param.shape))
 
-        def weights_iterator():
+        def weights():
             for name, param in model.named_parameters():
                 name = name.removeprefix("module.")
-                # For FSDP2 (DTensor), `full_tensor()` all-gathers just this parameter, then frees it once the
-                # generator advances.
                 full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
                 if full.device != self.device:
                     full = full.to(self.device)
                 yield name, full
 
-        self._send_weights_native(names, dtype_names, shapes, weights_iterator())
-
-    def update_weights(self, named_tensors: list[tuple[str, torch.Tensor]]):
-        """
-        Bulk-synchronize a pre-collected list of `(name, tensor)` pairs to native `vllm serve` (vLLM >= 0.22.0).
-
-        Unlike `update_model_params`, the caller supplies the already-materialized full tensors (e.g. gathered from
-        FSDP/DeepSpeed shards), letting it reuse its own name-fixing and gather logic. The metadata is derived from the
-        tensors themselves.
-
-        Args:
-            named_tensors (`list[tuple[str, torch.Tensor]]`):
-                List of `(name, full_tensor)` pairs to send, in the order they should be loaded.
-        """
-        if not self.use_native_server:
-            raise NotImplementedError("`update_weights` is only available in native `vllm serve` mode (vLLM >= 0.22.0).")
-        names = [name for name, _ in named_tensors]
-        dtype_names = [str(tensor.dtype).split(".")[-1] for _, tensor in named_tensors]
-        shapes = [list(tensor.shape) for _, tensor in named_tensors]
-        self._send_weights_native(names, dtype_names, shapes, iter(named_tensors))
+        self.update_weights(names, dtype_names, shapes, weights())
 
     def update_named_param(self, name: str, weights: torch.Tensor):
         """

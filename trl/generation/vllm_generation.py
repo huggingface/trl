@@ -382,13 +382,7 @@ class VLLMGeneration:
     def _push_param_to_vllm(self, name: str, param) -> None:
         """Push a single parameter tensor to the vLLM engine (server or colocate mode)."""
         if self.mode == "server" and self.accelerator.is_main_process:
-            if self.vllm_client.use_native_server:
-                # Native `vllm serve` syncs weights in a single bulk transfer, so collect parameters here and flush
-                # them at the end of `sync_weights`. Clone so the tensor survives the surrounding gather context (e.g.
-                # DeepSpeed ZeRO-3 reshards on exit).
-                self._vllm_weight_buffer.append((name, param.detach().clone()))
-            else:
-                self.vllm_client.update_named_param(name, param)
+            self.vllm_client.update_named_param(name, param)
         elif self.mode == "colocate":
             self.llm.llm_engine.model_executor.driver_worker.model_runner.model.load_weights([(name, param)])
 
@@ -457,11 +451,14 @@ class VLLMGeneration:
         model = self.model
         accelerator = self.accelerator
 
-        # In native `vllm serve` mode, `_push_param_to_vllm` accumulates parameters into this buffer instead of pushing
-        # them one at a time; they are flushed in a single bulk transfer below.
-        native_server = self.mode == "server" and accelerator.is_main_process and self.vllm_client.use_native_server
-        if native_server:
-            self._vllm_weight_buffer = []
+        # Native `vllm serve` (vLLM >= 0.22.0) syncs weights in a single bulk NCCL transfer rather than per-parameter
+        # HTTP pushes. Computed from the vLLM version so it is consistent across ranks (only the main process holds a
+        # `vllm_client`).
+        if self.mode == "server" and is_vllm_available(min_version="0.22.0"):
+            self._sync_weights_native()
+            if accelerator.is_main_process:
+                self.vllm_client.reset_prefix_cache()
+            return
 
         if is_peft_model(model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
@@ -501,16 +498,53 @@ class VLLMGeneration:
                     with self._dist.gather_params([param]):
                         self._push_param_to_vllm(name, param.data)
 
-        # Native `vllm serve`: flush all collected parameters in a single bulk transfer.
-        if native_server:
-            self.vllm_client.update_weights(self._vllm_weight_buffer)
-            self._vllm_weight_buffer = []
-
         # Reset cache on vLLM
         if self.mode == "server" and accelerator.is_main_process:
             self.vllm_client.reset_prefix_cache()
         elif self.mode == "colocate":
             self.llm.reset_prefix_cache()
+
+    def _sync_weights_native(self):
+        """Stream weights to native `vllm serve` one gathered parameter at a time (no full-model buffer).
+
+        Mirrors the async-GRPO weight transfer: parameter metadata (names, dtypes, shapes) is collected without
+        gathering, then full tensors are produced lazily so that, under FSDP2/ZeRO-3, only a single parameter is
+        materialized at a time. All ranks iterate so they participate in the collective gathers; only the main process
+        sends to vLLM.
+        """
+        from torch.distributed.tensor import DTensor
+
+        model = self.model
+        if self._dist.fsdp_version == 1:
+            raise NotImplementedError("Native `vllm serve` weight sync does not support FSDP1; use FSDP2.")
+        if is_peft_model(model):
+            raise NotImplementedError("Native `vllm serve` weight sync does not yet support PEFT models.")
+
+        def named_params():
+            for name, param in model.named_parameters():
+                yield self._fix_param_name_to_vllm(name), param
+
+        # Metadata, collected without gathering: full (unsharded) shapes are available from `ds_shape` under ZeRO-3 and
+        # directly otherwise (DTensor exposes the logical full shape).
+        names, dtype_names, shapes = [], [], []
+        for name, param in named_params():
+            names.append(name)
+            dtype_names.append(str(param.dtype).split(".")[-1])
+            shapes.append(list(param.ds_shape) if self._dist.is_zero3 else list(param.shape))
+
+        def weights():
+            for name, param in named_params():
+                # Gather one parameter at a time (ZeRO-3 all-gather; no-op otherwise), freed as the generator advances.
+                with self._dist.gather_params([param]):
+                    full = param.full_tensor() if isinstance(param, DTensor) else param.data
+                    yield name, full.detach()
+
+        if self.accelerator.is_main_process:
+            self.vllm_client.update_weights(names, dtype_names, shapes, weights())
+        else:
+            # Other ranks don't talk to vLLM but must still participate in the collective gathers.
+            for _ in weights():
+                pass
 
     def generate(
         self,
