@@ -284,6 +284,8 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         # preserve any per-model logits post-processing (e.g. Cohere `logit_scale`, Gemma
         # `final_logit_softcapping`, `logits_to_keep` slicing).
         if labels is None and shift_labels is None:
+            # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
+            # as a forward kwarg (not from the model config), so it must be passed here.
             if output_router_logits is not None:
                 kwargs["output_router_logits"] = output_router_logits
             return original_forward(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
@@ -293,6 +295,8 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
 
         kwargs.pop("use_cache", None)
         decoder_kwargs = {}
+        # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
+        # as a forward kwarg (not from the model config), so it must be passed here.
         if output_router_logits:
             decoder_kwargs["output_router_logits"] = True
         # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper
@@ -1642,6 +1646,11 @@ class SFTTrainer(_BaseTrainer):
 
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
+
+        # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
+        # as a forward kwarg (not from the model config), so it must be passed here.
+        if self.aux_loss_enabled:
+            inputs["output_router_logits"] = True
 
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
         if self.args.use_liger_kernel:

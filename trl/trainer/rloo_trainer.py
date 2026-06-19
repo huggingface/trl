@@ -793,7 +793,8 @@ class RLOOTrainer(_BaseTrainer):
 
             model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
 
-            # MoE models: request router logits so the model returns `outputs.aux_loss`
+            # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
+            # as a forward kwarg (not from the model config), so it must be passed here.
             if compute_aux_loss:
                 model_inputs["output_router_logits"] = True
 
