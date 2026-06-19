@@ -38,7 +38,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        uses: astral-sh/setup-uv@v8.2.0
 
       - name: Create Python virtual environment
         run: |
@@ -60,9 +60,17 @@ jobs:
           make test
 
       - name: Post to Slack
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
-        with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results of latest TRL with Python 3.12 and dev dependencies
-          status: ${{ job.status }}
-          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+        env:
+          SLACK_TOKEN: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+        run: |
+          curl -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "channel": "${{ env.CI_SLACK_CHANNEL }}",
+              "text": "Results of latest TRL with Python 3.12 and dev dependencies",
+              "attachments": [{
+                "color": "${{ job.status == 'success' && 'good' || 'danger' }}",
+                "text": "Status: ${{ job.status }}"
+              }]
+            }'
