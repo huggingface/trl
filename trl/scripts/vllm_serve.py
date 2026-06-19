@@ -148,6 +148,44 @@ class WeightSyncWorkerExtension:
         # Load the received weights into the model.
         self.model_runner.model.load_weights(weights=[(name, weight)])
 
+    def update_named_params(self, names: list[str], dtypes: list[str], shapes: list[Sequence[int]]) -> None:
+        """
+        Receives a batch of updated weights from the client process and loads them into the model in a single
+        `load_weights` call. Reduces the number of NCCL/XCCL broadcasts and HTTP round trips compared to calling
+        `update_named_param` once per tensor.
+
+        Args:
+            names (`list[str]`):
+                Names of the weight tensors being updated.
+            dtypes (`list[str]`):
+                Data types of the weight tensors, one per name (e.g., `"torch.float32"`).
+            shapes (`list[Sequence[int]]`):
+                Shapes of the weight tensors, one per name.
+        """
+        import torch
+        from transformers import is_torch_xpu_available
+
+        if self.communicator is None:
+            raise RuntimeError("Communicator not initialized. Call `init_communicator` first.")
+
+        weights = [
+            torch.empty(tuple(shape), dtype=getattr(torch, dtype.split(".")[-1]), device=self.device)
+            for dtype, shape in zip(dtypes, shapes, strict=True)
+        ]
+
+        # NCCL/XCCL broadcasts within a single process group must be called in the same order on all ranks, so loop
+        # sequentially. A single collective barrier at the end keeps the workers in step.
+        if is_torch_xpu_available():
+            for weight in weights:
+                self.communicator.broadcast(weight, root=self.client_rank)
+            self.communicator.barrier()
+        else:
+            for weight in weights:
+                self.communicator.broadcast(weight, src=self.client_rank)
+            self.communicator.group.barrier()
+
+        self.model_runner.model.load_weights(weights=list(zip(names, weights, strict=True)))
+
     def close_communicator(self) -> None:
         """
         Closes the communicator when weight synchronization is no longer needed.
@@ -1177,6 +1215,34 @@ def main(script_args: ScriptArguments):
             connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
 
         return {"message": "Request received, updating named parameter"}
+
+    class UpdateNamedParamsRequest(BaseModel):
+        names: list[str]
+        dtypes: list[str]
+        shapes: list[list[int]]
+
+    @app.post("/update_named_params/")
+    async def update_named_params(request: UpdateNamedParamsRequest):
+        """
+        Updates the model weights with a batch of tensors in a single server-side call. The client process broadcasts
+        each tensor to all server workers in order, then the workers load the full batch in one `load_weights` call.
+
+        Args:
+            request (`UpdateNamedParamsRequest`):
+                - `names` (`list[str]`): Names of the weight tensors being updated.
+                - `dtypes` (`list[str]`): Data types of the weight tensors, one per name.
+                - `shapes` (`list[list[int]]`): Shapes of the weight tensors, one per name.
+        """
+        # The function update_named_params is called this way:
+        # update_named_params(["w1", "w2"], ["torch.float32", "torch.float32"], [(10, 10), (5, 5)])
+        kwargs = {
+            "method": "update_named_params",
+            "args": (request.names, request.dtypes, [tuple(s) for s in request.shapes]),
+        }
+        for connection in connections:
+            connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
+
+        return {"message": "Request received, updating named parameters", "count": len(request.names)}
 
     @app.post("/reset_prefix_cache/")
     async def reset_prefix_cache():

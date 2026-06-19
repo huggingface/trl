@@ -511,17 +511,52 @@ class VLLMClient:
             self.communicator.broadcast(weights, src=self.rank)
             self.communicator.group.barrier()
 
+    def update_named_params(self, names: list[str], weights: list[torch.Tensor]):
+        """
+        Updates a batch of named parameters in a single HTTP request + single server-side `load_weights` call. Sends
+        only one POST regardless of the batch size, instead of one POST per tensor as `update_named_param` does.
+
+        Args:
+            names (`list[str]`):
+                Names of the layers whose weights are being updated.
+            weights (`list[torch.Tensor]`):
+                Tensors containing the updated weights, one per name.
+        """
+        payload = {
+            "names": names,
+            "dtypes": [str(w.dtype) for w in weights],
+            "shapes": [list(w.shape) for w in weights],
+        }
+        url = f"{self.base_url}/update_named_params/"
+        response = self.session.post(url, json=payload)
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+        # NCCL/XCCL broadcasts within a single process group must be called in the same order on all ranks, so loop
+        # sequentially. A single collective barrier at the end keeps the workers in step.
+        if is_torch_xpu_available():
+            for w in weights:
+                self.communicator.broadcast(w, root=self.rank)
+            self.communicator.barrier()
+        else:
+            for w in weights:
+                self.communicator.broadcast(w, src=self.rank)
+            self.communicator.group.barrier()
+
     def update_model_params(self, model: nn.Module):
         """
-        Updates all parameters of the given model by calling `update_named_param` for each parameter in the model.
+        Updates all parameters of the given model by sending batched `update_named_params` requests.
 
         Args:
             model (`nn.Module`):
                 Model whose parameters (weights/biases) are to be updated.
         """
+        names, params = [], []
         for name, param in model.named_parameters():
-            # Update each parameter individually
-            self.update_named_param(name, param.data)
+            names.append(name)
+            params.append(param.data)
+        if names:
+            self.update_named_params(names, params)
 
     def get_sequence_logprobs(
         self,
