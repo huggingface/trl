@@ -96,7 +96,6 @@ def main(script_args, training_args, model_args):
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
@@ -107,7 +106,6 @@ def main(script_args, training_args, model_args):
 
     teacher_model_kwargs = dict(
         revision=training_args.teacher_model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=True,
