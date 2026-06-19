@@ -382,7 +382,13 @@ class VLLMGeneration:
     def _push_param_to_vllm(self, name: str, param) -> None:
         """Push a single parameter tensor to the vLLM engine (server or colocate mode)."""
         if self.mode == "server" and self.accelerator.is_main_process:
-            self.vllm_client.update_named_param(name, param)
+            if self.vllm_client.use_native_server:
+                # Native `vllm serve` syncs weights in a single bulk transfer, so collect parameters here and flush
+                # them at the end of `sync_weights`. Clone so the tensor survives the surrounding gather context (e.g.
+                # DeepSpeed ZeRO-3 reshards on exit).
+                self._vllm_weight_buffer.append((name, param.detach().clone()))
+            else:
+                self.vllm_client.update_named_param(name, param)
         elif self.mode == "colocate":
             self.llm.llm_engine.model_executor.driver_worker.model_runner.model.load_weights([(name, param)])
 
@@ -451,6 +457,12 @@ class VLLMGeneration:
         model = self.model
         accelerator = self.accelerator
 
+        # In native `vllm serve` mode, `_push_param_to_vllm` accumulates parameters into this buffer instead of pushing
+        # them one at a time; they are flushed in a single bulk transfer below.
+        native_server = self.mode == "server" and accelerator.is_main_process and self.vllm_client.use_native_server
+        if native_server:
+            self._vllm_weight_buffer = []
+
         if is_peft_model(model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
             # merging adapters in a sharded manner is not supported.
@@ -488,6 +500,11 @@ class VLLMGeneration:
                     name = self._fix_param_name_to_vllm(name)
                     with self._dist.gather_params([param]):
                         self._push_param_to_vllm(name, param.data)
+
+        # Native `vllm serve`: flush all collected parameters in a single bulk transfer.
+        if native_server:
+            self.vllm_client.update_weights(self._vllm_weight_buffer)
+            self._vllm_weight_buffer = []
 
         # Reset cache on vLLM
         if self.mode == "server" and accelerator.is_main_process:
