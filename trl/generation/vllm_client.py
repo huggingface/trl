@@ -41,7 +41,11 @@ if is_vllm_available():
     from vllm.distributed.utils import StatelessProcessGroup
 
     if is_vllm_ascend_available():
-        from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
+        try:
+            from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
+        except ModuleNotFoundError:
+            logger = logging.getLogger(__name__)
+            logger.warning("vllm_ascend metadata is present but the module is not importable; falling back to NCCL.")
 
 
 logger = logging.getLogger(__name__)
