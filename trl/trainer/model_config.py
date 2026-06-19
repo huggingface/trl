@@ -78,6 +78,8 @@ class ModelConfig:
             Quantization type (`"fp4"` or `"nf4"`).
         use_bnb_nested_quant (`bool`, *optional*, defaults to `False`):
             Whether to use nested quantization.
+        bnb_4bit_quant_storage (`str`, *optional*):
+            Quantization storage dtype.
     """
 
     model_name_or_path: str | None = field(

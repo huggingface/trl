@@ -48,6 +48,8 @@ class KTOConfig(_BaseConfig):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left.
             If `None`, no truncation is applied.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the sequences will be padded to a multiple of this value.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute the reference model log probabilities for the entire training dataset before
             training. This allows to save memory during training, as the reference model does not need to be kept in
@@ -129,6 +131,10 @@ class KTOConfig(_BaseConfig):
             "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
             "the left. If `None`, no truncation is applied."
         },
+    )
+    pad_to_multiple_of: int | None = field(
+        default=None,
+        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
     )
     precompute_ref_log_probs: bool = field(
         default=False,
