@@ -107,9 +107,7 @@ class SFTConfig(_BaseConfig):
               [this paper](https://huggingface.co/papers/2508.05629).
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
-              in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`. Under
-              FSDP2, set `fsdp_reshard_after_forward false` in the accelerate config — the chunked path otherwise
-              re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time.
+              in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.
 
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
@@ -272,9 +270,7 @@ class SFTConfig(_BaseConfig):
             "`'chunked_nll'` (same math as `'nll'`, but the `lm_head` projection is computed on non-ignored tokens "
             "only — positions with `labels == -100` are dropped before the matmul — and the cross-entropy is "
             "processed in chunks of tokens to reduce peak activation memory; not compatible with `use_liger_kernel`; "
-            "under FSDP2, set `fsdp_reshard_after_forward false` in the accelerate config — the chunked path "
-            "otherwise re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time; the "
-            "patched `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level "
+            "the patched `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level "
             "`lm_head`, architectures with a non-standard head are not supported)."
         },
     )
