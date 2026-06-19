@@ -172,7 +172,7 @@ class TestGRPORolloutDispatch:
         trainer.state = SimpleNamespace(global_step=2, num_input_tokens_seen=0)
         trainer._last_loaded_step = 1
         trainer.use_vllm = False
-        trainer.use_transformers_paged = False
+        trainer.use_transformers_continuous_batching = False
         trainer.vllm_generation = SimpleNamespace(sync_weights=MagicMock())
         trainer.processing_class = SimpleNamespace(
             batch_decode=MagicMock(return_value=["decoded"]),
@@ -235,6 +235,42 @@ class TestGRPORolloutDispatch:
 
         with pytest.raises(ValueError, match="rollout_func must return keys"):
             trainer._generate(["prompt"])
+
+
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.8.0"),
+    reason="transformers continuous batching requires transformers>=5.8.0",
+)
+class TestTransformersContinuousBatchingContract:
+    """Contract tests for the transformers CB API that GRPOTrainer depends on."""
+
+    def test_generation_output_has_logprobs_field(self):
+        from transformers.generation.continuous_batching.requests import GenerationOutput
+
+        output = GenerationOutput(request_id="req_0")
+        assert output.logprobs == [], "GenerationOutput.logprobs must default to an empty list"
+
+    def test_generation_output_logprobs_accepts_floats(self):
+        from transformers.generation.continuous_batching.requests import GenerationOutput
+
+        output = GenerationOutput(request_id="req_0", generated_tokens=[1, 2, 3], logprobs=[-0.1, -0.5, -0.3])
+        assert output.logprobs == [-0.1, -0.5, -0.3]
+
+    def test_continuous_batching_config_has_return_logprobs(self):
+        from transformers.generation import ContinuousBatchingConfig
+
+        cfg = ContinuousBatchingConfig(return_logprobs=True)
+        assert cfg.return_logprobs is True
+
+    def test_generate_batch_accepts_continuous_batching_config(self):
+        import inspect
+
+        from transformers.generation.continuous_batching.continuous_api import ContinuousMixin
+
+        sig = inspect.signature(ContinuousMixin.generate_batch)
+        assert "continuous_batching_config" in sig.parameters, (
+            "generate_batch() must accept a continuous_batching_config parameter"
+        )
 
 
 class TestGRPOTrainer(TrlTestCase):
@@ -505,6 +541,66 @@ class TestGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    def test_liger_kernel_with_peft_lm_head_raises(self):
+        # The Liger fused GRPO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+        # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head (#4612).
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        with pytest.raises(ValueError, match="lm_head"):
+            GRPOTrainer(
+                model=model,
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"]),
+            )
+
+    @require_peft
+    def test_liger_kernel_with_peft_non_lm_head_target_allowed(self):
+        # The lm_head guard must only fire when the adapter actually wraps lm_head. An adapter that targets other
+        # modules (here q_proj/v_proj) leaves lm_head as a plain Linear, so Liger reads the real (frozen) head weight
+        # and there is nothing to silently drop. Guards against an over-broad regression.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        kwargs = {
+            "model": model,
+            "reward_funcs": "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            "args": training_args,
+            "train_dataset": dataset,
+            "peft_config": LoraConfig(target_modules=["q_proj", "v_proj"]),
+        }
+        if is_liger_kernel_available():
+            GRPOTrainer(**kwargs)  # must construct without raising
+        else:
+            # Liger isn't installed on this lane: the guard runs before the Liger-availability check, so the only
+            # acceptable failure is the missing-dependency ImportError, never the lm_head ValueError.
+            with pytest.raises(ImportError):
+                GRPOTrainer(**kwargs)
+
+    @require_peft
+    def test_liger_kernel_with_peft_modules_to_save_lm_head_allowed(self):
+        # `modules_to_save=["lm_head"]` makes the head a fully trained copy (ModulesToSaveWrapper, not a tuner layer),
+        # so `lm_head.weight` resolves to the trained weight and Liger trains it correctly. This is the documented
+        # workaround in the guard's error message, so it must stay unblocked.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        kwargs = {
+            "model": model,
+            "reward_funcs": "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            "args": training_args,
+            "train_dataset": dataset,
+            "peft_config": LoraConfig(target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]),
+        }
+        if is_liger_kernel_available():
+            GRPOTrainer(**kwargs)  # must construct without raising
+        else:
+            with pytest.raises(ImportError):
+                GRPOTrainer(**kwargs)
+
+    @require_peft
     def test_train_peft_model(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -539,6 +635,49 @@ class TestGRPOTrainer(TrlTestCase):
             if n in base_param_names:  # We expect the base model params to be the same
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_train_moe_peft_model(self):
+        # Regression test for https://github.com/huggingface/trl/issues/5222. PEFT only supports one adapter per model
+        # when the LoRA config uses `target_parameters` (see peft#3340), so no "ref" adapter can be created and the
+        # reference log probs are computed with adapters disabled instead.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM", dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
+        model = get_peft_model(model, lora_config)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            beta=0.1,  # set beta to a non-zero value so that the trainer needs a reference model
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert "ref" not in trainer.model.peft_config
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_peft_config`, since gradient checkpointing is enabled by
@@ -3006,17 +3145,17 @@ class TestGRPOTrainerSlow(TrlTestCase):
             "trl-internal-testing/tiny-MistralForCausalLM-0.2",
         ],
     )
-    def test_train_with_transformers_paged(self, model_name):
-        """Test that training works with transformers paged implementation (requires GPU)."""
-        if Version(transformers.__version__) < Version("4.57.0"):
-            pytest.xfail("Bug in transformers solved in GH#40692, released in 4.57.0.")
+    def test_train_with_transformers_continuous_batching(self, model_name):
+        """Test that training works with transformers continuous batching (requires GPU)."""
+        if not Version(transformers.__version__) >= Version("5.8.0"):
+            pytest.skip("transformers continuous batching requires transformers>=5.8.0.")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            use_transformers_paged=True,  # Enable transformers paged implementation
+            use_transformers_continuous_batching=True,
             report_to="none",
             logging_strategy="no",
         )
