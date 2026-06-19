@@ -39,6 +39,10 @@ class DPOConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`DPOTrainer`] is provided as a string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
+            [`~transformers.AutoProcessor.from_pretrained`].
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
 
@@ -156,6 +160,13 @@ class DPOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
             "the `DPOTrainer` is provided as a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
         },
     )
     disable_dropout: bool = field(

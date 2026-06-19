@@ -39,6 +39,10 @@ class RewardConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`RewardTrainer`] is provided as a string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForSequenceClassification.from_pretrained`] and
+            [`~transformers.AutoTokenizer.from_pretrained`].
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
@@ -101,6 +105,13 @@ class RewardConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
             "the `RewardTrainer` is provided as a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForSequenceClassification.from_pretrained` and `AutoTokenizer.from_pretrained`."
         },
     )
     chat_template_path: str | None = field(
