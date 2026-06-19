@@ -506,10 +506,10 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_chunked_nll_loss(self):
+    def test_train_nll_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="chunked_nll", report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="nll", report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -526,14 +526,14 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    def test_train_chunked_nll_loss_peft(self):
+    def test_train_nll_loss_peft(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="chunked_nll", report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="nll", report_to="none")
         trainer = SFTTrainer(
             model=model_id,
             args=training_args,
@@ -596,12 +596,12 @@ class TestSFTTrainer(TrlTestCase):
         ],
     )
     @require_vision
-    def test_train_chunked_nll_loss_vlm(self, model_id):
+    def test_train_nll_loss_vlm(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
-            loss_type="chunked_nll",
+            loss_type="nll",
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
@@ -956,9 +956,13 @@ class TestSFTTrainer(TrlTestCase):
     def test_compute_loss_skip_logits_on_eval_without_metrics_with_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:1]")
 
+        # Init with `use_liger_kernel=False` to skip Liger model wrapping, then flip the flag after to exercise the
+        # Liger branch of `compute_loss`. `loss_type="nll"` so the chunked path isn't patched in (incompatible with
+        # Liger), keeping `model.forward` unmodified.
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             use_liger_kernel=False,
+            loss_type="nll",
             report_to="none",
             max_length=8,
             bf16=False,
@@ -998,9 +1002,12 @@ class TestSFTTrainer(TrlTestCase):
     def test_predict_does_not_skip_logits_with_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:1]")
 
+        # Same pattern as `test_compute_loss_skip_logits_on_eval_without_metrics_with_liger`: init without Liger then
+        # flip the flag, and force `loss_type="nll"` to keep `model.forward` unpatched.
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             use_liger_kernel=False,
+            loss_type="nll",
             report_to="none",
             max_length=8,
             bf16=False,
@@ -1095,6 +1102,24 @@ class TestSFTTrainer(TrlTestCase):
         assert isinstance(trainer.data_collator, DataCollatorForLanguageModeling)
         assert trainer.data_collator.max_length == 16
         assert trainer.data_collator.truncation_mode == "keep_end"
+
+    def test_dataset_with_transform_requires_skip_prepare_dataset(self):
+        dataset = Dataset.from_dict({"text": ["hello world"]})
+
+        def add_suffix(batch):
+            batch["text"] = [text + " <AUG>" for text in batch["text"]]
+            return batch
+
+        dataset = dataset.with_transform(add_suffix)
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+
+        with pytest.raises(
+            ValueError,
+            match=r"Dataset\.with_transform\(\).*skip_prepare_dataset.*trainer-ready",
+        ):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
 
     def test_padding_free_without_packing_and_max_length_raises(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
@@ -2009,6 +2034,17 @@ class TestSFTTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    @require_vision
+    def test_vision_dataset_with_text_model_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match="vision-related.*vision-language model"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
 
     @require_peft
     def test_prompt_tuning(self):
