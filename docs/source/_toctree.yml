@@ -47,6 +47,8 @@
 - sections:
   - local: deepspeed_integration
     title: DeepSpeed
+  - local: harbor
+    title: Harbor
   - local: kernels_hub
     title: Kernels Hub
   - local: liger_kernel_integration
@@ -93,7 +95,9 @@
 - sections:
   - local: experimental_overview
     title: Experimental Overview
-  - local: async_grpo_trainer # Sorted alphabetically
+  - local: a2po_trainer # Sorted alphabetically
+    title: A2PO
+  - local: async_grpo_trainer
     title: Asynchronous GRPO
   - local: bema_for_reference_model
     title: BEMA for Reference Model
@@ -107,6 +111,8 @@
     title: GFPO
   - local: gkd_trainer
     title: GKD
+  - local: gmpo
+    title: GMPO
   - local: gold_trainer
     title: GOLD
   - local: grpo_with_replay_buffer
@@ -121,8 +127,6 @@
     title: MiniLLM
   - local: nash_md_trainer
     title: Nash-MD
-  - local: nemo_gym
-    title: NeMo Gym
   - local: online_dpo_trainer
     title: Online DPO
   - local: orpo_trainer
@@ -144,3 +148,4 @@
   - local: xpo_trainer
     title: XPO
   title: Experimental
+  isExpanded: false
