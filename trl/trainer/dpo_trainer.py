@@ -711,6 +711,12 @@ class DPOTrainer(_BaseTrainer):
                 )
             if args.beta_alpha is None:
                 raise ValueError("`beta_alpha` must be set when `adaptive_beta='beta-dpo'`.")
+            if args.use_liger_kernel:
+                raise ValueError(
+                    "`adaptive_beta` is not compatible with `use_liger_kernel=True`. "
+                    "The Liger fused DPO kernel uses a static β baked into the kernel and cannot "
+                    "be updated per-batch. Disable one or the other."
+                )
         # None → EMA of observed batch margins; fixed M₀ from config when set.
         self._running_margin: float | None = args.beta_reference_margin
         self.precompute_ref_logps = args.precompute_ref_log_probs
@@ -1292,11 +1298,18 @@ class DPOTrainer(_BaseTrainer):
         # ── Adaptive Beta-DPO (arXiv:2407.08639) ────────────────────────────────────
         if self.args.adaptive_beta == "beta-dpo" and mode == "train":
             with torch.no_grad():
-                batch_margin = (chosen_logratios - rejected_logratios).mean().item()
-            if self._running_margin is None:
-                self._running_margin = batch_margin
-            else:
-                self._running_margin = 0.9 * self._running_margin + 0.1 * batch_margin
+                local_margin = (chosen_logratios - rejected_logratios).mean()
+                # Gather across all DDP ranks so every process uses the same global
+                # margin. Without this, each rank's local micro-batch produces a
+                # different batch_margin → diverging effective_beta per GPU.
+                batch_margin = self.accelerator.gather(local_margin).mean().item()
+            if self.args.beta_reference_margin is None:
+                # EMA mode: update the running reference margin each step.
+                if self._running_margin is None:
+                    self._running_margin = batch_margin  # bootstrap on first batch
+                else:
+                    self._running_margin = 0.9 * self._running_margin + 0.1 * batch_margin
+            # else: fixed M₀ from config — _running_margin never changes after init.
             effective_beta = max(
                 (1.0 + self.args.beta_alpha * (batch_margin - self._running_margin)) * self.beta,
                 1e-6,
