@@ -148,6 +148,24 @@ training_args = GMPOConfig(
 )
 ```
 
+### Tülu 3: Reinforcement Learning with Verifiable Rewards for Instruction Following
+
+**📜 Paper**: https://huggingface.co/papers/2411.15124
+
+Tülu 3 introduces RLVR (Reinforcement Learning with Verifiable Rewards) and applies it beyond math to *instruction following*: each prompt carries machine-checkable constraints (e.g. "include keyword X", "answer with at least N words"), drawn from the [IFEval](https://huggingface.co/papers/2311.07911) instruction set, and the reward is the fraction of constraints the completion satisfies. Use [`~rewards.ifeval_reward`] with a dataset that provides per-prompt `instruction_id_list` and `instruction_kwargs` columns (e.g. derived from [`allenai/RLVR-IFeval`](https://huggingface.co/datasets/allenai/RLVR-IFeval)):
+
+```python
+from trl import GRPOTrainer
+from trl.rewards import ifeval_reward
+
+trainer = GRPOTrainer(
+    ...,
+    reward_funcs=[ifeval_reward],
+)
+```
+
+TRL ships a curated, standard-library-only subset of the IFEval constraints (the keys of `INSTRUCTION_CHECKERS`).
+
 ### DAPO: An Open-Source LLM Reinforcement Learning System at Scale
 
 **📜 Paper**: https://huggingface.co/papers/2503.14476
