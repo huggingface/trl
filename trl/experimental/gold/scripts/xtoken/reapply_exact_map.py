@@ -13,20 +13,18 @@
 # limitations under the License.
 """Step 2 (optional) of the X-Token projection-matrix pipeline.
 
-Overwrites exact-match rows of a dense top-k projection matrix so that each
-student token that maps exactly to a teacher token is encoded as a one-hot
-assignment (likelihood 1.0 at the matching teacher id, sentinel -1 and weight
-0.0 everywhere else).
+Overwrites exact-match rows of a dense top-k projection matrix so that each student token that maps exactly to a
+teacher token is encoded as a one-hot assignment (likelihood 1.0 at the matching teacher id, sentinel -1 and weight 0.0
+everywhere else).
 
-Running this between Steps 1 and 3 improves H-KL results by ensuring exact
-matches are never lost to Sinkhorn normalisation or the top-k trim.
+Running this between Steps 1 and 3 improves H-KL results by ensuring exact matches are never lost to Sinkhorn
+normalisation or the top-k trim.
 
 Usage:
 
     python reapply_exact_map.py \\
-        --student-model meta-llama/Llama-3.2-1B \\
-        --teacher-model Qwen/Qwen3-4B \\
-        --initial-projection-path cross_tokenizer_data/projection_map_...pt
+        --student-model meta-llama/Llama-3.2-1B \\ --teacher-model Qwen/Qwen3-4B \\ --initial-projection-path
+        cross_tokenizer_data/projection_map_...pt
 
 Output is saved as ``<input>_exact_map_remapped.pt``.
 
@@ -76,7 +74,7 @@ def reapply_exact_map(args):
     if not (isinstance(data, dict) and "indices" in data and "likelihoods" in data):
         raise ValueError(f"Expected dict with 'indices'/'likelihoods' tensors, got {type(data).__name__}")
 
-    for s_id, t_id in zip(match_s, match_t):
+    for s_id, t_id in zip(match_s, match_t, strict=False):
         remapped_idx = torch.full_like(data["indices"][s_id], -1)
         remapped_lik = torch.zeros_like(data["likelihoods"][s_id])
         remapped_idx[0] = t_id

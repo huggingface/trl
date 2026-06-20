@@ -992,6 +992,9 @@ class XTokenLoss(nn.Module):
         kd = torch.stack(kd_terms).mean()
         ce = torch.stack(ce_terms).mean()
 
+        self.last_kl_loss = kd.detach()
+        self.last_ce_loss = ce.detach()
+
         if self.dynamic_scaling:
             scale = (ce.detach() / kd.detach().clamp(min=1e-8)).clamp(0.01, 100.0)
             return scale * kd + ce
@@ -1762,7 +1765,8 @@ class GOLDTrainer(SFTTrainer):
         column_names = list(next(iter(dataset)).keys())
         is_processed = "input_ids" in column_names
 
-        _cross_tok = (self.use_uld_loss or self.xtoken_loss_fn is not None) and self.teacher_tokenizer is not None
+        # xtoken_loss_fn is set after super().__init__() returns, so check args instead.
+        _cross_tok = (self.use_uld_loss or args.xtoken_loss_type != "none") and self.teacher_tokenizer is not None
         if packing and _cross_tok:
             raise ValueError(
                 "Packing is not supported with cross-tokenizer KD (ULD or X-Token) because byte-offset alignment is "
@@ -2265,6 +2269,14 @@ class GOLDTrainer(SFTTrainer):
                 teacher_labels=xtoken_teacher_labels,
                 student_byte_offsets=xtoken_student_byte_offsets,
                 teacher_byte_offsets=teacher_completion_byte_offsets,
+            )
+
+            mode = "train" if self.model.training else "eval"
+            self._metrics[mode]["xtoken/kl_loss"].append(
+                self.accelerator.gather(self.xtoken_loss_fn.last_kl_loss).mean().item()
+            )
+            self._metrics[mode]["xtoken/ce_loss"].append(
+                self.accelerator.gather(self.xtoken_loss_fn.last_ce_loss).mean().item()
             )
 
         empty_cache()

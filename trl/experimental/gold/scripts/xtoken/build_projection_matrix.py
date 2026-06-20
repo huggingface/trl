@@ -13,22 +13,18 @@
 # limitations under the License.
 """Step 1 of the X-Token projection-matrix pipeline.
 
-Re-tokenizes every student-vocab token with the teacher tokenizer to build a
-weighted mapping matrix W ∈ R^{V_s × V_t}.  The output is a dense top-k ``.pt``
-file (dict with ``"indices"`` and ``"likelihoods"`` tensors) consumed by
+Re-tokenizes every student-vocab token with the teacher tokenizer to build a weighted mapping matrix W ∈ R^{V_s × V_t}.
+The output is a dense top-k ``.pt`` file (dict with ``"indices"`` and ``"likelihoods"`` tensors) consumed by
 ``GOLDConfig.xtoken_projection_matrix_path``.
 
 Typical usage (Llama-3.2-1B student → Qwen3-4B teacher, runtime top-4):
 
     python build_projection_matrix.py \\
-        --student-model meta-llama/Llama-3.2-1B \\
-        --teacher-model Qwen/Qwen3-4B \\
-        --runtime-top-k 4 \\
-        --output-dir cross_tokenizer_data
+        --student-model meta-llama/Llama-3.2-1B \\ --teacher-model Qwen/Qwen3-4B \\ --runtime-top-k 4 \\ --output-dir
+        cross_tokenizer_data
 
-Then optionally run ``reapply_exact_map.py`` (Step 2) and
-``sort_and_cut_projection_matrix.py`` (Step 3) on the output, or pass the
-``--runtime-top-k`` flag here to perform the trim in-place.
+Then optionally run ``reapply_exact_map.py`` (Step 2) and ``sort_and_cut_projection_matrix.py`` (Step 3) on the output,
+or pass the ``--runtime-top-k`` flag here to perform the trim in-place.
 
 See https://huggingface.co/papers/2605.21699 for the algorithm details.
 """
@@ -243,28 +239,34 @@ def build_projection_matrix(args):
 
     print(f"Total transformation entries: {len(counts)}")
 
-    # Build dense matrix and extract top-k.
-    rows = [k[0] for k in counts]
-    cols = [k[1] for k in counts]
-    vals = list(counts.values())
-    sparse = torch.sparse_coo_tensor(
-        torch.tensor([rows, cols], dtype=torch.long),
-        torch.tensor(vals, dtype=torch.float32),
-        (vocab_s, vocab_t),
-    ).coalesce()
+    # Group by student token and compute top-k per row without materialising the
+    # full V_s × V_t dense matrix (which can exceed 75 GB for large vocab pairs).
+    from collections import defaultdict as _dd
 
-    dense = sparse.to_dense()
-    dense = _sinkhorn_rows(dense, n_iters=1)
+    row_data: dict = _dd(list)  # student_id -> [(teacher_id, weight), ...]
+    for (s_id, t_id), w in counts.items():
+        row_data[s_id].append((t_id, w))
 
-    k = min(args.top_k, dense.shape[1])
-    top_likelihoods, top_indices = torch.topk(dense, k=k, dim=1)
+    k = args.top_k
+    all_top_idx = torch.full((vocab_s, k), -1, dtype=torch.long)
+    all_top_lik = torch.zeros(vocab_s, k, dtype=torch.float32)
 
-    if k < args.top_k:
-        pad = args.top_k - k
-        top_indices = torch.cat([top_indices, torch.full((vocab_s, pad), -1, dtype=top_indices.dtype)], dim=1)
-        top_likelihoods = torch.cat([top_likelihoods, torch.zeros(vocab_s, pad, dtype=top_likelihoods.dtype)], dim=1)
+    for s_id, pairs in tqdm.tqdm(row_data.items(), desc="Top-k per row"):
+        t_ids = torch.tensor([p[0] for p in pairs], dtype=torch.long)
+        weights = torch.tensor([p[1] for p in pairs], dtype=torch.float32)
+        row_sum = weights.sum()
+        if row_sum > 0:
+            weights = weights / row_sum  # Sinkhorn row-normalise (single iter)
+        actual_k = min(k, len(weights))
+        top_w, top_pos = torch.topk(weights, k=actual_k)
+        all_top_idx[s_id, :actual_k] = t_ids[top_pos]
+        all_top_lik[s_id, :actual_k] = top_w
+
+    top_indices, top_likelihoods = all_top_idx, all_top_lik
 
     if args.enable_scale_trick:
+        # Reserve the last column for the scale-trick sentinel weight 0.2,
+        # then re-normalise so the remaining k-1 columns + sentinel sum to 1.
         top_likelihoods[:, -1] = 0.2
         top_likelihoods = _sinkhorn_rows(top_likelihoods, n_iters=1)
 

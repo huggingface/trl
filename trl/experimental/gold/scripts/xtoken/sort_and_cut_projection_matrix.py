@@ -13,22 +13,18 @@
 # limitations under the License.
 """Step 3 of the X-Token projection-matrix pipeline.
 
-Sorts each row of a dense top-k projection matrix by descending weight,
-trims to a new (smaller) top-k, applies Sinkhorn row normalisation, and
-writes the result as a new ``.pt`` file.
+Sorts each row of a dense top-k projection matrix by descending weight, trims to a new (smaller) top-k, applies
+Sinkhorn row normalisation, and writes the result as a new ``.pt`` file.
 
-Run this after ``build_projection_matrix.py`` (Step 1) and optionally
-``reapply_exact_map.py`` (Step 2).
+Run this after ``build_projection_matrix.py`` (Step 1) and optionally ``reapply_exact_map.py`` (Step 2).
 
 Usage:
 
     python sort_and_cut_projection_matrix.py \\
-        --initial-projection-path cross_tokenizer_data/projection_map_...pt \\
-        --top_k 4
+        --initial-projection-path cross_tokenizer_data/projection_map_...pt \\ --top_k 4
 
-Output is saved as ``<input>_top_<k>_sorted.pt`` unless ``--output_path``
-is given.  When the input matrix was built with ``--enable-scale-trick``,
-the last column is preserved in its original slot even after sorting.
+Output is saved as ``<input>_top_<k>_sorted.pt`` unless ``--output_path`` is given. When the input matrix was built
+with ``--enable-scale-trick``, the last column is preserved in its original slot even after sorting.
 
 See https://huggingface.co/papers/2605.21699 Section 3.2.
 """
@@ -60,7 +56,9 @@ def _sinkhorn_one_dim(A: torch.Tensor, n_iters: int = 1) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
-def sort_and_cut(input_path: str, output_path: str, new_top_k: int, *, preserve_last: bool = False, verbose: bool = True) -> None:
+def sort_and_cut(
+    input_path: str, output_path: str, new_top_k: int, *, preserve_last: bool = False, verbose: bool = True
+) -> None:
     """Sort rows by descending weight, trim to ``new_top_k``, normalise, save."""
     if verbose:
         print(f"Loading: {input_path}")
@@ -69,7 +67,7 @@ def sort_and_cut(input_path: str, output_path: str, new_top_k: int, *, preserve_
     if not (isinstance(data, dict) and "indices" in data and "likelihoods" in data):
         raise ValueError("Expected dict with 'indices'/'likelihoods' tensors")
 
-    orig_idx = data["indices"]   # [V_s, old_k]
+    orig_idx = data["indices"]  # [V_s, old_k]
     orig_lik = data["likelihoods"]  # [V_s, old_k]
     vocab_size, orig_k = orig_idx.shape
 
@@ -180,7 +178,9 @@ def main():
         preserve_last = args.preserve_last
 
     output_path = args.output_path or _resolve_output_path(args.initial_projection_path, args.top_k, preserve_last)
-    sort_and_cut(args.initial_projection_path, output_path, args.top_k, preserve_last=preserve_last, verbose=not args.quiet)
+    sort_and_cut(
+        args.initial_projection_path, output_path, args.top_k, preserve_last=preserve_last, verbose=not args.quiet
+    )
     if not args.quiet:
         print(f"Output: {output_path}")
 
