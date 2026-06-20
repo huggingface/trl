@@ -964,10 +964,7 @@ class XTokenLoss(nn.Module):
                 ce_terms.append(zero)
                 continue
 
-            s_logits_i = student_logits[i, s0 : s0 + ss]
-            t_logits_i = teacher_logits[i, t0 : t0 + ts]
-
-            # Logit j predicts token j+1; shift back by 1 so CE targets align with labels.
+            # CE: logit at s0-1 predicts token at s0; shift back by 1.
             # s0 may be 0 for truncated sequences where the prompt was cut off entirely.
             if s0 < 1:
                 ce_terms.append(student_logits[i].sum() * 0.0)
@@ -985,8 +982,17 @@ class XTokenLoss(nn.Module):
                     acc_num += int((preds_i == labels_i)[valid].sum().item())
                     acc_den += int(valid.sum().item())
 
-            s_offs = student_byte_offsets[i, s0 : s0 + ss].tolist()
-            t_offs = teacher_byte_offsets[i, t0 : t0 + ts].tolist()
+            # KD: logit at position t predicts token t+1. Drop the last predictor
+            # (it predicts beyond the span) and align with the predicted tokens'
+            # byte offsets (shifted by 1). Mirrors the reference [:, :-1] / [:, 1:] shift.
+            if ss < 2 or ts < 2:
+                kd_terms.append(student_logits[i].sum() * 0.0)
+                continue
+
+            s_logits_i = student_logits[i, s0 : s0 + ss - 1]
+            t_logits_i = teacher_logits[i, t0 : t0 + ts - 1]
+            s_offs = student_byte_offsets[i, s0 + 1 : s0 + ss].tolist()
+            t_offs = teacher_byte_offsets[i, t0 + 1 : t0 + ts].tolist()
             s_groups, t_groups = ULDLoss._align_by_byte_offsets(s_offs, t_offs)
             paired = [(sg, tg) for sg, tg in zip(s_groups, t_groups, strict=False) if sg and tg]
             if not paired:
