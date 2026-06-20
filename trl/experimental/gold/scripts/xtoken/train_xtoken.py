@@ -100,7 +100,7 @@ def main():
         output_dir=args.output_dir,
         logging_steps=args.logging_steps,
         save_steps=args.max_steps,
-        report_to="wandb",
+        report_to="trackio",
         num_generations=1,
     )
 
