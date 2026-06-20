@@ -57,8 +57,6 @@ def parse_args():
     p.add_argument("--output-dir", default="output/xtoken_run")
     p.add_argument("--logging-steps", type=int, default=1)
     p.add_argument("--bf16", action="store_true", default=True)
-    p.add_argument("--project", default="xtoken-distillation")
-    p.add_argument("--trackio-space-id", default="kashif/xtoken-distillation")
     return p.parse_args()
 
 
@@ -102,9 +100,7 @@ def main():
         output_dir=args.output_dir,
         logging_steps=args.logging_steps,
         save_steps=args.max_steps,
-        report_to="trackio",
-        project=args.project,
-        trackio_space_id=args.trackio_space_id,
+        report_to="wandb",
         num_generations=1,
     )
 

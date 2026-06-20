@@ -952,6 +952,7 @@ class XTokenLoss(nn.Module):
 
         kd_terms = []
         ce_terms = []
+        acc_num = acc_den = valid_pairs_total = proj_acc_num = proj_acc_den = 0
 
         for i in range(batch_size):
             s0, ss = s_starts[i], s_sizes[i]
@@ -977,6 +978,12 @@ class XTokenLoss(nn.Module):
                     ignore_index=self.ignore_index,
                 )
                 ce_terms.append(ce_i)
+                with torch.no_grad():
+                    labels_i = student_labels[i, s0 : s0 + ss]
+                    preds_i = student_logits[i, s0 - 1 : s0 + ss - 1].argmax(dim=-1)
+                    valid = labels_i != self.ignore_index
+                    acc_num += int((preds_i == labels_i)[valid].sum().item())
+                    acc_den += int(valid.sum().item())
 
             s_offs = student_byte_offsets[i, s0 : s0 + ss].tolist()
             t_offs = teacher_byte_offsets[i, t0 : t0 + ts].tolist()
@@ -986,8 +993,11 @@ class XTokenLoss(nn.Module):
                 kd_terms.append(student_logits[i].sum() * 0.0)
                 continue
 
+            valid_pairs_total += len(paired)
             if self.loss_type == "p_kl":
-                kd_i = self._compute_p_kl(s_logits_i, t_logits_i, paired, device, T)
+                kd_i, p_num, p_den = self._compute_p_kl(s_logits_i, t_logits_i, paired, device, T)
+                proj_acc_num += p_num
+                proj_acc_den += p_den
             else:
                 kd_i = self._compute_h_kl(s_logits_i, t_logits_i, paired, device, T)
             kd_terms.append(kd_i)
@@ -997,6 +1007,11 @@ class XTokenLoss(nn.Module):
 
         self.last_kl_loss = kd.detach()
         self.last_ce_loss = ce.detach()
+        self.last_accuracy_num = acc_num
+        self.last_accuracy_den = acc_den
+        self.last_num_valid_pairs = float(valid_pairs_total) / batch_size
+        self.last_proj_accuracy_num = proj_acc_num
+        self.last_proj_accuracy_den = proj_acc_den
 
         if self.dynamic_scaling:
             scale = (ce.detach() / kd.detach().clamp(min=1e-8)).clamp(0.01, 100.0)
@@ -1064,8 +1079,14 @@ class XTokenLoss(nn.Module):
         t_topk = t_topk / (t_topk.sum(dim=-1, keepdim=True) + eps)
         t_log_topk = (t_topk + eps).log()
 
+        with torch.no_grad():
+            proj_top1 = s_proj_topk.argmax(dim=-1)
+            tgt_top1 = t_topk.argmax(dim=-1)
+            proj_acc_n = int((proj_top1 == tgt_top1).sum().item())
+            proj_acc_d = int(proj_top1.shape[0])
+
         per_chunk_kl = F.kl_div(s_log_proj, t_log_topk, reduction="none", log_target=True).sum(dim=-1)
-        return per_chunk_kl.mean() * (T * T)
+        return per_chunk_kl.mean() * (T * T), proj_acc_n, proj_acc_d
 
     def _compute_h_kl(self, s_logits, t_logits, paired, device, T):
         """H-KL: relaxed common-set forward KL + uncommon sorted-L1, T² scaling.
@@ -2280,12 +2301,37 @@ class GOLDTrainer(SFTTrainer):
             )
 
             mode = "train" if self.model.training else "eval"
+            dev = self.accelerator.device
             self._metrics[mode]["xtoken/kl_loss"].append(
                 self.accelerator.gather(self.xtoken_loss_fn.last_kl_loss).mean().item()
             )
             self._metrics[mode]["xtoken/ce_loss"].append(
                 self.accelerator.gather(self.xtoken_loss_fn.last_ce_loss).mean().item()
             )
+            acc_num = self.accelerator.gather(
+                torch.tensor(float(self.xtoken_loss_fn.last_accuracy_num), device=dev)
+            ).sum()
+            acc_den = self.accelerator.gather(
+                torch.tensor(float(self.xtoken_loss_fn.last_accuracy_den), device=dev)
+            ).sum()
+            self._metrics[mode]["xtoken/accuracy"].append(
+                (acc_num / acc_den).item() if acc_den > 0 else 0.0
+            )
+            self._metrics[mode]["xtoken/num_valid_pairs"].append(
+                self.accelerator.gather(
+                    torch.tensor(float(self.xtoken_loss_fn.last_num_valid_pairs), device=dev)
+                ).mean().item()
+            )
+            if self.xtoken_loss_fn.loss_type == "p_kl":
+                proj_num = self.accelerator.gather(
+                    torch.tensor(float(self.xtoken_loss_fn.last_proj_accuracy_num), device=dev)
+                ).sum()
+                proj_den = self.accelerator.gather(
+                    torch.tensor(float(self.xtoken_loss_fn.last_proj_accuracy_den), device=dev)
+                ).sum()
+                self._metrics[mode]["xtoken/proj_accuracy"].append(
+                    (proj_num / proj_den).item() if proj_den > 0 else 0.0
+                )
 
         empty_cache()
 
