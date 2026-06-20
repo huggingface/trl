@@ -328,6 +328,7 @@ def test_process_completions_to_buffer_left_pads_prompt_ids():
     trainer.processing_class = RecordingTokenizer()
     trainer.args = SimpleNamespace(max_length=None)
     trainer.use_uld_loss = False
+    trainer.xtoken_loss_fn = None
     trainer._buffered_inputs = [None]
     trainer._buffered_text_logs = [None]
 
@@ -479,6 +480,7 @@ def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens()
     trainer.args = SimpleNamespace(max_length=None, report_to=[])
     trainer.use_vllm = True
     trainer.use_uld_loss = False
+    trainer.xtoken_loss_fn = None
     trainer.vllm_generation = RecordingVLLMGeneration()
     trainer.vllm_sync_frequency = 1
     trainer._last_vllm_sync_step = -1
@@ -550,6 +552,7 @@ def test_on_policy_prompt_text_reflects_truncated_prompt():
     trainer.args = SimpleNamespace(max_length=3, report_to=[])
     trainer.use_vllm = True
     trainer.use_uld_loss = False
+    trainer.xtoken_loss_fn = None
     trainer.teacher_tokenizer = None
     trainer.uld_loss_fn = None
     trainer.vllm_generation = RecordingVLLMGeneration()
@@ -859,6 +862,7 @@ def test_on_policy_completion_byte_offsets_match_encode_offsets(smollm_tokenizer
     text, so student and teacher offsets share one byte coordinate system."""
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.use_uld_loss = True
+    trainer.xtoken_loss_fn = None
     trainer.teacher_tokenizer = qwen_tokenizer
     trainer.uld_loss_fn = SimpleNamespace(use_extended_uld=True)
     trainer.processing_class = smollm_tokenizer

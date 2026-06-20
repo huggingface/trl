@@ -95,19 +95,24 @@ def _create_weight_distribution(num_tokens):
 
 def _find_similar_special_tokens(tok_a, tok_b, similarity_threshold=0.3, top_k=3):
     def _is_special(t):
-        return (t.startswith("<|") and t.endswith("|>")) or (t.startswith("<") and t.endswith(">")) or t in {
-            "<eos>",
-            "<bos>",
-            "<pad>",
-            "<unk>",
-            "<s>",
-            "</s>",
-        }
+        return (
+            (t.startswith("<|") and t.endswith("|>"))
+            or (t.startswith("<") and t.endswith(">"))
+            or t
+            in {
+                "<eos>",
+                "<bos>",
+                "<pad>",
+                "<unk>",
+                "<s>",
+                "</s>",
+            }
+        )
 
     def _sim(a, b):
         seq = difflib.SequenceMatcher(None, a, b).ratio()
-        kw_a = set(w for w in re.sub(r"[<>|_]", " ", a.lower()).split() if len(w) > 2)
-        kw_b = set(w for w in re.sub(r"[<>|_]", " ", b.lower()).split() if len(w) > 2)
+        kw_a = {w for w in re.sub(r"[<>|_]", " ", a.lower()).split() if len(w) > 2}
+        kw_b = {w for w in re.sub(r"[<>|_]", " ", b.lower()).split() if len(w) > 2}
         kw = len(kw_a & kw_b) / len(kw_a | kw_b) if kw_a or kw_b else 0.0
         return 0.6 * seq + 0.4 * kw
 
@@ -121,7 +126,9 @@ def _find_similar_special_tokens(tok_a, tok_b, similarity_threshold=0.3, top_k=3
             reverse=True,
         )[:top_k]
         for ib, tb, sim in matches:
-            results.append({"student_id": ia, "student_token": ta, "teacher_id": ib, "teacher_token": tb, "similarity": sim})
+            results.append(
+                {"student_id": ia, "student_token": ta, "teacher_id": ib, "teacher_token": tb, "similarity": sim}
+            )
     return results
 
 
@@ -162,7 +169,7 @@ def _add_multitoken_mappings(
             continue
         tgt_ids = tgt_ids[:tokens_to_cut]
         weights = _create_weight_distribution(len(tgt_ids))
-        for tgt_id, w in zip(tgt_ids, weights):
+        for tgt_id, w in zip(tgt_ids, weights, strict=False):
             key = (src_id, tgt_id) if source_role == "student" else (tgt_id, src_id)
             transformation_counts[key] += w
         if len(tgt_ids) >= 2:
@@ -186,8 +193,8 @@ def build_projection_matrix(args):
     cfg_t = AutoConfig.from_pretrained(args.teacher_model)
     name_s = args.student_model.lower()
     name_t = args.teacher_model.lower()
-    vocab_s = (cfg_s.text_config.vocab_size if ("gemma" in name_s or "qwen3.5" in name_s) else cfg_s.vocab_size)
-    vocab_t = (cfg_t.text_config.vocab_size if ("gemma" in name_t or "qwen3.5" in name_t) else cfg_t.vocab_size)
+    vocab_s = cfg_s.text_config.vocab_size if ("gemma" in name_s or "qwen3.5" in name_s) else cfg_s.vocab_size
+    vocab_t = cfg_t.text_config.vocab_size if ("gemma" in name_t or "qwen3.5" in name_t) else cfg_t.vocab_size
 
     print(f"Student vocab: {vocab_s}  Teacher vocab: {vocab_t}")
 
@@ -196,7 +203,7 @@ def build_projection_matrix(args):
 
     counts: dict = defaultdict(float)
 
-    s2t = _add_multitoken_mappings(
+    _add_multitoken_mappings(
         source_tokenizer=tok_s,
         target_tokenizer=tok_t,
         source_vocab_size=vocab_s,
@@ -225,7 +232,10 @@ def build_projection_matrix(args):
 
     if args.enable_special_token_mapping:
         mappings = _find_similar_special_tokens(
-            tok_s, tok_t, similarity_threshold=args.special_token_similarity_threshold, top_k=args.special_token_top_k or args.top_k
+            tok_s,
+            tok_t,
+            similarity_threshold=args.special_token_similarity_threshold,
+            top_k=args.special_token_top_k or args.top_k,
         )
         for m in mappings:
             counts[(m["student_id"], m["teacher_id"])] += m["similarity"] * 0.8
@@ -288,7 +298,9 @@ def parse_args():
     p.add_argument("--student-model", required=True)
     p.add_argument("--teacher-model", required=True)
     p.add_argument("--top-k", type=int, default=32, help="Top-k teacher tokens to keep per student token")
-    p.add_argument("--runtime-top-k", type=int, default=None, help="If set, also run sort_and_cut to this k after building")
+    p.add_argument(
+        "--runtime-top-k", type=int, default=None, help="If set, also run sort_and_cut to this k after building"
+    )
     p.add_argument("--tokens-to-cut", type=int, default=4, help="Max target tokens for multi-token re-encoding")
     p.add_argument("--enable-scale-trick", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--enable-reverse-pass", action=argparse.BooleanOptionalAction, default=True)

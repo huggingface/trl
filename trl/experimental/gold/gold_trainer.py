@@ -1197,6 +1197,9 @@ class GOLDTrainer(SFTTrainer):
             if not hasattr(self.teacher_tokenizer, "pad_token") or self.teacher_tokenizer.pad_token is None:
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
 
+        # Initialise to None so _prepare_dataset (called by super().__init__) can safely read this attribute.
+        self.xtoken_loss_fn = None
+
         # Hybrid ULD loss configuration is handled in ULDLoss class
 
         super().__init__(
@@ -1456,16 +1459,18 @@ class GOLDTrainer(SFTTrainer):
         return new_attention_mask, new_labels
 
     def _maybe_add_completion_byte_offsets(self, updated_slice: dict[str, torch.Tensor | Any]) -> None:
-        """Attach completion-relative byte offsets to on-policy ULD batches.
+        """Attach completion-relative byte offsets to on-policy cross-tokenizer batches.
 
-        Derived from the sampled ids via ``piece_byte_len`` (no decode→re-encode round-trip).
+        Derived from the sampled ids via ``piece_byte_len`` (no decode→re-encode round-trip). Required by extended ULD
+        and by all X-Token variants.
         """
-        if not (
+        _needs_offsets = (
             self.use_uld_loss
             and self.teacher_tokenizer is not None
             and self.uld_loss_fn is not None
             and self.uld_loss_fn.use_extended_uld
-        ):
+        ) or (self.xtoken_loss_fn is not None and self.teacher_tokenizer is not None)
+        if not _needs_offsets:
             return
 
         new_input_ids = updated_slice["input_ids"]
@@ -1757,13 +1762,14 @@ class GOLDTrainer(SFTTrainer):
         column_names = list(next(iter(dataset)).keys())
         is_processed = "input_ids" in column_names
 
-        if packing and self.use_uld_loss and self.teacher_tokenizer is not None:
+        _cross_tok = (self.use_uld_loss or self.xtoken_loss_fn is not None) and self.teacher_tokenizer is not None
+        if packing and _cross_tok:
             raise ValueError(
-                "Packing is not supported with cross-tokenizer ULD because byte-offset alignment is defined per "
-                "prompt/completion example."
+                "Packing is not supported with cross-tokenizer KD (ULD or X-Token) because byte-offset alignment is "
+                "defined per prompt/completion example."
             )
 
-        if not is_processed or (self.use_uld_loss and self.teacher_tokenizer is not None):
+        if not is_processed or _cross_tok:
             return self._prepare_dataset_with_original_text(
                 dataset, processing_class, args, packing, formatting_func, dataset_name
             )
