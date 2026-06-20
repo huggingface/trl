@@ -36,6 +36,13 @@ cross-attending to that cache. Training therefore differs from autoregressive SF
 4. The loss is plain mean cross-entropy between the decoder logits and the clean tokens over the whole canvas
    (corrupted and uncorrupted positions alike), plus an autoregressive co-loss on the encoder.
 
+For uniform diffusion the plug-in softmax does not parameterize the plain denoiser but the leave-one-out (LOO)
+posterior, which predicts each token without using its own corrupted value (https://huggingface.co/papers/2605.22765).
+Passing `--model_prediction_type mean_loo` keeps the LOO target by converting the decoder logits to the denoiser
+before the cross-entropy; the paper reports better generation this way, but the model then parameterizes the LOO
+posterior, so sampling must apply the same conversion. The default `mean` trains the plain denoiser, matching the
+released checkpoint.
+
 Requires transformers >= 5.12.0 (https://github.com/huggingface/transformers/pull/46568, for training support).
 Gradient checkpointing additionally needs https://github.com/huggingface/transformers/pull/46572.
 
@@ -107,6 +114,10 @@ class DiffusionGemmaSFTConfig(SFTConfig):
     > - `max_steps`: Defaults to `800`.
     > - `per_device_train_batch_size`/`gradient_accumulation_steps`: Default to `1`/`8` (global batch size 8).
     > - `max_length`: Defaults to `1024`.
+
+    Additional parameters:
+
+    > - `model_prediction_type`: Defaults to `"mean"`.
     """
 
     learning_rate: float = 1.5e-4
@@ -120,6 +131,17 @@ class DiffusionGemmaSFTConfig(SFTConfig):
     per_device_train_batch_size: int = 1
     gradient_accumulation_steps: int = 8
     max_length: int = 1024
+    model_prediction_type: str = field(
+        default="mean",
+        metadata={
+            "help": "What the decoder softmax parameterizes. `mean` is the plain denoiser, matching the released "
+            "checkpoint. `mean_loo` is the leave-one-out (LOO) posterior, which predicts each token without its own "
+            "corrupted value: the logits are converted to the denoiser before the cross-entropy "
+            "(https://huggingface.co/papers/2605.22765). LOO improves generation for uniform diffusion but the model "
+            "then parameterizes the LOO posterior, so sampling must apply the same conversion.",
+            "choices": ["mean", "mean_loo"],
+        },
+    )
 
 
 @dataclass
@@ -160,6 +182,7 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         self.vocab_size = config.text_config.vocab_size
         self.final_logit_softcapping = config.text_config.final_logit_softcapping
         self.eos_token_id = self.processing_class.eos_token_id
+        self.model_prediction_type = self.args.model_prediction_type
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         input_ids = inputs["input_ids"]
@@ -229,9 +252,22 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         # corruption kernel has a flat ELBO). For truncated turns the EOS fill is not a real terminator, so it is
         # dropped from the loss while the surviving response tokens are still supervised.
         diffusion_target = canvas_target.masked_fill(truncated[:, None] & ~in_response, -100)
+        diffusion_logits = outputs.logits
+        if self.model_prediction_type == "mean_loo":
+            # The plug-in softmax parameterizes the leave-one-out posterior, not the plain denoiser
+            # (https://huggingface.co/papers/2605.22765). Convert it to the denoiser before the cross-entropy by
+            # adding log(1 + K * alpha_t / (1 - alpha_t)) to the logit of the observed (corrupted) token, where the
+            # uniform forward keeps the clean token with probability alpha_t = 1 - t. Upcast like the reference
+            # implementation: the correction reaches ~log(K) nats and would lose precision in bf16.
+            alpha = (1 - t).float()  # [batch_size, 1], keep probability of the uniform forward
+            K = diffusion_logits.shape[-1]
+            bump = torch.log1p(K * alpha / (1 - alpha))
+            diffusion_logits = diffusion_logits.float().scatter_add(
+                2, canvas_ids.unsqueeze(-1), bump[:, :, None].expand(-1, block_size, 1)
+            )
         if (diffusion_target != -100).any():
             diffusion_loss = F.cross_entropy(
-                outputs.logits.flatten(0, 1), diffusion_target.flatten(), ignore_index=-100
+                diffusion_logits.flatten(0, 1), diffusion_target.flatten(), ignore_index=-100
             )
         else:
             diffusion_loss = outputs.logits.sum() * 0.0
