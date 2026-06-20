@@ -18,9 +18,8 @@ DataCollatorForChatML.
 
 Usage:
 
-    python trl/experimental/gold/scripts/xtoken/train_xtoken.py \
-        --projection-matrix cross_tokenizer_data/projection_matrix_llama_qwen_top4.pt \ --loss-type p_kl \ --max-steps
-        100
+    python trl/experimental/gold/scripts/xtoken/train_xtoken.py
+        --projection-matrix cross_tokenizer_data/projection_map_..._top_4_sorted.pt --loss-type p_kl --max-steps 100
 
 Build the projection matrix first with the three scripts in this directory. See
 https://huggingface.co/papers/2605.21699.
@@ -28,7 +27,6 @@ https://huggingface.co/papers/2605.21699.
 
 import argparse
 
-import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
@@ -36,20 +34,14 @@ from trl.experimental.gold import GOLDConfig, GOLDTrainer
 
 
 def build_dataset(split="train", num_samples=2000):
-    """Load ultrachat_200k and return the first num_samples in messages format."""
-    ds = load_dataset("HuggingFaceH4/ultrachat_200k", split=f"{split}[:2000]")
-
-    def to_messages(example):
-        # ultrachat already has a 'messages' column with role/content dicts
-        return {"messages": example["messages"]}
-
-    return ds.map(to_messages, remove_columns=[c for c in ds.column_names if c != "messages"])
+    """Load chatbot_arena_completions (the proven GOLD dataset)."""
+    return load_dataset("trl-lib/chatbot_arena_completions", split=f"{split}[:{num_samples}]")
 
 
 def parse_args():
     p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    p.add_argument("--student-model", default="meta-llama/Llama-3.2-1B-Instruct")
-    p.add_argument("--teacher-model", default="Qwen/Qwen3-4B")
+    p.add_argument("--student-model", default="HuggingFaceTB/SmolLM2-135M-Instruct")
+    p.add_argument("--teacher-model", default="Qwen/Qwen3-0.6B")
     p.add_argument("--projection-matrix", required=True)
     p.add_argument("--loss-type", default="p_kl", choices=["p_kl", "h_kl"])
     p.add_argument("--max-steps", type=int, default=100)
@@ -65,6 +57,8 @@ def parse_args():
     p.add_argument("--output-dir", default="output/xtoken_run")
     p.add_argument("--logging-steps", type=int, default=1)
     p.add_argument("--bf16", action="store_true", default=True)
+    p.add_argument("--project", default="xtoken-distillation")
+    p.add_argument("--trackio-space-id", default="kashif/xtoken-distillation")
     return p.parse_args()
 
 
@@ -80,7 +74,7 @@ def main():
 
     config = GOLDConfig(
         # Models
-        teacher_model_init_kwargs={"torch_dtype": "bfloat16" if args.bf16 else "auto"},
+        teacher_model_init_kwargs={"dtype": "bfloat16" if args.bf16 else "auto"},
         teacher_tokenizer_name_or_path=args.teacher_model,
         # Sequence lengths
         max_length=args.max_length,
@@ -108,7 +102,9 @@ def main():
         output_dir=args.output_dir,
         logging_steps=args.logging_steps,
         save_steps=args.max_steps,
-        report_to="tensorboard",
+        report_to="trackio",
+        project=args.project,
+        trackio_space_id=args.trackio_space_id,
         num_generations=1,
     )
 
@@ -122,7 +118,6 @@ def main():
 
     trainer.train()
     trainer.save_model(args.output_dir)
-    print(f"Model saved to {args.output_dir}")
 
 
 if __name__ == "__main__":

@@ -967,13 +967,16 @@ class XTokenLoss(nn.Module):
             t_logits_i = teacher_logits[i, t0 : t0 + ts]
 
             # Logit j predicts token j+1; shift back by 1 so CE targets align with labels.
-            # s0 >= 1 always holds since the completion follows at least one prompt token.
-            ce_i = F.cross_entropy(
-                student_logits[i, s0 - 1 : s0 + ss - 1] / T,
-                student_labels[i, s0 : s0 + ss],
-                ignore_index=self.ignore_index,
-            )
-            ce_terms.append(ce_i)
+            # s0 may be 0 for truncated sequences where the prompt was cut off entirely.
+            if s0 < 1:
+                ce_terms.append(student_logits[i].sum() * 0.0)
+            else:
+                ce_i = F.cross_entropy(
+                    student_logits[i, s0 - 1 : s0 + ss - 1] / T,
+                    student_labels[i, s0 : s0 + ss],
+                    ignore_index=self.ignore_index,
+                )
+                ce_terms.append(ce_i)
 
             s_offs = student_byte_offsets[i, s0 : s0 + ss].tolist()
             t_offs = teacher_byte_offsets[i, t0 : t0 + ts].tolist()
@@ -1818,9 +1821,12 @@ class GOLDTrainer(SFTTrainer):
                 **map_kwargs,
             )
 
-            # Add EOS token if needed: non-conversational only
+            # Add EOS token if needed: non-conversational only.
+            # is_conversational pops one key from a set — if the dataset has both a
+            # string "prompt" and a list "messages" (e.g. ultrachat), it may pick the
+            # wrong key and return False.  Check "messages" explicitly as the fallback.
             first_example = next(iter(dataset))
-            if not is_conversational(first_example):
+            if not (is_conversational(first_example) or "messages" in first_example):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
 
@@ -1848,7 +1854,9 @@ class GOLDTrainer(SFTTrainer):
                 backend = processing_class.backend_tokenizer
                 result = {}
 
-                if "prompt" in example:  # prompt-completion case
+                if "prompt" in example and (
+                    "completion" in example or isinstance(example.get("prompt"), list)
+                ):  # prompt-completion case
                     if is_conversational(example):
                         prompt_text = processing_class.apply_chat_template(
                             example["prompt"],
@@ -1871,7 +1879,7 @@ class GOLDTrainer(SFTTrainer):
                         full_text = prompt_text + completion_text
                     result["original_prompt_text"] = prompt_text
                     result["original_completion_text"] = completion_text
-                elif is_conversational(example):
+                elif is_conversational(example) or "messages" in example:
                     messages = example["messages"]
                     assistant_indices = [idx for idx, msg in enumerate(messages) if msg["role"] == "assistant"]
                     if assistant_indices:
@@ -2272,12 +2280,24 @@ class GOLDTrainer(SFTTrainer):
             )
 
             mode = "train" if self.model.training else "eval"
-            self._metrics[mode]["xtoken/kl_loss"].append(
+            self._metrics[mode]["kl_loss"].append(
                 self.accelerator.gather(self.xtoken_loss_fn.last_kl_loss).mean().item()
             )
-            self._metrics[mode]["xtoken/ce_loss"].append(
+            self._metrics[mode]["ce_loss"].append(
                 self.accelerator.gather(self.xtoken_loss_fn.last_ce_loss).mean().item()
             )
+            # Token accuracy: argmax(logits[t]) == labels[t+1] over non-masked completion tokens.
+            with torch.no_grad():
+                logits_shifted = outputs_student.logits[:, :-1]
+                labels_shifted = xtoken_student_labels[:, 1:]
+                mask = labels_shifted != -100
+                correct = (logits_shifted.argmax(-1) == labels_shifted) & mask
+                # Always gather — conditional gather on mask.any() would deadlock
+                # when ranks disagree (e.g. one rank has an all-padding batch).
+                num = self.accelerator.gather(correct.float().sum()).sum()
+                den = self.accelerator.gather(mask.float().sum()).sum()
+                if den > 0:
+                    self._metrics[mode]["accuracy"].append((num / den).item())
 
         empty_cache()
 

@@ -68,7 +68,7 @@ def reapply_exact_map(args):
             match_s.append(i)
             match_t.append(teacher_map[ts])
 
-    print(f"Found {len(match_s)} exact-match token pairs")
+    print(f"Found {len(match_s)} exact-match token pairs")  # noqa: T201
 
     data = torch.load(args.initial_projection_path, map_location="cpu", weights_only=False)
     if not (isinstance(data, dict) and "indices" in data and "likelihoods" in data):
@@ -85,7 +85,7 @@ def reapply_exact_map(args):
     base, ext = os.path.splitext(args.initial_projection_path)
     out_path = base + "_exact_map_remapped" + (ext or ".pt")
     torch.save(data, out_path)
-    print(f"Saved remapped projection matrix → {out_path}")
+    print(f"Saved remapped projection matrix → {out_path}")  # noqa: T201
     return out_path
 
 

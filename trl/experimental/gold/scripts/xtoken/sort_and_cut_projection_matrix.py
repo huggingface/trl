@@ -61,7 +61,7 @@ def sort_and_cut(
 ) -> None:
     """Sort rows by descending weight, trim to ``new_top_k``, normalise, save."""
     if verbose:
-        print(f"Loading: {input_path}")
+        print(f"Loading: {input_path}")  # noqa: T201
 
     data = torch.load(input_path, map_location="cpu", weights_only=False)
     if not (isinstance(data, dict) and "indices" in data and "likelihoods" in data):
@@ -72,10 +72,10 @@ def sort_and_cut(
     vocab_size, orig_k = orig_idx.shape
 
     if verbose:
-        print(f"Original shape: {orig_idx.shape}  →  new top_k: {new_top_k}  preserve_last: {preserve_last}")
+        print(f"Original shape: {orig_idx.shape}  →  new top_k: {new_top_k}  preserve_last: {preserve_last}")  # noqa: T201
 
     if new_top_k > orig_k:
-        print(f"Warning: new_top_k ({new_top_k}) > original ({orig_k}). Padding with -1/0.")
+        print(f"Warning: new_top_k ({new_top_k}) > original ({orig_k}). Padding with -1/0.")  # noqa: T201
 
     effective_k = min(new_top_k, orig_k)
     new_idx = torch.full((vocab_size, new_top_k), -1, dtype=orig_idx.dtype)
@@ -131,7 +131,7 @@ def sort_and_cut(
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     torch.save(out_data, output_path)
     if verbose:
-        print(f"Saved → {output_path}  shape: {new_idx.shape}")
+        print(f"Saved → {output_path}  shape: {new_idx.shape}")  # noqa: T201
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ def main():
         except Exception:
             preserve_last = False
         if preserve_last and not args.quiet:
-            print("Auto-enabling --preserve_last (input has enable_scale_trick=True)")
+            print("Auto-enabling --preserve_last (input has enable_scale_trick=True)")  # noqa: T201
     else:
         preserve_last = args.preserve_last
 
@@ -182,7 +182,7 @@ def main():
         args.initial_projection_path, output_path, args.top_k, preserve_last=preserve_last, verbose=not args.quiet
     )
     if not args.quiet:
-        print(f"Output: {output_path}")
+        print(f"Output: {output_path}")  # noqa: T201
 
 
 if __name__ == "__main__":

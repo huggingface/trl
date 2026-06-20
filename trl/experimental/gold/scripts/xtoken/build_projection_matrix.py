@@ -192,7 +192,7 @@ def build_projection_matrix(args):
     vocab_s = cfg_s.text_config.vocab_size if ("gemma" in name_s or "qwen3.5" in name_s) else cfg_s.vocab_size
     vocab_t = cfg_t.text_config.vocab_size if ("gemma" in name_t or "qwen3.5" in name_t) else cfg_t.vocab_size
 
-    print(f"Student vocab: {vocab_s}  Teacher vocab: {vocab_t}")
+    print(f"Student vocab: {vocab_s}  Teacher vocab: {vocab_t}")  # noqa: T201
 
     ignore_s = {tok_s.convert_tokens_to_ids(t) for t in ["<|endoftext|>", "<eos>"] if t in tok_s.get_vocab()}
     ignore_t = {tok_t.convert_tokens_to_ids(t) for t in ["<|endoftext|>", "<eos>"] if t in tok_t.get_vocab()}
@@ -235,9 +235,9 @@ def build_projection_matrix(args):
         )
         for m in mappings:
             counts[(m["student_id"], m["teacher_id"])] += m["similarity"] * 0.8
-        print(f"Added {len(mappings)} special-token mappings")
+        print(f"Added {len(mappings)} special-token mappings")  # noqa: T201
 
-    print(f"Total transformation entries: {len(counts)}")
+    print(f"Total transformation entries: {len(counts)}")  # noqa: T201
 
     # Group by student token and compute top-k per row without materialising the
     # full V_s × V_t dense matrix (which can exceed 75 GB for large vocab pairs).
@@ -291,7 +291,7 @@ def build_projection_matrix(args):
         },
         out_path,
     )
-    print(f"Saved projection matrix → {out_path}  shape: {top_indices.shape}")
+    print(f"Saved projection matrix → {out_path}  shape: {top_indices.shape}")  # noqa: T201
     return out_path
 
 
@@ -324,4 +324,4 @@ if __name__ == "__main__":
 
         trimmed = out.replace(".pt", f"_top{args.runtime_top_k}.pt")
         sort_and_cut(out, trimmed, args.runtime_top_k)
-        print(f"Trimmed matrix → {trimmed}")
+        print(f"Trimmed matrix → {trimmed}")  # noqa: T201
