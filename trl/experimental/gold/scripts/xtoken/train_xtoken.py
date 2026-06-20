@@ -56,6 +56,7 @@ def parse_args():
     p.add_argument("--xtoken-vocab-topk", type=int, default=32)
     p.add_argument("--output-dir", default="output/xtoken_run")
     p.add_argument("--logging-steps", type=int, default=1)
+    p.add_argument("--report-to", default="trackio")
     p.add_argument("--bf16", action="store_true", default=True)
     return p.parse_args()
 
@@ -100,7 +101,7 @@ def main():
         output_dir=args.output_dir,
         logging_steps=args.logging_steps,
         save_steps=args.max_steps,
-        report_to="trackio",
+        report_to=args.report_to,
         num_generations=1,
     )
 
