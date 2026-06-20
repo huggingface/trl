@@ -1723,7 +1723,7 @@ training_args = GKDConfig(
 )
 ```
 
-You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration. A method description is available at the [On-Policy Distillation Space](https://huggingface.co/spaces/HuggingFaceH4/on-policy-distillation):
+You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration. See also [Unlocking On-Policy Distillation for Any Model Family](https://huggingface.co/spaces/HuggingFaceH4/on-policy-distillation):
 
 ```python
 from trl.experimental import GOLDConfig
