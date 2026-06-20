@@ -21,6 +21,10 @@ Usage:
     python trl/experimental/gold/scripts/xtoken/train_xtoken.py
         --projection-matrix cross_tokenizer_data/projection_map_..._top_4_sorted.pt --loss-type p_kl --max-steps 100
 
+    # Use Nemotron text corpus (matches the NeMo-RL reference run data): python
+    trl/experimental/gold/scripts/xtoken/train_xtoken.py
+        --dataset nemotron --projection-matrix ... --max-length 512
+
 Build the projection matrix first with the three scripts in this directory. See
 https://huggingface.co/papers/2605.21699.
 """
@@ -33,9 +37,27 @@ from transformers import AutoTokenizer
 from trl.experimental.gold import GOLDConfig, GOLDTrainer
 
 
-def build_dataset(split="train", num_samples=2000):
-    """Load chatbot_arena_completions (the proven GOLD dataset)."""
+# ~4 chars/token; keep samples comfortably within max_length
+_NEMOTRON_CHARS_PER_SAMPLE = 1800
+
+
+def build_chatbot_arena_dataset(split="train", num_samples=2000):
     return load_dataset("trl-lib/chatbot_arena_completions", split=f"{split}[:{num_samples}]")
+
+
+def build_nemotron_dataset(num_samples=2000):
+    ds = load_dataset(
+        "parquet",
+        data_files="hf://datasets/nvidia/Nemotron-Pretraining-Specialized-v1.1/Nemotron-Pretraining-Formal-Logic/*.parquet",
+        split="train",
+    )
+    ds = ds.select(range(min(num_samples, len(ds))))
+
+    def to_messages(example):
+        text = example["text"][:_NEMOTRON_CHARS_PER_SAMPLE]
+        return {"messages": [{"role": "user", "content": "Continue:"}, {"role": "assistant", "content": text}]}
+
+    return ds.map(to_messages, remove_columns=ds.column_names)
 
 
 def parse_args():
@@ -43,6 +65,8 @@ def parse_args():
     p.add_argument("--student-model", default="HuggingFaceTB/SmolLM2-135M-Instruct")
     p.add_argument("--teacher-model", default="Qwen/Qwen3-0.6B")
     p.add_argument("--projection-matrix", required=True)
+    p.add_argument("--dataset", default="chatbot_arena", choices=["chatbot_arena", "nemotron"])
+    p.add_argument("--num-samples", type=int, default=2000)
     p.add_argument("--loss-type", default="p_kl", choices=["p_kl", "h_kl"])
     p.add_argument("--max-steps", type=int, default=100)
     p.add_argument("--max-length", type=int, default=512)
@@ -69,7 +93,10 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
-    train_dataset = build_dataset()
+    if args.dataset == "nemotron":
+        train_dataset = build_nemotron_dataset(num_samples=args.num_samples)
+    else:
+        train_dataset = build_chatbot_arena_dataset(num_samples=args.num_samples)
 
     config = GOLDConfig(
         # Models
