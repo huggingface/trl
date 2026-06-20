@@ -2324,13 +2324,11 @@ class GOLDTrainer(SFTTrainer):
             acc_den = self.accelerator.gather(
                 torch.tensor(float(self.xtoken_loss_fn.last_accuracy_den), device=dev)
             ).sum()
-            self._metrics[mode]["xtoken/accuracy"].append(
-                (acc_num / acc_den).item() if acc_den > 0 else 0.0
-            )
+            self._metrics[mode]["xtoken/accuracy"].append((acc_num / acc_den).item() if acc_den > 0 else 0.0)
             self._metrics[mode]["xtoken/num_valid_pairs"].append(
-                self.accelerator.gather(
-                    torch.tensor(float(self.xtoken_loss_fn.last_num_valid_pairs), device=dev)
-                ).mean().item()
+                self.accelerator.gather(torch.tensor(float(self.xtoken_loss_fn.last_num_valid_pairs), device=dev))
+                .mean()
+                .item()
             )
             if self.xtoken_loss_fn.loss_type == "p_kl":
                 proj_num = self.accelerator.gather(
