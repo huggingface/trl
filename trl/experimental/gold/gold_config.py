@@ -116,7 +116,7 @@ class GOLDConfig(SFTConfig):
             Temperature T for X-Token KD loss; the loss is multiplied by T² (Hinton 2015).
         xtoken_dynamic_scaling (`bool`, *optional*, defaults to `False`):
             Scale KD by `stop_gradient(CE / KD)` to balance loss magnitudes (paper Eq. 7).
-        xtoken_uncommon_topk (`int`, *optional*, defaults to `100`):
+        xtoken_uncommon_topk (`int`, *optional*, defaults to `8192`):
             H-KL: cap sorted-L1 uncommon comparison to the top-k tokens per side.
         xtoken_vocab_topk (`int`, *optional*, defaults to `32`):
             P-KL: restrict KL to the global top-k teacher tokens by max logit.
@@ -396,7 +396,7 @@ class GOLDConfig(SFTConfig):
         },
     )
     xtoken_uncommon_topk: int = field(
-        default=100,
+        default=8192,
         metadata={
             "help": (
                 "H-KL only: cap the uncommon-partition sorted-L1 comparison to the top-k tokens on each "
@@ -606,3 +606,8 @@ class GOLDConfig(SFTConfig):
                 raise ValueError("xtoken_uncommon_topk must be non-negative.")
             if self.xtoken_vocab_topk < 0:
                 raise ValueError("xtoken_vocab_topk must be non-negative.")
+        if self.xtoken_loss_type != "none" and self.use_uld_loss:
+            raise ValueError(
+                "`xtoken_loss_type` and `use_uld_loss` are mutually exclusive — use one cross-tokenizer "
+                "KD approach at a time."
+            )

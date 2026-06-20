@@ -966,7 +966,13 @@ class XTokenLoss(nn.Module):
             s_logits_i = student_logits[i, s0 : s0 + ss]
             t_logits_i = teacher_logits[i, t0 : t0 + ts]
 
-            ce_i = F.cross_entropy(s_logits_i / T, student_labels[i, s0 : s0 + ss], ignore_index=self.ignore_index)
+            # Logit j predicts token j+1; shift back by 1 so CE targets align with labels.
+            # s0 >= 1 always holds since the completion follows at least one prompt token.
+            ce_i = F.cross_entropy(
+                student_logits[i, s0 - 1 : s0 + ss - 1] / T,
+                student_labels[i, s0 : s0 + ss],
+                ignore_index=self.ignore_index,
+            )
             ce_terms.append(ce_i)
 
             s_offs = student_byte_offsets[i, s0 : s0 + ss].tolist()
@@ -1209,8 +1215,15 @@ class GOLDTrainer(SFTTrainer):
 
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
-        if not args.use_uld_loss:
+        # X-Token KD needs the original teacher vocab; only resize for same-tokenizer JSD.
+        if not args.use_uld_loss and args.xtoken_loss_type == "none":
             teacher_model.resize_token_embeddings(self.model.config.get_text_config().vocab_size)
+
+        # Capture teacher vocab size before the model is wrapped by DeepSpeed/FSDP.
+        # Only needed when X-Token is active; avoids requiring teacher_model.config otherwise.
+        _teacher_vocab_size = (
+            teacher_model.config.get_text_config().vocab_size if args.xtoken_loss_type != "none" else None
+        )
 
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
@@ -1256,7 +1269,7 @@ class GOLDTrainer(SFTTrainer):
             self.xtoken_loss_fn = XTokenLoss(
                 config=args,
                 student_vocab_size=self.model.config.get_text_config().vocab_size,
-                teacher_vocab_size=self.teacher_model.config.get_text_config().vocab_size,
+                teacher_vocab_size=_teacher_vocab_size,
             )
 
         generation_kwargs = {
@@ -1492,10 +1505,11 @@ class GOLDTrainer(SFTTrainer):
             if not flag:
                 slice_inputs = slices[i]
 
-                if (
-                    self.use_uld_loss
-                    and self.teacher_tokenizer is not None
-                    and ("original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs)
+                _needs_text = (
+                    self.use_uld_loss or self.xtoken_loss_fn is not None
+                ) and self.teacher_tokenizer is not None
+                if _needs_text and (
+                    "original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs
                 ):
                     raise ValueError(
                         "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
@@ -1511,6 +1525,15 @@ class GOLDTrainer(SFTTrainer):
                     raise ValueError(
                         "Off-policy batch missing `byte_offsets`. Use the default DataCollatorForChatML or set "
                         "`use_extended_uld=False`."
+                    )
+                if (
+                    self.xtoken_loss_fn is not None
+                    and self.teacher_tokenizer is not None
+                    and "byte_offsets" not in slice_inputs
+                ):
+                    raise ValueError(
+                        "Off-policy batch missing `byte_offsets`. X-Token loss requires byte offsets for "
+                        "token-span alignment. Use the default DataCollatorForChatML."
                     )
 
                 self._buffered_inputs[i] = slice_inputs
