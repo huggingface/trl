@@ -207,7 +207,9 @@ class _CosineScaledReward:
                 # Gold solution was not parseable; skip the example, as in accuracy_reward.
                 rewards.append(None)
                 continue
-            progress = len(ids) / self.max_len
+            # Clamp to 1.0 so completions longer than max_len stay at the long-length bound: cos is periodic, so
+            # without clamping the schedule would climb back up past max_len and reward very long completions.
+            progress = min(len(ids) / self.max_len, 1.0)
             cosine = math.cos(progress * math.pi)
             if correct:
                 min_value, max_value = self.min_value_correct, self.max_value_correct

@@ -278,6 +278,17 @@ class TestCosineScaledReward:
         assert rewards == [pytest.approx(-1.0), pytest.approx(-0.5)]
 
     @require_math_latex
+    def test_length_exceeding_max_len_is_clamped(self):
+        """Completions longer than max_len stay at the long-length bound (no climb back up past max_len)."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}], [{"content": r"\boxed{\frac{1}{2}}"}]]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[1] * 200, [1] * 200]  # both 2x max_len
+        rewards = reward_fn(completions, solution, completion_ids)
+        # correct -> min_value_correct (0.5), wrong -> max_value_wrong (-0.5); same as at exactly max_len
+        assert rewards == [pytest.approx(0.5), pytest.approx(-0.5)]
+
+    @require_math_latex
     def test_unparsable_gold_yields_none(self):
         """An unparseable gold solution is skipped, as in accuracy_reward."""
         reward_fn = get_cosine_scaled_reward(max_len=100)
