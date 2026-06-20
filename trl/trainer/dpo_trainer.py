@@ -1442,7 +1442,7 @@ class DPOTrainer(_BaseTrainer):
                         "Skipping 'sft' loss for a batch where all chosen completion tokens were truncated. "
                         "Consider increasing `max_length`."
                     )
-                    per_sequence_loss = chosen_logits[:, 0, 0] * 0.0
+                    per_sequence_loss = chosen_logits[:, 0, :].softmax(dim=-1).mean(dim=-1) * 0.0
 
             elif loss_type == "sigmoid_norm":
                 chosen_mask, rejected_mask = completion_mask.chunk(2, dim=0)
