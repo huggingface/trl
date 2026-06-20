@@ -436,6 +436,24 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            SFTTrainer(
+                model=model_id,
+                args=SFTConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = SFTTrainer(
+            model=model_id,
+            args=SFTConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     # Special case for harmony
     def test_train_gpt_oss(self):
         dataset = load_dataset("trl-internal-testing/harmony", "language_modeling", split="train")
@@ -1526,6 +1544,36 @@ class TestSFTTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[0]["eval_loss"] is not None
+
+    def test_evaluate_with_raw_dataset(self):
+        # `evaluate` should accept the same (unprocessed) dataset types as the trainer, e.g. a held-out test set
+        # passed directly to `evaluate`. See https://github.com/huggingface/trl/issues/6115.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+        )
+
+        metrics = trainer.evaluate(eval_dataset=dataset["test"])
+        assert metrics["eval_loss"] is not None
+
+    def test_evaluate_with_raw_dataset_dict(self):
+        # Same as above, but passing a dict of raw datasets to `evaluate`.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+        )
+
+        metrics = trainer.evaluate(eval_dataset={"data1": dataset["test"], "data2": dataset["test"]})
+        assert metrics["eval_data1_loss"] is not None
+        assert metrics["eval_data2_loss"] is not None
 
     def test_train_with_metric_for_best_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")

@@ -198,7 +198,7 @@ class _AsyncRolloutLoop:
         chat_template_kwargs: dict[str, Any] | None = None,
         max_tool_calling_iterations: int | None = None,
         log_completions: bool = False,
-        num_completions_to_print: int = 3,
+        num_completions_to_print: int | None = None,
     ):
         self.model_name = model_name
         self.dataset = dataset
