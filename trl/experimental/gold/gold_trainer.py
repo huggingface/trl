@@ -716,7 +716,6 @@ class ULDLoss(nn.Module):
 
 # ---------------------------------------------------------------------------
 # X-Token cross-tokenizer KD (https://huggingface.co/papers/2605.21699)
-# Reference implementation: NVIDIA-NeMo/RL PRs #2508, #2757, #2797
 # ---------------------------------------------------------------------------
 
 # Per-process lazy caches keyed by (path, device, vocab_sizes).
@@ -730,8 +729,6 @@ class _Fp32SparseMM(torch.autograd.Function):
     PyTorch has no BF16 sparse-mm kernel. ``custom_fwd``/``custom_bwd`` force FP32 inputs on the forward and disable
     autocast in the backward, so the projection matmul stays in FP32 even inside ``autocast(bf16)``. The sparse matrix
     is frozen, so its gradient slot returns ``None``.
-
-    Mirrors ``Fp32SparseMM`` from NVIDIA-NeMo/RL PR #2508.
     """
 
     @staticmethod
@@ -807,8 +804,7 @@ def _load_exact_token_map(path, device, *, xtoken_loss, teacher_vocab_size):
     - Strict (``xtoken_loss=False``): top-1 weight == 1.0, no second mapping.
     - Relaxed (``xtoken_loss=True``): top-1 weight >= 0.6.
 
-    See https://huggingface.co/papers/2605.21699 Section 3.2. Mirrors ``build_exact_token_map`` from NVIDIA-NeMo/RL PR
-    #2757.
+    See https://huggingface.co/papers/2605.21699 Section 3.2.
     """
     import os
 
@@ -901,8 +897,7 @@ class XTokenLoss(nn.Module):
     Both paths apply T² gradient scaling (Hinton 2015) and optionally a stop-gradient dynamic CE/KD balancing factor
     (paper Eq. 7).
 
-    Token-span alignment reuses TRL's ``ULDLoss._align_by_byte_offsets``. The DP-based aligner that handles BOS
-    asymmetry lives in the NeMo-RL reference (NVIDIA-NeMo/RL PRs #2508, #2757, #2797).
+    Token-span alignment reuses TRL's ``ULDLoss._align_by_byte_offsets``.
     """
 
     def __init__(self, config, student_vocab_size, teacher_vocab_size):
@@ -1026,8 +1021,7 @@ class XTokenLoss(nn.Module):
     def _compute_p_kl(self, s_logits, t_logits, paired, device, T):
         """P-KL: project student to teacher vocab, global top-k, forward KL with T² scaling.
 
-        Implements Eq. (2) from https://huggingface.co/papers/2605.21699. Mirrors ``_compute_p_kl`` in NVIDIA-NeMo/RL
-        PR #2757.
+        Implements Eq. (2) from https://huggingface.co/papers/2605.21699.
         """
         eps = 1e-10
         s_groups = [p[0] for p in paired]
@@ -1065,8 +1059,7 @@ class XTokenLoss(nn.Module):
         """H-KL: relaxed common-set forward KL + uncommon sorted-L1, T² scaling.
 
         Common set built via top-1 mapping under W (threshold ≥ 0.6). Implements Eq. (3-4) from
-        https://huggingface.co/papers/2605.21699. Mirrors ``_compute_gold`` (xtoken_loss=True) in NVIDIA-NeMo/RL PR
-        #2757.
+        https://huggingface.co/papers/2605.21699.
         """
         s_groups = [p[0] for p in paired]
         t_groups = [p[1] for p in paired]

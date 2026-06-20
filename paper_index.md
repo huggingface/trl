@@ -31,5 +31,3 @@ student and teacher when their tokenizers differ.
 **Relevant files**
 - `trl/experimental/gold/gold_config.py` — `GOLDConfig` fields prefixed `xtoken_*`
 - `trl/experimental/gold/gold_trainer.py` — `XTokenLoss` class, `_load_sparse_projection_matrix`, `_load_exact_token_map`, `_Fp32SparseMM`
-
-**Reference implementation**: [NVIDIA-NeMo/RL PR #2508](https://github.com/NVIDIA-NeMo/RL/pull/2508), [PR #2757](https://github.com/NVIDIA-NeMo/RL/pull/2757), [PR #2797](https://github.com/NVIDIA-NeMo/RL/pull/2797)
