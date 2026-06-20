@@ -511,6 +511,30 @@ class VLLMClient:
             self.communicator.broadcast(weights, src=self.rank)
             self.communicator.group.barrier()
 
+    def update_weights(self, names, dtype_names, shapes, weights):
+        """
+        Streams a batch of model weights to the server, one parameter at a time.
+
+        This is the bulk entry point used by the trainer's weight-sync loop: the caller passes the parameter metadata
+        up-front (`names`, `dtype_names`, `shapes`) and a lazy `weights` iterator that yields the `(name, tensor)`
+        pairs in the same order, so that only a single full parameter is materialized at once (no full-model buffer).
+        This server transfers weights per parameter, so the up-front metadata is unused here (each push carries its own
+        dtype/shape); it is kept for parity with the native `vllm serve` engine, which sends all metadata before
+        streaming.
+
+        Args:
+            names (`list[str]`):
+                Ordered parameter names.
+            dtype_names (`list[str]`):
+                Short dtype name per parameter (e.g. `"bfloat16"`), aligned with `names`.
+            shapes (`list[list[int]]`):
+                Full (unsharded) shape per parameter, aligned with `names`.
+            weights (`Iterable[tuple[str, torch.Tensor]]`):
+                Iterable yielding `(name, full_tensor)` pairs in the same order as `names`.
+        """
+        for name, weight in weights:
+            self.update_named_param(name, weight)
+
     def update_model_params(self, model: nn.Module):
         """
         Updates all parameters of the given model by calling `update_named_param` for each parameter in the model.

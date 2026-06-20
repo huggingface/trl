@@ -436,6 +436,45 @@ class VLLMGeneration:
         elif self._dist.fsdp_version == 2:
             self._sync_fsdp2_params_to_vllm(model)
 
+    def _sync_weights_bulk(self):
+        """Stream weights to the vLLM server one gathered parameter at a time (no full-model buffer).
+
+        Parameter metadata (names, dtypes, shapes) is collected without gathering, then full tensors are produced
+        lazily so that, under ZeRO-3, only a single parameter is materialized at a time. All ranks iterate so they
+        participate in the collective gathers; only the main process sends to vLLM. The actual transfer is delegated to
+        the client's `update_weights`, so the same call site works for both the per-parameter server (`trl vllm-serve`)
+        and the native `vllm serve` bulk NCCL engine.
+        """
+        from torch.distributed.tensor import DTensor
+
+        model = self.model
+
+        def named_params():
+            for name, param in model.named_parameters():
+                yield self._fix_param_name_to_vllm(name), param
+
+        # Metadata, collected without gathering: full (unsharded) shapes are available from `ds_shape` under ZeRO-3 and
+        # directly otherwise (DTensor exposes the logical full shape).
+        names, dtype_names, shapes = [], [], []
+        for name, param in named_params():
+            names.append(name)
+            dtype_names.append(str(param.dtype).split(".")[-1])
+            shapes.append(list(param.ds_shape) if self._dist.is_zero3 else list(param.shape))
+
+        def weights():
+            for name, param in named_params():
+                # Gather one parameter at a time (ZeRO-3 all-gather; no-op otherwise), freed as the generator advances.
+                with self._dist.gather_params([param]):
+                    full = param.full_tensor() if isinstance(param, DTensor) else param.data
+                    yield name, full.detach()
+
+        if self.accelerator.is_main_process:
+            self.vllm_client.update_weights(names, dtype_names, shapes, weights())
+        else:
+            # Other ranks don't talk to vLLM but must still participate in the collective gathers.
+            for _ in weights():
+                pass
+
     def sync_weights(self):
         """Synchronize model weights to vLLM.
 
@@ -483,6 +522,9 @@ class VLLMGeneration:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
             if self._dist.is_fsdp:
                 self._sync_fsdp_params_to_vllm(model)
+            elif self.mode == "server":
+                # Server mode streams parameters through the client's bulk `update_weights` entry point.
+                self._sync_weights_bulk()
             else:
                 for name, param in model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
