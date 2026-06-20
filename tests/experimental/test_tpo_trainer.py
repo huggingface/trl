@@ -301,7 +301,9 @@ class TestTPOTrainer(TrlTestCase):
         chosen = ["Great."] * 4
         rejected = ["Bad."] * 4
         reference = ["Perfect."] * 4
-        dataset = Dataset.from_dict({"prompt": prompts, "chosen": chosen, "rejected": rejected, "reference": reference})
+        dataset = Dataset.from_dict(
+            {"prompt": prompts, "chosen": chosen, "rejected": rejected, "reference": reference}
+        )
 
         training_args = TPOConfig(
             output_dir=self.tmp_dir,

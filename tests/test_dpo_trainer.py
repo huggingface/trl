@@ -1285,6 +1285,7 @@ class TestDPOTrainerVLM(TrlTestCase):
         )
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
     def test_train_vlm_keep_end_raises(self):
         # Regression test for #5285: keep_end with a VLM must raise at init time, not silently corrupt training.
         # Image tokens live at the start of the sequence (in the prompt); keep_end would drop them.
