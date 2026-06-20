@@ -638,6 +638,7 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
         use_liger_kernel=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
+        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
