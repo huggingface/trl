@@ -2280,24 +2280,12 @@ class GOLDTrainer(SFTTrainer):
             )
 
             mode = "train" if self.model.training else "eval"
-            self._metrics[mode]["kl_loss"].append(
+            self._metrics[mode]["xtoken/kl_loss"].append(
                 self.accelerator.gather(self.xtoken_loss_fn.last_kl_loss).mean().item()
             )
-            self._metrics[mode]["ce_loss"].append(
+            self._metrics[mode]["xtoken/ce_loss"].append(
                 self.accelerator.gather(self.xtoken_loss_fn.last_ce_loss).mean().item()
             )
-            # Token accuracy: argmax(logits[t]) == labels[t+1] over non-masked completion tokens.
-            with torch.no_grad():
-                logits_shifted = outputs_student.logits[:, :-1]
-                labels_shifted = xtoken_student_labels[:, 1:]
-                mask = labels_shifted != -100
-                correct = (logits_shifted.argmax(-1) == labels_shifted) & mask
-                # Always gather — conditional gather on mask.any() would deadlock
-                # when ranks disagree (e.g. one rank has an all-padding batch).
-                num = self.accelerator.gather(correct.float().sum()).sum()
-                den = self.accelerator.gather(mask.float().sum()).sum()
-                if den > 0:
-                    self._metrics[mode]["accuracy"].append((num / den).item())
 
         empty_cache()
 
