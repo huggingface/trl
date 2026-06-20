@@ -1230,10 +1230,14 @@ class GOLDTrainer(SFTTrainer):
             if not hasattr(self.teacher_tokenizer, "pad_token") or self.teacher_tokenizer.pad_token is None:
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
 
+        if args.use_uld_loss and args.xtoken_loss_type != "none":
+            raise ValueError(
+                "ULD loss and X-Token loss cannot be enabled at the same time. "
+                "Set either `use_uld_loss=False` or `xtoken_loss_type='none'`."
+            )
+
         # Initialise to None so _prepare_dataset (called by super().__init__) can safely read this attribute.
         self.xtoken_loss_fn = None
-
-        # Hybrid ULD loss configuration is handled in ULDLoss class
 
         super().__init__(
             model,
