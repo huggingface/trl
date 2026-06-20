@@ -193,17 +193,24 @@ trainer = GRPOTrainer(
 
 **📜 Paper**: https://huggingface.co/papers/2502.03373
 
-To encourage concise reasoning, this paper scales the correctness reward by completion length following a cosine schedule (Appendix C.1): a correct completion is rewarded more when it is shorter, while a wrong completion is penalized less when it is longer (preserving exploration). Use [`~rewards.get_cosine_scaled_reward`], typically alongside a repetition penalty to avoid the degenerate, repetitive completions that length shaping can induce:
+This paper studies long chain-of-thought RL and introduces two complementary rule-based rewards:
+
+- A **cosine length-scaled reward** ([`~rewards.get_cosine_scaled_reward`], Appendix C.1) that scales the correctness reward by completion length: a correct completion is rewarded more when it is shorter, while a wrong completion is penalized less when it is longer (preserving exploration).
+- An **n-gram repetition penalty** ([`~rewards.get_repetition_penalty_reward`], Appendix C.2) that discourages the degenerate, repetitive completions that emerge as a reward-hacking strategy under length shaping.
+
+The two are designed to be used together:
 
 ```python
 from trl import GRPOTrainer
-from trl.rewards import get_cosine_scaled_reward
+from trl.rewards import get_cosine_scaled_reward, get_repetition_penalty_reward
 
 # max_len should match the generation budget (in tokens)
 cosine_scaled_reward = get_cosine_scaled_reward(max_len=4096)
+# Penalize repeated 3-grams, down to -1.0 for fully repetitive completions
+repetition_penalty = get_repetition_penalty_reward(ngram_size=3, max_penalty=-1.0)
 trainer = GRPOTrainer(
     ...,
-    reward_funcs=[cosine_scaled_reward],
+    reward_funcs=[cosine_scaled_reward, repetition_penalty],
 )
 ```
 

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 from datasets import Dataset
 
@@ -26,6 +27,26 @@ def completion_parity_reward(completions, **kwargs):
 
 
 class TestA2POTrainer(TrlTestCase):
+    def test_trust_remote_code(self):
+        dataset = Dataset.from_dict({"prompt": ["The capital of France is", "Two plus two equals"]})
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            A2POTrainer(
+                model=model_id,
+                reward_funcs=completion_parity_reward,
+                args=A2POConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = A2POTrainer(
+            model=model_id,
+            reward_funcs=completion_parity_reward,
+            args=A2POConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     def test_train(self):
         # Main two-stage smoke test: Stage 1 estimates V*, Stage 2 regresses on a single on-policy generation.
         dataset = Dataset.from_dict(
