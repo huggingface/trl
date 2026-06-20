@@ -1118,6 +1118,29 @@ class TestDPOTrainer(TrlTestCase):
             "eval_loss must be finite when completions are truncated"
         )
 
+    def test_train_no_error_when_sft_completions_truncated(self):
+        # Regression test: when all completion tokens are truncated, the zero fallback in the sft
+        # branch must stay in the computation graph so loss.backward() doesn't raise.
+        prompts = ["Tell me all about the history of computing and its wide impact."] * 4
+        chosen = ["Great."] * 4
+        rejected = ["Bad."] * 4
+        dataset = Dataset.from_dict({"prompt": prompts, "chosen": chosen, "rejected": rejected})
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="sft",
+            max_length=5,  # prompt tokenizes to more than 5 tokens; completions are fully truncated
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
 
 @require_vision
 class TestDPOTrainerVLM(TrlTestCase):
