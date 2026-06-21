@@ -586,6 +586,12 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
                 token_type_ids = token_type_ids[:, : self.max_length]
             if "mm_token_type_ids" in processed_prompts:
                 mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
+            # Truncate the prompt tensors used for on-policy generation. Keep the start
+            # (matching SFT/DPO VLM truncation) so image placeholder tokens at the beginning
+            # of the prompt are preserved. Left padding is retained but harmless — the
+            # attention mask masks it out during generation.
+            prompt_ids = prompt_ids[:, : self.max_length]
+            prompt_mask = prompt_mask[:, : self.max_length]
 
         # Create labels: mask padding and prompt tokens
         labels = input_ids.clone()

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 from functools import partial
 from types import SimpleNamespace
 
@@ -1684,10 +1685,13 @@ def test_vlm_chatml_collator_preserves_completion_qwen3vl(smolvlm_processor, qwe
     assert torch.isfinite(loss)
 
 
-def test_vlm_collator_label_masking(smolvlm_processor, vlm_examples):
-    """Verify that the VLM collator masks prompt and padding tokens in labels and leaves completion tokens unmasked."""
+def test_vlm_collator_label_masking_and_prompt_truncation(smolvlm_processor, vlm_examples):
+    """Verify that the VLM collator:
+    1. Masks prompt and padding tokens in labels, leaves completion tokens unmasked.
+    2. Truncates `prompts`/`prompt_attention_mask` to `max_length` (keeping the start, matching SFT/DPO VLM truncation)
+       so on-policy `model.generate(input_ids=inputs["prompts"])` never exceeds `max_length`."""
     collator = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=2048)
-    batch = collator(vlm_examples)
+    batch = collator(copy.deepcopy(vlm_examples))
 
     input_ids = batch["input_ids"]
     labels = batch["labels"]
@@ -1711,6 +1715,24 @@ def test_vlm_collator_label_masking(smolvlm_processor, vlm_examples):
         prompt_positions = (attention_mask[i] == 1) & (labels[i] == -100)
         assert prompt_positions.any(), "Each example must have masked prompt tokens"
 
+    # Truncation: prompt tensors must be truncated to max_length, keeping the start
+    full_prompt_len = batch["prompts"].shape[1]
+    short_max_length = max(1, full_prompt_len - 1)
+    collator_short = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=short_max_length)
+    short_batch = collator_short(copy.deepcopy(vlm_examples))
+
+    assert short_batch["prompts"].shape[1] <= short_max_length, (
+        f"prompts tensor should be truncated to max_length={short_max_length}, "
+        f"got shape[1]={short_batch['prompts'].shape[1]}"
+    )
+    assert short_batch["prompt_attention_mask"].shape[1] <= short_max_length, (
+        f"prompt_attention_mask should be truncated to max_length={short_max_length}, "
+        f"got shape[1]={short_batch['prompt_attention_mask'].shape[1]}"
+    )
+    # Keep the start of the tensor (preserves image tokens at the start of the prompt)
+    assert torch.equal(short_batch["prompts"], batch["prompts"][:, :short_max_length])
+    assert torch.equal(short_batch["prompt_attention_mask"], batch["prompt_attention_mask"][:, :short_max_length])
+
 
 def test_vlm_collator_original_text_is_untemplated(smolvlm_processor, vlm_examples):
     """`original_*_text` must be free of the student's chat-template markers.
@@ -1721,9 +1743,6 @@ def test_vlm_collator_original_text_is_untemplated(smolvlm_processor, vlm_exampl
     teacher logits.
     """
     collator = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=2048)
-    # Take a deep copy because the collator mutates examples in-place.
-    import copy
-
     batch = collator(copy.deepcopy(vlm_examples))
 
     student_tokenizer = smolvlm_processor.tokenizer
@@ -1738,9 +1757,7 @@ def test_vlm_collator_original_text_is_untemplated(smolvlm_processor, vlm_exampl
     for raw_completion, assistant_text in zip(
         batch["original_completion_text"], expected_assistant_texts, strict=True
     ):
-        # The raw text must still contain the underlying assistant content...
         assert assistant_text.strip() in raw_completion
-        # ...but must not include any of the student's chat-template special tokens.
         for special in student_specials:
             assert special not in raw_completion, (
                 f"original_completion_text leaked student special token {special!r}: {raw_completion!r}"
