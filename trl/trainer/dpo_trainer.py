@@ -538,6 +538,7 @@ class DPOTrainer(_BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
@@ -555,7 +556,9 @@ class DPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
+            processing_class = AutoProcessor.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            )
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -803,15 +806,6 @@ class DPOTrainer(_BaseTrainer):
             optimizers=optimizers,
         )
 
-        # Restore adaptive-beta EMA state when resuming from checkpoint.
-        if self.args.adaptive_beta is not None and self.args.beta_reference_margin is None:
-            resume_ckpt = getattr(self.args, "resume_from_checkpoint", None)
-            if resume_ckpt and os.path.isdir(resume_ckpt):
-                state_path = os.path.join(resume_ckpt, "adaptive_beta_state.json")
-                if os.path.isfile(state_path):
-                    with open(state_path) as f:
-                        self._running_margin = json.load(f)["running_margin"]
-
         # Initialize activation offloading context
         if self.args.activation_offloading:
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
@@ -830,6 +824,7 @@ class DPOTrainer(_BaseTrainer):
                 # Distributed training requires device_map=None ("auto" fails)
                 if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     ref_model_init_kwargs["device_map"] = None
+                ref_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
                 ref_model_path = get_config_model_id(self.model.config)
                 self.ref_model = create_model_from_path(ref_model_path, **ref_model_init_kwargs)
         else:
@@ -1304,29 +1299,6 @@ class DPOTrainer(_BaseTrainer):
         chosen_logratios = chosen_logps - ref_chosen_logps
         rejected_logratios = rejected_logps - ref_rejected_logps
 
-        # ── Adaptive Beta-DPO (arXiv:2407.08639) ────────────────────────────────────
-        if self.args.adaptive_beta == "beta-dpo" and mode == "train":
-            with torch.no_grad():
-                local_margin = (chosen_logratios - rejected_logratios).mean()
-                # Gather across all DDP ranks so every process uses the same global
-                # margin. Without this, each rank's local micro-batch produces a
-                # different batch_margin → diverging effective_beta per GPU.
-                batch_margin = self.accelerator.gather(local_margin).mean().item()
-            if self.args.beta_reference_margin is None:
-                # EMA mode: update the running reference margin each step.
-                if self._running_margin is None:
-                    self._running_margin = batch_margin  # bootstrap on first batch
-                else:
-                    self._running_margin = 0.9 * self._running_margin + 0.1 * batch_margin
-            # else: fixed M₀ from config — _running_margin never changes after init.
-            effective_beta = max(
-                (1.0 + self.args.beta_alpha * (batch_margin - self._running_margin)) * self.beta,
-                1e-6,
-            )
-        else:
-            effective_beta = self.beta
-        # ─────────────────────────────────────────────────────────────────────────────
-
         if self.f_divergence_type == "reverse_kl":  # standard DPO
             chosen_scores = chosen_logratios
             rejected_scores = rejected_logratios
@@ -1358,6 +1330,31 @@ class DPOTrainer(_BaseTrainer):
             raise ValueError(f"Unknown f_divergence_type: {self.f_divergence_type}")
 
         delta_score = chosen_scores - rejected_scores
+
+        # ── Adaptive Beta-DPO (arXiv:2407.08639) ────────────────────────────────────
+        if self.args.adaptive_beta == "beta-dpo" and mode == "train":
+            with torch.no_grad():
+                local_margin = (chosen_logratios - rejected_logratios).mean()
+                # Gather across all DDP ranks so every process uses the same global
+                # margin. Without this, each rank's local micro-batch produces a
+                # different batch_margin → diverging effective_beta per GPU.
+                batch_margin = self.accelerator.gather(local_margin).mean().item()
+            if self.args.beta_reference_margin is None and self.accelerator.sync_gradients:
+                # Only update EMA once per optimizer step (last micro-batch in an
+                # accumulation group). Updating on every forward diverges M₀ faster
+                # than the β-DPO formulation intends.
+                if self._running_margin is None:
+                    self._running_margin = batch_margin  # bootstrap on first step
+                else:
+                    self._running_margin = 0.9 * self._running_margin + 0.1 * batch_margin
+            # else: fixed M₀ from config — _running_margin never changes after init.
+            effective_beta = max(
+                (1.0 + self.args.beta_alpha * (batch_margin - self._running_margin)) * self.beta,
+                1e-6,
+            )
+        else:
+            effective_beta = self.beta
+        # ─────────────────────────────────────────────────────────────────────────────
 
         loss = 0.0
         for loss_type, loss_weight in zip(self.loss_types, self.loss_weights, strict=True):
@@ -1576,10 +1573,43 @@ class DPOTrainer(_BaseTrainer):
         # Average log probabilities for chosen and rejected completions
         self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
         self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
+
         if self.args.adaptive_beta is not None:
             self._metrics[mode]["beta/effective"].append(effective_beta)
-
         return (loss, outputs) if return_outputs else loss
+
+    def evaluate(
+        self,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        ignore_keys: list[str] | None = None,
+        metric_key_prefix: str = "eval",
+    ) -> dict[str, float]:
+        # When a dataset is passed directly to `evaluate` (e.g. a held-out test set), preprocess it the same way
+        # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer. `_prepare_dataset` is
+        # idempotent: it skips datasets that are already tokenized. A `str` selects a dataset that was already prepared
+        # at init time, so it's left untouched.
+        if not self._is_vision_dataset and eval_dataset is not None and not isinstance(eval_dataset, str):
+            if isinstance(eval_dataset, dict):
+                eval_dataset = {
+                    key: self._prepare_dataset(dataset, self.processing_class, self.args, key)
+                    for key, dataset in eval_dataset.items()
+                }
+            else:
+                eval_dataset = self._prepare_dataset(eval_dataset, self.processing_class, self.args, "eval")
+            # With `precompute_ref_log_probs`, `_compute_loss` reads the reference log-probs from the batch, so they
+            # must be precomputed here as well, mirroring `__init__`.
+            if self.precompute_ref_logps:
+                batch_size = self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
+                if isinstance(eval_dataset, dict):
+                    eval_dataset = {
+                        name: self._precompute_ref_logps(dataset, name, batch_size)
+                        for name, dataset in eval_dataset.items()
+                    }
+                else:
+                    eval_dataset = self._precompute_ref_logps(eval_dataset, "eval", batch_size)
+        return super().evaluate(
+            eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
+        )
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
@@ -1625,6 +1655,20 @@ class DPOTrainer(_BaseTrainer):
         return loss, logits, labels
 
     # Ensure the model card is saved along with the checkpoint
+    def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
+        super()._load_from_checkpoint(resume_from_checkpoint, model=model)
+        # Restore adaptive-beta EMA state from the checkpoint directory.
+        # isinstance guard: resume_from_checkpoint=True (bool) must not be passed to os.path.join.
+        if (
+            self.args.adaptive_beta is not None
+            and self.args.beta_reference_margin is None
+            and isinstance(resume_from_checkpoint, str)
+        ):
+            state_path = os.path.join(resume_from_checkpoint, "adaptive_beta_state.json")
+            if os.path.isfile(state_path):
+                with open(state_path) as f:
+                    self._running_margin = json.load(f)["running_margin"]
+
     def _save_checkpoint(self, model, trial):
         if self.args.hub_model_id is None:
             model_name = Path(self.args.output_dir).name
