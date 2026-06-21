@@ -1870,6 +1870,96 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
         )
 
 
+def test_gold_trainer_init_rejects_keep_end_truncation_for_vlm(monkeypatch):
+    """GOLDTrainer should raise ValueError when truncation_mode='keep_end' is used with a VLM."""
+
+    class DummyStudentModel:
+        def __init__(self):
+            self.config = SimpleNamespace(
+                _name_or_path="student", vocab_size=17, vision_config=True, model_type="dummy_vlm"
+            )
+            self.config.get_text_config = lambda: self.config
+            self.generation_config = SimpleNamespace(eos_token_id=2)
+            self.name_or_path = "student"
+
+    class DummyTeacherModel:
+        def __init__(self):
+            self.config = SimpleNamespace(vision_config=True, model_type="dummy_vlm")
+            self.resized_to = None
+
+        def resize_token_embeddings(self, vocab_size):
+            self.resized_to = vocab_size
+
+    def fake_sft_init(
+        self,
+        model,
+        args=None,
+        data_collator=None,
+        train_dataset=None,
+        eval_dataset=None,
+        processing_class=None,
+        compute_metrics=None,
+        callbacks=None,
+        optimizers=None,
+        preprocess_logits_for_metrics=None,
+        peft_config=None,
+    ):
+        del data_collator, train_dataset, eval_dataset, compute_metrics, callbacks, optimizers
+        del preprocess_logits_for_metrics, peft_config
+        self.model = model
+        self.args = args
+        self.processing_class = processing_class
+        self.accelerator = SimpleNamespace(
+            device=torch.device("cpu"),
+            num_processes=1,
+            prepare_model=lambda module, evaluation_mode=True: module,
+        )
+        self.is_deepspeed_enabled = False
+        self.is_fsdp_enabled = False
+
+    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
+
+    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
+
+    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
+
+    args = SimpleNamespace(
+        model_init_kwargs=None,
+        max_length=128,
+        truncation_mode="keep_end",
+        use_liger_kernel=False,
+        teacher_model_init_kwargs=None,
+        use_uld_loss=False,
+        teacher_tokenizer_name_or_path=None,
+        teacher_model_revision=None,
+        disable_dropout=False,
+        lmbda=1.0,
+        beta=0.5,
+        temperature=1.0,
+        top_p=1.0,
+        seq_kd=False,
+        num_generations=1,
+        max_completion_length=16,
+        top_k=0,
+        log_completions=False,
+        log_completions_steps=100,
+        wandb_log_unique_prompts=True,
+        num_completions_to_print=None,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=1,
+        use_vllm=False,
+    )
+
+    with pytest.raises(ValueError, match="truncation_mode='keep_end' is not supported for vision-language models"):
+        GOLDTrainer(
+            model=DummyStudentModel(),
+            teacher_model=DummyTeacherModel(),
+            args=args,
+            train_dataset=vision_dataset,
+            processing_class=processor,
+        )
+
+
 def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
     """When a VLM processor is used with lmbda > 0 and use_vllm=True, GOLDTrainer should use the identity collator
     and store a _vlm_collator for on-the-fly collation. vLLM should be initialized with max_model_length from args.
