@@ -23,6 +23,7 @@ import time
 import traceback
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
+from functools import partial
 from multiprocessing.queues import Queue as MPQueue
 from multiprocessing.sharedctypes import Synchronized as MPValue
 from multiprocessing.synchronize import Event as MPEvent
@@ -133,6 +134,12 @@ def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event: MPEvent) 
     threading.Thread(target=_watch, daemon=True, name="grpo-mp-stop-watcher").start()
 
 
+def _reward_func_name(reward_func: Callable[..., list[float]]) -> str:
+    if isinstance(reward_func, partial):
+        return _reward_func_name(reward_func.func)
+    return getattr(reward_func, "__name__", reward_func.__class__.__name__)
+
+
 def _child_main(
     loop_kwargs: dict[str, Any],
     samples_queue: MPQueue,
@@ -204,7 +211,7 @@ class _AsyncRolloutLoop:
         self.dataset = dataset
         self._dataset_iter = iter(dataset)
         self.reward_funcs = reward_funcs
-        self.reward_func_names = [f.__name__ for f in reward_funcs]
+        self.reward_func_names = [_reward_func_name(f) for f in reward_funcs]
         self.tokenizer = add_response_schema(processing_class)
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
