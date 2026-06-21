@@ -2400,6 +2400,60 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_evaluate_with_environment_factory_partial_batch(self):
+        # Regression test for #6129. `self.environments` has `generation_batch_size` entries, but the final
+        # batch of an eval (or of training on a non-divisible dataset) can be partial, i.e.
+        # `len(prompts) < generation_batch_size`. Here `num_generations_eval=1` with a single eval example
+        # yields one prompt against two environments, which previously raised
+        # `ValueError: zip() argument 2 is longer than argument 1` in `_generate_and_score_completions`.
+        # `evaluate()` must now complete.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        class DummyEnvironment:
+            def reset(self, **kwargs):
+                self._counter = 0
+
+            def increment(self, step: int) -> int:
+                """
+                Increment the internal counter.
+
+                Args:
+                    step: Value to add to the counter.
+
+                Returns:
+                    The updated counter value.
+                """
+                self._counter += step
+                return self._counter
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            per_device_eval_batch_size=2,
+            num_generations=2,
+            num_generations_eval=1,  # eval batch yields fewer prompts than the environment list
+            max_completion_length=8,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset.select(range(1)),  # 1 example -> partial final eval batch
+            environment_factory=DummyEnvironment,
+        )
+
+        metrics = trainer.evaluate()
+        assert metrics["eval_loss"] is not None
+
+    @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
         reason="Tool parsing is not supported in transformers versions below 5.0.0",
         strict=True,
