@@ -2463,7 +2463,15 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
 
         @staticmethod
         def decode(ids, skip_special_tokens, clean_up_tokenization_spaces):
-            return f"comp_{ids[0]}"
+            tokens = []
+            for token_id in ids:
+                if token_id == 9:
+                    if skip_special_tokens:
+                        continue
+                    tokens.append("<eos>")
+                else:
+                    tokens.append(f"comp_{token_id}")
+            return "".join(tokens)
 
     trainer.processing_class = StubProcessor
 
@@ -2476,7 +2484,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
         def generate(self, prompts, images, num_generations):
             received["n_prompts"] = len(prompts)
             received["n_images"] = len(images) if images is not None else None
-            completion_ids = [[100 + i] for i in range(len(prompts))]
+            completion_ids = [[100 + i, 9] for i in range(len(prompts))]
             return None, completion_ids, None, None
 
     trainer.vllm_generation = StubVLLMGeneration()
@@ -2542,6 +2550,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
     first_slice = trainer._materialize_vlm_slice(trainer._buffered_inputs[0])
     assert first_slice["input_ids"].shape[0] == unique_prompts_per_slice * num_generations
     assert first_slice["original_prompt_text"] == [example["prompt"][0]["content"] for example in collated_per_call[0]]
+    assert all(completion.endswith("<eos>") for completion in first_slice["original_completion_text"])
     assert all("<" not in prompt for prompt in first_slice["original_prompt_text"])
     assert len(collated_per_call) == 1
     assert len(collated_per_call[0]) == unique_prompts_per_slice * num_generations

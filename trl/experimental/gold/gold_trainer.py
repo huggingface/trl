@@ -1246,9 +1246,8 @@ class GOLDTrainer(SFTTrainer):
                 updated_slice[k] = torch.cat([prompt_part, comp_part], dim=1)
         if "original_prompt_text" not in updated_slice:
             updated_slice["original_prompt_text"] = prompt_texts
-        # Keep special tokens (e.g. EOS) so the text matches the supervised `labels != -100` tokens that
-        # `byte_offsets` is built from. Stripping them here would shorten the teacher re-encoding and break the
-        # cross-tokenizer byte alignment in ULD.
+        # Keep special tokens (e.g. EOS) so the teacher inputs are built from text covering the same generated
+        # content as the supervised `labels != -100` tokens. The alignment itself remains byte-offset based.
         updated_slice["original_completion_text"] = completion_texts
         self._maybe_add_completion_byte_offsets(updated_slice)
         if self._teacher_processor is not None:
@@ -1702,7 +1701,7 @@ class GOLDTrainer(SFTTrainer):
             all_completion_texts.append(
                 self.processing_class.decode(
                     comp_ids,
-                    skip_special_tokens=True,
+                    skip_special_tokens=False,
                     clean_up_tokenization_spaces=False,
                 )
             )
