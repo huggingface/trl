@@ -817,7 +817,7 @@ class GOLDTrainer(SFTTrainer):
                 ).model_type
             else:
                 # Teacher already instantiated — check if it looks like a VLM by checking for a vision config
-                if not hasattr(teacher_model.config, "vision_config"):
+                if teacher_model.config.vision_config is None:
                     raise ValueError(
                         "VLM distillation requires both student and teacher to be vision-language models. "
                         "The student has a `ProcessorMixin` but the teacher model does not appear to be a VLM "
@@ -916,7 +916,7 @@ class GOLDTrainer(SFTTrainer):
         if args.use_uld_loss and args.teacher_tokenizer_name_or_path is None:
             if isinstance(teacher_model, str):
                 args.teacher_tokenizer_name_or_path = teacher_model
-            elif hasattr(teacher_model, "config") and getattr(teacher_model.config, "_name_or_path", None):
+            elif teacher_model.config._name_or_path:
                 args.teacher_tokenizer_name_or_path = teacher_model.config._name_or_path
             else:
                 raise ValueError(

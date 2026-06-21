@@ -1787,8 +1787,8 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
 
     class DummyTeacherModel:
         def __init__(self):
-            # No vision_config — looks like a text-only model
-            self.config = SimpleNamespace()
+            # vision_config=None — looks like a text-only model
+            self.config = SimpleNamespace(vision_config=None)
             self.resized_to = None
 
         def resize_token_embeddings(self, vocab_size):
