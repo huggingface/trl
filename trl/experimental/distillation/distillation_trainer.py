@@ -417,13 +417,16 @@ class DistillationTrainer(_BaseTrainer):
             teacher_model_init_kwargs = json.loads(teacher_model_init_kwargs)
         if isinstance(model, str):
             model_name_or_path = model
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             model_name_or_path = model.config._name_or_path if model is not None else None
 
         # ── Processing class (tokenizer) ──
         if processing_class is None and model_name_or_path is not None:
-            processing_class = AutoTokenizer.from_pretrained(model_name_or_path)
+            processing_class = AutoTokenizer.from_pretrained(
+                model_name_or_path, trust_remote_code=args.trust_remote_code
+            )
         if processing_class is not None:
             if getattr(processing_class, "pad_token", None) is None:
                 processing_class.pad_token = processing_class.eos_token
@@ -492,12 +495,12 @@ class DistillationTrainer(_BaseTrainer):
                     "tokenizer can be validated against the student tokenizer."
                 )
 
+            teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             teacher_tokenizer_kwargs = {}
             teacher_revision = teacher_model_init_kwargs.get("revision", args.teacher_model_revision)
             if teacher_revision is not None:
                 teacher_tokenizer_kwargs["revision"] = teacher_revision
-            if teacher_model_init_kwargs.get("trust_remote_code") is not None:
-                teacher_tokenizer_kwargs["trust_remote_code"] = teacher_model_init_kwargs["trust_remote_code"]
+            teacher_tokenizer_kwargs["trust_remote_code"] = teacher_model_init_kwargs["trust_remote_code"]
             teacher_processing_class = AutoTokenizer.from_pretrained(
                 teacher_model_name_or_path, **teacher_tokenizer_kwargs
             )
@@ -1564,7 +1567,7 @@ class DistillationTrainer(_BaseTrainer):
 
         labels_mask = inputs["labels"] != -100
         masked_input_ids = torch.where(labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100))
-        true_labels = masked_input_ids[:, 1:].contiguous().reshape(-1)
+        true_labels = masked_input_ids[:, 1:].reshape(-1)
 
         student_head = unwrapped_student.get_output_embeddings()
         teacher_head = unwrapped_teacher.get_output_embeddings()
