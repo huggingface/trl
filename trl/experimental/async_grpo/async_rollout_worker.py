@@ -23,6 +23,7 @@ import time
 import traceback
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
+from functools import partial
 from multiprocessing.queues import Queue as MPQueue
 from multiprocessing.sharedctypes import Synchronized as MPValue
 from multiprocessing.synchronize import Event as MPEvent
@@ -49,6 +50,17 @@ logger = get_logger(__name__)
 Messages: TypeAlias = list[dict[str, str]]
 
 _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
+
+
+def _get_callable_name(func: Callable) -> str:
+    """Return a stable metric name for a supported picklable callable."""
+    while isinstance(func, partial):
+        func = func.func
+
+    if inspect.isfunction(func) or inspect.ismethod(func):
+        return func.__name__
+
+    return type(func).__name__
 
 
 async def _retry_on_http_error(coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
@@ -204,7 +216,7 @@ class _AsyncRolloutLoop:
         self.dataset = dataset
         self._dataset_iter = iter(dataset)
         self.reward_funcs = reward_funcs
-        self.reward_func_names = [f.__name__ for f in reward_funcs]
+        self.reward_func_names = [_get_callable_name(f) for f in reward_funcs]
         self.tokenizer = add_response_schema(processing_class)
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
