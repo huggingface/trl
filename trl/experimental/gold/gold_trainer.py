@@ -789,15 +789,15 @@ class GOLDTrainer(SFTTrainer):
             # simplified logic from SFTTrainer
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
-            tokenizer = processing_class.tokenizer
+            self._tokenizer = processing_class.tokenizer
             self._is_vlm = True
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
+            if self._tokenizer.pad_token is None:
+                self._tokenizer.pad_token = self._tokenizer.eos_token
         else:
-            tokenizer = processing_class
+            self._tokenizer = processing_class
             self._is_vlm = False
 
-        self.pad_token_id = tokenizer.pad_token_id
+        self.pad_token_id = self._tokenizer.pad_token_id
 
         # VLM distillation: only VLM-to-VLM is supported. Both student and teacher must be
         # VLMs so that both receive images and multimodal inputs.
@@ -874,7 +874,7 @@ class GOLDTrainer(SFTTrainer):
                 )
                 data_collator = identity
             else:
-                data_collator = DataCollatorForChatML(tokenizer=tokenizer, max_length=args.max_length)
+                data_collator = DataCollatorForChatML(tokenizer=self._tokenizer, max_length=args.max_length)
 
         # Liger fused GKD loss (JSD)
         self.use_liger_gkd_loss = False
@@ -997,7 +997,7 @@ class GOLDTrainer(SFTTrainer):
         if self.use_uld_loss:
             self.uld_loss_fn = ULDLoss(
                 config=args,
-                student_tokenizer=processing_class,
+                student_tokenizer=self._tokenizer,
                 teacher_tokenizer=self.teacher_tokenizer,
                 device=self.accelerator.device,
             )
@@ -1436,7 +1436,7 @@ class GOLDTrainer(SFTTrainer):
         seq_len = new_input_ids.shape[1]
 
         # convert_ids_to_tokens is a tokenizer method; VLM processors expose it via `.tokenizer`.
-        tokenizer = self.processing_class.tokenizer if self._is_vlm else self.processing_class
+        tokenizer = self._tokenizer
 
         rows: list[list[tuple[int, int]]] = []
         for row_ids, row_labels in zip(new_input_ids.cpu().tolist(), new_labels.cpu().tolist(), strict=True):

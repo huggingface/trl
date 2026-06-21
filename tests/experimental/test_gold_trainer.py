@@ -370,6 +370,7 @@ def test_process_completions_to_buffer_left_pads_prompt_ids():
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
     trainer.processing_class = RecordingTokenizer()
+    trainer._tokenizer = RecordingTokenizer()
     trainer.args = SimpleNamespace(max_length=None)
     trainer.use_uld_loss = False
     trainer._buffered_inputs = [None]
@@ -462,6 +463,7 @@ def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_promp
     trainer.accelerator = SimpleNamespace(is_main_process=True)
     trainer.args = SimpleNamespace(report_to=[])
     trainer.processing_class = RecordingTokenizer()
+    trainer._tokenizer = RecordingTokenizer()
     trainer.use_vllm = True
     trainer.vllm_generation = RecordingVLLMGeneration()
     trainer.vllm_sync_frequency = 1
@@ -536,6 +538,7 @@ def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens()
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
     trainer.processing_class = RecordingTokenizer()
+    trainer._tokenizer = RecordingTokenizer()
     trainer.args = SimpleNamespace(max_length=None, report_to=[])
     trainer.use_vllm = True
     trainer.use_uld_loss = False
@@ -975,6 +978,7 @@ def test_on_policy_completion_byte_offsets_match_encode_offsets(smollm_tokenizer
     trainer.teacher_tokenizer = qwen_tokenizer
     trainer.uld_loss_fn = SimpleNamespace(use_extended_uld=True)
     trainer.processing_class = smollm_tokenizer
+    trainer._tokenizer = smollm_tokenizer
     trainer._is_vlm = False
 
     completion_text = "hello 你好 😊"
