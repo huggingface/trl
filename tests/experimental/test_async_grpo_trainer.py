@@ -14,6 +14,7 @@
 
 from functools import partial
 import itertools
+import operator
 import queue
 
 import numpy as np
@@ -42,11 +43,20 @@ class _CallableReward:
         return [1.0] * len(completions)
 
 
+class _NamedCallableReward:
+    __name__ = "named_callable_reward"
+
+    def __call__(self, completions, **kwargs):
+        return [1.0] * len(completions)
+
+
 @pytest.mark.parametrize(
     ("reward_func", "expected_name"),
     [
         (partial(_partial_compatible_reward), "_partial_compatible_reward"),
         (_CallableReward(), "_CallableReward"),
+        (_NamedCallableReward(), "named_callable_reward"),
+        (operator.add, "add"),
     ],
 )
 def test_get_callable_name_supports_picklable_reward_callables(reward_func, expected_name):

@@ -57,10 +57,10 @@ def _get_callable_name(func: Callable) -> str:
     while isinstance(func, partial):
         func = func.func
 
-    if inspect.isfunction(func) or inspect.ismethod(func):
+    try:
         return func.__name__
-
-    return type(func).__name__
+    except AttributeError:
+        return type(func).__name__
 
 
 async def _retry_on_http_error(coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
