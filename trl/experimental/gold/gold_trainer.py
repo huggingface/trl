@@ -785,7 +785,7 @@ class GOLDTrainer(SFTTrainer):
         dataset_sample = next(iter(train_dataset)) if train_dataset is not None else {}
         if processing_class is None:
             model_id = model if isinstance(model, str) else get_config_model_id(model.config)
-            processing_class = AutoProcessor.from_pretrained(model_id)
+            processing_class = AutoProcessor.from_pretrained(model_id, trust_remote_code=args.trust_remote_code)
             # simplified logic from SFTTrainer
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -806,13 +806,15 @@ class GOLDTrainer(SFTTrainer):
         if self._is_vlm:
             if isinstance(teacher_model, str):
                 # Teacher not yet instantiated -- validate it's a VLM
-                teacher_proc = AutoProcessor.from_pretrained(teacher_model)
+                teacher_proc = AutoProcessor.from_pretrained(teacher_model, trust_remote_code=args.trust_remote_code)
                 if not isinstance(teacher_proc, ProcessorMixin):
                     raise ValueError(
                         "VLM distillation requires both student and teacher to be vision-language models. "
                         "The student has a `ProcessorMixin` but the teacher does not."
                     )
-                teacher_model_type = AutoConfig.from_pretrained(teacher_model).model_type
+                teacher_model_type = AutoConfig.from_pretrained(
+                    teacher_model, trust_remote_code=args.trust_remote_code
+                ).model_type
             else:
                 # Teacher already instantiated — check if it looks like a VLM by checking for a vision config
                 if not hasattr(teacher_model.config, "vision_config"):
@@ -825,7 +827,9 @@ class GOLDTrainer(SFTTrainer):
 
             # Check for cross-architecture VLM distillation
             student_model_type = (
-                AutoConfig.from_pretrained(model).model_type if isinstance(model, str) else model.config.model_type
+                AutoConfig.from_pretrained(model, trust_remote_code=args.trust_remote_code).model_type
+                if isinstance(model, str)
+                else model.config.model_type
             )
             is_cross_architecture = student_model_type and teacher_model_type != student_model_type
             self._is_cross_architecture_vlm = is_cross_architecture
@@ -839,7 +843,9 @@ class GOLDTrainer(SFTTrainer):
                 self._teacher_processor = (
                     teacher_proc
                     if isinstance(teacher_model, str)
-                    else AutoProcessor.from_pretrained(teacher_model.config._name_or_path)
+                    else AutoProcessor.from_pretrained(
+                        teacher_model.config._name_or_path, trust_remote_code=args.trust_remote_code
+                    )
                 )
         if self._is_cross_architecture_vlm and not args.use_uld_loss:
             raise ValueError(
