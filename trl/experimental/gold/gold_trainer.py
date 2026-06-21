@@ -1606,22 +1606,20 @@ class GOLDTrainer(SFTTrainer):
 
     def _generate_on_policy_vlm_raw(self, raw_slices: list[list[dict]], on_policy_indices: list[int]):
         """On-policy generation from raw VLM examples, preserving PIL images for vLLM."""
-        # Phase 1: Collect prompts, images, and raw examples across all on-policy slices
         all_prompt_ids = []
         all_images = []
-        all_prompts = []  # prepared multimodal messages
+        all_prompts = []
         all_raw_examples = []
         local_slice_indices = []
-        slice_raw_data = {}  # per-slice raw data for non-vLLM path
+        slice_raw_data = {}
+        max_completion_length = self.generation_config.max_new_tokens
+        prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
 
         for slice_idx in on_policy_indices:
             raw_examples = raw_slices[slice_idx]
 
-            # Extract raw PIL images and build prompts with multimodal messages (like GRPOTrainer)
             images, prompts = self._extract_images_and_prompts(raw_examples)
 
-            # Normalize string content to content blocks for VLM processors that don't handle plain strings
-            # copied from GRPOTrainer
             prompts = [
                 [
                     (
@@ -1638,7 +1636,6 @@ class GOLDTrainer(SFTTrainer):
                 slice_raw_data[slice_idx] = (raw_examples, images, prompts, None)
                 continue
 
-            # Tokenize prompts to get prompt token IDs
             # TODO: add self.tools support
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
@@ -1651,6 +1648,9 @@ class GOLDTrainer(SFTTrainer):
                 [tok for tok, m in zip(ids, mask, strict=True) if m]
                 for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
             ]
+            if prompt_max_length is not None:
+                # Keep the start for VLMs because keep-end truncation can drop image tokens from the prompt.
+                prompt_ids_list = [prompt_ids[:prompt_max_length] for prompt_ids in prompt_ids_list]
 
             slice_raw_data[slice_idx] = (raw_examples, images, prompts, prompt_ids_list)
 
@@ -1662,7 +1662,6 @@ class GOLDTrainer(SFTTrainer):
                 local_slice_indices.append(slice_idx)
 
         if not self.use_vllm:
-            # Non-vLLM path: local generation needs collated pixel tensors, so defer generation too.
             for slice_idx in on_policy_indices:
                 raw_examples, images, prompts, _ = slice_raw_data[slice_idx]
                 has_images = images is not None and any(img is not None for img in images)
@@ -1674,7 +1673,6 @@ class GOLDTrainer(SFTTrainer):
             return
 
         all_prompts_text = self.processing_class.batch_decode(all_prompt_ids, skip_special_tokens=True)
-        # vLLM path: one batched generate call across all slices
         if (
             self.state.global_step != self._last_vllm_sync_step
             and self.state.global_step >= self._last_vllm_sync_step + self.vllm_sync_frequency
@@ -1692,8 +1690,6 @@ class GOLDTrainer(SFTTrainer):
             num_generations=self.num_generations,
         )
 
-        # Decode completions
-        max_completion_length = self.generation_config.max_new_tokens
         all_completion_texts = []
         for comp_ids in completion_ids:
             if len(comp_ids) > max_completion_length:
@@ -2366,6 +2362,12 @@ class GOLDTrainer(SFTTrainer):
             if self._teacher_processor is not None:
                 # VLM teacher: render the prompt through the teacher's own processor so image
                 # placeholders and pixel tensors match the teacher model.
+                if "_raw_images" not in inputs or "_raw_prompts" not in inputs:
+                    raise ValueError(
+                        "VLM ULD distillation requires `_raw_images` and `_raw_prompts` in the batch so teacher "
+                        "inputs can be rendered with the teacher processor. Use the default GOLD VLM data collator "
+                        "or ensure your custom collator preserves these fields."
+                    )
                 (
                     teacher_input_ids,
                     teacher_labels,

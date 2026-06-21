@@ -2442,6 +2442,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
     trainer._last_vllm_sync_step = -1
     trainer.vllm_sync_frequency = 1
     trainer.generation_config = SimpleNamespace(max_new_tokens=16)
+    trainer.args = SimpleNamespace(max_length=18)
     trainer._buffered_inputs = {}
     trainer._buffered_text_logs = {}
     trainer._teacher_processor = None
@@ -2453,8 +2454,8 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
         @staticmethod
         def apply_chat_template(conversation, add_generation_prompt, tokenize, return_dict, processor_kwargs):
             return {
-                "input_ids": [[1, 2, 3] for _ in conversation],
-                "attention_mask": [[1, 1, 1] for _ in conversation],
+                "input_ids": [[1, 2, 3, 4, 5] for _ in conversation],
+                "attention_mask": [[1, 1, 1, 1, 1] for _ in conversation],
             }
 
         @staticmethod
@@ -2484,6 +2485,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
         def generate(self, prompts, images, num_generations):
             received["n_prompts"] = len(prompts)
             received["n_images"] = len(images) if images is not None else None
+            received["prompts"] = prompts
             completion_ids = [[100 + i, 9] for i in range(len(prompts))]
             return None, completion_ids, None, None
 
@@ -2537,6 +2539,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
     total_sampled_prompts = num_slices * unique_prompts_per_slice * num_generations
     assert received["n_prompts"] == total_sampled_prompts
     assert received["n_images"] == total_sampled_prompts
+    assert all(prompt == [1, 2] for prompt in received["prompts"])
 
     # Synthetic VLM examples are stored lazily and are not collated until their slice is consumed.
     assert len(collated_per_call) == 0
@@ -2554,6 +2557,23 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
     assert all("<" not in prompt for prompt in first_slice["original_prompt_text"])
     assert len(collated_per_call) == 1
     assert len(collated_per_call[0]) == unique_prompts_per_slice * num_generations
+
+
+def test_vlm_uld_custom_collator_missing_raw_fields_raises_clear_error():
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.use_uld_loss = True
+    trainer.teacher_tokenizer = object()
+    trainer._teacher_processor = object()
+
+    inputs = {
+        "input_ids": torch.ones(1, 2, dtype=torch.long),
+        "attention_mask": torch.ones(1, 2, dtype=torch.long),
+        "original_prompt_text": ["prompt"],
+        "original_completion_text": ["completion"],
+    }
+
+    with pytest.raises(ValueError, match="requires `_raw_images` and `_raw_prompts`"):
+        GOLDTrainer.compute_loss(trainer, model=object(), inputs=inputs)
 
 
 def test_off_policy_vlm_collates_only_consumed_slice(monkeypatch):
@@ -2670,7 +2690,7 @@ def test_eval_vlm_attaches_raw_images_for_teacher_processor(monkeypatch):
 def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
-    trainer.args = SimpleNamespace(gradient_accumulation_steps=2)
+    trainer.args = SimpleNamespace(gradient_accumulation_steps=2, max_length=None)
     trainer.use_vllm = False
     trainer._teacher_processor = None
     trainer._is_cross_architecture_vlm = False
@@ -2678,7 +2698,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
     trainer._buffered_text_logs = [None, None]
     trainer._step = 1
     trainer.generation_kwargs = {}
-    trainer.generation_config = SimpleNamespace()
+    trainer.generation_config = SimpleNamespace(max_new_tokens=1)
     trainer.pad_token_id = 0
     trainer.use_uld_loss = False
     trainer.teacher_tokenizer = None
