@@ -55,7 +55,10 @@ _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutErro
 def _get_callable_name(func: Callable) -> str:
     """Return a stable metric name for a supported picklable callable."""
     while isinstance(func, partial):
-        func = func.func
+        try:
+            return func.__name__
+        except AttributeError:
+            func = func.func
 
     try:
         return func.__name__

@@ -38,6 +38,10 @@ def _partial_compatible_reward(completions, **kwargs):
     return [1.0] * len(completions)
 
 
+_named_partial_reward = partial(_partial_compatible_reward)
+_named_partial_reward.__name__ = "named_partial_reward"
+
+
 class _CallableReward:
     def __call__(self, completions, **kwargs):
         return [1.0] * len(completions)
@@ -54,6 +58,7 @@ class _NamedCallableReward:
     ("reward_func", "expected_name"),
     [
         (partial(_partial_compatible_reward), "_partial_compatible_reward"),
+        (_named_partial_reward, "named_partial_reward"),
         (_CallableReward(), "_CallableReward"),
         (_NamedCallableReward(), "named_callable_reward"),
         (operator.add, "add"),
