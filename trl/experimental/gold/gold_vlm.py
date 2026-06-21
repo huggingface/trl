@@ -12,19 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-GOLD VLM distillation on GEOQA_R1V.
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+#     "trackio",
+# ]
+# ///
 
+# docstyle-ignore
+"""
 # Same-family distillation (Qwen3-VL-8B → Qwen3-VL-2B)
 # Uses JSD loss. Same architecture and tokenizer, so standard distillation works directly.
 # vLLM enabled for faster on-policy generation.
-accelerate launch examples/scripts/gold_vlm.py \
+accelerate launch trl/experimental/gold/gold_vlm.py \
     --student_model_name Qwen/Qwen3-VL-2B-Instruct \
     --teacher_model_name Qwen/Qwen3-VL-8B-Instruct
 
 # Cross-family distillation (Qwen3-VL-8B → LFM2.5-VL-1.6B)
 # Uses ULD loss for different tokenizers/processors. vLLM is disabled because this path uses local VLM generation.
-accelerate launch examples/scripts/gold_vlm.py \
+accelerate launch trl/experimental/gold/gold_vlm.py \
     --student_model_name LiquidAI/LFM2.5-VL-1.6B \
     --teacher_model_name Qwen/Qwen3-VL-8B-Instruct \
     --use_uld_loss \
