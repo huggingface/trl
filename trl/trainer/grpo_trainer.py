@@ -17,6 +17,7 @@ import atexit
 import copy
 import importlib.resources as pkg_resources
 import inspect
+import json
 import math
 import os
 import sys
@@ -2921,3 +2922,16 @@ class GRPOTrainer(_BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
+        if self.use_adaptive_entropy and self.is_world_process_zero():
+            checkpoint_folder = f"checkpoint-{self.state.global_step}"
+            output_dir = os.path.join(self.args.output_dir, checkpoint_folder)
+            with open(os.path.join(output_dir, "entropy_ctrl_state.json"), "w") as f:
+                json.dump({"entropy_coef": self.entropy_coef}, f)
+
+    def _load_optimizer_and_scheduler(self, checkpoint):
+        super()._load_optimizer_and_scheduler(checkpoint)
+        if self.use_adaptive_entropy and checkpoint is not None:
+            path = os.path.join(checkpoint, "entropy_ctrl_state.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    self.entropy_coef = json.load(f)["entropy_coef"]
