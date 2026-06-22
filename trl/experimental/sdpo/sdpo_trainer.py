@@ -24,6 +24,7 @@ from typing import Any
 
 import datasets
 import torch
+from accelerate.logging import get_logger
 from accelerate.utils import gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
@@ -40,7 +41,7 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available, logging
+from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available
 
 from ...data_utils import apply_chat_template, is_conversational
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
@@ -70,7 +71,7 @@ from .sdpo_config import SDPOConfig
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 if is_peft_available():
