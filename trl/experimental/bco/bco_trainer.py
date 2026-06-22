@@ -387,6 +387,12 @@ class BCOTrainer(_BaseTrainer):
             Name of the train target PEFT adapter, when using LoRA with multiple adapters.
         ref_adapter_name (`str`, defaults to `None`):
             Name of the reference PEFT adapter, when using LoRA with multiple adapters.
+        embedding_func (`Callable`, *optional*):
+            Function to compute prompt embeddings, used to train the underlying distribution matching (UDM) classifier
+            when the desirable and undesirable datasets have divergent prompt distributions. Requires the scikit-learn
+            and joblib libraries.
+        embedding_tokenizer ([`~transformers.PreTrainedTokenizerBase`], *optional*):
+            Tokenizer used to prepare prompts for `embedding_func`.
     """
 
     _tag_names = ["trl", "bco"]
@@ -462,6 +468,8 @@ class BCOTrainer(_BaseTrainer):
                     )
                 model_init_kwargs["dtype"] = dtype
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
+
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
