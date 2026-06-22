@@ -295,6 +295,28 @@ class GRPOConfig(_BaseConfig):
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
             `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
+        entropy_coef (`float`, *optional*, defaults to `0.0`):
+            Coefficient of the entropy regularization term in the loss. A positive value adds an entropy bonus that
+            encourages exploration by keeping the policy from collapsing to near-deterministic outputs. When
+            `use_adaptive_entropy=True`, this serves as the initial coefficient and is updated each optimizer step.
+            Has no effect when set to `0.0` (default).
+        use_adaptive_entropy (`bool`, *optional*, defaults to `False`):
+            Whether to use adaptive entropy control, introduced in
+            [Skywork-OR1](https://huggingface.co/papers/2505.22312). When enabled, the entropy coefficient
+            `entropy_coef` is updated each optimizer step: incremented by `entropy_coef_delta` when the current
+            entropy is below `entropy_target`, and decremented otherwise. The coefficient is only applied when
+            entropy is at or below `entropy_target`.
+        entropy_coef_min (`float`, *optional*, defaults to `0.0`):
+            Lower bound for the entropy coefficient when using adaptive entropy control.
+        entropy_coef_max (`float`, *optional*, defaults to `1.0`):
+            Upper bound for the entropy coefficient when using adaptive entropy control.
+        entropy_coef_delta (`float`, *optional*, defaults to `0.005`):
+            Step size for adjusting the entropy coefficient at each optimizer step during adaptive entropy control.
+        entropy_target (`float`, *optional*, defaults to `0.2`):
+            Target mean per-token entropy (in nats) used by adaptive entropy control. The coefficient is only
+            applied when the current entropy falls at or below this value. Typical language models have per-token
+            entropies in the range 2–10 nats; the default of `0.2` nearly always triggers regularization, so users
+            should tune this to a value appropriate for their model and task.
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
@@ -830,6 +852,42 @@ class GRPOConfig(_BaseConfig):
             "[0.0-1.0]. A value of `0.0` masks all but the highest entropy token; `1.0` keeps all tokens. The paper "
             "recommends a value of `0.2`. If used with `mask_truncated_completions=True`, only tokens from "
             "non-truncated completions are considered."
+        },
+    )
+    entropy_coef: float = field(
+        default=0.0,
+        metadata={
+            "help": "Coefficient of the entropy regularization term in the loss. A positive value adds an entropy "
+            "bonus that encourages exploration. When `use_adaptive_entropy=True`, this serves as the initial "
+            "coefficient and is updated each optimizer step. Has no effect when set to `0.0` (default)."
+        },
+    )
+    use_adaptive_entropy: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use adaptive entropy control, introduced in Skywork-OR1 "
+            "(https://huggingface.co/papers/2505.22312). When enabled, `entropy_coef` is incremented by "
+            "`entropy_coef_delta` when entropy is below `entropy_target`, and decremented otherwise."
+        },
+    )
+    entropy_coef_min: float = field(
+        default=0.0,
+        metadata={"help": "Lower bound for the entropy coefficient when using adaptive entropy control."},
+    )
+    entropy_coef_max: float = field(
+        default=1.0,
+        metadata={"help": "Upper bound for the entropy coefficient when using adaptive entropy control."},
+    )
+    entropy_coef_delta: float = field(
+        default=0.005,
+        metadata={"help": "Step size for adjusting the entropy coefficient during adaptive entropy control."},
+    )
+    entropy_target: float = field(
+        default=0.2,
+        metadata={
+            "help": "Target mean per-token entropy (nats) for adaptive entropy control. The coefficient is only "
+            "applied when current entropy is at or below this value. Typical language models have per-token "
+            "entropies of 2–10 nats; the default of 0.2 nearly always triggers regularization, so tune this."
         },
     )
     max_tool_calling_iterations: int | None = field(
