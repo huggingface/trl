@@ -2741,8 +2741,14 @@ class GRPOTrainer(_BaseTrainer):
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
-        # Entropy bonus: add entropy regularization to encourage exploration
-        if self.entropy_coef != 0.0:
+        # Capture the pure policy loss for logging before entropy/aux modify it
+        policy_loss = loss.detach()
+
+        # Entropy bonus: add entropy regularization to encourage exploration.
+        # Gate: run whenever a non-zero static coef is set OR adaptive mode is enabled. Adaptive must always run even
+        # when self.entropy_coef has been decremented to entropy_coef_min (default 0) so it can recover once entropy
+        # drops below entropy_target again.
+        if self.entropy_coef != 0.0 or self.use_adaptive_entropy:
             if self.loss_type in ["grpo", "sapo", "luspo"]:
                 entropy_loss = ((entropies * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean() / normalizer
             elif self.loss_type == "bnpo":
@@ -2754,14 +2760,16 @@ class GRPOTrainer(_BaseTrainer):
 
             world_entropy = self.accelerator.reduce(entropy_loss.detach(), reduction="mean").item()
             if self.use_adaptive_entropy:
-                if world_entropy < self.args.entropy_target:
-                    self.entropy_coef = min(
-                        self.entropy_coef + self.args.entropy_coef_delta, self.args.entropy_coef_max
-                    )
-                else:
-                    self.entropy_coef = max(
-                        self.entropy_coef - self.args.entropy_coef_delta, self.args.entropy_coef_min
-                    )
+                # Update the coefficient once per optimizer step, not per micro-batch
+                if self.accelerator.sync_gradients:
+                    if world_entropy < self.args.entropy_target:
+                        self.entropy_coef = min(
+                            self.entropy_coef + self.args.entropy_coef_delta, self.args.entropy_coef_max
+                        )
+                    else:
+                        self.entropy_coef = max(
+                            self.entropy_coef - self.args.entropy_coef_delta, self.args.entropy_coef_min
+                        )
                 apply_coef = self.entropy_coef if world_entropy <= self.args.entropy_target else 0.0
             else:
                 apply_coef = self.entropy_coef
@@ -2783,8 +2791,8 @@ class GRPOTrainer(_BaseTrainer):
             else:
                 return (x * mask).sum() / completion_token_count
 
-        self._metrics[mode]["policy_loss"].append(self.accelerator.reduce(loss.detach(), reduction="mean").item())
-        if self.entropy_coef != 0.0:
+        self._metrics[mode]["policy_loss"].append(self.accelerator.reduce(policy_loss, reduction="mean").item())
+        if self.entropy_coef != 0.0 or self.use_adaptive_entropy:
             self._metrics[mode]["entropy_loss"].append(world_entropy)
             self._metrics[mode]["entropy_coef"].append(self.entropy_coef)
 
