@@ -670,6 +670,9 @@ class GRPOTrainer(_BaseTrainer):
             )
         self.entropy_coef = args.entropy_coef
         self.use_adaptive_entropy = args.use_adaptive_entropy
+        # Cached entropy from the last optimizer step; inf so the first accumulation window
+        # applies no bonus until a real measurement arrives (conservative default).
+        self._last_world_entropy = float("inf")
         if self.use_liger_kernel and (self.entropy_coef != 0.0 or self.use_adaptive_entropy):
             raise NotImplementedError("Entropy bonus is not supported with Liger kernel.")
 
