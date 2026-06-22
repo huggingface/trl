@@ -34,6 +34,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 
 from datasets import Dataset
 from openspiel_env import OpenSpielEnv
@@ -41,6 +42,13 @@ from openspiel_env.models import OpenSpielAction
 from textarena_env import TextArenaAction, TextArenaEnv
 
 from trl import GRPOConfig, GRPOTrainer
+
+
+def run_sync(loop: asyncio.AbstractEventLoop, result):
+    if asyncio.iscoroutine(result):
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(result)
+    return result
 
 
 wordle_prompt = """You are an expert Wordle solver with deep knowledge of English vocabulary, letter frequency patterns, and optimal guessing strategies.
@@ -120,6 +128,7 @@ class MultiEnv:
     def __init__(self):
         self._wordle_client = None
         self._catch_client = None
+        self._loop = asyncio.new_event_loop()
         self.active = None
         self.reward = 0.0
         self.done = False
@@ -136,7 +145,7 @@ class MultiEnv:
                 except Exception:
                     pass
             self._wordle_client = TextArenaEnv(base_url=MultiEnv.wordle_url)
-            result = self._wordle_client.reset()
+            result = run_sync(self._loop, self._wordle_client.reset())
             self._last_full_feedback = result.observation.messages[0].content
             self.reward = 0.0
             return self._last_full_feedback
@@ -147,7 +156,7 @@ class MultiEnv:
                 except Exception:
                     pass
             self._catch_client = OpenSpielEnv(base_url=MultiEnv.catch_url)
-            result = self._catch_client.reset()
+            result = run_sync(self._loop, self._catch_client.reset())
             self.done = result.observation.done
             return _format_catch_obs(result.observation.info_state)
         else:
@@ -167,7 +176,7 @@ class MultiEnv:
             raise ValueError("guess is only available in Wordle")
         if self.done:
             raise ValueError("Game over.")
-        result = self._wordle_client.step(TextArenaAction(message=guess))
+        result = run_sync(self._loop, self._wordle_client.step(TextArenaAction(message=guess)))
         _full_feedback = result.observation.messages[0].content
         feedback = _full_feedback[len(self._last_full_feedback) :]
         self._last_full_feedback = _full_feedback
@@ -181,7 +190,7 @@ class MultiEnv:
     def _catch_action(self, action_id: int) -> str:
         if self.done:
             raise ValueError("Episode is done.")
-        result = self._catch_client.step(OpenSpielAction(action_id=action_id, game_name="catch"))
+        result = run_sync(self._loop, self._catch_client.step(OpenSpielAction(action_id=action_id, game_name="catch")))
         self.reward = result.reward or 0.0
         self.done = result.observation.done
         return _format_catch_obs(result.observation.info_state)
@@ -235,14 +244,21 @@ def catch_reward(environments, **kwargs) -> list[float | None]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Multi-environment GRPO training")
+    parser.add_argument("--model", default="Qwen/Qwen3-1.7B", help="Model identifier to train.")
     parser.add_argument("--wordle-url", default=DEFAULT_WORDLE_URL, help="Wordle environment URL")
     parser.add_argument("--catch-url", default=DEFAULT_CATCH_URL, help="Catch environment URL")
+    parser.add_argument("--samples-per-env", type=int, default=500, help="Number of prompts to create for each environment.")
+    parser.add_argument("--report-to", default="wandb", help="Reporting backend forwarded to GRPOConfig.")
+    parser.add_argument("--per-device-train-batch-size", type=int, default=1, help="Per-device training batch size.")
+    parser.add_argument("--num-generations", type=int, default=1, help="Number of rollout generations to sample per prompt.")
+    parser.add_argument("--generation-batch-size", type=int, default=1, help="Generation batch size used during rollouts.")
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=1, help="Gradient accumulation steps.")
     args, remaining = parser.parse_known_args()
 
     MultiEnv.wordle_url = args.wordle_url
     MultiEnv.catch_url = args.catch_url
 
-    n = 500  # samples per environment
+    n = args.samples_per_env
     dataset = Dataset.from_dict(
         {
             "prompt": (
@@ -253,14 +269,18 @@ def main() -> None:
     )
 
     trainer = GRPOTrainer(
-        model="Qwen/Qwen3-1.7B",
+        model=args.model,
         reward_funcs=[wordle_reward, catch_reward],
         train_dataset=dataset,
         args=GRPOConfig(
-            report_to="wandb",
+            report_to=args.report_to,
             log_completions=True,
             num_completions_to_print=2,
             logging_steps=1,
+            per_device_train_batch_size=args.per_device_train_batch_size,
+            num_generations=args.num_generations,
+            generation_batch_size=args.generation_batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
             chat_template_kwargs={"enable_thinking": False},
             max_completion_length=1024,
         ),

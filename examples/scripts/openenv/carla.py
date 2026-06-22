@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl",
-#     "openenv-carla-env @ git+https://huggingface.co/spaces/sergiopaniego/carla_env",
+#     "openenv-carla-env @ git+https://huggingface.co/spaces/sergiopaniego/carla-env",
 # ]
 # ///
 
@@ -28,7 +28,7 @@ correct action (e.g., swerve to an empty lane) to minimize casualties.
 Setup (Option A - Install from HF Space, recommended):
 
 ```sh
-uv pip install git+https://huggingface.co/spaces/sergiopaniego/carla_env
+uv pip install "openenv-carla-env @ git+https://huggingface.co/spaces/sergiopaniego/carla-env"
 ```
 
 Setup (Option B - Clone OpenEnv repo, for development):
@@ -48,11 +48,19 @@ python examples/scripts/openenv/carla.py --model Qwen/Qwen3-1.7B --env-urls http
 """
 
 import argparse
+import asyncio
 
 from carla_env import CarlaAction, CarlaEnv
 from datasets import Dataset
 
 from trl import GRPOConfig, GRPOTrainer
+
+
+def run_sync(loop: asyncio.AbstractEventLoop, result):
+    if asyncio.iscoroutine(result):
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(result)
+    return result
 
 
 def parse_args():
@@ -111,6 +119,7 @@ class CarlaGRPOEnv:
     def __init__(self):
         url = next(CarlaGRPOEnv._env_url_iter)
         self.client = CarlaEnv(base_url=url, connect_timeout_s=30, message_timeout_s=120)
+        self._loop = asyncio.new_event_loop()
 
     @staticmethod
     def _describe(obs) -> str:
@@ -130,13 +139,13 @@ class CarlaGRPOEnv:
         """Advance the simulation by calling observe repeatedly, return the last result."""
         result = None
         for _ in range(ticks):
-            result = self.client.step(CarlaAction(action_type="observe"))
+            result = run_sync(self._loop, self.client.step(CarlaAction(action_type="observe")))
             if result.done:
                 break
         return result
 
     def reset(self, **kwargs) -> str | None:
-        result = self.client.reset(scenario_name="trolley_micro_escape_exists")
+        result = run_sync(self._loop, self.client.reset(scenario_name="trolley_micro_escape_exists"))
         self.reward = 0.0
         return self._describe(result.observation)
 
@@ -158,7 +167,7 @@ class CarlaGRPOEnv:
         Returns:
             The scene description after braking.
         """
-        self.client.step(CarlaAction(action_type="emergency_stop"))
+        run_sync(self._loop, self.client.step(CarlaAction(action_type="emergency_stop")))
         result = self._advance()
         self.reward = result.observation.rubric_reward or 0.0
         return self._describe(result.observation)
@@ -173,7 +182,7 @@ class CarlaGRPOEnv:
         Returns:
             The scene description after changing lane.
         """
-        self.client.step(CarlaAction(action_type="lane_change", lane_direction=direction))
+        run_sync(self._loop, self.client.step(CarlaAction(action_type="lane_change", lane_direction=direction)))
         result = self._advance()
         self.reward = result.observation.rubric_reward or 0.0
         return self._describe(result.observation)

@@ -17,7 +17,7 @@
 #     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
-#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
+#     "openenv-browsergym-env @ git+https://huggingface.co/spaces/openenv/browsergym_env",
 # ]
 # ///
 
@@ -30,7 +30,7 @@ to see the page visually after each action.
 
 Setup:
 ```sh
-pip install "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env"
+pip install "openenv-browsergym-env @ git+https://huggingface.co/spaces/openenv/browsergym_env"
 ```
 
 Usage:
@@ -50,6 +50,7 @@ CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/browsergym.py --use-vllm 
 from __future__ import annotations
 
 import argparse
+import asyncio
 from datetime import datetime
 from pathlib import Path
 
@@ -59,6 +60,13 @@ from datasets import Dataset
 from PIL import Image
 
 from trl import GRPOConfig, GRPOTrainer
+
+
+def run_sync(loop: asyncio.AbstractEventLoop, result):
+    if asyncio.iscoroutine(result):
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(result)
+    return result
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,6 +84,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--logging-steps", type=int, default=1)
     parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--task-name", default="click-test")
+    parser.add_argument("--report-to", default="trackio", choices=("none", "trackio"))
     parser.add_argument("--use-vllm", action="store_true", default=False, help="Enable vLLM for generation.")
     parser.add_argument("--vllm-mode", choices=("colocate", "server"), default="colocate")
     parser.add_argument("--vllm-server-url", default="http://localhost:8000")
@@ -130,6 +140,7 @@ def main() -> None:
     class BrowserGymVLMEnv:
         def __init__(self):
             self.client = BrowserGymEnv(base_url=space_url)
+            self._loop = asyncio.new_event_loop()
             self.reward = 0.0
             self.done = False
             self._step_count = 0
@@ -138,7 +149,7 @@ def main() -> None:
             self.reward = 0.0
             self.done = False
             self._step_count = 0
-            result = self.client.reset()
+            result = run_sync(self._loop, self.client.reset(task_name=args.task_name or None))
             self.done = result.done
             return self._format_observation(result.observation)
 
@@ -200,7 +211,7 @@ def main() -> None:
                 raise ValueError("Episode is done.")
 
             self._step_count += 1
-            result = self.client.step(BrowserGymAction(action_str=action_str))
+            result = run_sync(self._loop, self.client.step(BrowserGymAction(action_str=action_str)))
             observation = result.observation
             step_reward = float(result.reward or 0.0)
             self.done = result.done
@@ -277,8 +288,8 @@ def main() -> None:
             max_completion_length=args.max_completion_length,
             logging_steps=args.logging_steps,
             log_completions=True,
-            report_to="trackio",
-            trackio_space_id=f"browsergym-vlm-grpo-{sanitize_name(args.model_id)}",
+            report_to=args.report_to,
+            trackio_space_id=f"browsergym-vlm-grpo-{sanitize_name(args.model_id)}" if args.report_to == "trackio" else None,
             chat_template_kwargs={"enable_thinking": False},
         ),
         environment_factory=BrowserGymVLMEnv,

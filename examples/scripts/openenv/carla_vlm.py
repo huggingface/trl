@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl",
-#     "openenv-carla-env @ git+https://huggingface.co/spaces/sergiopaniego/carla_env",
+#     "openenv-carla-env @ git+https://huggingface.co/spaces/sergiopaniego/carla-env",
 # ]
 # ///
 
@@ -29,7 +29,7 @@ scene description, so the model sees the driving scene after each action.
 Setup:
 
 ```sh
-uv pip install git+https://huggingface.co/spaces/sergiopaniego/carla_env
+uv pip install "openenv-carla-env @ git+https://huggingface.co/spaces/sergiopaniego/carla-env"
 ```
 
 Usage (requires at least 2 CARLA Spaces, each supports only 1 concurrent connection):

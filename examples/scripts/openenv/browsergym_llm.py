@@ -17,7 +17,7 @@
 #     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
-#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
+#     "openenv-browsergym-env @ git+https://huggingface.co/spaces/openenv/browsergym_env",
 # ]
 # ///
 
@@ -32,7 +32,7 @@ The environment runs on a Hugging Face Space by default.
 Setup (Option A - Install from HF Space, recommended):
 
 ```sh
-uv pip install git+https://huggingface.co/spaces/openenv/browsergym_env
+uv pip install "openenv-browsergym-env @ git+https://huggingface.co/spaces/openenv/browsergym_env"
 ```
 
 Setup (Option B - Clone OpenEnv repo, for development):
@@ -64,6 +64,7 @@ CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/browsergym_llm.py --vllm-
 from __future__ import annotations
 
 import argparse
+import asyncio
 from datetime import datetime
 from pathlib import Path
 
@@ -71,6 +72,13 @@ from browsergym_env import BrowserGymAction, BrowserGymEnv
 from datasets import Dataset
 
 from trl import GRPOConfig, GRPOTrainer
+
+
+def run_sync(loop: asyncio.AbstractEventLoop, result):
+    if asyncio.iscoroutine(result):
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(result)
+    return result
 
 
 def parse_args() -> argparse.Namespace:
@@ -134,8 +142,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--top-p",
         type=float,
-        default=None,
-        help="Optional top-p sampling parameter forwarded to vLLM.",
+        default=1.0,
+        help="Top-p sampling parameter forwarded to vLLM.",
     )
     parser.add_argument(
         "--learning-rate",
@@ -224,6 +232,12 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Frequency of logging steps for GRPO training.",
     )
+    parser.add_argument(
+        "--report-to",
+        default="trackio",
+        choices=("none", "trackio"),
+        help="Reporting backend used during training.",
+    )
     return parser.parse_args()
 
 
@@ -286,6 +300,7 @@ def main() -> None:
     class BrowserGymLLMEnv:
         def __init__(self):
             self.client = BrowserGymEnv(base_url=space_url)
+            self._loop = asyncio.new_event_loop()
             self.reward = 0.0
             self._done = False
             self._step_count = 0
@@ -296,7 +311,7 @@ def main() -> None:
             openenv-core<=0.2.1 does not pass max_size to ws_connect, so the websockets library
             defaults to 1MB. We force a connection and patch it to 100MB before any messages are sent.
             """
-            self.client.connect()
+            run_sync(self._loop, self.client.connect())
             ws = self.client._ws
             if ws is not None and hasattr(ws, "protocol"):
                 proto = ws.protocol
@@ -310,7 +325,7 @@ def main() -> None:
             self._done = False
             self._step_count = 0
             self._ensure_large_max_size()
-            result = self.client.reset()
+            result = run_sync(self._loop, self.client.reset(task_name=args.task_name or None))
             self._done = result.done
             return self._format_observation(result.observation)
 
@@ -372,7 +387,7 @@ def main() -> None:
                 raise ValueError("Episode is done.")
 
             self._step_count += 1
-            result = self.client.step(BrowserGymAction(action_str=action_str))
+            result = run_sync(self._loop, self.client.step(BrowserGymAction(action_str=action_str)))
             observation = result.observation
             step_reward = float(result.reward or 0.0)
             self._done = result.done
@@ -424,8 +439,8 @@ def main() -> None:
         generation_batch_size=args.num_generations,
         max_completion_length=args.max_completion_length,
         logging_steps=args.logging_steps,
-        report_to="trackio",
-        trackio_space_id=f"browsergym-grpo-{sanitize_name(args.model_id)}-{timestamp}",
+        report_to=args.report_to,
+        trackio_space_id=f"browsergym-grpo-{sanitize_name(args.model_id)}-{timestamp}" if args.report_to == "trackio" else None,
         save_strategy="steps",
         save_steps=args.save_interval,
         save_total_limit=args.save_total_limit,
