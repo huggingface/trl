@@ -2766,7 +2766,7 @@ class GRPOTrainer(_BaseTrainer):
             if self.use_adaptive_entropy:
                 # Update the coefficient once per optimizer step, not per micro-batch
                 if self.accelerator.sync_gradients:
-                    if world_entropy < self.args.entropy_target:
+                    if world_entropy <= self.args.entropy_target:
                         self.entropy_coef = min(
                             self.entropy_coef + self.args.entropy_coef_delta, self.args.entropy_coef_max
                         )
