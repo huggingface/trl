@@ -648,8 +648,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
             # Compute the clipped probability ratios. A token is counted as clipped only when clipping is binding in a
             # policy-relevant direction: low clip when the advantage is negative, high clip when it is positive.
-            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (per_token_advantages < 0)
-            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (per_token_advantages > 0)
+            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
+            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
             local_low_clip_sum = (
                 is_low_clipped[valid_mask].float().sum()
