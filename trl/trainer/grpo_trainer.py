@@ -667,6 +667,10 @@ class GRPOTrainer(_BaseTrainer):
                 f"Unknown importance sampling level: {self.importance_sampling_level}. "
                 "Possible values are 'token' and 'sequence'."
             )
+        self.entropy_coef = args.entropy_coef
+        self.use_adaptive_entropy = args.use_adaptive_entropy
+        if self.use_liger_kernel and self.entropy_coef != 0.0:
+            raise NotImplementedError("Entropy bonus is not supported with Liger kernel.")
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
