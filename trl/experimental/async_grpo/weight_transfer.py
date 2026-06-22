@@ -28,13 +28,14 @@ from huggingface_hub import create_bucket
 from trl.import_utils import is_vllm_available
 
 from .delta_codec import UpdateKind, extract_sparse_batched
-from .delta_engine import HFBucketWeightTransferEngine
 
 
 if is_vllm_available(min_version="0.17.1"):
     from vllm.distributed.weight_transfer.base import SparseWeightPatch
     from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
     from vllm.utils.network_utils import get_ip, get_open_port
+
+    from .delta_engine import HFBucketWeightTransferEngine
 
 
 logger = get_logger(__name__)
