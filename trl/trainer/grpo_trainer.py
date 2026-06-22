@@ -2947,7 +2947,7 @@ class GRPOTrainer(_BaseTrainer):
             checkpoint_folder = f"checkpoint-{self.state.global_step}"
             output_dir = os.path.join(self.args.output_dir, checkpoint_folder)
             with open(os.path.join(output_dir, "entropy_ctrl_state.json"), "w") as f:
-                json.dump({"entropy_coef": self.entropy_coef}, f)
+                json.dump({"entropy_coef": self.entropy_coef, "last_world_entropy": self._last_world_entropy}, f)
 
     def _load_optimizer_and_scheduler(self, checkpoint):
         super()._load_optimizer_and_scheduler(checkpoint)
@@ -2955,4 +2955,6 @@ class GRPOTrainer(_BaseTrainer):
             path = os.path.join(checkpoint, "entropy_ctrl_state.json")
             if os.path.exists(path):
                 with open(path) as f:
-                    self.entropy_coef = json.load(f)["entropy_coef"]
+                    state = json.load(f)
+                self.entropy_coef = state["entropy_coef"]
+                self._last_world_entropy = state.get("last_world_entropy", float("inf"))
