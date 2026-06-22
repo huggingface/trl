@@ -2740,6 +2740,33 @@ class GRPOTrainer(_BaseTrainer):
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
+        # Entropy bonus: add entropy regularization to encourage exploration
+        if self.entropy_coef != 0.0:
+            if self.loss_type in ["grpo", "sapo", "luspo"]:
+                entropy_loss = ((entropies * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean() / normalizer
+            elif self.loss_type == "bnpo":
+                entropy_loss = (entropies * mask).sum() / mask.sum().clamp(min=1.0) / normalizer
+            elif self.loss_type == "dr_grpo":
+                entropy_loss = (entropies * mask).sum() / (entropies.size(0) * self.max_completion_length) / normalizer
+            elif self.loss_type in ["cispo", "dapo", "vespo"]:
+                entropy_loss = (entropies * mask).sum() / normalizer
+
+            world_entropy = self.accelerator.reduce(entropy_loss.detach(), reduction="mean").item()
+            if self.use_adaptive_entropy:
+                if world_entropy < self.args.entropy_target:
+                    self.entropy_coef = min(
+                        self.entropy_coef + self.args.entropy_coef_delta, self.args.entropy_coef_max
+                    )
+                else:
+                    self.entropy_coef = max(
+                        self.entropy_coef - self.args.entropy_coef_delta, self.args.entropy_coef_min
+                    )
+                apply_coef = self.entropy_coef if world_entropy <= self.args.entropy_target else 0.0
+            else:
+                apply_coef = self.entropy_coef
+
+            loss = loss - apply_coef * entropy_loss
+
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
         if self.aux_loss_enabled:
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
@@ -2754,6 +2781,11 @@ class GRPOTrainer(_BaseTrainer):
                 return x.mean()
             else:
                 return (x * mask).sum() / completion_token_count
+
+        self._metrics[mode]["policy_loss"].append(self.accelerator.reduce(loss.detach(), reduction="mean").item())
+        if self.entropy_coef != 0.0:
+            self._metrics[mode]["entropy_loss"].append(world_entropy)
+            self._metrics[mode]["entropy_coef"].append(self.entropy_coef)
 
         if self.beta != 0.0:
             mean_kl = masked_batch_mean(per_token_kl)
