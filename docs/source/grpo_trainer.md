@@ -175,7 +175,10 @@ While training and evaluating, we record the following reward metrics:
   - If `scale_rewards` is `"group"` or `"none"`, this is the average of the per-group standard deviations.
   - If `scale_rewards` is `"batch"`, this is the standard deviation computed over all rewards in the batch (ignoring groups).
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
+- `policy_loss`: The policy gradient loss value (before any entropy bonus).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
+- `entropy_loss`: The aggregated entropy used as the regularization term. Logged only if `entropy_coef` is nonzero.
+- `entropy_coef`: The current entropy coefficient. Logged only if `entropy_coef` is nonzero. Changes each optimizer step when `use_adaptive_entropy=True`.
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
 - `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:
 $$
@@ -542,6 +545,46 @@ trainer = GRPOTrainer(
 and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
 
 Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
+
+### Entropy regularization
+
+To encourage exploration and prevent the policy from collapsing to near-deterministic outputs, you can add an entropy bonus to the training objective. The entropy regularization augments the GRPO loss as follows:
+
+$$
+\mathcal{L}(\theta) = \mathcal{L}_{\text{GRPO}}(\theta) - \alpha \cdot \mathcal{H}(\pi_\theta),
+$$
+
+where \\(\mathcal{H}(\pi_\theta)\\) is the mean per-token entropy of the policy and \\(\alpha\\) is the entropy coefficient.
+
+**Static entropy** — a fixed coefficient throughout training:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+training_args = GRPOConfig(entropy_coef=0.05, ...)
+```
+
+**Adaptive entropy** — the coefficient is updated each optimizer step based on a target entropy, as introduced in [Skywork-OR1](https://huggingface.co/papers/2505.22312). When the current entropy falls at or below `entropy_target`, the coefficient is incremented by `entropy_coef_delta`; otherwise it is decremented. The coefficient is only applied (i.e. non-zero) while entropy is at or below the target:
+
+```python
+training_args = GRPOConfig(
+    entropy_coef=0.01,          # initial coefficient
+    use_adaptive_entropy=True,
+    entropy_target=5.0,         # target mean per-token entropy (nats); tune for your model
+    entropy_coef_delta=0.005,   # step size per optimizer step
+    entropy_coef_min=0.0,
+    entropy_coef_max=1.0,
+    ...
+)
+```
+
+<Tip>
+
+Typical language models have per-token entropies of 2–10 nats. The default `entropy_target=0.2` nearly always triggers regularization; set it to a value meaningful for your model (e.g. the entropy you observe early in training).
+
+</Tip>
+
+When `use_adaptive_entropy=True`, the current entropy coefficient `entropy_coef` is saved alongside each checkpoint and restored on resume, so training is fully resumable.
 
 ## Vision-Language Model (VLM) Training
 
