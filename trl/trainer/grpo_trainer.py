@@ -2758,11 +2758,13 @@ class GRPOTrainer(_BaseTrainer):
             elif self.loss_type in ["cispo", "dapo", "vespo"]:
                 entropy_loss = (entropies * mask).sum() / normalizer
 
-            # Mean per-token entropy in nats across ranks — computed independently of the loss
-            # normalizer so its scale matches entropy_target (loss-scaled entropy_loss would not).
-            world_entropy = self.accelerator.reduce(
-                ((entropies * mask).sum() / mask.sum().clamp(min=1.0)).detach(), reduction="mean"
-            ).item()
+            # True global mean per-token entropy (nats): reduce sum and token count jointly so
+            # that ranks with fewer tokens don't get equal weight (averaging per-rank means would
+            # be biased when completion lengths differ across ranks).
+            entropy_stats = self.accelerator.reduce(
+                torch.stack([(entropies * mask).sum(), mask.sum()]).detach(), reduction="sum"
+            )
+            world_entropy = (entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item()
             if self.use_adaptive_entropy:
                 # Update the coefficient once per optimizer step, not per micro-batch
                 if self.accelerator.sync_gradients:
