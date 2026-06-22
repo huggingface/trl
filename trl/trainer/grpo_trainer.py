@@ -2769,7 +2769,10 @@ class GRPOTrainer(_BaseTrainer):
             )
             world_entropy = (entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item()
             if self.use_adaptive_entropy:
-                # Update the coefficient once per optimizer step, not per micro-batch
+                # Update coefficient and cache entropy once per optimizer step, not per micro-batch.
+                # apply_coef uses the cached value so all micro-batches within one accumulation
+                # window apply the same bonus (using per-micro-batch world_entropy would cause
+                # the bonus to toggle on/off unpredictably across accumulation steps).
                 if self.accelerator.sync_gradients:
                     if world_entropy <= self.args.entropy_target:
                         self.entropy_coef = min(
@@ -2779,7 +2782,8 @@ class GRPOTrainer(_BaseTrainer):
                         self.entropy_coef = max(
                             self.entropy_coef - self.args.entropy_coef_delta, self.args.entropy_coef_min
                         )
-                apply_coef = self.entropy_coef if world_entropy <= self.args.entropy_target else 0.0
+                    self._last_world_entropy = world_entropy
+                apply_coef = self.entropy_coef if self._last_world_entropy <= self.args.entropy_target else 0.0
             else:
                 apply_coef = self.entropy_coef
 
