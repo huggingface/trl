@@ -670,7 +670,7 @@ class GRPOTrainer(_BaseTrainer):
             )
         self.entropy_coef = args.entropy_coef
         self.use_adaptive_entropy = args.use_adaptive_entropy
-        if self.use_liger_kernel and self.entropy_coef != 0.0:
+        if self.use_liger_kernel and (self.entropy_coef != 0.0 or self.use_adaptive_entropy):
             raise NotImplementedError("Entropy bonus is not supported with Liger kernel.")
 
         # Datasets
