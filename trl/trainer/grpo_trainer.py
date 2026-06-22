@@ -17,6 +17,7 @@ import atexit
 import copy
 import importlib.resources as pkg_resources
 import inspect
+import json
 import math
 import os
 import sys
@@ -667,6 +668,10 @@ class GRPOTrainer(_BaseTrainer):
                 f"Unknown importance sampling level: {self.importance_sampling_level}. "
                 "Possible values are 'token' and 'sequence'."
             )
+        self.entropy_coef = args.entropy_coef
+        self.use_adaptive_entropy = args.use_adaptive_entropy
+        if self.use_liger_kernel and self.entropy_coef != 0.0:
+            raise NotImplementedError("Entropy bonus is not supported with Liger kernel.")
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -2714,27 +2719,55 @@ class GRPOTrainer(_BaseTrainer):
 
         mode = "train" if self.model.training else "eval"
         if self.loss_type in ["grpo", "sapo"]:
-            loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
+            policy_loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
-            loss = loss / normalizer
+            policy_loss = policy_loss / normalizer
         elif self.loss_type == "bnpo":
-            loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
+            policy_loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
-            loss = loss / normalizer
+            policy_loss = policy_loss / normalizer
         elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+            policy_loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
-            loss = loss / normalizer
+            policy_loss = policy_loss / normalizer
         elif self.loss_type in ["cispo", "dapo", "vespo"]:
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
-            loss = (per_token_loss * mask).sum() / normalizer
+            policy_loss = (per_token_loss * mask).sum() / normalizer
         elif self.loss_type == "luspo":
             # Unless importance_sampling_level="token" (not recommended here), per_token_loss is expected to be (B, 1)
-            loss = (per_token_loss * mask.sum(1, keepdim=True)).mean()
+            policy_loss = (per_token_loss * mask.sum(1, keepdim=True)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
-            loss = loss / normalizer
+            policy_loss = policy_loss / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
+
+        # Entropy bonus: add entropy regularization to encourage exploration
+        loss = policy_loss
+        if self.entropy_coef != 0.0:
+            if self.loss_type in ["grpo", "sapo", "luspo"]:
+                entropy_loss = ((entropies * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean() / normalizer
+            elif self.loss_type == "bnpo":
+                entropy_loss = (entropies * mask).sum() / mask.sum().clamp(min=1.0) / normalizer
+            elif self.loss_type == "dr_grpo":
+                entropy_loss = (entropies * mask).sum() / (entropies.size(0) * self.max_completion_length) / normalizer
+            elif self.loss_type in ["cispo", "dapo", "vespo"]:
+                entropy_loss = (entropies * mask).sum() / normalizer
+
+            world_entropy = self.accelerator.reduce(entropy_loss.detach(), reduction="mean").item()
+            if self.use_adaptive_entropy:
+                if world_entropy < self.args.entropy_target:
+                    self.entropy_coef = min(
+                        self.entropy_coef + self.args.entropy_coef_delta, self.args.entropy_coef_max
+                    )
+                else:
+                    self.entropy_coef = max(
+                        self.entropy_coef - self.args.entropy_coef_delta, self.args.entropy_coef_min
+                    )
+                apply_coef = self.entropy_coef if world_entropy <= self.args.entropy_target else 0.0
+            else:
+                apply_coef = self.entropy_coef
+
+            loss = policy_loss - apply_coef * entropy_loss
 
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
         if self.aux_loss_enabled:
@@ -2750,6 +2783,13 @@ class GRPOTrainer(_BaseTrainer):
                 return x.mean()
             else:
                 return (x * mask).sum() / completion_token_count
+
+        self._metrics[mode]["policy_loss"].append(
+            self.accelerator.reduce(policy_loss.detach(), reduction="mean").item()
+        )
+        if self.entropy_coef != 0.0:
+            self._metrics[mode]["entropy_loss"].append(world_entropy)
+            self._metrics[mode]["entropy_coef"].append(self.entropy_coef)
 
         if self.beta != 0.0:
             mean_kl = masked_batch_mean(per_token_kl)
@@ -2885,3 +2925,16 @@ class GRPOTrainer(_BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
+        if self.use_adaptive_entropy and self.is_world_process_zero():
+            checkpoint_folder = f"checkpoint-{self.state.global_step}"
+            output_dir = os.path.join(self.args.output_dir, checkpoint_folder)
+            with open(os.path.join(output_dir, "entropy_ctrl_state.json"), "w") as f:
+                json.dump({"entropy_coef": self.entropy_coef}, f)
+
+    def _load_optimizer_and_scheduler(self, checkpoint):
+        super()._load_optimizer_and_scheduler(checkpoint)
+        if self.use_adaptive_entropy and checkpoint is not None:
+            path = os.path.join(checkpoint, "entropy_ctrl_state.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    self.entropy_coef = json.load(f)["entropy_coef"]
