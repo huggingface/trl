@@ -2,7 +2,7 @@
 
 <div style="text-align: center">
     <picture>
-        <source media="(prefers-color-scheme: light)" srcset="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/TRL%20banner%20light.png">
+        <source media="(prefers-color-scheme: light)" srcset="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_light.png">
         <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png" alt="TRL Banner">
     </picture>
 </div>
@@ -23,6 +23,8 @@
 ## 🎉 What's New
 
 **TRL v1:** We released TRL v1 — a major milestone that marks a real shift in what TRL is. Read the [blog post](https://huggingface.co/blog/trl-v1) to learn more.
+
+**🚢 Harbor:** We now support [Harbor](https://huggingface.co/docs/trl/harbor) — train agents against sandboxed task suites (instruction + sandbox image + in-sandbox verifier) via [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer)'s `environment_factory`.
 
 ## Overview
 

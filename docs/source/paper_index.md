@@ -95,7 +95,7 @@ training_args = GRPOConfig(
 
 Note that this method only has an effect when training goes slightly off-policy—for example, when `steps_per_generation > gradient_accumulation_steps` or `num_iterations > 1`. Otherwise, it is effectively equivalent to no modification.
 
-TRL also provide an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](experimental#gspo-token).
+TRL also provide an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](gspo_token).
 
 #### Policy ratio: GRPO vs. GSPO
 
@@ -122,6 +122,31 @@ w_{i,t}(\theta) = \frac{\pi_\theta (o_{i,t} | q, o_{i,< t})}{\pi_{\theta_{\text{
 $$
 
 This token-level ratio is then combined with a shared advantage  \\( \hat{A}_i \\), and the GRPO objective clips and optimizes each token independently across the sequence.
+
+### Geometric-Mean Policy Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2507.20673
+
+Geometric-Mean Policy Optimization (GMPO) is a GRPO variant that maximizes the *geometric* mean of the token-level importance ratios instead of the arithmetic mean. The geometric mean is far less sensitive to outlier ratios, so the policy update is more stable and tolerates a much wider clipping range. Clipping is applied per token, in log space, and is one-sided per the advantage sign (the standard PPO trust region) — crucially, *before* the geometric mean is taken. This is what distinguishes GMPO from GSPO (`importance_sampling_level="sequence"`), which clips the sequence-level ratio *after* averaging.
+
+The GMPO objective replaces GRPO's per-token arithmetic mean with the geometric mean of the (clipped) token ratios:
+
+$$
+\mathcal{J}_{\text{GMPO}}(\theta) = \mathbb{E}_{q, \{o_i\}} \left[ \frac{1}{G} \sum_{i=1}^{G} \left( \prod_{t=1}^{|o_i|} \min\left[ w_{i,t}(\theta)^{\operatorname{sgn}(\hat{A}_i)},\ \operatorname{clip}\left(w_{i,t}(\theta)^{\operatorname{sgn}(\hat{A}_i)}, \epsilon_1, \epsilon_2\right) \right]^{\operatorname{sgn}(\hat{A}_i)} \right)^{\frac{1}{|o_i|}} \hat{A}_i \right]
+$$
+
+where  \\( w_{i,t}(\theta) \\) is the per-token importance ratio. In practice the product and clipping are computed in log space for numerical stability, and the clip range  \\( (\epsilon_1, \epsilon_2) = (e^{-0.4}, e^{0.4}) \\) is markedly wider than GRPO/DAPO to encourage exploration.
+
+TRL provides an experimental implementation, see [Experimental - GMPO](gmpo):
+
+```python
+from trl.experimental.gmpo import GMPOConfig, GMPOTrainer
+
+training_args = GMPOConfig(
+    epsilon=0.4,  # log-space clip range -> ratios clipped to (exp(-0.4), exp(0.4)); paper, Sec. 4
+    beta=0.0,
+)
+```
 
 ### DAPO: An Open-Source LLM Reinforcement Learning System at Scale
 
@@ -161,6 +186,31 @@ trainer = GRPOTrainer(
     ...,
     args=training_args,
     reward_funcs=[..., sop_reward],
+)
+```
+
+### Demystifying Long Chain-of-Thought Reasoning in LLMs
+
+**📜 Paper**: https://huggingface.co/papers/2502.03373
+
+This paper studies long chain-of-thought RL and introduces two complementary rule-based rewards:
+
+- A **cosine length-scaled reward** ([`~rewards.get_cosine_scaled_reward`], Appendix C.1) that scales the correctness reward by completion length: a correct completion is rewarded more when it is shorter, while a wrong completion is penalized less when it is longer (preserving exploration).
+- An **n-gram repetition penalty** ([`~rewards.get_repetition_penalty_reward`], Appendix C.2) that discourages the degenerate, repetitive completions that emerge as a reward-hacking strategy under length shaping.
+
+The two are designed to be used together:
+
+```python
+from trl import GRPOTrainer
+from trl.rewards import get_cosine_scaled_reward, get_repetition_penalty_reward
+
+# max_len should match the generation budget (in tokens)
+cosine_scaled_reward = get_cosine_scaled_reward(max_len=4096)
+# Penalize repeated 3-grams, down to -1.0 for fully repetitive completions
+repetition_penalty = get_repetition_penalty_reward(ngram_size=3, max_penalty=-1.0)
+trainer = GRPOTrainer(
+    ...,
+    reward_funcs=[cosine_scaled_reward, repetition_penalty],
 )
 ```
 
@@ -271,7 +321,7 @@ training_args = GRPOConfig(
 )
 ```
 
-Note that when using gradient accumulation, the loss is aggregated over the total number of tokens in the batch, but not over the accumulated batch. For more details, see the [GRPO Trainer - Loss types](grpo_trainer#loss_types).
+Note that when using gradient accumulation, the loss is aggregated over the total number of tokens in the batch, but not over the accumulated batch. For more details, see the [GRPO Trainer - Loss types](grpo_trainer#loss-types).
 
 ### Truncated Importance Sampling
 
@@ -408,7 +458,7 @@ TRL exposes the Importance Sampling granularity level through the `vllm_importan
 
 **📜 Paper**: https://huggingface.co/papers/2508.09726
 
-See [Experimental - GFPO](experimental#gfpo).
+See [Experimental - GFPO](gfpo).
 
 ### Perception-Aware Policy Optimization for Multimodal Reasoning
 
@@ -1717,7 +1767,7 @@ trainer = MiniLLMTrainer(
 trainer.train()
 ```
 
-For more details, see the [MiniLLM Trainer documentation](minillm) documentation.
+For more details, see the [MiniLLM Trainer documentation](minillm_trainer).
 
 ### Reinforcement Learning via Self-Distillation
 
