@@ -822,16 +822,16 @@ class SFTTrainer(_BaseTrainer):
     Example:
 
     ```python
-    from trl import SFTTrainer
-    from datasets import load_dataset
+    >>> from trl import SFTTrainer
+    >>> from datasets import load_dataset
 
-    dataset = load_dataset("roneneldan/TinyStories", split="train[:1%]")
+    >>> dataset = load_dataset("roneneldan/TinyStories", split="train[:1%]")
 
-    trainer = SFTTrainer(
-        model="Qwen/Qwen2.5-0.5B-Instruct",
-        train_dataset=dataset,
-    )
-    trainer.train()
+    >>> trainer = SFTTrainer(
+    ...     model="Qwen/Qwen2.5-0.5B-Instruct",
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
     ```
 
     Args:

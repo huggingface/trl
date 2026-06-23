@@ -416,15 +416,12 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
 
     Example:
     ```python
-    from trl import DatasetMixtureConfig, get_dataset
-    from trl.scripts.utils import DatasetConfig
+    >>> from trl import DatasetMixtureConfig, get_dataset
+    >>> from trl.scripts.utils import DatasetConfig
 
-    mixture_config = DatasetMixtureConfig(datasets=[DatasetConfig(path="trl-lib/tldr")])
-    dataset = get_dataset(mixture_config)
-    print(dataset)
-    ```
-
-    ```
+    >>> mixture_config = DatasetMixtureConfig(datasets=[DatasetConfig(path="trl-lib/tldr")])
+    >>> dataset = get_dataset(mixture_config)
+    >>> print(dataset)
     DatasetDict({
         train: Dataset({
             features: ['prompt', 'completion'],
