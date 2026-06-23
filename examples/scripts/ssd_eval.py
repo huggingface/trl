@@ -32,7 +32,7 @@ for evaluating SSD-trained checkpoints alongside their base models.
 Example — evaluate the base Qwen3-4B-Instruct-2507 on the v6 delta (the new problems released in v6):
 
 ```bash
-python trl/experimental/ssd/ssd_eval.py \\
+python examples/scripts/ssd_eval.py \\
     --model_name_or_path Qwen/Qwen3-4B-Instruct-2507 \\
     --temperature 1.1 \\
     --top_k 20 \\
@@ -44,7 +44,7 @@ python trl/experimental/ssd/ssd_eval.py \\
 Evaluate an SSD-trained checkpoint with the same decoding configuration:
 
 ```bash
-python trl/experimental/ssd/ssd_eval.py \\
+python examples/scripts/ssd_eval.py \\
     --model_name_or_path outputs/ssd-qwen3-4b-instruct \\
     --temperature 1.1 \\
     --top_k 20 \\

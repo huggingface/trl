@@ -38,6 +38,10 @@ class DistillationConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the
             trainer is provided as a string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
+            [`~transformers.AutoTokenizer.from_pretrained`], for both the student and teacher.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum total sequence length (prompt + completion) for tokenization and truncation.
 
@@ -138,12 +142,6 @@ class DistillationConfig(_BaseConfig):
 
         > Parameters that control logging
 
-        wandb_entity (`str` or `None`, *optional*):
-            The W&B entity to store runs under.
-        wandb_project (`str` or `None`, *optional*):
-            The W&B project to store runs under.
-        wandb_run_group (`str` or `None`, *optional*):
-            The W&B group to store runs under.
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `log_completions_steps` steps. If `rich` is
             installed, it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb`
@@ -162,6 +160,14 @@ class DistillationConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument "
             "of the trainer is provided as a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoTokenizer.from_pretrained`, for both the "
+            "student and teacher."
         },
     )
     max_length: int | None = field(
@@ -351,18 +357,6 @@ class DistillationConfig(_BaseConfig):
     )
 
     # W&B
-    wandb_entity: str | None = field(
-        default=None,
-        metadata={"help": "The W&B entity to store runs under."},
-    )
-    wandb_project: str | None = field(
-        default=None,
-        metadata={"help": "The W&B project to store runs under."},
-    )
-    wandb_run_group: str | None = field(
-        default=None,
-        metadata={"help": "The W&B group to store runs under."},
-    )
 
     # Logging
     log_completions: bool = field(
