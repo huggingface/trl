@@ -22,7 +22,7 @@ from transformers import AutoTokenizer
 
 from trl.experimental.gold import GOLDConfig
 from trl.experimental.gold import gold_trainer as gold_trainer_module
-from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, build_teacher_inputs_from_texts
+from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, XTokenLoss, build_teacher_inputs_from_texts
 from trl.experimental.utils import (
     DataCollatorForChatML,
     encode_with_byte_offsets,
@@ -684,6 +684,27 @@ def test_truncation(llama_tokenizer, qwen_tokenizer):
     )
     assert decoded_completion4 == row4["original_completion_text"]
 
+    # --- conversational prompt-completion format (list-valued prompt + list-valued completion) ---
+    # Regression: the condition was changed to route list-valued "prompt" without "completion" into
+    # the prompt-completion branch, crashing on example["completion"]. Fix: require both keys.
+    prompt_msgs = [{"role": "user", "content": "What is 2+2?"}]
+    completion_msgs = [{"role": "assistant", "content": "Four."}]
+    dataset5 = Dataset.from_dict({"prompt": [prompt_msgs], "completion": [completion_msgs]})
+    args5 = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=128,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+    )
+    trainer5 = GOLDTrainer.__new__(GOLDTrainer)
+    prepared5 = trainer5._prepare_dataset_with_original_text(
+        dataset5, llama_tokenizer, args5, packing=False, formatting_func=None, dataset_name="train"
+    )
+    row5 = prepared5[0]
+    assert "Four." in row5["original_completion_text"]
+    assert 1 in row5["completion_mask"]
+
 
 def test_uldloss(llama_tokenizer, qwen_tokenizer, smollm_tokenizer):
     def _run_uldloss(config, student_tok, teacher_tok, prompt, completion):
@@ -776,6 +797,56 @@ def test_uldloss(llama_tokenizer, qwen_tokenizer, smollm_tokenizer):
     assert loss_fn.last_unmatched_loss is not None
     expected = config_beta0.uld_hybrid_unmatched_weight * loss_fn.last_unmatched_loss
     torch.testing.assert_close(loss, expected, atol=1e-6, rtol=1e-5)
+
+
+def test_xtoken_loss(tmp_path):
+    # Build a minimal top-k projection matrix: V_s=4 student tokens -> V_t=5 teacher tokens.
+    # Each student token maps to one teacher token (weight 1.0), sentinel -1 pads the top-k.
+    V_s, V_t = 4, 5
+    proj_path = tmp_path / "proj.pt"
+    torch.save(
+        {
+            "indices": torch.tensor([[i % V_t, -1] for i in range(V_s)], dtype=torch.long),
+            "likelihoods": torch.tensor([[1.0, 0.0] for _ in range(V_s)]),
+        },
+        proj_path,
+    )
+
+    def _make_config(loss_type):
+        return SimpleNamespace(
+            xtoken_loss_type=loss_type,
+            xtoken_projection_matrix_path=str(proj_path),
+            xtoken_temperature=1.0,
+            xtoken_dynamic_scaling=False,
+            xtoken_uncommon_topk=0,
+            xtoken_vocab_topk=0,
+            xtoken_kl_weight=1.0,
+            xtoken_ce_scale=0.1,
+            uld_skip_student_eos=False,
+            uld_skip_teacher_eos=False,
+        )
+
+    # Logit heads wider than configured vocab sizes: student head=V_s+2, teacher head=V_t+2.
+    # Without the fix, the sparse matmul shape is (V_t x V_s) @ (V_s+2 x G) → dimension error.
+    T = 3  # 1 prompt token + 2 completion tokens
+    student_logits = torch.randn(1, T, V_s + 2)
+    teacher_logits = torch.randn(1, T, V_t + 2)
+    student_labels = torch.tensor([[-100, 1, 2]])
+    teacher_labels = torch.tensor([[-100, 1, 2]])
+    student_byte_offsets = torch.tensor([[[0, 0], [0, 3], [3, 6]]])
+    teacher_byte_offsets = torch.tensor([[[0, 0], [0, 3], [3, 6]]])
+
+    for loss_type in ("p_kl", "h_kl"):
+        loss_fn = XTokenLoss(_make_config(loss_type), student_vocab_size=V_s, teacher_vocab_size=V_t)
+        loss = loss_fn(
+            student_logits=student_logits,
+            teacher_logits=teacher_logits,
+            student_labels=student_labels,
+            teacher_labels=teacher_labels,
+            student_byte_offsets=student_byte_offsets,
+            teacher_byte_offsets=teacher_byte_offsets,
+        )
+        assert torch.isfinite(loss), f"{loss_type} produced non-finite loss"
 
 
 @pytest.mark.slow
