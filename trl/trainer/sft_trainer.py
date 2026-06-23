@@ -393,16 +393,6 @@ def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
     return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
-def _truncation_slice(max_length: int, truncation_mode: str) -> slice:
-    # Defined once so that every consumer (collation, dataset preparation) truncates with the same window.
-    if truncation_mode == "keep_start":
-        return slice(None, max_length)
-    elif truncation_mode == "keep_end":
-        return slice(-max_length, None)
-    else:
-        raise ValueError(f"Unsupported truncation mode: {truncation_mode}, expected 'keep_start' or 'keep_end'")
-
-
 @dataclass
 class DataCollatorForLanguageModeling(DataCollatorMixin):
     """
@@ -483,13 +473,18 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         input_ids = [example["input_ids"] for example in examples]
         batch_seq_lengths = [example["seq_lengths"] for example in examples] if "seq_lengths" in examples[0] else None
-        # Tokens that shouldn't contribute to the loss are expected to be already set to -100 in the labels, which is
-        # handled during dataset preparation. The collator only truncates and pads the labels alongside the input IDs.
         labels = [example.get("labels", example["input_ids"]) for example in examples]
 
         # Truncate per sequence if necessary
         if self.max_length is not None and not self.padding_free:
-            sl = _truncation_slice(self.max_length, self.truncation_mode)
+            if self.truncation_mode == "keep_start":
+                sl = slice(None, self.max_length)
+            elif self.truncation_mode == "keep_end":
+                sl = slice(-self.max_length, None)
+            else:
+                raise ValueError(
+                    f"Unsupported truncation mode: {self.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                )
             input_ids = [ids[sl] for ids in input_ids]
             labels = [lbl[sl] for lbl in labels]
 
@@ -1250,42 +1245,35 @@ class SFTTrainer(_BaseTrainer):
             )
         # Skip dataset preparation if `skip_prepare_dataset=True` in `dataset_kwargs`, or if it's a VLM, where
         # preprocessing (e.g., image-to-pixel conversion) is too costly and done on the fly instead.
-        skip_prepare_dataset = (
+        self._skip_prepare_dataset = (
             args.dataset_kwargs is not None
             and args.dataset_kwargs.get("skip_prepare_dataset", False)
             or self._is_vision_dataset
         )
         # Kept on the instance so that `evaluate` can preprocess freshly-passed eval datasets the same way.
         self._formatting_func = formatting_func
-        self._skip_prepare_dataset = skip_prepare_dataset
         if (
-            skip_prepare_dataset
+            self._skip_prepare_dataset
             and not self._is_vision_dataset
             and isinstance(data_collator, DataCollatorForLanguageModeling)
         ):
-            # Labels are built from the mask columns during dataset preparation, which is being skipped here, and
-            # the data collator does not consume the mask columns. A dataset carrying masks without labels would
-            # therefore silently be trained on the full sequence.
-            datasets_to_check = {"train": train_dataset}
-            if isinstance(eval_dataset, dict):
-                datasets_to_check.update(eval_dataset)
-            elif eval_dataset is not None:
-                datasets_to_check["eval"] = eval_dataset
-            for dataset_name, dataset in datasets_to_check.items():
-                column_names = get_dataset_column_names(dataset)
-                if "labels" not in column_names and (
-                    "completion_mask" in column_names or "assistant_masks" in column_names
-                ):
+            # This guard may look defensive, but it covers a behavior change introduced when label building moved
+            # from the collator to dataset preparation: the collator used to consume the mask columns directly, so a
+            # skipped-preparation dataset carrying masks trained correctly. Now labels are built during preparation,
+            # which is skipped here, and the collator ignores the mask columns. Without a "labels" column, such a
+            # dataset would silently train on the full sequence, so we fail loudly instead.
+            eval_datasets = (
+                eval_dataset if isinstance(eval_dataset, dict) else {"eval": eval_dataset} if eval_dataset else {}
+            )
+            for name, dataset in {"train": train_dataset, **eval_datasets}.items():
+                cols = get_dataset_column_names(dataset)
+                if "labels" not in cols and ("completion_mask" in cols or "assistant_masks" in cols):
                     raise ValueError(
-                        f"The {dataset_name} dataset contains mask columns ('completion_mask' or "
-                        "'assistant_masks') but no 'labels' column, and dataset preparation is skipped "
-                        "(`skip_prepare_dataset=True`). Since labels are built from the mask columns during "
-                        "dataset preparation and the data collator does not consume the mask columns, this "
-                        "dataset would silently be trained on the full sequence. Provide a 'labels' column with "
-                        "-100 for the tokens that shouldn't contribute to the loss, or remove "
-                        "`skip_prepare_dataset` from `dataset_kwargs`."
+                        f"The {name} dataset has mask columns but no 'labels', and `skip_prepare_dataset=True` skips "
+                        "label building, so it would train on the full sequence. Add a 'labels' column (-100 for "
+                        "non-loss tokens) or drop `skip_prepare_dataset`."
                     )
-        if not skip_prepare_dataset:
+        if not self._skip_prepare_dataset:
             if self.completion_only_loss and formatting_func:
                 raise ValueError(
                     "A formatting function was provided while `completion_only_loss=True`, which is incompatible. "
@@ -1591,12 +1579,10 @@ class SFTTrainer(_BaseTrainer):
                     **map_kwargs,
                 )
 
-            # Build the labels ahead of collation, so that "what's trainable" is defined in one place. A token is
-            # trainable when every applicable mask is 1 at its position: "assistant_masks" always applies when
-            # present, while "completion_mask" only applies when completion_only_loss is enabled. The collator then
-            # only truncates and pads the labels. Datasets that already provide a "labels" column are taken as is,
-            # and datasets without any applicable mask don't get a labels column: the collator defaults to using the
-            # input IDs as labels.
+            # Build a "labels" column, setting tokens that shouldn't contribute to the loss to -100 based on the
+            # available masks: "assistant_masks" always applies, "completion_mask" only when completion_only_loss
+            # is enabled. With no applicable mask, every token contributes (labels == input_ids). A dataset that
+            # already provides a "labels" column is left as is.
             column_names = get_dataset_column_names(dataset)
             if "labels" not in column_names:
                 mask_columns = []
@@ -1604,23 +1590,18 @@ class SFTTrainer(_BaseTrainer):
                     mask_columns.append("completion_mask")
                 if "assistant_masks" in column_names:
                     mask_columns.append("assistant_masks")
-                if mask_columns:
-                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                        map_kwargs["desc"] = f"Building labels for {dataset_name} dataset"
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Building labels for {dataset_name} dataset"
 
-                    def build_labels(example, mask_columns):
-                        masks = [example[column] for column in mask_columns]
-                        labels = [
-                            token_id if all(mask[pos] for mask in masks) else -100
-                            for pos, token_id in enumerate(example["input_ids"])
-                        ]
-                        return {"labels": labels}
+                def build_labels(example, mask_columns):
+                    masks = [example[column] for column in mask_columns]
+                    labels = [
+                        token_id if all(bits) else -100
+                        for token_id, *bits in zip(example["input_ids"], *masks, strict=False)
+                    ]
+                    return {"labels": labels}
 
-                    dataset = dataset.map(
-                        build_labels,
-                        fn_kwargs={"mask_columns": mask_columns},
-                        **map_kwargs,
-                    )
+                dataset = dataset.map(build_labels, fn_kwargs={"mask_columns": mask_columns}, **map_kwargs)
 
             # Pack
             if packing:
@@ -1629,16 +1610,7 @@ class SFTTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
 
-                columns = ["input_ids"]
-                if "labels" in get_dataset_column_names(dataset):
-                    columns.append("labels")  # the masks are already baked into the labels
-                else:
-                    if "completion_mask" in get_dataset_column_names(dataset):
-                        columns.append("completion_mask")
-                    if "assistant_masks" in get_dataset_column_names(dataset):
-                        columns.append("assistant_masks")
-
-                dataset = dataset.select_columns(columns)
+                dataset = dataset.select_columns(["input_ids", "labels"])
 
                 # Shuffle the dataset before packing. When using wrapped packing, it's important to shuffle before
                 # packing as well to avoid correlations between sequences packed together.
@@ -1649,7 +1621,7 @@ class SFTTrainer(_BaseTrainer):
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
-                collator_expected_keys = {"input_ids", "seq_lengths", "labels", "completion_mask", "assistant_masks"}
+                collator_expected_keys = {"input_ids", "seq_lengths", "labels"}
                 column_names = get_dataset_column_names(dataset)
                 dataset = dataset.select_columns(collator_expected_keys.intersection(column_names))
 
@@ -1660,14 +1632,14 @@ class SFTTrainer(_BaseTrainer):
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
-        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
-        # and "attention_mask"). When using `train_on_completion_only` we add a "completion_mask" column to the
-        # dataset. So we need to override the default signature columns to include "completion_mask" as well.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids",
+        # "attention_mask" and "labels"). Dataset preparation also produces a "seq_lengths" column (for packing /
+        # padding-free), so we override the default signature columns to keep it alongside the model inputs.
         if self._signature_columns is None:
             if self._is_vision_dataset:
                 self._signature_columns = ["messages", "prompt", "completion", "image", "images"]
             else:
-                self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
+                self._signature_columns = ["input_ids", "labels", "seq_lengths"]
 
     def evaluate(
         self,

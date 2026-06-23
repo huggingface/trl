@@ -96,7 +96,19 @@ class TestDFTLoss(TrlTestCase):
 
 class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_basic_padding(self):
-        """Test basic padding functionality without completion masks."""
+        """Test basic padding."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        examples = [{"input_ids": [1, 2, 3], "labels": [1, 2, 3]}, {"input_ids": [4, 5], "labels": [4, 5]}]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
+
+    def test_without_labels(self):
+        """When no labels are provided, they default to the input IDs (padding excluded)."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
 
@@ -107,24 +119,36 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
-    def test_mask_columns_ignored(self):
-        """Mask columns are not consumed by the collator: labels are expected to be prebuilt during dataset
-        preparation."""
+    def test_provided_labels_not_reconstructed_from_masks(self):
+        """Provided labels are used as is, never rebuilt from the mask columns. Here the labels match the input IDs
+        (every token trainable); the masks would introduce -100 if they were consumed, so the labels staying equal
+        to the input IDs proves the masks are ignored."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [
-            {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
-            {"input_ids": [4, 5], "completion_mask": [0, 1]},
+            {"input_ids": [1, 2, 3], "labels": [1, 2, 3], "completion_mask": [0, 0, 1], "assistant_masks": [0, 0, 1]},
+            {"input_ids": [4, 5], "labels": [4, 5], "completion_mask": [0, 1], "assistant_masks": [0, 1]},
         ]
 
         result = collator(examples)
 
         assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
     def test_padding_free_mode(self):
         """Test padding-free mode where sequences are concatenated."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
+        examples = [{"input_ids": [1, 2, 3], "labels": [1, 2, 3]}, {"input_ids": [4, 5], "labels": [4, 5]}]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5]]))
+
+    def test_padding_free_without_labels(self):
+        """Padding-free mode without labels: labels default to the input IDs (document starts masked)."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
         examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
 
@@ -135,30 +159,14 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5]]))
 
-    def test_padding_free_with_prebuilt_labels(self):
-        """Test padding-free mode with prebuilt labels."""
-        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
-        examples = [
-            {"input_ids": [1, 2, 3], "labels": [-100, -100, 3]},
-            {"input_ids": [4, 5], "labels": [4, 5]},
-        ]
-
-        result = collator(examples)
-
-        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
-        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
-        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
-        # The first token of each document is additionally masked (position_ids == 0)
-        torch.testing.assert_close(result["labels"], torch.tensor([[-100, -100, 3, -100, 5]]))
-
     def test_packing(self):
         """Test that when using packing with position_ids, attention_mask is dropped with fa2."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
 
         # Simulate packed sequences with position_ids that restart (typical of BFD packing)
         examples = [
-            {"input_ids": [1, 2, 3, 4, 5, 6], "seq_lengths": [3, 3]},
-            {"input_ids": [7, 8, 9, 10, 11], "seq_lengths": [4, 1]},
+            {"input_ids": [1, 2, 3, 4, 5, 6], "seq_lengths": [3, 3], "labels": [1, 2, 3, 4, 5, 6]},
+            {"input_ids": [7, 8, 9, 10, 11], "seq_lengths": [4, 1], "labels": [7, 8, 9, 10, 11]},
         ]
 
         result = collator(examples)
@@ -171,7 +179,7 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_pad_to_multiple_of(self):
         """Test padding to multiple of specified value."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, pad_to_multiple_of=4)
-        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+        examples = [{"input_ids": [1, 2, 3], "labels": [1, 2, 3]}, {"input_ids": [4, 5], "labels": [4, 5]}]
 
         result = collator(examples)
 
@@ -183,7 +191,7 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_pad_to_multiple_of_and_padding_free(self):
         """Test padding to multiple of specified value."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True, pad_to_multiple_of=4)
-        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+        examples = [{"input_ids": [1, 2, 3], "labels": [1, 2, 3]}, {"input_ids": [4, 5], "labels": [4, 5]}]
 
         result = collator(examples)
 
@@ -195,7 +203,10 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_custom_position_ids_but_no_padding_free(self):
         """Test that custom position_ids are ignored if padding_free is False."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0)
-        examples = [{"input_ids": [1, 2, 3], "seq_lengths": [1, 2]}, {"input_ids": [4, 5], "seq_lengths": [2]}]
+        examples = [
+            {"input_ids": [1, 2, 3], "seq_lengths": [1, 2], "labels": [1, 2, 3]},
+            {"input_ids": [4, 5], "seq_lengths": [2], "labels": [4, 5]},
+        ]
 
         result = collator(examples)
 
@@ -207,7 +218,7 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_single_example(self):
         """Test collator with a single example."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0)
-        examples = [{"input_ids": [1, 2, 3, 4]}]
+        examples = [{"input_ids": [1, 2, 3, 4], "labels": [1, 2, 3, 4]}]
 
         result = collator(examples)
 
@@ -219,7 +230,7 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_different_pad_token_id(self):
         """Test with different pad token ID."""
         collator = DataCollatorForLanguageModeling(pad_token_id=999)
-        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+        examples = [{"input_ids": [1, 2, 3], "labels": [1, 2, 3]}, {"input_ids": [4, 5], "labels": [4, 5]}]
 
         result = collator(examples)
 
@@ -228,41 +239,13 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
-    def test_prebuilt_labels_take_precedence_over_masks(self):
-        """When examples provide prebuilt labels, the mask columns must be ignored."""
-        collator = DataCollatorForLanguageModeling(pad_token_id=0)
-        examples = [
-            {
-                "input_ids": [1, 2, 3],
-                "labels": [1, -100, 3],
-                "completion_mask": [1, 1, 1],
-                "assistant_masks": [1, 1, 1],
-            },
-            {"input_ids": [4, 5], "labels": [-100, 5], "completion_mask": [1, 1], "assistant_masks": [1, 1]},
-        ]
-
-        result = collator(examples)
-
-        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[1, -100, 3], [-100, 5, -100]]))
-
-    def test_prebuilt_labels_truncated_and_padded(self):
-        """Prebuilt labels must be truncated with the same window as the input IDs and padded with -100."""
-        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3)
-        examples = [
-            {"input_ids": [1, 2, 3, 4, 5], "labels": [-100, -100, 3, 4, 5]},
-            {"input_ids": [6, 7], "labels": [-100, 7]},
-        ]
-
-        result = collator(examples)
-
-        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [6, 7, 0]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[-100, -100, 3], [-100, 7, -100]]))
-
     def test_max_length_keep_start(self):
         """Test that sequences longer than max_length are truncated from the start."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3)
-        examples = [{"input_ids": [1, 2, 3, 4, 5]}, {"input_ids": [6, 7, 8]}]
+        examples = [
+            {"input_ids": [1, 2, 3, 4, 5], "labels": [1, 2, 3, 4, 5]},
+            {"input_ids": [6, 7, 8], "labels": [6, 7, 8]},
+        ]
 
         result = collator(examples)
 
@@ -274,7 +257,10 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_max_length_keep_end(self):
         """Test that sequences longer than max_length are truncated from the end (keeping last tokens)."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3, truncation_mode="keep_end")
-        examples = [{"input_ids": [1, 2, 3, 4, 5]}, {"input_ids": [6, 7, 8]}]
+        examples = [
+            {"input_ids": [1, 2, 3, 4, 5], "labels": [1, 2, 3, 4, 5]},
+            {"input_ids": [6, 7, 8], "labels": [6, 7, 8]},
+        ]
 
         result = collator(examples)
 
@@ -286,7 +272,7 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_max_length_no_truncation_needed(self):
         """Test that max_length larger than sequences does not alter the output."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=10)
-        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+        examples = [{"input_ids": [1, 2, 3], "labels": [1, 2, 3]}, {"input_ids": [4, 5], "labels": [4, 5]}]
 
         result = collator(examples)
 
@@ -295,40 +281,22 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
-    def test_max_length_with_prebuilt_labels(self):
-        """Test that truncation is applied correctly when prebuilt labels are present."""
+    def test_max_length_without_labels(self):
+        """Truncation without labels: labels default to the input IDs and are truncated with the same window."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3)
-        examples = [
-            {"input_ids": [1, 2, 3, 4, 5], "labels": [-100, -100, 3, 4, 5]},
-            {"input_ids": [6, 7, 8], "labels": [-100, 7, 8]},
-        ]
+        examples = [{"input_ids": [1, 2, 3, 4, 5]}, {"input_ids": [6, 7, 8]}]
 
         result = collator(examples)
 
         assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [6, 7, 8]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 1]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[-100, -100, 3], [-100, 7, 8]]))
-
-    def test_max_length_keep_end_with_prebuilt_labels(self):
-        """Test keep_end truncation with prebuilt labels preserves the final tokens."""
-        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3, truncation_mode="keep_end")
-        examples = [
-            {"input_ids": [1, 2, 3, 4, 5], "labels": [-100, -100, 3, 4, 5]},
-            {"input_ids": [6, 7, 8], "labels": [-100, 7, 8]},
-        ]
-
-        result = collator(examples)
-
-        assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
-        torch.testing.assert_close(result["input_ids"], torch.tensor([[3, 4, 5], [6, 7, 8]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 1]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[3, 4, 5], [-100, 7, 8]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [6, 7, 8]]))
 
     def test_max_length_invalid_truncation_mode(self):
         """Test that an invalid truncation_mode raises ValueError."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3, truncation_mode="invalid")
-        examples = [{"input_ids": [1, 2, 3, 4, 5]}]
+        examples = [{"input_ids": [1, 2, 3, 4, 5], "labels": [1, 2, 3, 4, 5]}, {"input_ids": [6, 7, 8], "labels": [6, 7, 8]}]
 
         with pytest.raises(ValueError, match="Unsupported truncation mode"):
             collator(examples)
@@ -1352,6 +1320,27 @@ class TestSFTTrainer(TrlTestCase):
             ]
             assert example["labels"] == expected
 
+    def test_labels_all_masked_after_truncation(self):
+        """Regression test for #3927: when the assistant response lies beyond `max_length`, dataset preparation
+        builds labels that still hold real token IDs, but the slice surviving the collator's truncation is all
+        -100 (the prompt). The bug was masking happening after truncation; building labels before truncation makes
+        this surfaceable."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        # `max_length` is small enough that the kept prefix is entirely prompt tokens (the assistant turn comes later).
+        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, max_length=4, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
+        )
+
+        # Before truncation, the prepared labels contain real (non -100) assistant token IDs.
+        labels = trainer.train_dataset[0]["labels"]
+        assert any(token_id != -100 for token_id in labels)
+
+        # After the collator truncates to `max_length` (keep_start), the surviving labels are all -100.
+        batch = trainer.data_collator([trainer.train_dataset[0]])
+        assert batch["labels"].eq(-100).all()
+
     def test_dataset_prep_builds_labels_for_completion_only(self):
         """Dataset preparation must bake the completion mask into a labels column when completion_only_loss
         resolves to True (the default for prompt-completion datasets)."""
@@ -1402,18 +1391,6 @@ class TestSFTTrainer(TrlTestCase):
 
         assert trainer.train_dataset[:]["labels"] == [[-100, -100, 3, 4], [-100, 6, -100]]
 
-    def test_dataset_prep_no_labels_for_plain_lm(self):
-        """Datasets without any applicable mask must not get a labels column (the collator defaults to using the
-        input IDs as labels), keeping storage neutral."""
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-        )
-
-        assert "labels" not in trainer.train_dataset.column_names
-
     def test_packing_carries_labels(self):
         """With packing enabled, the labels column must be packed alongside input_ids (replacing the masks)."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
@@ -1443,19 +1420,6 @@ class TestSFTTrainer(TrlTestCase):
             SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
-
-    def test_skip_prepare_dataset_with_labels(self):
-        """Datasets providing labels directly are accepted as is with `skip_prepare_dataset=True`."""
-        dataset = Dataset.from_list([{"input_ids": [1, 2, 3, 4], "labels": [-100, -100, 3, 4]} for _ in range(2)])
-
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir, dataset_kwargs={"skip_prepare_dataset": True}, report_to="none"
-        )
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-        )
-
-        assert trainer.train_dataset[:]["labels"] == [[-100, -100, 3, 4], [-100, -100, 3, 4]]
 
     def test_train_completion_only(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
