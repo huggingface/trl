@@ -909,6 +909,7 @@ class XTokenLoss(nn.Module):
         self.uncommon_topk = config.xtoken_uncommon_topk
         self.vocab_topk = config.xtoken_vocab_topk
         self.kl_weight = config.xtoken_kl_weight
+        self.ce_scale = config.xtoken_ce_scale
         self.skip_student_eos = config.uld_skip_student_eos
         self.skip_teacher_eos = config.uld_skip_teacher_eos
         self.student_vocab_size = student_vocab_size
@@ -1021,8 +1022,8 @@ class XTokenLoss(nn.Module):
 
         if self.dynamic_scaling:
             scale = (ce.detach() / kd.detach().clamp(min=1e-8)).clamp(0.01, 100.0)
-            return scale * kd + ce
-        return self.kl_weight * kd + ce
+            return scale * kd + self.ce_scale * ce
+        return self.kl_weight * kd + self.ce_scale * ce
 
     @staticmethod
     def _answer_spans(labels, *, skip_eos):
