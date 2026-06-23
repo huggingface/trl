@@ -970,7 +970,7 @@ class XTokenLoss(nn.Module):
                 ce_terms.append(student_logits[i].sum() * 0.0)
             else:
                 ce_i = F.cross_entropy(
-                    student_logits[i, s0 - 1 : s0 + ss - 1] / T,
+                    student_logits[i, s0 - 1 : s0 + ss - 1],
                     student_labels[i, s0 : s0 + ss],
                     ignore_index=self.ignore_index,
                 )
@@ -982,17 +982,17 @@ class XTokenLoss(nn.Module):
                     acc_num += int((preds_i == labels_i)[valid].sum().item())
                     acc_den += int(valid.sum().item())
 
-            # KD: logit at position t predicts token t+1. Drop the last predictor
-            # (it predicts beyond the span) and align with the predicted tokens'
-            # byte offsets (shifted by 1). Mirrors the reference [:, :-1] / [:, 1:] shift.
-            if ss < 2 or ts < 2:
+            # KD: logit at s0-1 predicts token s0 (first completion token) — same
+            # [:, :-1] / [:, 1:] shift as CE. Skip when s0 or t0 == 0 (no preceding
+            # predictor; CE is already zero'd by the s0 < 1 branch above).
+            if s0 < 1 or t0 < 1:
                 kd_terms.append(student_logits[i].sum() * 0.0)
                 continue
 
-            s_logits_i = student_logits[i, s0 : s0 + ss - 1]
-            t_logits_i = teacher_logits[i, t0 : t0 + ts - 1]
-            s_offs = student_byte_offsets[i, s0 + 1 : s0 + ss].tolist()
-            t_offs = teacher_byte_offsets[i, t0 + 1 : t0 + ts].tolist()
+            s_logits_i = student_logits[i, s0 - 1 : s0 + ss - 1]
+            t_logits_i = teacher_logits[i, t0 - 1 : t0 + ts - 1]
+            s_offs = student_byte_offsets[i, s0 : s0 + ss].tolist()
+            t_offs = teacher_byte_offsets[i, t0 : t0 + ts].tolist()
             s_groups, t_groups = ULDLoss._align_by_byte_offsets(s_offs, t_offs)
             paired = [(sg, tg) for sg, tg in zip(s_groups, t_groups, strict=False) if sg and tg]
             if not paired:
