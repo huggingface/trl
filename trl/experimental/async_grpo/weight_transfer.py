@@ -25,12 +25,11 @@ import torch
 from accelerate.logging import get_logger
 from huggingface_hub import create_bucket
 
-from trl.import_utils import is_vllm_available
-
+from ...import_utils import is_vllm_available
 from .delta_codec import UpdateKind, extract_sparse_batched
 
 
-if is_vllm_available(min_version="0.17.1"):
+if is_vllm_available(min_version="0.23.0"):
     from vllm.distributed.weight_transfer.base import SparseWeightPatch
     from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
     from vllm.utils.network_utils import get_ip, get_open_port
@@ -74,10 +73,10 @@ class WeightTransfer(ABC):
         server_timeout: float = 240.0,
         init_weight_transfer_timeout: int = 1800,
     ):
-        if not is_vllm_available(min_version="0.17.1"):
+        if not is_vllm_available(min_version="0.23.0"):
             raise ImportError(
-                "vLLM >= 0.17.1 is required to use the weight-sync transports. Install it with: "
-                "pip install 'vllm>=0.17.1'"
+                "vLLM >= 0.23.0 is required to use the weight-sync transports. Install it with: "
+                "pip install 'vllm>=0.23.0'"
             )
         self.vllm_server_url = vllm_server_url.rstrip("/")
         self.server_timeout = server_timeout

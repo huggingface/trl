@@ -27,7 +27,7 @@
 Usage:
 
 ```bash
-python trl/experimental/sdpo/sdpo.py \
+python examples/scripts/sdpo.py \
     --model_name_or_path Qwen/Qwen2.5-Math-1.5B-Instruct \
     --dataset_name openai/gsm8k \
     --dataset_config main \
@@ -44,7 +44,7 @@ python trl/experimental/sdpo/sdpo.py \
     --generation_batch_size 32 \
     --distillation_alpha 1.0 \
     --distillation_mode sampled_token \
-    --sdpo_policy_loss_mode hybrid \
+    --distillation_weight 0.5 \
     --report_to none \
     --eval_strategy steps \
     --eval_steps 1000 \

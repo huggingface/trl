@@ -42,8 +42,8 @@ pip install "openenv-textarena @ git+https://huggingface.co/spaces/openenv/wordl
 hf auth login   # needs write access to create the bucket + (for Option 1) deploy Spaces
 ```
 
-The vLLM side needs a build with sparse weight transfer (vllm-project/vllm#40096); the Space Dockerfile installs it
-from the nightly index. Locally, install the same nightly (see the repo's `dev_delta_v2/INSTALL.md`).
+The vLLM side needs sparse weight transfer (vllm-project/vllm#40096), which shipped in **vLLM 0.23.0** — both the
+Space Dockerfile and a local install just need `vllm>=0.23.0`.
 
 ### Step 1 — deploy the vLLM inference Space (GPU)
 

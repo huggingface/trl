@@ -66,7 +66,7 @@ class RLOOScriptArguments(ScriptArguments):
 
 
 def main(script_args, training_args, model_args, dataset_args):
-    from accelerate import logging
+    from accelerate.logging import get_logger
     from datasets import load_dataset
 
     from trl import RLOOTrainer, get_dataset, get_kbit_device_map, get_peft_config, get_quantization_config
@@ -77,7 +77,7 @@ def main(script_args, training_args, model_args, dataset_args):
         think_format_reward,
     )
 
-    logger = logging.get_logger(__name__)
+    logger = get_logger(__name__)
 
     reward_funcs_registry = {
         "accuracy_reward": accuracy_reward,
@@ -109,7 +109,7 @@ def main(script_args, training_args, model_args, dataset_args):
 
     training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
+        trust_remote_code=training_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
     )

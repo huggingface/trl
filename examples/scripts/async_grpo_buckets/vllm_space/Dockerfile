@@ -13,8 +13,8 @@ FROM vllm/vllm-openai:latest
 
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 
-# Overlay the vLLM nightly that contains #40096 (sparse weight transfer), then TRL (v3 branch) + a recent transformers.
-RUN pip install -U --pre vllm --extra-index-url https://wheels.vllm.ai/nightly/cu129
+# vLLM 0.23.0 ships sparse weight transfer (vllm-project/vllm#40096), then TRL (v3 branch) + a recent transformers.
+RUN pip install "vllm>=0.23.0"
 RUN pip install "transformers>=5.2.0"
 RUN pip install "trl @ git+https://github.com/huggingface/trl.git@delta-weight-sync-v3"
 
