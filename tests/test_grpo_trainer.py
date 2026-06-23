@@ -283,6 +283,40 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
+    def test_mgpo_reward_base(self):
+        def compute_weights(rewards, num_generations, mgpo_reward_base, mgpo_lambda=0.5, mgpo_target_success_rate=0.5):
+            return GRPOTrainer._compute_mgpo_weights(
+                rewards,
+                num_generations,
+                mgpo_reward_base,
+                mgpo_lambda,
+                mgpo_target_success_rate,
+            )
+
+        num_generations = 2
+        rewards = torch.tensor([1.0, 0.0, 1.0, 1.0, 0.0, 0.0])
+        weights_mixed = compute_weights(rewards, num_generations, mgpo_reward_base=1.0)
+        weights_all_success = compute_weights(
+            torch.tensor([1.0, 1.0, 1.0, 1.0]), num_generations, mgpo_reward_base=1.0
+        )
+        weights_all_fail = compute_weights(
+            torch.tensor([0.0, 0.0, 0.0, 0.0]), num_generations, mgpo_reward_base=1.0
+        )
+
+        # pc=0.5 group gets peak weight (D_ME=0 -> w=1.0)
+        torch.testing.assert_close(weights_mixed[:2], torch.tensor([1.0, 1.0]))
+        assert weights_mixed[0] > weights_all_success[0]
+        assert weights_mixed[0] > weights_all_fail[0]
+
+        # mgpo_reward_base=0.0 is valid (must not be skipped by truthiness check)
+        weights_zero_base = compute_weights(
+            torch.tensor([0.0, -1.0, 1.0, 1.0]), num_generations, mgpo_reward_base=0.0
+        )
+        assert weights_zero_base.shape == (4,)
+
+        with pytest.raises(ValueError, match="mgpo_lambda"):
+            GRPOConfig(output_dir="/tmp/test", mgpo_lambda=0.0)
+
     @pytest.mark.parametrize(
         "model_id",
         [

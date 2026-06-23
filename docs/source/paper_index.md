@@ -123,6 +123,47 @@ $$
 
 This token-level ratio is then combined with a shared advantage  \\( \hat{A}_i \\), and the GRPO objective clips and optimizes each token independently across the sequence.
 
+### MaxEnt-Guided Policy Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2511.06221
+
+MaxEnt-Guided Policy Optimization (MGPO) is a GRPO add-on that reweights advantages by each prompt group's success rate. Groups closest to maximum uncertainty (p_c ≈ p₀) receive the highest weight, steering training toward prompts at the model's capability boundary. MGPO was used in [VibeThinker-1.5B](https://huggingface.co/papers/2511.06221) and [VibeThinker-3B](https://arxiv.org/pdf/2606.16140).
+
+To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    mgpo_reward_base=1.0,  # success threshold: reward >= this counts as correct (section 3.4)
+    mgpo_lambda=0.5,  # entropy deviation coefficient λ (section 3.4)
+    mgpo_target_success_rate=0.5,  # target group success rate p₀ for peak weight (section 3.4)
+    scale_rewards="group",  # standard GRPO group normalization
+)
+```
+
+`mgpo_reward_base` is the per-rollout success cutoff and should match your reward function's scale (for example, `1.0` for binary verifiable rewards). It is not necessarily the maximum possible reward.
+
+#### Advantage reweighting
+
+For each prompt, MGPO computes the empirical group success rate:
+
+$$
+p_c(q) = \frac{1}{G}\sum_{i=1}^{G}\mathbb{I}(r_i \geq \text{mgpo\_reward\_base})
+$$
+
+The max-entropy deviation distance and reweighting factor are:
+
+$$
+D_{\mathrm{ME}}(p_c(q)\|p_0) = p_c(q)\log\frac{p_c(q)}{p_0} + (1-p_c(q))\log\frac{1-p_c(q)}{1-p_0}
+$$
+
+$$
+w_{\mathrm{ME}}(p_c(q)) = \exp(-\lambda \cdot D_{\mathrm{ME}}(p_c(q)\|p_0))
+$$
+
+The reweighted advantage is  \\( \hat{A}'_j(q) = w_{\mathrm{ME}}(p_c(q)) \cdot \hat{A}_j(q) \\), applied after GRPO std-normalization.
+
 ### Geometric-Mean Policy Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2507.20673
