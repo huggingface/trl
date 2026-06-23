@@ -2653,9 +2653,9 @@ class TestPatchChunkedCELMHead:
     @pytest.mark.parametrize("model_id", _CHUNKED_CE_VLM_MODEL_IDS)
     def test_patched_forward_preserves_signature_vlm(self, model_id):
         """The patched forward must keep the original `forward` signature. Transformers' `generate`
-        inspects `model.forward` in `_validate_model_kwargs` to learn the accepted kwargs; if the patched
-        signature hides VLM image kwargs (e.g. `pixel_values`, `spatial_shapes`), they are wrongly rejected
-        during on-policy generation (GKD/GOLD)."""
+        inspects `model.forward` in `_validate_model_kwargs` to learn the accepted kwargs; if the patched signature
+        hides VLM image kwargs (e.g. `pixel_values`, `spatial_shapes`), they are wrongly rejected during on-policy
+        generation (GKD/GOLD)."""
         model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
         expected = inspect.signature(model.forward)
         _patch_chunked_ce_lm_head(model, chunk_size=self.CHUNK_SIZE, is_vlm=True)
