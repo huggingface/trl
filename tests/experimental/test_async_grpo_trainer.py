@@ -13,7 +13,11 @@
 # limitations under the License.
 
 import itertools
+import json
+import os
 import queue
+import subprocess
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -23,7 +27,14 @@ from transformers import AutoTokenizer
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
 
-from ..testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
+
+
+ROOT = Path(__file__).resolve().parents[2]
+_HERE = Path(__file__).parent
+_FSDP2_WORKER = _HERE / "_async_grpo_fsdp2_worker.py"
+_FSDP2_CONFIG = _HERE / "data" / "accelerate_configs" / "fsdp2_reshard.yaml"
+_FSDP2_RESULT_PREFIX = "ASYNC_GRPO_FSDP2_RESULT"
 
 
 def dummy_reward_func(completions, **kwargs):
@@ -128,3 +139,41 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_torch_multi_accelerator
+    def test_train_fsdp2(self):
+        # Functional smoke: AsyncGRPOTrainer trains under a 2-process FSDP2 group. This exercises the
+        # `patch_chunked_lm_head` chunked-logprob path on FSDP2-sharded parameters end-to-end and confirms
+        # the optimizer actually updates them. The worker uses an in-process stub rollout worker (no vLLM
+        # server / NCCL weight transfer), so the only distributed surface is the FSDP2 parameter lifecycle.
+        #
+        # (This is NOT a #6077 all-gather microbenchmark: under FSDP2 the per-parameter gathers are driven
+        # by autograd unshard hooks, not by `DTensor.full_tensor`, and the trainer's weight-sync path calls
+        # `full_tensor` on every parameter every step — so counting `full_tensor` cannot isolate the chunk
+        # path. The #6077 question is settled by static analysis instead: `patch_chunked_lm_head` has no
+        # `torch.utils.checkpoint` recompute, so the per-chunk re-gather that PR #6077 fixed for SFT's
+        # `chunked_nll` is structurally absent here.)
+        #
+        # Pin the repo root onto PYTHONPATH for the child: `accelerate launch` re-execs each rank via
+        # torch.distributed.elastic, which sets sys.path[0] to the launched script's directory
+        # (tests/experimental/), not cwd. Without this, a non-editable `trl` already in site-packages
+        # would shadow the working tree and the test would exercise the wrong code.
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join([str(ROOT), env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
+        result = subprocess.run(
+            ["accelerate", "launch", "--config_file", str(_FSDP2_CONFIG), str(_FSDP2_WORKER)],
+            env=env,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"FSDP2 worker failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+        result_lines = [ln for ln in result.stdout.splitlines() if ln.startswith(_FSDP2_RESULT_PREFIX)]
+        assert len(result_lines) == 1, f"expected exactly one result line, got {result_lines}\n{result.stdout}"
+        measured = json.loads(result_lines[0][len(_FSDP2_RESULT_PREFIX) :].strip())
+
+        # Training actually ran under FSDP2, produced a finite loss, and updated the parameters.
+        assert measured["steps"] >= 1, f"no training steps ran: {measured}"
+        assert measured["train_loss_finite"], f"train loss not finite under FSDP2: {measured}"
+        assert measured["params_changed"], f"parameters did not change under FSDP2: {measured}"

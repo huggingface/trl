@@ -1,0 +1,29 @@
+# 2-process FSDP2 config for the async-GRPO FSDP2 functional test (test_train_fsdp2).
+#
+# `fsdp_reshard_after_forward: true` is set explicitly so the test exercises the resharding parameter
+# lifecycle rather than relying on FSDP's default. Mirrors `examples/accelerate_configs/fsdp2.yaml`
+# with `num_processes: 2` for a 2-GPU node.
+compute_environment: LOCAL_MACHINE
+debug: false
+distributed_type: FSDP
+downcast_bf16: 'no'
+enable_cpu_affinity: false
+fsdp_config:
+  fsdp_activation_checkpointing: false
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_cpu_ram_efficient_loading: true
+  fsdp_offload_params: false
+  fsdp_reshard_after_forward: true
+  fsdp_state_dict_type: FULL_STATE_DICT
+  fsdp_version: 2
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 2
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false
