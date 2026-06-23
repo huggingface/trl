@@ -122,7 +122,7 @@ class GOLDConfig(SFTConfig):
             P-KL: restrict KL to the global top-k teacher tokens by max logit.
         xtoken_kl_weight (`float`, *optional*, defaults to `1.0`):
             Weight for the X-Token KD term when `xtoken_dynamic_scaling=False`.
-        xtoken_ce_scale (`float`, *optional*, defaults to `0.1`):
+        xtoken_ce_scale (`float`, *optional*, defaults to `1.0`):
             Scale factor for the CE term in the X-Token loss when `xtoken_dynamic_scaling=False`.
         > Parameters that control vLLM integration
 
@@ -427,7 +427,7 @@ class GOLDConfig(SFTConfig):
         },
     )
     xtoken_ce_scale: float = field(
-        default=0.1,
+        default=1.0,
         metadata={
             "help": (
                 "Scale factor for the CE term in the X-Token loss. Only used when `xtoken_dynamic_scaling=False`."
