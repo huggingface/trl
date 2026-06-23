@@ -162,10 +162,10 @@ The merged distribution is unnormalized (sums to 0.81), but this is intentional 
 
 ## Example script
 
-Use [`trl/experimental/gold/gold.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/gold/gold.py) to launch GOLD training from the command line. The script supports full training and LoRA via the standard `ModelConfig` flags.
+Use [`examples/scripts/gold.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/gold.py) to launch GOLD training from the command line. The script supports full training and LoRA via the standard `ModelConfig` flags.
 
 ```bash
-python trl/experimental/gold/gold.py \
+python examples/scripts/gold.py \
     --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \

@@ -68,14 +68,14 @@ import argparse
 
 
 def main(script_args, training_args, model_args, dataset_args):
-    from accelerate import logging
+    from accelerate.logging import get_logger
     from datasets import load_dataset
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from trl import get_dataset, get_peft_config
     from trl.experimental.kto import KTOTrainer
 
-    logger = logging.get_logger(__name__)
+    logger = get_logger(__name__)
 
     # Load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(

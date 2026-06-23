@@ -37,7 +37,7 @@ Expected dataset formats:
 Example:
 
 ```bash
-python trl/experimental/sdft/sdft.py \
+python examples/scripts/sdft.py \
     --model_name_or_path Qwen/Qwen3.5-0.8B \
     --dataset_name your-org/your-dataset \
     --output_dir outputs/sdft-qwen3.5-0.8b \
