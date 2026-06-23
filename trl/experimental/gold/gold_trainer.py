@@ -947,6 +947,8 @@ class XTokenLoss(nn.Module):
 
         if teacher_logits.shape[-1] > self.teacher_vocab_size:
             teacher_logits = teacher_logits[..., : self.teacher_vocab_size]
+        if student_logits.shape[-1] > self.student_vocab_size:
+            student_logits = student_logits[..., : self.student_vocab_size]
 
         s_starts, s_sizes = self._answer_spans(student_labels, skip_eos=self.skip_student_eos)
         t_starts, t_sizes = self._answer_spans(teacher_labels, skip_eos=self.skip_teacher_eos)
@@ -1886,9 +1888,7 @@ class GOLDTrainer(SFTTrainer):
                 backend = processing_class.backend_tokenizer
                 result = {}
 
-                if "prompt" in example and (
-                    "completion" in example or isinstance(example.get("prompt"), list)
-                ):  # prompt-completion case
+                if "prompt" in example and "completion" in example:  # prompt-completion case
                     if is_conversational(example):
                         prompt_text = processing_class.apply_chat_template(
                             example["prompt"],
