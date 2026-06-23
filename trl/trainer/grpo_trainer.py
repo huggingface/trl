@@ -134,7 +134,7 @@ EnvironmentFactory = Callable[[], _SupportsReset]
 
 
 @dataclass
-class _GRPOLossResult:
+class _GRPOLossState:
     loss: torch.Tensor
     mode: str
     mask: torch.Tensor
@@ -2610,7 +2610,7 @@ class GRPOTrainer(_BaseTrainer):
 
         return phi_seq  # (B, 1)
 
-    def _compute_loss_result(self, model, inputs):
+    def _compute_loss_state(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
@@ -2770,7 +2770,7 @@ class GRPOTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
             loss = loss + self.router_aux_loss_coef * aux_loss / normalizer
-        return _GRPOLossResult(
+        return _GRPOLossState(
             loss=loss,
             mode=mode,
             mask=mask,
@@ -2786,12 +2786,12 @@ class GRPOTrainer(_BaseTrainer):
             aux_loss=aux_loss,
         )
 
-    def _log_loss_metrics(self, result: _GRPOLossResult):
-        mode = result.mode
-        mask = result.mask
-        advantages = result.advantages
-        entropies = result.entropies
-        coef_1 = result.coef_1
+    def _log_loss_metrics(self, state: _GRPOLossState):
+        mode = state.mode
+        mask = state.mask
+        advantages = state.advantages
+        entropies = state.entropies
+        coef_1 = state.coef_1
         completion_token_count = mask.sum().clamp(min=1.0)
 
         def masked_batch_mean(x):
@@ -2800,15 +2800,11 @@ class GRPOTrainer(_BaseTrainer):
             else:
                 return (x * mask).sum() / completion_token_count
 
-        if self.aux_loss_enabled:
-            aux_loss = result.aux_loss
-            assert aux_loss is not None
-            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
+        if self.aux_loss_enabled and state.aux_loss is not None:
+            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(state.aux_loss).mean().item())
 
-        if self.beta != 0.0:
-            per_token_kl = result.per_token_kl
-            assert per_token_kl is not None
-            mean_kl = masked_batch_mean(per_token_kl)
+        if self.beta != 0.0 and state.per_token_kl is not None:
+            mean_kl = masked_batch_mean(state.per_token_kl)
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
         mean_entropy = masked_batch_mean(entropies)
@@ -2837,16 +2833,14 @@ class GRPOTrainer(_BaseTrainer):
             cispo_clip_ratio = masked_batch_mean(is_cispo_clipped.float())
             gathered_cispo_clip_ratio = self.accelerator.gather(cispo_clip_ratio)
             self._metrics[mode]["cispo_clip_ratio"].append(gathered_cispo_clip_ratio.nanmean().item())
-        elif self.loss_type == "vespo":
-            phi_seq = result.phi_seq
-            assert phi_seq is not None
-            gathered_phi_seq = self.accelerator.gather(phi_seq)
+        elif self.loss_type == "vespo" and state.phi_seq is not None:
+            gathered_phi_seq = self.accelerator.gather(state.phi_seq)
             self._metrics[mode]["vespo/phi_seq_mean"].append(gathered_phi_seq.nanmean().item())
 
     def _compute_loss(self, model, inputs):
-        result = self._compute_loss_result(model, inputs)
-        self._log_loss_metrics(result)
-        return result.loss
+        state = self._compute_loss_state(model, inputs)
+        self._log_loss_metrics(state)
+        return state.loss
 
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
     # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
