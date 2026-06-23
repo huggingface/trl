@@ -14,6 +14,7 @@
 
 import logging
 
+import pytest
 import torch
 from datasets import Dataset, load_dataset
 from transformers import TrainerCallback
@@ -72,6 +73,31 @@ class RecordingTeacherClient:
 
 
 class TestSDPOTrainer(TrlTestCase):
+    def test_trust_remote_code(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            SDPOTrainer(
+                model=model_id,
+                reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+                args=SDPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = SDPOTrainer(
+            model=model_id,
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=SDPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     def test_train_with_positional_config_argument(self):
         dataset = Dataset.from_dict(
             {
