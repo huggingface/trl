@@ -1250,6 +1250,11 @@ class KTOTrainer(_BaseTrainer):
                 self.accelerator.gather_for_metrics(rejected_logits_sum.nansum()).nansum().item() / all_num_rejected
             )
 
+        if all_num_chosen > 0 and all_num_rejected > 0:
+            self._metrics[mode]["rewards/margins"].append(
+                self._metrics[mode]["rewards/chosen"][-1] - self._metrics[mode]["rewards/rejected"][-1]
+            )
+
         return loss
 
     def _compute_loss(self, model, inputs, return_outputs):
@@ -1401,6 +1406,11 @@ class KTOTrainer(_BaseTrainer):
                 self.accelerator.gather_for_metrics(policy_rejected_logits.nansum()).nansum().item() / all_num_rejected
             )
 
+        if all_num_chosen > 0 and all_num_rejected > 0:
+            self._metrics[mode]["rewards/margins"].append(
+                self._metrics[mode]["rewards/chosen"][-1] - self._metrics[mode]["rewards/rejected"][-1]
+            )
+
         loss = losses.nanmean()
         if self.aux_loss_enabled:
             loss += self.aux_loss_coef * aux_loss
@@ -1451,8 +1461,6 @@ class KTOTrainer(_BaseTrainer):
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
-        if "rewards/chosen" in metrics and "rewards/rejected" in metrics:
-            metrics["rewards/margins"] = metrics["rewards/chosen"] - metrics["rewards/rejected"]
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
