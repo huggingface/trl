@@ -31,12 +31,15 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState, logging
+from accelerate import PartialState
+from accelerate.logging import get_logger
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
     BitsAndBytesConfig,
     PretrainedConfig,
     PreTrainedModel,
@@ -66,7 +69,7 @@ if is_peft_available():
     from peft import LoraConfig, PeftConfig, PeftModel
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
@@ -1021,8 +1024,19 @@ def create_model_from_path(
         )
     kwargs["device_map"] = kwargs.get("device_map", "auto")
     if architecture is None:
-        config = AutoConfig.from_pretrained(model_id)
-        architecture = getattr(transformers, config.architectures[0])
+        # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
+        architecture = getattr(transformers, config.architectures[0], None)
+        if architecture is None:
+            # Remote-code checkpoint: the architecture name lives in the dynamic module, not in
+            # `transformers`. Pick the most specific auto class declared in `config.auto_map`.
+            auto_map = config.auto_map or {}
+            for candidate in (AutoModelForImageTextToText, AutoModelForCausalLM):
+                if candidate.__name__ in auto_map:
+                    architecture = candidate
+                    break
+            else:
+                architecture = AutoModelForCausalLM
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
 

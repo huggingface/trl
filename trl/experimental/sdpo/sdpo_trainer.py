@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import inspect
+import math
 import re
 import textwrap
 from collections import defaultdict
@@ -23,6 +24,7 @@ from typing import Any
 
 import datasets
 import torch
+from accelerate.logging import get_logger
 from accelerate.utils import gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
@@ -39,7 +41,7 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available, logging
+from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available
 
 from ...data_utils import apply_chat_template, is_conversational
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
@@ -69,7 +71,7 @@ from .sdpo_config import SDPOConfig
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 if is_peft_available():
@@ -361,6 +363,7 @@ class SDPOTrainer(_BaseTrainer):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
             logger.warning(
@@ -403,7 +406,10 @@ class SDPOTrainer(_BaseTrainer):
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), truncation_side="left", padding_side="left"
+                get_config_model_id(model.config),
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
             )
 
         if isinstance(processing_class, ProcessorMixin):
@@ -605,6 +611,7 @@ class SDPOTrainer(_BaseTrainer):
                 reward_model_init_kwargs = args.model_init_kwargs or {}
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     reward_model_init_kwargs["device_map"] = None
+                reward_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func,
                     num_labels=1,
@@ -635,7 +642,9 @@ class SDPOTrainer(_BaseTrainer):
         ):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(get_config_model_id(reward_func.config))
+                    reward_processing_class = AutoTokenizer.from_pretrained(
+                        get_config_model_id(reward_func.config), trust_remote_code=args.trust_remote_code
+                    )
                 if reward_processing_class.pad_token_id is None:
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 reward_func.config.pad_token_id = reward_processing_class.pad_token_id
@@ -727,6 +736,7 @@ class SDPOTrainer(_BaseTrainer):
         model_init_kwargs = self.args.model_init_kwargs or {}
         if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
             model_init_kwargs["device_map"] = None
+        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
         self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()
@@ -1647,10 +1657,22 @@ class SDPOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {k: sum(v) / len(v) for k, v in self._metrics[mode].items() if v}
+        # Average the metrics
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            # Filter out NaN values before averaging. A reward function that returns None for all samples
+            # in a batch produces NaN for that batch's metric. With logging_steps > 1, a naive sum()/len()
+            # would let a single NaN contaminate valid data from other batches. Only return None when no
+            # valid values remain (e.g. JSON loggers crash on float NaN).
+            valid = [v for v in val if not math.isnan(v)]
+            metrics[key] = sum(valid) / len(valid) if valid else None
+
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
-            metrics = {f"eval_{k}": v for k, v in metrics.items()}
-        logs = {**logs, **metrics}
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 

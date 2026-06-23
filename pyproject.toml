@@ -49,7 +49,7 @@ bco = [
     "joblib"
 ]
 deepspeed = [
-    "deepspeed>=0.14.4,<0.19.2",  # temporary hotfix for #6089
+    "deepspeed>=0.14.4",
     "transformers!=5.1.0",  # see transformers#43780
 ]
 kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
@@ -80,7 +80,7 @@ test = [
     "pytest"
 ]
 vllm = [
-    "vllm>=0.12.0,<=0.19.0",
+    "vllm>=0.13.0,<=0.22.1",
     "fastapi",
     "pydantic",
     "aiohttp>=3.13.3",
@@ -98,12 +98,15 @@ math_verify = [
 openreward = [
     "openreward>=0.1.109; python_version >= '3.11'",  # openreward requires Python 3.11+
 ]
+harbor = [
+    "harbor>=0.13.0; python_version >= '3.12'",  # harbor requires Python 3.12+ (pulls its sandbox backends)
+]
 dev = [
     # bco
     "scikit-learn",
     "joblib",
     # deepspeed
-    "deepspeed>=0.14.4,<0.19.2",  # temporary hotfix for #6089
+    "deepspeed>=0.14.4",
     # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
