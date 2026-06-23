@@ -330,6 +330,10 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
+        # MoE models log the load-balancing auxiliary loss (on by default)
+        if trainer.aux_loss_enabled:
+            assert trainer.state.log_history[-1]["aux_loss"] is not None
+
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
@@ -364,6 +368,29 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        def reward_func(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        with pytest.raises(ValueError, match="custom code"):
+            GRPOTrainer(
+                model=model_id,
+                args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                reward_funcs=reward_func,
+                train_dataset=dataset,
+            )
+
+        trainer = GRPOTrainer(
+            model=model_id,
+            args=GRPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            reward_funcs=reward_func,
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
 
     @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
     @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"])
@@ -539,6 +566,66 @@ class TestGRPOTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_liger_kernel_with_peft_lm_head_raises(self):
+        # The Liger fused GRPO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+        # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head (#4612).
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        with pytest.raises(ValueError, match="lm_head"):
+            GRPOTrainer(
+                model=model,
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"]),
+            )
+
+    @require_peft
+    def test_liger_kernel_with_peft_non_lm_head_target_allowed(self):
+        # The lm_head guard must only fire when the adapter actually wraps lm_head. An adapter that targets other
+        # modules (here q_proj/v_proj) leaves lm_head as a plain Linear, so Liger reads the real (frozen) head weight
+        # and there is nothing to silently drop. Guards against an over-broad regression.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        kwargs = {
+            "model": model,
+            "reward_funcs": "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            "args": training_args,
+            "train_dataset": dataset,
+            "peft_config": LoraConfig(target_modules=["q_proj", "v_proj"]),
+        }
+        if is_liger_kernel_available():
+            GRPOTrainer(**kwargs)  # must construct without raising
+        else:
+            # Liger isn't installed on this lane: the guard runs before the Liger-availability check, so the only
+            # acceptable failure is the missing-dependency ImportError, never the lm_head ValueError.
+            with pytest.raises(ImportError):
+                GRPOTrainer(**kwargs)
+
+    @require_peft
+    def test_liger_kernel_with_peft_modules_to_save_lm_head_allowed(self):
+        # `modules_to_save=["lm_head"]` makes the head a fully trained copy (ModulesToSaveWrapper, not a tuner layer),
+        # so `lm_head.weight` resolves to the trained weight and Liger trains it correctly. This is the documented
+        # workaround in the guard's error message, so it must stay unblocked.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        kwargs = {
+            "model": model,
+            "reward_funcs": "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            "args": training_args,
+            "train_dataset": dataset,
+            "peft_config": LoraConfig(target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]),
+        }
+        if is_liger_kernel_available():
+            GRPOTrainer(**kwargs)  # must construct without raising
+        else:
+            with pytest.raises(ImportError):
+                GRPOTrainer(**kwargs)
 
     @require_peft
     def test_train_peft_model(self):

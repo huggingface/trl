@@ -31,7 +31,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.data.data_collator import DataCollatorMixin
 
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import pad, patch_chunked_lm_head
+from ...trainer.utils import nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
 from .weight_transfer import WeightTransferClient
@@ -396,12 +396,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Training arguments
         self.epsilon_low = self.args.epsilon
-        self.epsilon_high = self.args.epsilon_high
+        self.epsilon_high = self.args.epsilon_high if self.args.epsilon_high is not None else self.args.epsilon
         self.temperature = self.args.temperature
 
         # Model
         model_name = model
         model_init_kwargs = self.args.model_init_kwargs or {}
+        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = AutoModelForCausalLM.from_pretrained(
@@ -415,15 +416,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
-        # MoE load-balancing auxiliary loss, enabled via `output_router_logits` in `model_init_kwargs`
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
         text_config = model.config.get_text_config()
-        self.aux_loss_enabled = getattr(text_config, "output_router_logits", False)
-        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0)
-        if self.aux_loss_enabled and self.router_aux_loss_coef == 0.0:
-            logger.warning(
-                "You set `output_router_logits=True` in the model config, but `router_aux_loss_coef` is `0.0`, so the "
-                "auxiliary loss has no effect. Set `router_aux_loss_coef > 0.0` to enable it."
-            )
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
+        self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = self.args.router_aux_loss_coef
 
         patch_chunked_lm_head(
             model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
@@ -431,7 +428,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name)
+            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=self.args.trust_remote_code)
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
@@ -591,7 +588,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         completion_mask = inputs["completion_mask"][mask_bool].unsqueeze(0)
         old_log_probs = inputs["old_log_probs"][mask_bool].unsqueeze(0)
         position_ids = inputs["position_ids"][mask_bool].unsqueeze(0)
-        per_token_advantages = inputs["advantages"][mask_bool].unsqueeze(0)
+        advantages = inputs["advantages"][mask_bool].unsqueeze(0)
 
         forward_start = time.time()
         outputs = model(
@@ -606,11 +603,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         completion_mask = completion_mask[:, 1:]
         old_log_probs = old_log_probs[:, 1:]
-        per_token_advantages = per_token_advantages[:, 1:]
+        advantages = advantages[:, 1:]
         log_ratio = log_probs - old_log_probs
-        ratio = torch.exp(log_ratio)
-        clipped = torch.clamp(ratio, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss = -torch.min(ratio * per_token_advantages, clipped * per_token_advantages)
+        coef_1 = torch.exp(log_ratio)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        per_token_loss1 = coef_1 * advantages
+        per_token_loss2 = coef_2 * advantages
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
 
         # DDP/FSDP averages gradients across ranks (world_size).
         # To get correct per-token normalization we scale by 1/tokens_per_rank
@@ -634,11 +633,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             local_count = valid_mask.sum().float()
 
             local_ratio_sum = (
-                ratio[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
+                coef_1[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
             # Approx KL: http://joschu.net/blog/kl-approx.html
             local_kl_sum = (
-                ((ratio[valid_mask] - 1) - log_ratio[valid_mask]).sum()
+                ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
                 if valid_mask.any()
                 else torch.zeros((), device=completion_mask.device)
             )
@@ -647,21 +646,66 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
 
-            clipped = (ratio < 1 - self.epsilon_low) | (ratio > 1 + self.epsilon_high)
-            local_clip_sum = (
-                clipped[valid_mask].float().sum()
+            # Compute the clipped probability ratios. A token is counted as clipped only when clipping is binding in a
+            # policy-relevant direction: low clip when the advantage is negative, high clip when it is positive.
+            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
+            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
+            is_region_clipped = is_low_clipped | is_high_clipped
+            local_low_clip_sum = (
+                is_low_clipped[valid_mask].float().sum()
+                if valid_mask.any()
+                else torch.zeros((), device=completion_mask.device)
+            )
+            local_high_clip_sum = (
+                is_high_clipped[valid_mask].float().sum()
+                if valid_mask.any()
+                else torch.zeros((), device=completion_mask.device)
+            )
+            local_region_clip_sum = (
+                is_region_clipped[valid_mask].float().sum()
                 if valid_mask.any()
                 else torch.zeros((), device=completion_mask.device)
             )
 
-            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, clip_sum, count]
-            stats = torch.stack([local_ratio_sum, local_kl_sum, local_entropy_sum, local_clip_sum, local_count])
+            # Per-rank clip fractions, gathered below to report the cross-rank saturation extrema.
+            local_low_clip_mean = local_low_clip_sum / local_count.clamp(min=1.0)
+            local_high_clip_mean = local_high_clip_sum / local_count.clamp(min=1.0)
+
+            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum, count]
+            stats = torch.stack(
+                [
+                    local_ratio_sum,
+                    local_kl_sum,
+                    local_entropy_sum,
+                    local_low_clip_sum,
+                    local_high_clip_sum,
+                    local_region_clip_sum,
+                    local_count,
+                ]
+            )
             stats = self.accelerator.reduce(stats, reduction="sum")
-            global_ratio_sum, global_kl_sum, global_entropy_sum, global_clip_sum, global_count = stats.unbind(0)
+            (
+                global_ratio_sum,
+                global_kl_sum,
+                global_entropy_sum,
+                global_low_clip_sum,
+                global_high_clip_sum,
+                global_region_clip_sum,
+                global_count,
+            ) = stats.unbind(0)
             self._metrics["train"]["ratio"].append((global_ratio_sum / global_count).item())
             self._metrics["train"]["kl"].append((global_kl_sum / global_count).item())
             self._metrics["train"]["entropy"].append((global_entropy_sum / global_count).item())
-            self._metrics["train"]["clip_ratio"].append((global_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/low_mean"].append((global_low_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
+
+            # Cross-rank saturation extrema, mirroring GRPOTrainer's clip_ratio/low_min and clip_ratio/high_max:
+            # the smallest per-rank low-clip and largest per-rank high-clip fractions across ranks.
+            gathered_low_clip = self.accelerator.gather(local_low_clip_mean)
+            gathered_high_clip = self.accelerator.gather(local_high_clip_mean)
+            self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
+            self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
 
             if self.aux_loss_enabled:
                 gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
