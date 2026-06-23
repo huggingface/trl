@@ -1003,7 +1003,7 @@ class GRPOTrainer(_BaseTrainer):
         #    in group formation.
         # 2. repeats the batch multiple times to allow reusing generations across multiple updates. Refer to
         #    _prepare_inputs to see how the generations are stored and reused.
-
+        
         # In the following figure, the values are the prompt indices. Each row shows the per-step batch
         # returned by `_prepare_inputs`; rows within a `steps_per_generation` block are slices of the same
         # generated batch. When `num_iterations > 1`, that block is reused for multiple optimization passes
