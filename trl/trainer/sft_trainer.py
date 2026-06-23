@@ -1590,44 +1590,41 @@ class SFTTrainer(_BaseTrainer):
             # token when all completion or assistant tokens lie beyond the truncation boundary (e.g., the prompt
             # alone reaches `max_length`). All labels of such examples become -100, so they contribute nothing to
             # the loss, and a batch made entirely of them silently yields a zero loss (see GH-3927). Drop these
-            # examples upfront and warn.
+            # examples upfront.
             if args.max_length is not None and not packing:
-                if args.truncation_mode == "keep_end":
-                    truncation_slice = slice(-args.max_length, None)
-                else:  # "keep_start"
-                    truncation_slice = slice(None, args.max_length)
+                if self.truncation_mode == "keep_start":
+                    sl = slice(None, self.max_length)
+                elif self.truncation_mode == "keep_end":
+                    sl = slice(-self.max_length, None)
+                else:
+                    raise ValueError(
+                        f"Unsupported truncation mode: {self.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                    )
 
-                def has_trainable_tokens(examples, truncation_slice):
+                def has_trainable_tokens(example, sl):
                     # An example is kept if at least one trainable token (label != -100) survives truncation.
-                    return [any(label != -100 for label in labels[truncation_slice]) for labels in examples["labels"]]
+                    return any(label != -100 for label in example["labels"][sl])
 
                 if isinstance(dataset, Dataset):  # `IterableDataset.filter` does not support `desc`
                     map_kwargs["desc"] = f"Dropping {dataset_name} examples with no trainable tokens"
 
                 num_examples = len(dataset) if isinstance(dataset, Dataset) else None
-                dataset = dataset.filter(
-                    has_trainable_tokens,
-                    batched=True,
-                    fn_kwargs={"truncation_slice": truncation_slice},
-                    **map_kwargs,
-                )
+                dataset = dataset.filter(has_trainable_tokens, fn_kwargs={"sl": sl}, **map_kwargs)
                 if num_examples is not None:
                     num_dropped = num_examples - len(dataset)
-                    if num_dropped == num_examples:
+                    if len(dataset) == 0:
                         raise ValueError(
                             f"All {num_examples} examples of the {dataset_name} dataset were dropped because none of "
-                            "them have trainable tokens after truncation to "
-                            f"`max_length={args.max_length}` (truncation_mode='{args.truncation_mode}'): all their "
-                            "completion or assistant tokens lie beyond the truncation boundary. Increase "
-                            "`max_length` or reduce the prompt lengths."
+                            f"them have trainable tokens after truncation (`max_length={args.max_length}`, "
+                            f"truncation_mode='{args.truncation_mode}'): all the trainable tokens lie beyond the "
+                            "truncation boundary. Increase `max_length`."
                         )
                     elif num_dropped > 0:
-                        logger.warning(
-                            f"Dropped {num_dropped} of {num_examples} examples of the {dataset_name} dataset "
-                            "because they have no trainable tokens after truncation to "
-                            f"`max_length={args.max_length}` (truncation_mode='{args.truncation_mode}'): all their "
-                            "completion or assistant tokens lie beyond the truncation boundary, so all their labels "
-                            "would be -100. Increase `max_length` or reduce the prompt lengths to keep these examples."
+                        logger.info(
+                            f"Dropped {num_dropped} of {num_examples} examples of the {dataset_name} dataset because "
+                            f"they have no trainable tokens after truncation (`max_length={args.max_length}`, "
+                            f"truncation_mode='{args.truncation_mode}'). If this is unexpected, consider increasing "
+                            "`max_length`."
                         )
 
             # Pack

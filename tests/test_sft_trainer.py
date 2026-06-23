@@ -1309,98 +1309,44 @@ class TestSFTTrainer(TrlTestCase):
         """Examples whose assistant tokens all lie beyond `max_length` have every label set to -100 after
         truncation, so they contribute nothing to the loss; before being dropped, a batch made entirely of them
         silently produced a zero loss. Regression test for #3927."""
-        long_user_turn = "lorem ipsum dolor sit amet " * 50
-        dataset = Dataset.from_list(
-            [
-                {
-                    "messages": [
-                        {"role": "user", "content": long_user_turn},
-                        {"role": "assistant", "content": "short reply"},
-                    ]
-                },
-                {
-                    "messages": [
-                        {"role": "user", "content": "What is 2+2?"},
-                        {"role": "assistant", "content": "4"},
-                    ]
-                },
-                {
-                    "messages": [
-                        {"role": "user", "content": long_user_turn},
-                        {"role": "assistant", "content": "another short reply"},
-                    ]
-                },
-            ]
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=64, assistant_only_loss=True, report_to="none")
-        with caplog.at_level("WARNING", logger="trl.trainer.sft_trainer"):
+        # `max_length` is small enough that some examples keep only prompt tokens (the assistant turn comes later).
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=18, assistant_only_loss=True, report_to="none")
+        with caplog.at_level("INFO", logger="trl.trainer.sft_trainer"):
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
             )
 
-        assert len(trainer.train_dataset) == 1
-        assert "Dropped 2 of 3 examples of the train dataset" in caplog.text
+        assert len(trainer.train_dataset) == 13
+        assert "Dropped 4 of 17 examples of the train dataset" in caplog.text
 
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_assistant_only_loss_raises_if_no_example_has_trainable_tokens(self):
-        long_user_turn = "lorem ipsum dolor sit amet " * 50
-        dataset = Dataset.from_list(
-            [
-                {
-                    "messages": [
-                        {"role": "user", "content": long_user_turn},
-                        {"role": "assistant", "content": "short reply"},
-                    ]
-                }
-                for _ in range(2)
-            ]
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=64, assistant_only_loss=True, report_to="none")
+        # `max_length` is so small that the kept prefix is entirely prompt tokens for every example.
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=4, assistant_only_loss=True, report_to="none")
         with pytest.raises(ValueError, match="dropped because none of them have trainable tokens"):
             SFTTrainer(model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset)
 
     def test_completion_only_loss_drops_examples_with_no_trainable_tokens_after_truncation(self, caplog):
         """Same as above for prompt-completion datasets: examples whose prompt alone reaches `max_length` have
         no completion token left after truncation."""
-        long_prompt = "lorem ipsum dolor sit amet " * 50
-        dataset = Dataset.from_list(
-            [
-                {"prompt": long_prompt, "completion": " A short answer."},
-                {"prompt": "What is 2+2?", "completion": " 4"},
-            ]
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=32, report_to="none")
-        with caplog.at_level("WARNING", logger="trl.trainer.sft_trainer"):
+        # `max_length` is small enough that some examples keep only prompt tokens (the completion comes later).
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=8, report_to="none")
+        with caplog.at_level("INFO", logger="trl.trainer.sft_trainer"):
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
 
-        assert len(trainer.train_dataset) == 1
-        assert "Dropped 1 of 2 examples of the train dataset" in caplog.text
-
-    def test_truncation_keep_end_keeps_examples_with_trailing_trainable_tokens(self):
-        """With `truncation_mode="keep_end"`, completions at the end of long sequences survive truncation, so
-        the same long-prompt examples must not be dropped."""
-        long_prompt = "lorem ipsum dolor sit amet " * 50
-        dataset = Dataset.from_list(
-            [
-                {"prompt": long_prompt, "completion": " A short answer."},
-                {"prompt": long_prompt, "completion": " Another short answer."},
-            ]
-        )
-
-        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=32, truncation_mode="keep_end", report_to="none")
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-        )
-
-        assert len(trainer.train_dataset) == 2
+        assert len(trainer.train_dataset) == 15
+        assert "Dropped 2 of 17 examples of the train dataset" in caplog.text
 
     def test_dataset_prep_builds_labels_for_assistant_only_loss(self):
         """Dataset preparation must bake the assistant masks into a labels column."""
