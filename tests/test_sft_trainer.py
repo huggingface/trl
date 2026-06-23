@@ -121,8 +121,8 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
     def test_provided_labels_not_reconstructed_from_masks(self):
         """Provided labels are used as is, never rebuilt from the mask columns. Here the labels match the input IDs
-        (every token trainable); the masks would introduce -100 if they were consumed, so the labels staying equal
-        to the input IDs proves the masks are ignored."""
+        (every token trainable); the masks would introduce -100 if they were consumed, so the labels staying equal to
+        the input IDs proves the masks are ignored."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [
             {"input_ids": [1, 2, 3], "labels": [1, 2, 3], "completion_mask": [0, 0, 1], "assistant_masks": [0, 0, 1]},
@@ -296,7 +296,10 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_max_length_invalid_truncation_mode(self):
         """Test that an invalid truncation_mode raises ValueError."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3, truncation_mode="invalid")
-        examples = [{"input_ids": [1, 2, 3, 4, 5], "labels": [1, 2, 3, 4, 5]}, {"input_ids": [6, 7, 8], "labels": [6, 7, 8]}]
+        examples = [
+            {"input_ids": [1, 2, 3, 4, 5], "labels": [1, 2, 3, 4, 5]},
+            {"input_ids": [6, 7, 8], "labels": [6, 7, 8]},
+        ]
 
         with pytest.raises(ValueError, match="Unsupported truncation mode"):
             collator(examples)
@@ -1322,9 +1325,9 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_labels_all_masked_after_truncation(self):
         """Regression test for #3927: when the assistant response lies beyond `max_length`, dataset preparation
-        builds labels that still hold real token IDs, but the slice surviving the collator's truncation is all
-        -100 (the prompt). The bug was masking happening after truncation; building labels before truncation makes
-        this surfaceable."""
+        builds labels that still hold real token IDs, but the slice surviving the collator's truncation is all -100
+        (the prompt). The bug was masking happening after truncation; building labels before truncation makes this
+        surfaceable."""
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         # `max_length` is small enough that the kept prefix is entirely prompt tokens (the assistant turn comes later).
