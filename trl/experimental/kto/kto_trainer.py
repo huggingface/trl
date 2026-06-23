@@ -23,7 +23,8 @@ from typing import Any
 
 import torch
 import transformers
-from accelerate import PartialState, logging
+from accelerate import PartialState
+from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
@@ -74,7 +75,7 @@ if is_peft_available():
     from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 RUNNING_NAME = "running.pt"
 
