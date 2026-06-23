@@ -1252,7 +1252,9 @@ class SFTTrainer(_BaseTrainer):
         )
         # Kept on the instance so that `evaluate` can preprocess freshly-passed eval datasets the same way.
         self._formatting_func = formatting_func
-        eval_datasets = eval_dataset if isinstance(eval_dataset, dict) else {"eval": eval_dataset} if eval_dataset else {}
+        eval_datasets = (
+            eval_dataset if isinstance(eval_dataset, dict) else {"eval": eval_dataset} if eval_dataset else {}
+        )
         self._reject_skip_prepare_without_labels({"train": train_dataset, **eval_datasets}, data_collator)
         if not self._skip_prepare_dataset:
             if self.completion_only_loss and formatting_func:
