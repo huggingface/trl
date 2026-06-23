@@ -2311,6 +2311,12 @@ class GOLDTrainer(SFTTrainer):
                 teacher_byte_offsets=teacher_completion_byte_offsets,
             )
 
+            if num_items_in_batch is not None:
+                num_valid_local = (xtoken_student_labels != -100).sum().clamp_min(1)
+                if isinstance(num_items_in_batch, torch.Tensor):
+                    num_items_in_batch = num_items_in_batch.to(loss.device)
+                loss = loss * num_valid_local / num_items_in_batch
+
             mode = "train" if self.model.training else "eval"
             dev = self.accelerator.device
             self._metrics[mode]["xtoken/kl_loss"].append(
