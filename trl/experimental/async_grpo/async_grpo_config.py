@@ -91,6 +91,21 @@ class AsyncGRPOConfig(_BaseConfig):
         heartbeat_stale_after_s (`float`, *optional*, defaults to `300.0`):
             Seconds since the rollout worker's last heartbeat after which the trainer treats it as
             hung and aborts.
+        weight_sync_mode (`str`, *optional*, defaults to `"sparse"`):
+            How to sync the policy to vLLM. `"sparse"` sends only the changed bf16 weights (the changed set is
+            recovered by inverting the AdamW step from the resident optimizer moments — no snapshot kept); requires a
+            `torch.optim.AdamW` optimizer and a vLLM with sparse weight transfer. `"full"` broadcasts the entire policy
+            over NCCL every sync (use this when the optimizer is not AdamW).
+        weight_sync_backend (`str`, *optional*, defaults to `"nccl"`):
+            Transport for the sparse patches: `"nccl"` (broadcast in place over the NCCL group) or `"bucket"` (upload
+            to an HF Storage Bucket and apply from there). The `"full"` mode is always NCCL.
+        weight_sync_bucket_id (`str`, *optional*):
+            HF Storage Bucket for the patches/anchors (created if missing). Required when `weight_sync_backend="bucket"`.
+        weight_sync_anchor_interval (`int`, *optional*, defaults to `20`):
+            In `"sparse"` mode, send a full anchor every N syncs; sparse deltas in between (bounds drift from low-byte /
+            inversion misses).
+        weight_sync_encoding (`str`, *optional*, defaults to `"gap_delta"`):
+            Index encoding for bucket patches: `"raw"`, `"gap_delta"`, or `"nvcomp_cascaded"` (needs nvcomp).
 
         > Parameters that control the logging
 
@@ -239,6 +254,47 @@ class AsyncGRPOConfig(_BaseConfig):
         },
     )
 
+    # Parameters that control weight sync
+    weight_sync_mode: str = field(
+        default="sparse",
+        metadata={
+            "help": "How to sync the policy to vLLM. `'sparse'` (default) sends only the changed bf16 weights (the "
+            "changed set is recovered by inverting the AdamW step from the resident optimizer moments); "
+            "requires a `torch.optim.AdamW` optimizer and a vLLM with sparse weight transfer, served with "
+            "`--model-impl transformers` and `VLLM_USE_V2_MODEL_RUNNER=0`. `'full'` broadcasts the entire policy over "
+            "NCCL every sync (use this when the optimizer is not AdamW).",
+            "choices": ["sparse", "full"],
+        },
+    )
+    weight_sync_backend: str = field(
+        default="nccl",
+        metadata={
+            "help": "Transport for the sparse patches: `'nccl'` (default, broadcast in place over the NCCL group) or "
+            "`'bucket'` (upload to an HF Storage Bucket and apply from there). The `'full'` mode is always NCCL.",
+            "choices": ["nccl", "bucket"],
+        },
+    )
+    weight_sync_bucket_id: str | None = field(
+        default=None,
+        metadata={
+            "help": "HF Storage Bucket for the patches/anchors (created if missing). Required when "
+            "`weight_sync_backend='bucket'`."
+        },
+    )
+    weight_sync_anchor_interval: int = field(
+        default=20,
+        metadata={
+            "help": "In `'sparse'` mode, send a full anchor every N syncs; sparse deltas in between (bounds drift "
+            "from low-byte / inversion misses)."
+        },
+    )
+    weight_sync_encoding: str = field(
+        default="gap_delta",
+        metadata={
+            "help": "Index encoding for bucket patches: 'raw', 'gap_delta', or 'nvcomp_cascaded' (needs nvcomp)."
+        },
+    )
+
     # Parameters that control the logging
     log_completions: bool = field(
         default=False,
@@ -254,6 +310,16 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        # Validate the weight-sync configuration.
+        if self.weight_sync_mode not in ("sparse", "full"):
+            raise ValueError(f"weight_sync_mode must be 'sparse' or 'full', got {self.weight_sync_mode!r}")
+        if self.weight_sync_backend not in ("nccl", "bucket"):
+            raise ValueError(f"weight_sync_backend must be 'nccl' or 'bucket', got {self.weight_sync_backend!r}")
+        if self.weight_sync_mode == "full" and self.weight_sync_backend != "nccl":
+            raise ValueError("weight_sync_mode='full' transfers over NCCL; set weight_sync_backend='nccl'.")
+        if self.weight_sync_backend == "bucket" and self.weight_sync_bucket_id is None:
+            raise ValueError("weight_sync_backend='bucket' requires weight_sync_bucket_id to be set.")
 
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader
