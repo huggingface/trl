@@ -1419,7 +1419,7 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir, dataset_kwargs={"skip_prepare_dataset": True}, report_to="none"
         )
-        with pytest.raises(ValueError, match="Provide a 'labels' column"):
+        with pytest.raises(ValueError, match="Add a 'labels' column"):
             SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )

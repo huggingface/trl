@@ -1252,27 +1252,8 @@ class SFTTrainer(_BaseTrainer):
         )
         # Kept on the instance so that `evaluate` can preprocess freshly-passed eval datasets the same way.
         self._formatting_func = formatting_func
-        if (
-            self._skip_prepare_dataset
-            and not self._is_vision_dataset
-            and isinstance(data_collator, DataCollatorForLanguageModeling)
-        ):
-            # This guard may look defensive, but it covers a behavior change introduced when label building moved
-            # from the collator to dataset preparation: the collator used to consume the mask columns directly, so a
-            # skipped-preparation dataset carrying masks trained correctly. Now labels are built during preparation,
-            # which is skipped here, and the collator ignores the mask columns. Without a "labels" column, such a
-            # dataset would silently train on the full sequence, so we fail loudly instead.
-            eval_datasets = (
-                eval_dataset if isinstance(eval_dataset, dict) else {"eval": eval_dataset} if eval_dataset else {}
-            )
-            for name, dataset in {"train": train_dataset, **eval_datasets}.items():
-                cols = get_dataset_column_names(dataset)
-                if "labels" not in cols and ("completion_mask" in cols or "assistant_masks" in cols):
-                    raise ValueError(
-                        f"The {name} dataset has mask columns but no 'labels', and `skip_prepare_dataset=True` skips "
-                        "label building, so it would train on the full sequence. Add a 'labels' column (-100 for "
-                        "non-loss tokens) or drop `skip_prepare_dataset`."
-                    )
+        eval_datasets = eval_dataset if isinstance(eval_dataset, dict) else {"eval": eval_dataset} if eval_dataset else {}
+        self._reject_skip_prepare_without_labels({"train": train_dataset, **eval_datasets}, data_collator)
         if not self._skip_prepare_dataset:
             if self.completion_only_loss and formatting_func:
                 raise ValueError(
@@ -1641,6 +1622,28 @@ class SFTTrainer(_BaseTrainer):
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths"]
 
+    def _reject_skip_prepare_without_labels(self, datasets: dict[str, Dataset], data_collator) -> None:
+        # This guard may look defensive, but it covers a behavior change introduced when label building moved from
+        # the collator to dataset preparation: the collator used to consume the mask columns directly, so a
+        # skipped-preparation dataset carrying masks trained correctly. Now labels are built during preparation, which
+        # is skipped here, and the collator ignores the mask columns. Without a "labels" column, such a dataset would
+        # silently optimize the loss over the full sequence, so we fail loudly instead. Checked both at init and in
+        # `evaluate`, since a dataset passed directly to `evaluate` also skips preparation.
+        if not (
+            self._skip_prepare_dataset
+            and not self._is_vision_dataset
+            and isinstance(data_collator, DataCollatorForLanguageModeling)
+        ):
+            return
+        for name, dataset in datasets.items():
+            cols = get_dataset_column_names(dataset)
+            if "labels" not in cols and ("completion_mask" in cols or "assistant_masks" in cols):
+                raise ValueError(
+                    f"The {name} dataset has mask columns but no 'labels', and `skip_prepare_dataset=True` skips "
+                    "label building, so it would train on the full sequence. Add a 'labels' column (-100 for "
+                    "non-loss tokens) or drop `skip_prepare_dataset`."
+                )
+
     def evaluate(
         self,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
@@ -1664,6 +1667,14 @@ class SFTTrainer(_BaseTrainer):
                 eval_dataset = self._prepare_dataset(
                     eval_dataset, self.processing_class, self.args, packing, self._formatting_func, "eval"
                 )
+        eval_datasets = (
+            eval_dataset
+            if isinstance(eval_dataset, dict)
+            else {"eval": eval_dataset}
+            if eval_dataset is not None and not isinstance(eval_dataset, str)
+            else {}
+        )
+        self._reject_skip_prepare_without_labels(eval_datasets, self.data_collator)
         return super().evaluate(
             eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
         )
