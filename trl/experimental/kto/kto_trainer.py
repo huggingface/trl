@@ -54,6 +54,7 @@ from ...import_utils import is_liger_kernel_available
 from ...models import get_act_offloading_ctx_manager
 from ...models.utils import disable_gradient_checkpointing, prepare_deepspeed, prepare_fsdp
 from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
@@ -733,6 +734,25 @@ class KTOTrainer(_BaseTrainer):
                 self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+
+        if args.sync_ref_model:
+            if is_peft_model(self.model):
+                raise NotImplementedError(
+                    "You passed `sync_ref_model=True` while using a PEFT model, which is currently not supported. "
+                    "With PEFT, KTOTrainer does not keep a separate reference model in memory; instead, it recovers "
+                    "reference behavior by temporarily disabling the adapter. As a result, there is no standalone "
+                    "`ref_model` instance to synchronize. Use `sync_ref_model=False`, or opt for full fine-tuning if "
+                    "you need a synced reference model. If you need `sync_ref_model` to work with PEFT, please open a "
+                    "feature request at https://github.com/huggingface/trl/issues."
+                )
+            if args.precompute_ref_log_probs:
+                raise ValueError(
+                    "You cannot use `sync_ref_model=True` together with `precompute_ref_log_probs=True`. "
+                    "`precompute_ref_log_probs=True` assumes a fixed reference model, but with `sync_ref_model=True` "
+                    "the reference model is periodically updated during training, making any precomputed reference "
+                    "log-probs stale. Set `precompute_ref_log_probs=False` or disable `sync_ref_model`."
+                )
+            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         self.use_liger_kernel = args.use_liger_kernel
         # Import Liger kernel if enabled
