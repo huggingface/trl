@@ -2551,12 +2551,10 @@ class GOLDTrainer(SFTTrainer):
 
     def generate_on_policy_outputs(self, model, inputs, generation_config, pad_token_id=None):
         # Generate output with respect to the prompt only
-        generate_kwargs = self._get_model_forward_kwargs(inputs)
-        # Slice sequence-length-dependent keys to prompt-only length (e.g. token_type_ids for Gemma,
-        # mm_token_type_ids for ERNIE-VL) since model.generate receives prompt-only input_ids
-        for k in self._SEQUENCE_KEYS:
-            if k in generate_kwargs:
-                generate_kwargs[k] = self._get_prompt_sequence_key(inputs, k)
+        # Drop sequence-aligned multimodal keys (token_type_ids, mm_token_type_ids): generate recomputes them from
+        # `input_ids` as it extends the sequence, and some models (e.g. Qwen3-VL) reject them as unknown
+        # `generate` kwargs.
+        generate_kwargs = self._get_model_forward_kwargs(inputs, exclude=self._SEQUENCE_KEYS)
         generated_outputs = model.generate(
             input_ids=inputs["prompts"],
             attention_mask=inputs.get("prompt_attention_mask", None),

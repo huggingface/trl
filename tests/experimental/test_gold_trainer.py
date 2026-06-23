@@ -1837,6 +1837,7 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
     args = SimpleNamespace(
         model_init_kwargs=None,
         max_length=128,
+        truncation_mode="keep_start",
         use_liger_kernel=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
@@ -2031,6 +2032,7 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
     args = SimpleNamespace(
         model_init_kwargs=None,
         max_length=128,
+        truncation_mode="keep_start",
         use_liger_kernel=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
@@ -2121,6 +2123,7 @@ def _make_vlm_trainer_args(use_vllm=False):
     return SimpleNamespace(
         model_init_kwargs=None,
         max_length=128,
+        truncation_mode="keep_start",
         use_liger_kernel=False,
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
