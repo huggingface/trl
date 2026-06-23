@@ -11,6 +11,10 @@ This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv its
 
 [`GRPOTrainer`] can be used to train agents. For agentic tasks, it supports two modes: **tools**, where the model can call external functions but each call is stateless and independent, and **environments**, which maintain state across turns, enabling genuine multi-turn interaction where the agent's actions shape future observations. Use environments when continuity matters — for example, navigating a game, browsing a web page, or any task where what the agent sees next depends on what it did before.
 
+## Choosing an environment integration
+
+OpenEnv is the native path documented here. Two further integrations — [OpenReward](openreward) and [Harbor](harbor) — conform to the same `environment_factory` contract and are interchangeable at the TRL level. See the [comparison of environment integrations](grpo_trainer#agent-training) in the GRPO guide to pick the one whose ecosystem fits your task.
+
 ## Installation
 
 OpenEnv environments are hosted as Hugging Face Spaces, which are also pip-installable Git repositories:
@@ -186,7 +190,7 @@ def reward_func(environments, **kwargs) -> list[float]:
     return [env.reward for env in environments]
 ```
 
-For more information on reward functions, see the [GRPO - Custom Reward Functions](grpo_trainer#custom-reward-functions).
+For more information on reward functions, see the [GRPO - Custom Reward Functions](grpo_trainer#using-a-custom-reward-function).
 
 ### Tips for reward functions
 

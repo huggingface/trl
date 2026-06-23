@@ -417,13 +417,16 @@ class DistillationTrainer(_BaseTrainer):
             teacher_model_init_kwargs = json.loads(teacher_model_init_kwargs)
         if isinstance(model, str):
             model_name_or_path = model
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             model_name_or_path = model.config._name_or_path if model is not None else None
 
         # ── Processing class (tokenizer) ──
         if processing_class is None and model_name_or_path is not None:
-            processing_class = AutoTokenizer.from_pretrained(model_name_or_path)
+            processing_class = AutoTokenizer.from_pretrained(
+                model_name_or_path, trust_remote_code=args.trust_remote_code
+            )
         if processing_class is not None:
             if getattr(processing_class, "pad_token", None) is None:
                 processing_class.pad_token = processing_class.eos_token
@@ -492,12 +495,12 @@ class DistillationTrainer(_BaseTrainer):
                     "tokenizer can be validated against the student tokenizer."
                 )
 
+            teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             teacher_tokenizer_kwargs = {}
             teacher_revision = teacher_model_init_kwargs.get("revision", args.teacher_model_revision)
             if teacher_revision is not None:
                 teacher_tokenizer_kwargs["revision"] = teacher_revision
-            if teacher_model_init_kwargs.get("trust_remote_code") is not None:
-                teacher_tokenizer_kwargs["trust_remote_code"] = teacher_model_init_kwargs["trust_remote_code"]
+            teacher_tokenizer_kwargs["trust_remote_code"] = teacher_model_init_kwargs["trust_remote_code"]
             teacher_processing_class = AutoTokenizer.from_pretrained(
                 teacher_model_name_or_path, **teacher_tokenizer_kwargs
             )
@@ -1024,13 +1027,24 @@ class DistillationTrainer(_BaseTrainer):
     # ──────────────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _reduce_divergence_loss(jsd, labels=None, reduction="batchmean"):
-        """Reduce a per-token divergence tensor using the trainer's label mask semantics."""
+    def _reduce_divergence_loss(jsd, labels=None, reduction="batchmean", num_items_in_batch=None):
+        """Reduce a per-token divergence tensor using the trainer's label mask semantics.
+
+        When `num_items_in_batch` is provided (as under gradient accumulation), the divergence is reduced as `sum /
+        num_items_in_batch`, matching the gradient-accumulation-correct behavior of HF's default cross-entropy.
+        Otherwise it falls back to the local `reduction` (default `batchmean`). See issue #4719.
+        """
         mask = None
         if labels is not None:
             mask = labels != -100
             jsd = jsd[mask]
 
+        if num_items_in_batch is not None:
+            # Normalize by the global number of valid tokens for gradient-accumulation-correct loss.
+            jsd_sum = jsd.sum()
+            if isinstance(num_items_in_batch, torch.Tensor):
+                num_items_in_batch = num_items_in_batch.to(jsd_sum.device)
+            return jsd_sum / num_items_in_batch
         if reduction == "batchmean":
             # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
             # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
@@ -1054,6 +1068,7 @@ class DistillationTrainer(_BaseTrainer):
         reduction="batchmean",
         top_k=0,
         add_tail=True,
+        num_items_in_batch=None,
     ):
         """
         Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation.
@@ -1127,7 +1142,9 @@ class DistillationTrainer(_BaseTrainer):
             teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
 
         jsd = _jsd_divergence(student_log_probs, teacher_log_probs, beta, support_mask)
-        return DistillationTrainer._reduce_divergence_loss(jsd, labels=labels, reduction=reduction)
+        return DistillationTrainer._reduce_divergence_loss(
+            jsd, labels=labels, reduction=reduction, num_items_in_batch=num_items_in_batch
+        )
 
     def _get_reverse_kl_top_1_tokens(
         self, student_scores: torch.Tensor, completion_tokens: torch.Tensor
@@ -1151,6 +1168,7 @@ class DistillationTrainer(_BaseTrainer):
         reverse_token_ids: torch.Tensor,
         reverse_teacher_logprobs: torch.Tensor,
         labels: torch.Tensor,
+        num_items_in_batch=None,
     ) -> torch.Tensor:
         """Compute exact generalized JSD/KL on top-1 support for the mixed beta>0 path."""
         neg_inf = torch.full((), float("-inf"), dtype=student_log_probs.dtype, device=student_log_probs.device)
@@ -1185,7 +1203,9 @@ class DistillationTrainer(_BaseTrainer):
             )
 
         jsd = _jsd_divergence(student_sparse_log_probs, teacher_sparse_log_probs, self.beta, support_mask)
-        return self._reduce_divergence_loss(jsd, labels=labels, reduction="batchmean")
+        return self._reduce_divergence_loss(
+            jsd, labels=labels, reduction="batchmean", num_items_in_batch=num_items_in_batch
+        )
 
     def _compute_local_sparse_top_1_divergence_loss(
         self,
@@ -1193,6 +1213,7 @@ class DistillationTrainer(_BaseTrainer):
         teacher_logits: torch.Tensor,
         completion_tokens: torch.Tensor,
         labels: torch.Tensor,
+        num_items_in_batch=None,
     ) -> torch.Tensor:
         """Compute the mixed top-1 loss for a local teacher using gathered full-logit probabilities."""
         student_log_probs = F.log_softmax(student_logits / self.temperature, dim=-1)
@@ -1212,6 +1233,7 @@ class DistillationTrainer(_BaseTrainer):
             reverse_token_ids=reverse_token_ids,
             reverse_teacher_logprobs=reverse_teacher_logprobs,
             labels=labels,
+            num_items_in_batch=num_items_in_batch,
         )
 
     def _get_teacher_logits(self, inputs: dict[str, torch.Tensor | Any]) -> torch.Tensor:
@@ -1372,6 +1394,10 @@ class DistillationTrainer(_BaseTrainer):
         # Server path only supports "sampled" mode — config validation enforces this, but we guard
         # explicitly so future relaxations of the config check don't silently change behaviour.
         reverse_token_ids = self._get_reverse_kl_top_1_tokens(student_log_probs, completion_tokens)
+        # The server path normalizes locally (batchmean), not by num_items_in_batch: teacher logprobs may not cover
+        # every student completion token (the loss is summed over the trimmed teacher window), so the global token
+        # count would be the wrong denominator. Gradient-accumulation normalization for the server path is left as a
+        # follow-up.
         return self._compute_sparse_top_1_divergence_loss(
             student_log_probs=student_log_probs,
             teacher_top1_token_ids=topk_token_ids.squeeze(-1),
@@ -1421,13 +1447,15 @@ class DistillationTrainer(_BaseTrainer):
             beta=0.0,
             support_mask=support_mask,
         )
+        # See `_compute_server_sparse_top_1_divergence_loss`: the server path normalizes locally, not by
+        # num_items_in_batch, because the teacher window may not cover every student completion token.
         return self._reduce_divergence_loss(jsd, labels=labels, reduction="batchmean")
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         self._raise_if_local_teacher_tokenizer_mismatch()
 
         if self.use_liger_loss:
-            loss = self._compute_liger_loss(model, inputs)
+            loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
             return (loss, None) if return_outputs else loss
 
         # Student forward pass
@@ -1478,6 +1506,7 @@ class DistillationTrainer(_BaseTrainer):
                     teacher_logits=teacher_logits,
                     completion_tokens=completion_tokens,
                     labels=labels,
+                    num_items_in_batch=num_items_in_batch,
                 )
             else:
                 loss = self.generalized_jsd_loss(
@@ -1488,6 +1517,7 @@ class DistillationTrainer(_BaseTrainer):
                     temperature=self.temperature,
                     top_k=self.loss_top_k,
                     add_tail=self.loss_add_tail,
+                    num_items_in_batch=num_items_in_batch,
                 )
 
         return (loss, student_outputs) if return_outputs else loss
@@ -1504,7 +1534,7 @@ class DistillationTrainer(_BaseTrainer):
             use_cache=False,
         )
 
-    def _compute_liger_loss(self, model, inputs):
+    def _compute_liger_loss(self, model, inputs, num_items_in_batch=None):
         """Memory-efficient JSD using Liger kernel (operates on hidden states, not full logits)."""
         # Route through the DDP/FSDP wrapper via _forward_redirection so that
         # DDP.forward() is called and prepare_for_backward() fires correctly.
@@ -1537,7 +1567,7 @@ class DistillationTrainer(_BaseTrainer):
 
         labels_mask = inputs["labels"] != -100
         masked_input_ids = torch.where(labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100))
-        true_labels = masked_input_ids[:, 1:].contiguous().reshape(-1)
+        true_labels = masked_input_ids[:, 1:].reshape(-1)
 
         student_head = unwrapped_student.get_output_embeddings()
         teacher_head = unwrapped_teacher.get_output_embeddings()
@@ -1551,6 +1581,14 @@ class DistillationTrainer(_BaseTrainer):
             student_bias=getattr(student_head, "bias", None),
             teacher_bias=getattr(teacher_head, "bias", None),
         )
+
+        # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we want
+        # the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
+        if num_items_in_batch is not None:
+            num_valid_local = (true_labels != -100).sum().clamp_min(1)
+            if isinstance(num_items_in_batch, torch.Tensor):
+                num_items_in_batch = num_items_in_batch.to(loss.device)
+            loss = loss * num_valid_local / num_items_in_batch
 
         del student_hidden, teacher_hidden, true_labels
         return loss
