@@ -592,6 +592,10 @@ class SDPOTrainer(_BaseTrainer):
         self.model_accepts_loss_kwargs = False
 
         self.importance_sampling_level = args.importance_sampling_level
+        self.scale_rewards = args.scale_rewards
+        self.epsilon_low = args.epsilon
+        self.epsilon_high = args.epsilon_high
+        self.beta = args.beta
 
         if args.importance_sampling_level == "sequence" and args.loss_type in ["bnpo", "dr_grpo", "dapo"]:
             logger.warning(
@@ -600,11 +604,6 @@ class SDPOTrainer(_BaseTrainer):
                 "optimizing the per-sequence objective. To reproduce the GSPO paper's setup, set `loss_type='grpo'` "
                 "(see https://huggingface.co/docs/trl/main/en/paper_index#group-sequence-policy-optimization)."
             )
-
-        self.scale_rewards = args.scale_rewards
-        self.epsilon_low = args.epsilon
-        self.epsilon_high = args.epsilon_high
-        self.beta = args.beta
 
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
