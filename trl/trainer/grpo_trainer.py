@@ -1019,25 +1019,6 @@ class GRPOTrainer(_BaseTrainer):
         #                      2          4    12  12  13  13  14  14   <- Generate for the second `steps_per_generation` (prompts 12 to 23); store the completions; use the first slice to compute the loss
         #                      2          5    15  15  16  16  17  17   <- Take the stored generations and use the second slice to compute the loss
         #                                          ...
-        #
-        # The figure above uses `num_iterations=1`. When `num_iterations > 1`, the same generation batch is reused
-        # for `num_iterations` passes before regenerating. The figure below shows `num_iterations=2` with the
-        # default `steps_per_generation=gradient_accumulation_steps=2`:
-        #
-        #                                      |   GPU 0  |   GPU 1  |
-        #
-        #                 global_step   step    <-───>  num_generations=2
-        #                                       <-───────> per_device_train_batch_size=3
-        #  grad_accum    ▲  ▲  0          0     0   0   1   1   2   2   <- Generate for prompts 0 to 5; store completions; use first slice
-        #     =2         ▼  |  0          1     3   3   4   4   5   5   <- Take stored completions; use second slice
-        #                   |
-        #  num_iterations   |  1          2     0   0   1   1   2   2   <- Take stored completions; reuse first slice (2nd iteration)
-        #     =2            ▼  1          3     3   3   4   4   5   5   <- Take stored completions; reuse second slice (2nd iteration)
-        #
-        #                      2          4     6   6   7   7   8   8   <- Generate for prompts 6 to 11; store completions; use first slice
-        #                      2          5     9   9  10  10  11  11   <- Take stored completions; use second slice
-        #                                          ...
-
         if dataset is None:
             dataset = self.train_dataset
         return RepeatSampler(
