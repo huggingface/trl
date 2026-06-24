@@ -2806,7 +2806,10 @@ class GRPOTrainer(_BaseTrainer):
 
             self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
             self._metrics[mode]["entropy_loss"].append(world_entropy)
-            self._metrics[mode]["entropy_coef"].append(self.entropy_coef)
+            # Log entropy_coef only on optimizer-step boundaries: it updates once per step (sync_gradients),
+            # so logging K identical values per step would dilute the metric with stale data.
+            if self.accelerator.sync_gradients:
+                self._metrics[mode]["entropy_coef"].append(self.entropy_coef)
 
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
         if self.aux_loss_enabled:
