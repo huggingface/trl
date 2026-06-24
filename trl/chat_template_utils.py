@@ -330,9 +330,10 @@ glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text(encodi
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding="utf-8")
 
-falconmamba_chat_template = (_CHAT_TEMPLATES_DIR / "falconmamba.jinja").read_text()
+falconmamba_chat_template = (_CHAT_TEMPLATES_DIR / "falconmamba.jinja").read_text(encoding="utf-8")
 
-gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text()
+gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text(encoding="utf-8")
+
 idefics3_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3.jinja").read_text(encoding="utf-8")
 
 llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text(encoding="utf-8")
@@ -662,9 +663,10 @@ gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").
 
 idefics3_training_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3_training.jinja").read_text(encoding="utf-8")
 
-falconmamba_training_chat_template = (_CHAT_TEMPLATES_DIR / "falconmamba_training.jinja").read_text()
+falconmamba_training_chat_template = (_CHAT_TEMPLATES_DIR / "falconmamba_training.jinja").read_text(encoding="utf-8")
 
-gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma_training.jinja").read_text()
+gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma_training.jinja").read_text(encoding="utf-8")
+
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
