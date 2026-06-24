@@ -692,6 +692,40 @@ training_args = GRPOConfig(
 ```
 
 
+### STARE: Surprisal-Guided Token-Level Advantage Reweighting for Policy Entropy Stability
+
+**📜 Paper**: https://huggingface.co/papers/2606.19236
+
+STARE addresses policy entropy collapse in PPO/GRPO-style RL on language models. A first-order analysis of per-token entropy dynamics shows that the change in entropy is proportional to the product of a token's advantage and an entropy-sensitivity term that grows with the token's surprisal \\( s_{i,t} = -\log \pi_\theta(o_{i,t}) \\) — so updates on high-surprisal tokens dominate how fast the policy loses (or keeps) exploration. STARE identifies the *entropy-critical token subset* via a top-fraction-by-surprisal selection within each advantage-sign partition and reweights the per-token PG loss of those tokens, gated by a closed-loop target-entropy signal.
+
+The STARE objective wraps the standard GRPO dual-clip surrogate with a token-level reweighting factor \\( \omega_{i,t} \\):
+
+$$
+\mathcal{J}_{\text{STARE}}(\theta) = \mathbb{E}_{q, \{o_i\}} \left[ \frac{1}{\sum_i |o_i|} \sum_{i=1}^{G} \sum_{t=1}^{|o_i|} \omega_{i,t} \cdot \min\left( w_{i,t}(\theta) \hat{A}_{i,t},\ \operatorname{clip}(w_{i,t}(\theta), 1-\epsilon, 1+\epsilon)\, \hat{A}_{i,t} \right) \right]
+$$
+
+with \\( w_{i,t}(\theta) = \pi_\theta(o_{i,t} \mid q, o_{i,<t}) / \pi_{\text{old}}(o_{i,t} \mid q, o_{i,<t}) \\) the per-token importance ratio. The reweighting factor is
+
+$$
+\omega_{i,t} = \begin{cases} W > 1 & \text{if } (i,t) \in L^+ \text{ (positive-advantage critical tokens)} \\ M < 1 & \text{if } (i,t) \in L^- \text{ and variant } = C2 \\ 1 & \text{otherwise} \end{cases}
+$$
+
+active only when the closed-loop gate is open: \\( \mathbb{1}[\bar{H}_k < H_{\text{tgt}}] \\), where \\( \bar{H}_k \\) is the batch-mean policy entropy and \\( H_{\text{tgt}} \\) is the target floor. When the gate stays closed, all weights revert to 1 and STARE degrades to vanilla GRPO.
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    loss_type="stare",
+    stare_variant="O1",  # "O1" (one-sided amplification, default) or "C2" (dual-sided regulation)
+    stare_top_p_ratio=0.1,  # paper Section 4.1 default
+    stare_reweight_w=1.1,  # multiplicative weight for L+ (positive-advantage critical tokens)
+    stare_reweight_m=0.9,  # multiplicative weight for L- (only active when variant="C2")
+    stare_target_entropy=0.3,  # closed-loop gate floor (paper Section 4.3)
+)
+```
+
+
 ### Rethinking the Trust Region in LLM Reinforcement Learning
 
 **📜 Paper**: https://huggingface.co/papers/2602.04879
