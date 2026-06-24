@@ -112,18 +112,18 @@ class RLOOTrainer(_BaseTrainer):
     Example:
 
     ```python
-    from trl import RLOOTrainer
-    from trl.rewards import accuracy_reward
-    from datasets import load_dataset
+    >>> from trl import RLOOTrainer
+    >>> from trl.rewards import accuracy_reward
+    >>> from datasets import load_dataset
 
-    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+    >>> dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-    trainer = RLOOTrainer(
-        model="Qwen/Qwen2.5-0.5B-Instruct",
-        reward_funcs=accuracy_reward,
-        train_dataset=dataset,
-    )
-    trainer.train()
+    >>> trainer = RLOOTrainer(
+    ...     model="Qwen/Qwen2.5-0.5B-Instruct",
+    ...     reward_funcs=accuracy_reward,
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
     ```
 
     Args:
