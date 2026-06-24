@@ -113,6 +113,14 @@ class SFTConfig(_BaseConfig):
               [this paper](https://huggingface.co/papers/2508.05629).
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
+              in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`. Under
+              FSDP2, set `fsdp_reshard_after_forward false` in the accelerate config — the chunked path otherwise
+              re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time.
+        chunked_nll_chunk_size (`int`, *optional*, defaults to `256`):
+            Number of valid (non-`-100`) tokens processed per chunk when `loss_type="chunked_nll"`. Peak logit
+            activation memory scales linearly with this value rather than with `batch_size * seq_len`. Smaller
+            values reduce peak VRAM at the cost of slightly more kernel launches. Recommended range: `128`–`512`
+            for large-vocabulary models (vocab ≥ 64k). Has no effect when `loss_type` is not `"chunked_nll"`.
               in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.
 
         activation_offloading (`bool`, *optional*, defaults to `False`):
@@ -291,6 +299,17 @@ class SFTConfig(_BaseConfig):
             "processed in chunks of tokens to reduce peak activation memory; not compatible with `use_liger_kernel`; "
             "the patched `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level "
             "`lm_head`, architectures with a non-standard head are not supported)."
+        },
+    )
+    chunked_nll_chunk_size: int = field(
+        default=256,
+        metadata={
+            "help": (
+                "Number of valid (non-`-100`) tokens processed per chunk when `loss_type='chunked_nll'`. Peak logit "
+                "activation memory scales linearly with this value rather than with `batch_size * seq_len`. Smaller "
+                "values reduce peak VRAM at the cost of slightly more kernel launches. Recommended range: 128–512 "
+                "for large-vocabulary models (vocab ≥ 64k). Has no effect when `loss_type` is not `'chunked_nll'`."
+            )
         },
     )
     activation_offloading: bool = field(
