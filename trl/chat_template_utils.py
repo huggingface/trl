@@ -324,9 +324,9 @@ qwen3_5_schema = {
 }
 
 
-# New-style response templates (transformers >= 5.X with PR huggingface/transformers#45847). These coexist with the
-# legacy `*_schema` dicts above; `add_response_schema` sets both so the tokenizer works on both old and new
-# transformers (the new parser prefers `response_template`, the old one reads `response_schema`).
+# New-style response templates (transformers >= 5.13 with PR huggingface/transformers#45847). These coexist with the
+# legacy `*_schema` dicts above; `add_response_schema` sets the template on transformers >= 5.13 and the schema on
+# older versions.
 qwen3_template = {
     "defaults": {"role": "assistant"},
     "start_anchor": "<|im_start|>assistant\n",
@@ -341,7 +341,7 @@ qwen3_template = {
             "close_pattern": r"</tool_call>\s*",
             "repeats": True,
             "content": "json",
-            "transform": "{type: 'function', function: content}",
+            "transform": {"type": "function", "function": "{content}"},
         },
         "content": {
             "close_pattern": r"<\|im_end\|>\s*",
@@ -368,7 +368,7 @@ qwen3_5_template = {
                 "tag_pattern": r"<parameter=(?P<key>[^>\n]+)>\s*(?P<value>.*?)\s*</parameter>",
                 "value_parser": {"name": "json", "args": {"allow_non_json": True}},
             },
-            "transform": "{type: 'function', function: {name: name, arguments: content}}",
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
         },
         "content": {
             "close_pattern": r"<\|im_end\|>\s*",
@@ -395,7 +395,7 @@ glm4moe_template = {
                 "tag_pattern": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*\n<arg_value>(?P<value>.*?)</arg_value>",
                 "value_parser": {"name": "json", "args": {"allow_non_json": True}},
             },
-            "transform": "{type: 'function', function: {name: name, arguments: content}}",
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
         },
         "content": {
             "close_pattern": r"<\|user\|>\s*|$",
@@ -409,13 +409,11 @@ llama3_template = {
     "start_anchor": "<|start_header_id|>assistant<|end_header_id|>\n\n",
     "fields": {
         "tool_calls": {
-            "open_pattern": r'(?=\{"name":\s*")',
-            "close_pattern": r"<\|eot_id\|>\s*",
+            "open_pattern": r'\{"name":\s*"(?P<name>[^"]+)",\s*"parameters":\s*',
+            "close_pattern": r"\}<\|eot_id\|>\s*",
             "repeats": True,
             "content": "json",
-            # Llama emits `parameters` instead of `arguments`; remap inside the transform so the captured JSON
-            # lands in the standard tool-call shape.
-            "transform": "{type: 'function', function: {name: content.name, arguments: content.parameters}}",
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
         },
         "content": {
             "close_pattern": r"<\|eot_id\|>\s*",
@@ -443,7 +441,39 @@ gptoss_template = {
             "close_pattern": r"<\|call\|>\s*",
             "repeats": True,
             "content": "json",
-            "transform": "{type: 'function', function: {name: name, arguments: content}}",
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+    },
+}
+
+nemotron_3_template = {
+    # Nemotron 3 always prefills the assistant turn with the `<think>` opener (and a trailing `\n` when thinking is
+    # enabled, or `</think>` when it is not), so the start anchor consumes it. Reasoning content is therefore not framed
+    # by a `<think>` open in the model output; the zero-width `open_pattern` only activates the reasoning field when a
+    # closing `</think>` is actually present, so a turn with no reasoning is parsed entirely as content. Tool calls use
+    # the same `<function=...>` / `<parameter=...>` XML as Qwen3.5.
+    "defaults": {"role": "assistant"},
+    "start_anchor_pattern": r"<\|im_start\|>assistant\n<think>(?:\n|</think>)?",
+    "fields": {
+        "reasoning_content": {
+            "open_pattern": r"(?=[\s\S]*?</think>)",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"<tool_call>\s*<function=(?P<name>[^\n>]+)>",
+            "close_pattern": r"</tool_call>\s*",
+            "repeats": True,
+            "content": "xml-inline",
+            "content_args": {
+                "tag_pattern": r"<parameter=(?P<key>[^>\n]+)>\s*(?P<value>.*?)\s*</parameter>",
+                "value_parser": {"name": "json", "args": {"allow_non_json": True}},
+            },
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"<\|im_end\|>\s*",
+            "content": "text",
         },
     },
 }
@@ -569,8 +599,7 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         nemotron_3_super_chat_template,
         nemotron_3_ultra_chat_template,
     ]:
-        # Nemotron 3 renders tool calls in the same Hermes-style <function=...>/<parameter=...> format as Qwen3.5.
-        schema, template = qwen3_5_schema, qwen3_5_template
+        schema, template = qwen3_5_schema, nemotron_3_template
     else:
         raise ValueError(
             "Unrecognized chat template, failed to add response schema. Please manually set the response schema on "
