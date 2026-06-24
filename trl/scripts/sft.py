@@ -64,12 +64,12 @@ import argparse
 
 
 def main(script_args, training_args, model_args, dataset_args):
-    from accelerate import logging
+    from accelerate.logging import get_logger
     from datasets import load_dataset
 
     from trl import SFTTrainer, get_dataset, get_kbit_device_map, get_peft_config, get_quantization_config
 
-    logger = logging.get_logger(__name__)
+    logger = get_logger(__name__)
 
     training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
