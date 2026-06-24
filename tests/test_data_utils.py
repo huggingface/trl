@@ -994,6 +994,45 @@ class TestUnpairPreferenceDataset(TrlTestCase):
             "The paired dataset should be converted to unpaired."
         )
 
+    def test_unpair_preference_dataset_extra_columns(self):
+        # Test that extra columns are preserved and duplicated for chosen and rejected rows
+        paired_dataset = Dataset.from_dict(
+            {
+                "prompt": ["The sky is", "The sun is"],
+                "chosen": [" blue.", " in the sky."],
+                "rejected": [" green.", " in the sea."],
+                "extra": [1, 2],
+            }
+        )
+        unpaired_dataset = unpair_preference_dataset(paired_dataset)
+        expected = {**self.unpaired_dataset.to_dict(), "extra": [1, 2, 1, 2]}
+        assert unpaired_dataset.to_dict() == expected
+
+    def test_unpair_preference_dataset_iterable(self):
+        # Test that an IterableDataset with extra columns is correctly unpaired
+        paired_dataset = self.paired_dataset.to_iterable_dataset()
+        unpaired_dataset = unpair_preference_dataset(paired_dataset)
+        assert list(unpaired_dataset) == [
+            dict(zip(self.unpaired_dataset.column_names, vals, strict=False))
+            for vals in zip(*self.unpaired_dataset.to_dict().values(), strict=False)
+        ]
+
+    def test_unpair_preference_dataset_iterable_extra_columns(self):
+        # Test that an IterableDataset with extra columns preserves and duplicates them
+        paired_iterable = Dataset.from_dict(
+            {
+                "prompt": ["The sky is", "The sun is"],
+                "chosen": [" blue.", " in the sky."],
+                "rejected": [" green.", " in the sea."],
+                "extra": [1, 2],
+            }
+        ).to_iterable_dataset()
+        unpaired_dataset = unpair_preference_dataset(paired_iterable)
+        expected = {**self.unpaired_dataset.to_dict(), "extra": [1, 2, 1, 2]}
+        assert list(unpaired_dataset) == [
+            dict(zip(expected.keys(), vals, strict=False)) for vals in zip(*expected.values(), strict=False)
+        ]
+
     def test_unpair_preference_dataset_dict(self):
         # Test that a paired dataset dict is correctly converted to unpaired
         paired_dataset_dict = DatasetDict({"abc": self.paired_dataset})

@@ -396,15 +396,18 @@ def maybe_apply_chat_template(
         return example
 
 
-def _unpair_row(examples: list[dict[str, list[dict[str, str]]]]) -> list[dict[str, list[dict[str, str]]]]:
-    batch_size = len(examples["chosen"])
-    new_rows = {
-        "completion": examples["chosen"] + examples["rejected"],
+def _unpair_row(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
+    batch_size = len(batch["chosen"])
+    new_batch = {
+        "completion": batch["chosen"] + batch["rejected"],
         "label": [True] * batch_size + [False] * batch_size,
     }
-    if "prompt" in examples:
-        new_rows["prompt"] = examples["prompt"] + examples["prompt"]
-    return new_rows
+    if "prompt" in batch:
+        new_batch["prompt"] = batch["prompt"] + batch["prompt"]
+    for k in batch:
+        if k not in ("chosen", "rejected", "prompt"):
+            new_batch[k] = batch[k] + batch[k]
+    return new_batch
 
 
 def unpair_preference_dataset(
@@ -413,6 +416,9 @@ def unpair_preference_dataset(
     # docstyle-ignore
     """
     Unpair a preference dataset.
+
+    The output contains `"prompt"`, `"completion"`, and `"label"` plus any extra columns, which are duplicated for
+    each chosen and rejected row.
 
     Args:
         dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]):
@@ -447,7 +453,13 @@ def unpair_preference_dataset(
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
     """
-    return dataset.map(_unpair_row, batched=True, remove_columns=["chosen", "rejected"], **map_kwargs)
+    if isinstance(dataset, DatasetDict):
+        column_names = next(iter(dataset.values())).column_names
+    elif isinstance(dataset, Dataset):
+        column_names = dataset.column_names
+    else:  # IterableDataset
+        column_names = dataset.column_names or list(next(iter(dataset)).keys())
+    return dataset.map(_unpair_row, batched=True, remove_columns=column_names, **map_kwargs)
 
 
 def maybe_unpair_preference_dataset(
