@@ -15,23 +15,21 @@
 """Companion worker launched under ``accelerate launch --config_file <fsdp2>`` by the FSDP2 case in
 ``test_async_grpo_trainer.py``.
 
-It runs a couple of :class:`AsyncGRPOTrainer` steps on an FSDP2-sharded model, driven by an in-process
-stub rollout worker (no vLLM server, no NCCL weight transfer), and checks that training actually
-progresses under FSDP2: the loss is finite and the parameters change. It then prints one
-machine-parseable result line (``ASYNC_GRPO_FSDP2_RESULT {json}``) that the pytest side asserts on.
+It runs a couple of :class:`AsyncGRPOTrainer` steps on an FSDP2-sharded model, driven by an in-process stub rollout
+worker (no vLLM server, no NCCL weight transfer), and checks that training actually progresses under FSDP2: the loss is
+finite and the parameters change. It then prints one machine-parseable result line (``ASYNC_GRPO_FSDP2_RESULT {json}``)
+that the pytest side asserts on.
 
 This is a *functional* FSDP2 smoke, not a performance microbenchmark. (An earlier version tried to count
-``lm_head.weight`` all-gathers to answer PR #6077's per-chunk re-gather question, but under FSDP2 those
-gathers are driven by autograd unshard hooks, not by ``DTensor.full_tensor``, and the trainer's own
-weight-sync path calls ``full_tensor`` on every parameter every step — so a ``full_tensor`` counter
-cannot isolate the chunked-logprob path. The #6077 question is instead settled by static analysis:
-``patch_chunked_lm_head`` uses a plain custom autograd Function with no ``torch.utils.checkpoint``
-recompute, so the per-chunk re-gather mechanism that PR #6077 fixed for SFT's ``chunked_nll`` is
-structurally absent here.)
+``lm_head.weight`` all-gathers to answer PR #6077's per-chunk re-gather question, but under FSDP2 those gathers are
+driven by autograd unshard hooks, not by ``DTensor.full_tensor``, and the trainer's own weight-sync path calls
+``full_tensor`` on every parameter every step — so a ``full_tensor`` counter cannot isolate the chunked-logprob path.
+The #6077 question is instead settled by static analysis: ``patch_chunked_lm_head`` uses a plain custom autograd
+Function with no ``torch.utils.checkpoint`` recompute, so the per-chunk re-gather mechanism that PR #6077 fixed for
+SFT's ``chunked_nll`` is structurally absent here.)
 
-Self-contained on purpose (mirrors ``tests/experimental/_openreward_echo_env.py``): it imports only
-public TRL symbols and carries its own stub, so it never imports pytest-internal classes across the
-subprocess boundary.
+Self-contained on purpose (mirrors ``tests/experimental/_openreward_echo_env.py``): it imports only public TRL symbols
+and carries its own stub, so it never imports pytest-internal classes across the subprocess boundary.
 """
 
 from __future__ import annotations
@@ -62,9 +60,9 @@ def dummy_reward_func(completions, **kwargs):
 class _StubRolloutWorker:
     """Minimal in-process rollout worker — same shape as the one in test_async_grpo_trainer.py.
 
-    Reproduced here (rather than imported) because this module runs as ``__main__`` under
-    ``accelerate launch``, not as a pytest module, so importing the test class would be fragile. Keeping
-    it self-contained matches the openreward companion-script precedent.
+    Reproduced here (rather than imported) because this module runs as ``__main__`` under ``accelerate launch``, not as
+    a pytest module, so importing the test class would be fragile. Keeping it self-contained matches the openreward
+    companion-script precedent.
     """
 
     def __init__(self, tokenizer, dataset, num_generations: int = 3, samples_per_weight_sync: int = 10):
