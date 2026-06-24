@@ -995,7 +995,7 @@ class TestUnpairPreferenceDataset(TrlTestCase):
         )
 
     def test_unpair_preference_dataset_extra_columns(self):
-        # Test that extra columns are dropped (not causing a length mismatch error)
+        # Test that extra columns are preserved and duplicated for chosen and rejected rows
         paired_dataset = Dataset.from_dict(
             {
                 "prompt": ["The sky is", "The sun is"],
@@ -1005,7 +1005,8 @@ class TestUnpairPreferenceDataset(TrlTestCase):
             }
         )
         unpaired_dataset = unpair_preference_dataset(paired_dataset)
-        assert unpaired_dataset.to_dict() == self.unpaired_dataset.to_dict()
+        expected = {**self.unpaired_dataset.to_dict(), "extra": [1, 2, 1, 2]}
+        assert unpaired_dataset.to_dict() == expected
 
     def test_unpair_preference_dataset_iterable(self):
         # Test that an IterableDataset with extra columns is correctly unpaired
@@ -1017,7 +1018,7 @@ class TestUnpairPreferenceDataset(TrlTestCase):
         ]
 
     def test_unpair_preference_dataset_iterable_extra_columns(self):
-        # Test that an IterableDataset with extra columns drops them without error
+        # Test that an IterableDataset with extra columns preserves and duplicates them
         paired_iterable = Dataset.from_dict(
             {
                 "prompt": ["The sky is", "The sun is"],
@@ -1027,9 +1028,9 @@ class TestUnpairPreferenceDataset(TrlTestCase):
             }
         ).to_iterable_dataset()
         unpaired_dataset = unpair_preference_dataset(paired_iterable)
+        expected = {**self.unpaired_dataset.to_dict(), "extra": [1, 2, 1, 2]}
         assert list(unpaired_dataset) == [
-            dict(zip(self.unpaired_dataset.column_names, vals, strict=False))
-            for vals in zip(*self.unpaired_dataset.to_dict().values(), strict=False)
+            dict(zip(expected.keys(), vals, strict=False)) for vals in zip(*expected.values(), strict=False)
         ]
 
     def test_unpair_preference_dataset_dict(self):
