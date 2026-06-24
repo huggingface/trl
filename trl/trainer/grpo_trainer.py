@@ -2779,24 +2779,26 @@ class GRPOTrainer(_BaseTrainer):
                 raise ValueError(f"Unknown loss type: {self.loss_type}")
 
             if self.use_adaptive_entropy:
-                # Reduce sum and token count jointly for a true global mean (unbiased when ranks
-                # have different completion lengths). Update coefficient and cache entropy once per
-                # optimizer step; apply_coef uses the cached value so all micro-batches within one
-                # accumulation window apply the same bonus.
-                entropy_stats = self.accelerator.reduce(
-                    torch.stack([(entropies * mask).sum(), mask.sum()]).detach(), reduction="sum"
-                )
-                world_entropy = (entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item()
-                if self.accelerator.sync_gradients:
-                    if world_entropy <= self.args.entropy_target:
-                        self.entropy_coef = min(
-                            self.entropy_coef + self.args.entropy_coef_delta, self.args.entropy_coef_max
-                        )
-                    else:
-                        self.entropy_coef = max(
-                            self.entropy_coef - self.args.entropy_coef_delta, self.args.entropy_coef_min
-                        )
-                    self._last_world_entropy = world_entropy
+                if mode == "train":
+                    # Reduce sum and token count jointly for a true global mean (unbiased when ranks
+                    # have different completion lengths). Update coefficient and cache entropy once per
+                    # optimizer step; apply_coef uses the cached value so all micro-batches within one
+                    # accumulation window apply the same bonus. Gated on train mode so evaluation
+                    # cannot mutate the entropy controller state.
+                    entropy_stats = self.accelerator.reduce(
+                        torch.stack([(entropies * mask).sum(), mask.sum()]).detach(), reduction="sum"
+                    )
+                    world_entropy = (entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item()
+                    if self.accelerator.sync_gradients:
+                        if world_entropy <= self.args.entropy_target:
+                            self.entropy_coef = min(
+                                self.entropy_coef + self.args.entropy_coef_delta, self.args.entropy_coef_max
+                            )
+                        else:
+                            self.entropy_coef = max(
+                                self.entropy_coef - self.args.entropy_coef_delta, self.args.entropy_coef_min
+                            )
+                        self._last_world_entropy = world_entropy
                 apply_coef = self.entropy_coef if self._last_world_entropy <= self.args.entropy_target else 0.0
             else:
                 apply_coef = self.entropy_coef
@@ -2804,9 +2806,9 @@ class GRPOTrainer(_BaseTrainer):
             loss = loss - apply_coef * entropy_loss
 
             self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
-            # Log entropy_coef only on optimizer-step boundaries: it updates once per step (sync_gradients),
-            # so logging K identical values per step would dilute the metric with stale data.
-            if self.accelerator.sync_gradients:
+            # Log entropy_coef only on train optimizer-step boundaries: it updates once per step
+            # (sync_gradients), and sync_gradients is always True in eval (no accumulation context).
+            if mode == "train" and self.accelerator.sync_gradients:
                 self._metrics[mode]["entropy_coef"].append(self.entropy_coef)
 
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
