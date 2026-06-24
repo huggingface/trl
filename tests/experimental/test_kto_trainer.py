@@ -18,6 +18,7 @@ import torch
 import transformers
 from datasets import Dataset, load_dataset
 from packaging.version import Version
+from packaging.version import parse as parse_version
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.kto import KTOConfig, KTOTrainer
@@ -702,6 +703,46 @@ class TestKTOTrainerVLM(TrlTestCase):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
+    @pytest.mark.xfail(
+        parse_version(transformers.__version__) < parse_version("4.57.0"),
+        reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
+        strict=False,
+    )
+    def test_train_vlm_multi_image(self, model_id):
+        dataset = load_dataset(
+            "trl-internal-testing/zen-multi-image", "conversational_unpaired_preference", split="train"
+        )
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     def test_train_vlm_apo_zero_unpaired(self):
         # apo_zero_unpaired does not need the KL term: verify that calculate_kl=False path works end-to-end.
