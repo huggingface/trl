@@ -1148,15 +1148,18 @@ class DPOTrainer(_BaseTrainer):
         model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
 
+        if is_peft_model(model):
+            model = model.base_model.model
+
         # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
         # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
         # returns just the text stack and feeds image-placeholder IDs through it.
         # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
         # Fall back to `.model` there.
         if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            backbone, ref_backbone = model.model, self.ref_model.model
+            backbone = model.model
         else:
-            backbone, ref_backbone = model.base_model, self.ref_model.base_model
+            backbone = model.base_model
 
         outputs = backbone(**model_kwargs)
         hidden_states = outputs.last_hidden_state[:, :-1].contiguous()
@@ -1165,8 +1168,28 @@ class DPOTrainer(_BaseTrainer):
         bias = lm_head.bias
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            ref_outputs = ref_backbone(**model_kwargs)
-            ref_lm_head = self.ref_model.get_output_embeddings()
+            if self.ref_model is None:
+                # PEFT model with no explicit reference model: recover reference behaviour by disabling / switching to
+                # the frozen "ref" adapter, exactly as _compute_loss does for logit-based reference computation.
+                model_unwrapped = self.accelerator.unwrap_model(self.model)
+                with use_adapter(
+                    model_unwrapped, adapter_name="ref" if "ref" in model_unwrapped.peft_config else None
+                ):
+                    ref_model_inner = model_unwrapped.base_model.model
+                    if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                        ref_backbone = ref_model_inner.model
+                    else:
+                        ref_backbone = ref_model_inner.base_model
+                    ref_outputs = ref_backbone(**model_kwargs)
+                    ref_lm_head = model_unwrapped.get_output_embeddings()
+            else:
+                ref_model_inner = self.ref_model.base_model.model if is_peft_model(self.ref_model) else self.ref_model
+                if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                    ref_backbone = ref_model_inner.model
+                else:
+                    ref_backbone = ref_model_inner.base_model
+                ref_outputs = ref_backbone(**model_kwargs)
+                ref_lm_head = self.ref_model.get_output_embeddings()
             ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
             ref_weight = ref_lm_head.weight
             ref_bias = ref_lm_head.bias
