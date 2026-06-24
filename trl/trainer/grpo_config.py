@@ -314,9 +314,11 @@ class GRPOConfig(_BaseConfig):
             Step size for adjusting the entropy coefficient at each optimizer step during adaptive entropy control.
         entropy_target (`float`, *optional*, defaults to `0.2`):
             Target mean per-token entropy (in nats) used by adaptive entropy control. The coefficient is only
-            applied when the current entropy falls at or below this value. Typical language models have per-token
-            entropies in the range 2–10 nats; the default of `0.2` nearly always triggers regularization, so users
-            should tune this to a value appropriate for their model and task.
+            applied when the current entropy falls at or below this value. Measured over the same token set as
+            the policy loss: all completion tokens by default, or only the high-entropy subset when
+            `top_entropy_quantile < 1.0`. Typical language models have per-token entropies in the range 2–10
+            nats; the default of `0.2` nearly always triggers regularization, so users should tune this to a
+            value appropriate for their model and task (and token subset when using `top_entropy_quantile`).
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
@@ -886,8 +888,10 @@ class GRPOConfig(_BaseConfig):
         default=0.2,
         metadata={
             "help": "Target mean per-token entropy (nats) for adaptive entropy control. The coefficient is only "
-            "applied when current entropy is at or below this value. Typical language models have per-token "
-            "entropies of 2–10 nats; the default of 0.2 nearly always triggers regularization, so tune this."
+            "applied when current entropy is at or below this value. Measured over the same token set as the "
+            "policy loss (all completion tokens, or the high-entropy subset when top_entropy_quantile < 1.0). "
+            "Typical language models have per-token entropies of 2–10 nats; the default of 0.2 nearly always "
+            "triggers regularization, so tune this."
         },
     )
     max_tool_calling_iterations: int | None = field(

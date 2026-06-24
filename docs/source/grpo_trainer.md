@@ -677,7 +677,7 @@ training_args = GRPOConfig(
 
 <Tip>
 
-Typical language models have per-token entropies of 2–10 nats. The default `entropy_target=0.2` nearly always triggers regularization; set it to a value meaningful for your model (e.g. the entropy you observe early in training, logged as the `entropy` metric).
+Typical language models have per-token entropies of 2–10 nats. The default `entropy_target=0.2` nearly always triggers regularization; set it to a value meaningful for your model (e.g. the entropy you observe early in training, logged as the `entropy` metric). When using `top_entropy_quantile < 1.0`, `entropy_target` applies to the high-entropy token subset — that subset's entropy will be higher than the logged full-token `entropy`, so calibrate accordingly.
 
 </Tip>
 
