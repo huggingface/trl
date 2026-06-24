@@ -22,6 +22,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 
 from trl import clone_chat_template
 from trl.chat_template_utils import (
+    _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
@@ -192,11 +193,15 @@ class TestAddResponseSchema:
         ],
     )
     def test_add_response_schema_vlm(self, processor_name):
-        # For VLM processors, `add_response_schema` must set the schema on the inner tokenizer, since
-        # `parse_response` is a tokenizer method that reads `self.response_schema` from the tokenizer instance.
+        # For VLM processors, `add_response_schema` must set the template/schema on the inner tokenizer, since
+        # `parse_response` is a tokenizer method that reads `self.response_template` / `self.response_schema` from the
+        # tokenizer instance. Which attribute is set depends on the installed transformers version.
         processor = AutoProcessor.from_pretrained(processor_name)
         processor = add_response_schema(processor)
-        assert processor.tokenizer.response_schema is not None
+        if _SUPPORTS_RESPONSE_TEMPLATE:
+            assert processor.tokenizer.response_template is not None
+        else:
+            assert processor.tokenizer.response_schema is not None
         messages = [
             {"role": "user", "content": [{"type": "text", "text": "What is 3*4?"}]},
             {

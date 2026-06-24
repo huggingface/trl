@@ -1103,8 +1103,8 @@ def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int], prefix: l
     try:
         # `prefix=` is only supported by the new-style parser (transformers >= 5.13, when a `response_template` is set).
         # Older transformers only ship the legacy `response_schema` parser, whose `parse_response` rejects the kwarg, so
-        # we omit it there. Note that `add_response_schema` sets `response_template` on every transformers version, so
-        # the attribute check alone is not enough — the version gate is what distinguishes old from new.
+        # we gate on `_SUPPORTS_RESPONSE_TEMPLATE` (matching `add_response_schema`, which only sets `response_template`
+        # on those versions) and omit `prefix=` everywhere else, including the legacy `response_schema` path.
         if (
             prefix is not None
             and _SUPPORTS_RESPONSE_TEMPLATE
