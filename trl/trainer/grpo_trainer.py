@@ -2767,21 +2767,10 @@ class GRPOTrainer(_BaseTrainer):
             # When top_entropy_quantile < 1.0, entropy_mask restricts policy gradients to high-entropy
             # tokens. Use the same effective mask for the entropy bonus so it acts on the same tokens.
             effective_mask = mask if entropy_mask is None else mask * entropy_mask
-            if self.loss_type in ["grpo", "sapo"]:
-                entropy_loss = ((entropies * effective_mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean() / normalizer
-            elif self.loss_type == "bnpo":
-                entropy_loss = (entropies * effective_mask).sum() / mask.sum().clamp(min=1.0) / normalizer
-            elif self.loss_type == "dr_grpo":
-                entropy_loss = (
-                    (entropies * effective_mask).sum() / (entropies.size(0) * self.max_completion_length) / normalizer
-                )
-            elif self.loss_type in ["cispo", "dapo", "vespo"]:
-                entropy_loss = (entropies * effective_mask).sum() / normalizer
-            elif self.loss_type == "luspo":
-                # luspo weights each sequence by its token count, so entropy is summed (not per-token averaged) per sequence
-                entropy_loss = (entropies * effective_mask).sum(-1).mean() / normalizer
-            else:
-                raise ValueError(f"Unknown loss type: {self.loss_type}")
+            # Mean per-active-token entropy, scaled for gradient accumulation like the policy loss.
+            # Uniform across all loss types so entropy_target and entropy_coef have consistent units
+            # (per-token nats) and match the world_entropy computed in the adaptive block below.
+            entropy_loss = (entropies * effective_mask).sum() / effective_mask.sum().clamp(min=1.0) / normalizer
 
             if self.use_adaptive_entropy:
                 if mode == "train":
