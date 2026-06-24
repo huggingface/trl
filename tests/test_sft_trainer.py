@@ -101,13 +101,19 @@ class TestWeightedNLLLoss(TrlTestCase):
     def test_zero_weight_suppresses_sample(self):
         """A sample with weight=0.0 should not contribute to the loss."""
         outputs, labels = self._make_outputs_labels(batch_size=2)
-        # Keep only second sample (weight 0 for first, 1 for second)
         weights_zero_first = torch.tensor([0.0, 1.0])
-        weights_second_only = torch.tensor([0.0, 1.0])
 
-        loss_a = weighted_nll_loss(outputs, labels, weights_zero_first)
-        loss_b = weighted_nll_loss(outputs, labels, weights_second_only)
-        torch.testing.assert_close(loss_a, loss_b, atol=1e-6, rtol=1e-6)
+        # Loss over the full batch with the first sample zeroed out must equal the
+        # loss computed from the second sample alone (weight 1.0, batch size 1) --
+        # not merely two calls with the same weight tensor, which would pass trivially.
+        second_sample_outputs = MagicMock()
+        second_sample_outputs.logits = outputs.logits[1:2]
+        second_sample_labels = labels[1:2]
+        weight_second_only = torch.tensor([1.0])
+
+        loss_full_batch = weighted_nll_loss(outputs, labels, weights_zero_first)
+        loss_second_alone = weighted_nll_loss(second_sample_outputs, second_sample_labels, weight_second_only)
+        torch.testing.assert_close(loss_full_batch, loss_second_alone, atol=1e-6, rtol=1e-6)
 
     def test_negative_weight_inverts_gradient(self):
         """Negative weights should produce negative loss (gradient inversion)."""

@@ -1844,10 +1844,9 @@ class SFTTrainer(_BaseTrainer):
             # `router_aux_loss_coef * aux_loss` to `outputs.loss`, but we
             # discard that when we replace loss with weighted_nll_loss. Mirror
             # the same scaling so MoE models train correctly.
-            if self.aux_loss_enabled and getattr(outputs, "aux_loss", None) is not None:
-                config = getattr(self.model.config, "text_config", self.model.config)
-                coef = getattr(config, "router_aux_loss_coef", 0.0)
-                loss = loss + coef * outputs.aux_loss.to(loss.device)
+            if self.aux_loss_enabled and outputs.aux_loss is not None:
+                text_config = self.model.config.text_config if self._is_vlm else self.model.config
+                loss = loss + text_config.router_aux_loss_coef * outputs.aux_loss.to(loss.device)
 
         # Compute entropy
         if self.args.loss_type == "chunked_nll":
