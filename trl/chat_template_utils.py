@@ -17,13 +17,21 @@ import warnings
 from pathlib import Path
 from typing import TypeVar
 
+import transformers
 from jinja2 import TemplateError
+from packaging.version import Version
 from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
 
 from .data_utils import prepare_multimodal_messages
 
 
 _CHAT_TEMPLATES_DIR = Path(__file__).parent / "chat_templates"
+
+# New-style `response_template` parsing (streamable chat parsing, with the `prefix=` argument to `parse_response`)
+# landed in transformers 5.13.0 (huggingface/transformers#45847). Earlier versions (>= 5.0.0) only ship the legacy
+# `response_schema` parser. We gate on `5.13.0.dev0` so the feature is also active on transformers `main` (which
+# reports a dev version) ahead of the 5.13.0 release.
+_SUPPORTS_RESPONSE_TEMPLATE = Version(transformers.__version__) >= Version("5.13.0.dev0")
 
 
 def has_generation_markers(chat_template: str) -> bool:
@@ -416,7 +424,7 @@ llama3_template = {
     },
 }
 
-gpt_oss_template = {
+gptoss_template = {
     "defaults": {"role": "assistant"},
     "start_anchor": "<|start|>assistant",
     "fields": {
@@ -498,22 +506,23 @@ ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizerBase, Processo
 
 def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     r"""
-    Adds the appropriate response schema to the given tokenizer based on its chat template.
+    Adds the appropriate response template (or legacy schema) to the given tokenizer based on its chat template.
 
-    At the time of initial implementation, most tokenizers do not have built-in support for response schemas. While
-    waiting for broader adoption, we provide this utility function to manually set the response schema for known chat
-    templates.
+    At the time of initial implementation, most tokenizers do not have built-in support for response parsing. While
+    waiting for broader adoption, we provide this utility function to manually set it for known chat templates. On
+    transformers >= 5.13 the new-style `response_template` is set; on older versions (which only understand it) the
+    legacy `response_schema` is set instead.
 
-    When given a VLM processor, the schema is set on the inner tokenizer, since `parse_response` is a tokenizer method
-    and reads `self.response_schema` from the tokenizer instance.
+    When given a VLM processor, it is set on the inner tokenizer, since `parse_response` is a tokenizer method that
+    reads `self.response_template` / `self.response_schema` from the tokenizer instance.
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
-            Tokenizer or VLM processor to which the response schema will be added.
+            Tokenizer or VLM processor to which the response template or schema will be added.
 
     Returns:
         `PreTrainedTokenizerBase` or `ProcessorMixin`:
-            The same object that was passed in, with the response schema set on the underlying tokenizer.
+            The same object that was passed in, with the response template or schema set on the underlying tokenizer.
 
     Examples:
 
@@ -528,46 +537,40 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
     ```
     """
-    # For VLM processors, set the schema on the inner tokenizer (where `parse_response` reads it from).
-    # Match against the top-level chat_template, since that's what was used historically and processors
-    # may carry their own VLM-specific template separate from the inner tokenizer's.
+    # For VLM processors, set it on the inner tokenizer (where `parse_response` reads it from). Match against the
+    # top-level chat_template, since that's what was used historically and processors may carry their own VLM-specific
+    # template separate from the inner tokenizer's.
     chat_template = processing_class.chat_template
     if isinstance(processing_class, ProcessorMixin):
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
     if chat_template == glm4moe_chat_template:
-        tokenizer.response_schema = glm4moe_schema
-        tokenizer.response_template = glm4moe_template
+        schema, template = glm4moe_schema, glm4moe_template
     elif chat_template == gptoss_chat_template:
-        tokenizer.response_schema = gptoss_schema
-        tokenizer.response_template = gpt_oss_template
+        schema, template = gptoss_schema, gptoss_template
     elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
-        tokenizer.response_schema = llama3_schema
-        tokenizer.response_template = llama3_template
+        schema, template = llama3_schema, llama3_template
     elif chat_template in [
         qwen2_5_chat_template,
         qwen3_chat_template,
         qwen3_instruct_2507_chat_template,
         qwen3_vl_chat_template,
     ]:
-        tokenizer.response_schema = qwen3_schema
-        tokenizer.response_template = qwen3_template
+        schema, template = qwen3_schema, qwen3_template
     elif chat_template in [
         qwen3_5_nothink_chat_template,
         qwen3_5_think_chat_template,
         qwen3_6_chat_template,
     ]:
-        tokenizer.response_schema = qwen3_5_schema
-        tokenizer.response_template = qwen3_5_template
+        schema, template = qwen3_5_schema, qwen3_5_template
     elif chat_template in [
         nemotron_3_nano_chat_template,
         nemotron_3_super_chat_template,
         nemotron_3_ultra_chat_template,
     ]:
         # Nemotron 3 renders tool calls in the same Hermes-style <function=...>/<parameter=...> format as Qwen3.5.
-        tokenizer.response_schema = qwen3_5_schema
-        tokenizer.response_template = qwen3_5_template
+        schema, template = qwen3_5_schema, qwen3_5_template
     else:
         raise ValueError(
             "Unrecognized chat template, failed to add response schema. Please manually set the response schema on "
@@ -575,6 +578,13 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
             "[docs](https://huggingface.co/docs/transformers/main/en/chat_response_parsing#response-parsing) for more "
             "details on response parsing."
         )
+    # New-style `response_template` is preferred where supported (transformers >= 5.13); older versions only understand
+    # the legacy `response_schema`. Set exactly the one the installed transformers can use, so the presence of the
+    # attribute reflects the parser actually in play.
+    if _SUPPORTS_RESPONSE_TEMPLATE:
+        tokenizer.response_template = template
+    else:
+        tokenizer.response_schema = schema
     return processing_class
 
 
@@ -1041,7 +1051,8 @@ def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int], prefix: l
         prefix (`list[int]`, *optional*):
             Token IDs of the chat-prompt context that came before `ids` (e.g. the rendered chat template up to and
             including the assistant header / any template-emitted thinking opener). Only used when the tokenizer has a
-            new-style `response_template` set; ignored for legacy `response_schema`.
+            new-style `response_template` set and the installed transformers supports it (>= 5.13); ignored for legacy
+            `response_schema`.
 
     Returns:
         `dict`:
@@ -1061,9 +1072,15 @@ def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int], prefix: l
     ```
     """
     try:
-        # `prefix=` is only supported when a new-style `response_template` is set on the tokenizer. For legacy
-        # `response_schema` only, the underlying call rejects the kwarg, so we omit it in that case.
-        if prefix is not None and getattr(tokenizer, "response_template", None) is not None:
+        # `prefix=` is only supported by the new-style parser (transformers >= 5.13, when a `response_template` is set).
+        # Older transformers only ship the legacy `response_schema` parser, whose `parse_response` rejects the kwarg, so
+        # we omit it there. Note that `add_response_schema` sets `response_template` on every transformers version, so
+        # the attribute check alone is not enough — the version gate is what distinguishes old from new.
+        if (
+            prefix is not None
+            and _SUPPORTS_RESPONSE_TEMPLATE
+            and getattr(tokenizer, "response_template", None) is not None
+        ):
             parsed = tokenizer.parse_response(ids, prefix=prefix)
         else:
             parsed = tokenizer.parse_response(ids)
