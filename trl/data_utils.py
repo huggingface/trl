@@ -404,6 +404,9 @@ def _unpair_row(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     }
     if "prompt" in batch:
         new_batch["prompt"] = batch["prompt"] + batch["prompt"]
+    for k in batch:
+        if k not in ("chosen", "rejected", "prompt"):
+            new_batch[k] = batch[k] + batch[k]
     return new_batch
 
 
