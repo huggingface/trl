@@ -2754,7 +2754,7 @@ class GRPOTrainer(_BaseTrainer):
         # when self.entropy_coef has been decremented to entropy_coef_min (default 0) so it can recover once entropy
         # drops below entropy_target again.
         if self.entropy_coef != 0.0 or self.use_adaptive_entropy:
-            if self.loss_type in ["grpo", "sapo", "luspo"]:
+            if self.loss_type in ["grpo", "sapo"]:
                 entropy_loss = ((entropies * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean() / normalizer
             elif self.loss_type == "bnpo":
                 entropy_loss = (entropies * mask).sum() / mask.sum().clamp(min=1.0) / normalizer
@@ -2762,6 +2762,9 @@ class GRPOTrainer(_BaseTrainer):
                 entropy_loss = (entropies * mask).sum() / (entropies.size(0) * self.max_completion_length) / normalizer
             elif self.loss_type in ["cispo", "dapo", "vespo"]:
                 entropy_loss = (entropies * mask).sum() / normalizer
+            elif self.loss_type == "luspo":
+                # luspo weights each sequence by its token count, so entropy is summed (not per-token averaged) per sequence
+                entropy_loss = (entropies * mask).sum(-1).mean() / normalizer
 
             # True global mean per-token entropy (nats): reduce sum and token count jointly so
             # that ranks with fewer tokens don't get equal weight (averaging per-rank means would
