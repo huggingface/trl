@@ -185,7 +185,7 @@ While training and evaluating, we record the following reward metrics:
 - `reward`: The overall average reward after summing rewards across functions (weighted by `reward_weights`).
 - `reward_std`: The standard deviation of summed rewards across functions (weighted by `reward_weights`), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
-- `policy_loss`: The policy gradient loss value (before any entropy bonus).
+- `policy_loss`: The policy gradient loss value (before any entropy bonus). Logged when `entropy_coef` is nonzero or `use_adaptive_entropy=True`.
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `entropy_loss`: Mean per-token entropy (nats) used as the regularization signal. Logged when `entropy_coef` is nonzero or `use_adaptive_entropy=True`.
 - `entropy_coef`: The current entropy coefficient. Logged when `entropy_coef` is nonzero or `use_adaptive_entropy=True`. Updated once per optimizer step when `use_adaptive_entropy=True`.
