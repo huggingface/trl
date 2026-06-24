@@ -72,12 +72,12 @@ def clone_chat_template(
 
     Example:
     ```python
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    from trl import clone_chat_template
+    >>> from transformers import AutoModelForCausalLM, AutoTokenizer
+    >>> from trl import clone_chat_template
 
-    model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
-    model, tokenizer, added_tokens = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
+    >>> model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
+    >>> tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
+    >>> model, tokenizer, added_tokens = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
     ```
     """
     # Load the source tokenizer containing the desired chat template
@@ -329,6 +329,8 @@ gemma3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3.jinja").read_text(encoding
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text(encoding="utf-8")
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding="utf-8")
+
+idefics3_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3.jinja").read_text(encoding="utf-8")
 
 llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text(encoding="utf-8")
 
@@ -655,6 +657,8 @@ glm4moe_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe_training.jinja"
 
 gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text(encoding="utf-8")
 
+idefics3_training_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3_training.jinja").read_text(encoding="utf-8")
+
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
@@ -707,9 +711,9 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    Currently Cohere, Cohere 2, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS, LLaMA 3, Phi-3, Phi-3.5,
-    Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, and Qwen3.6 are
-    supported.
+    Currently Cohere, Cohere 2, DeepSeek-V3, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS, Idefics3, LLaMA 3, Phi-3,
+    Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, and Qwen3.6
+    are supported.
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
@@ -795,6 +799,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
+
+    if processing_class.chat_template == idefics3_chat_template:
+        return idefics3_training_chat_template
 
     if processing_class.chat_template == llama3_chat_template:
         return llama3_training_chat_template

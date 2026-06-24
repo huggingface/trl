@@ -795,11 +795,14 @@ class GOLDTrainer(SFTTrainer):
             init_kwargs = dict(teacher_model_init_kwargs)
             if args.teacher_model_revision is not None:
                 init_kwargs.setdefault("revision", args.teacher_model_revision)
+            init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             teacher_model = create_model_from_path(teacher_model, **init_kwargs)
         self.use_uld_loss = args.use_uld_loss
         self.teacher_tokenizer = None
         if args.use_uld_loss and args.teacher_tokenizer_name_or_path is not None:
-            self.teacher_tokenizer = AutoTokenizer.from_pretrained(args.teacher_tokenizer_name_or_path)
+            self.teacher_tokenizer = AutoTokenizer.from_pretrained(
+                args.teacher_tokenizer_name_or_path, trust_remote_code=args.trust_remote_code
+            )
             if not hasattr(self.teacher_tokenizer, "pad_token") or self.teacher_tokenizer.pad_token is None:
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
 
