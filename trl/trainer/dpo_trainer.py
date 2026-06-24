@@ -544,7 +544,7 @@ class DPOTrainer(_BaseTrainer):
                 if "quantization_config" in model_init_kwargs:
                     raise ValueError(
                         "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
-                        "Please set it in only one place."
+                        "Please set it in only one place, preferably as a trainer argument."
                     )
                 model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
