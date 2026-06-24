@@ -26,6 +26,10 @@ jobs:
             echo "Invalid version format: $VERSION"
             exit 1
           fi
+          if [[ ${#VERSION} -gt 50 ]]; then
+            echo "Version string too long: $VERSION"
+            exit 1
+          fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
@@ -39,6 +43,8 @@ jobs:
 
       - name: Build and Push
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
+        env:
+          VERSION: ${{ env.VERSION }}
         with:
           context: docker/trl
           push: true
