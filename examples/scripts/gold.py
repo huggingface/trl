@@ -23,7 +23,7 @@
 # docstyle-ignore
 """
 # Full training:
-python trl/experimental/gold/gold.py \
+python examples/scripts/gold.py \
     --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -35,7 +35,7 @@ python trl/experimental/gold/gold.py \
     --push_to_hub
 
 # LoRA:
-python trl/experimental/gold/gold.py \
+python examples/scripts/gold.py \
     --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \

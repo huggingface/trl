@@ -39,39 +39,38 @@ class PAPOTrainer(GRPOTrainer):
     Example:
 
     ```python
-    from datasets import load_dataset
-    from trl.experimental.papo import PAPOTrainer, PAPOConfig
+    >>> from datasets import load_dataset
+    >>> from trl.experimental.papo import PAPOTrainer, PAPOConfig
 
-    dataset = load_dataset("your-vlm-dataset", split="train")
-
-
-    def reward_func(completions, **kwargs):
-        # Your reward function for multimodal reasoning
-        return [compute_reward(c) for c in completions]
+    >>> dataset = load_dataset("your-vlm-dataset", split="train")
 
 
+    >>> def reward_func(completions, **kwargs):
+    ...     # Your reward function for multimodal reasoning
+    ...     return [compute_reward(c) for c in completions]
     # PAPO-G
-    config = PAPOConfig(
-        loss_type="grpo",  # Use GRPO as base
-        perception_loss_weight=0.1,
-        mask_ratio=0.3,
-    )
 
+    >>> config = PAPOConfig(
+    ...     loss_type="grpo",  # Use GRPO as base
+    ...     perception_loss_weight=0.1,
+    ...     mask_ratio=0.3,
+    ... )
     # PAPO-G
-    config = PAPOConfig(
-        loss_type="dapo",  # Use DAPO as base
-        perception_loss_weight=0.1,
-        mask_ratio=0.3,
-    )
 
-    trainer = PAPOTrainer(
-        model="Qwen/Qwen2-VL-2B-Instruct",
-        reward_funcs=reward_func,
-        args=config,
-        train_dataset=dataset,
-    )
+    >>> config = PAPOConfig(
+    ...     loss_type="dapo",  # Use DAPO as base
+    ...     perception_loss_weight=0.1,
+    ...     mask_ratio=0.3,
+    ... )
 
-    trainer.train()
+    >>> trainer = PAPOTrainer(
+    ...     model="Qwen/Qwen2-VL-2B-Instruct",
+    ...     reward_funcs=reward_func,
+    ...     args=config,
+    ...     train_dataset=dataset,
+    ... )
+
+    >>> trainer.train()
     ```
 
     Args:
