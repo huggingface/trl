@@ -25,7 +25,6 @@ import transformers
 from accelerate.utils.memory import release_memory
 from datasets import Dataset, load_dataset
 from packaging.version import Version
-from packaging.version import parse as parse_version
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -733,7 +732,7 @@ class TestSFTTrainer(TrlTestCase):
                 tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             )
         elif peft_type == "prefix_tuning":
-            if parse_version(peft.__version__) <= Version("0.17.1"):
+            if Version(peft.__version__) <= Version("0.17.1"):
                 pytest.xfail(
                     "Prefix tuning with device_map='auto' is broken in peft 0.17.1 and below. See "
                     "https://github.com/huggingface/peft/issues/2821"
@@ -1881,7 +1880,7 @@ class TestSFTTrainer(TrlTestCase):
         ],
     )
     @pytest.mark.xfail(
-        parse_version(transformers.__version__) < parse_version("4.57.0"),
+        Version(transformers.__version__) < Version("4.57.0"),
         reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
         strict=False,
     )
