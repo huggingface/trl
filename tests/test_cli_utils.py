@@ -307,17 +307,27 @@ class TestGetDataset:
         train_dataset = result["train"]
         assert train_dataset.column_names == ["prompt"]
         prompts = train_dataset["prompt"]
-        expected_first_half = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
-        assert prompts[: len(prompts) // 2] == expected_first_half["prompt"]
-        expected_second_half = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
-        assert prompts[len(prompts) // 2 :] == expected_second_half["prompt"]
+        expected_first_dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_completion", split="train"
+        )
+        expected_second_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        assert prompts[: len(expected_first_dataset)] == expected_first_dataset["prompt"]
+        assert prompts[len(expected_first_dataset) :] == expected_second_dataset["prompt"]
 
-    def test_dataset_mixture_with_weights(self):
+    def test_dataset_mixture_with_fractions(self):
         dataset_config1 = DatasetConfig(
-            path="trl-internal-testing/zen", name="standard_prompt_completion", split="train[:50%]", columns=["prompt"]
+            path="trl-internal-testing/zen",
+            name="standard_prompt_completion",
+            split="train",
+            fraction=0.5,
+            columns=["prompt"],
         )
         dataset_config2 = DatasetConfig(
-            path="trl-internal-testing/zen", name="standard_preference", split="train[:50%]", columns=["prompt"]
+            path="trl-internal-testing/zen",
+            name="standard_preference",
+            split="train",
+            fraction=0.25,
+            columns=["prompt"],
         )
         mixture_config = DatasetMixtureConfig(datasets=[dataset_config1, dataset_config2])
         result = get_dataset(mixture_config)
@@ -326,12 +336,29 @@ class TestGetDataset:
         train_dataset = result["train"]
         assert train_dataset.column_names == ["prompt"]
         prompts = train_dataset["prompt"]
-        expected_first_half = load_dataset("trl-internal-testing/zen", "standard_preference", split="train[:50%]")
-        assert prompts[: len(prompts) // 2] == expected_first_half["prompt"]
-        expected_second_half = load_dataset(
-            "trl-internal-testing/zen", "standard_prompt_completion", split="train[:50%]"
+        expected_first_dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_completion", split="train"
         )
-        assert prompts[len(prompts) // 2 :] == expected_second_half["prompt"]
+        expected_second_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        num_first_examples = int(0.5 * len(expected_first_dataset))
+        num_second_examples = int(0.25 * len(expected_second_dataset))
+        assert prompts[:num_first_examples] == expected_first_dataset[:num_first_examples]["prompt"]
+        assert prompts[num_first_examples:] == expected_second_dataset[:num_second_examples]["prompt"]
+
+    def test_dataset_mixture_with_invalid_fraction(self):
+        with pytest.raises(ValueError, match="`fraction` must be between 0 and 1."):
+            DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=1.5)
+
+    def test_dataset_mixture_fraction_with_streaming_raises_error(self, tmp_path):
+        data_file = tmp_path / "data.jsonl"
+        data_file.write_text('{"prompt": "a"}\n{"prompt": "b"}\n')
+        mixture_config = DatasetMixtureConfig(
+            datasets=[DatasetConfig(path="json", data_files=str(data_file), fraction=0.5)],
+            streaming=True,
+        )
+
+        with pytest.raises(ValueError, match="Dataset fractions are only supported for non-streaming datasets."):
+            get_dataset(mixture_config)
 
     def test_dataset_mixture_with_test_split(self):
         mixture_config = DatasetMixtureConfig(
@@ -373,6 +400,7 @@ class TestGetDataset:
           name: standard_prompt_only
         - path: trl-internal-testing/zen
           name: standard_preference
+          fraction: 0.5
           columns:
           - prompt
         """
@@ -402,6 +430,7 @@ class TestGetDataset:
         assert isinstance(dataset_config2, DatasetConfig)
         assert dataset_config2.path == "trl-internal-testing/zen"
         assert dataset_config2.name == "standard_preference"
+        assert dataset_config2.fraction == 0.5
         assert dataset_config2.columns == ["prompt"]  # Columns specified
 
     def test_trlparser_parses_yaml_and_loads_dataset(self):

@@ -537,7 +537,9 @@ trl kto --config kto_config.yaml
 
 ### Using dataset mixtures
 
-You can use dataset mixtures to combine multiple datasets into a single training dataset. This is useful for training on diverse data sources or when you want to mix different types of data.
+You can use dataset mixtures to combine multiple datasets into a single training dataset. This is useful for training
+on diverse data sources or when you want to mix different types of data. Set `fraction` on a dataset entry to keep the
+first `fraction * len(dataset)` rows from that source before concatenation.
 
 <hfoptions id="trainer">
 <hfoption id="SFT">
@@ -547,7 +549,9 @@ You can use dataset mixtures to combine multiple datasets into a single training
 model_name_or_path: Qwen/Qwen2.5-0.5B
 datasets:
   - path: stanfordnlp/imdb
+    fraction: 0.5
   - path: roneneldan/TinyStories
+    fraction: 0.25
 ```
 
 Launch with:

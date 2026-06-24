@@ -58,6 +58,8 @@ class DatasetConfig:
             Path(s) to source data file(s).
         split (`str`, *optional*, defaults to `"train"`):
             Which split of the data to load.
+        fraction (`float`, *optional*, defaults to `1.0`):
+            Fraction of the dataset split to keep, taken from the first rows.
         columns (`list[str]`, *optional*):
             List of column names to select from the dataset. If `None`, all columns are selected.
     """
@@ -67,7 +69,12 @@ class DatasetConfig:
     data_dir: str | None = None
     data_files: str | list[str] | dict[str, str] | None = None
     split: str = "train"
+    fraction: float = 1.0
     columns: list[str] | None = None
+
+    def __post_init__(self):
+        if self.fraction < 0 or self.fraction > 1:
+            raise ValueError("`fraction` must be between 0 and 1.")
 
 
 @dataclass
@@ -98,12 +105,14 @@ class DatasetMixtureConfig:
             data_dir: ...
             data_files: ...
             split: ...
+            fraction: ...
             columns: ...
           - path: ...
             name: ...
             data_dir: ...
             data_files: ...
             split: ...
+            fraction: ...
             columns: ...
         streaming: ...
         test_split_size: ...
@@ -435,6 +444,8 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
     datasets_list = []
     for dataset_config in mixture_config.datasets:
         logger.info(f"Loading dataset for mixture: {dataset_config.path} (config name: {dataset_config.name})")
+        if mixture_config.streaming and dataset_config.fraction < 1.0:
+            raise ValueError("Dataset fractions are only supported for non-streaming datasets.")
         dataset = datasets.load_dataset(
             path=dataset_config.path,
             name=dataset_config.name,
@@ -445,6 +456,8 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
         )
         if dataset_config.columns is not None:
             dataset = dataset.select_columns(dataset_config.columns)
+        if dataset_config.fraction < 1.0:
+            dataset = dataset.select(range(int(dataset_config.fraction * len(dataset))))
         datasets_list.append(dataset)
 
     if datasets_list:
