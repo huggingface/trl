@@ -55,14 +55,7 @@ from accelerate import logging
 from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, HfArgumentParser
 
-from trl import (
-    ModelConfig,
-    RewardConfig,
-    RewardTrainer,
-    ScriptArguments,
-    get_peft_config,
-    get_quantization_config,
-)
+from trl import ModelConfig, RewardConfig, RewardTrainer, ScriptArguments, get_peft_config, get_quantization_config
 
 
 logger = logging.get_logger(__name__)

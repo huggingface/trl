@@ -60,13 +60,7 @@ import torch
 from datasets import DatasetDict, load_dataset, load_from_disk
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from trl import (
-    ModelConfig,
-    ScriptArguments,
-    TrlParser,
-    get_peft_config,
-    get_quantization_config,
-)
+from trl import ModelConfig, ScriptArguments, TrlParser, get_peft_config, get_quantization_config
 from trl.experimental.ssd import SSDConfig, SSDTrainer
 
 

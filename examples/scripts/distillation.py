@@ -82,11 +82,7 @@ def main(script_args, training_args, model_args):
     from datasets import load_dataset
     from transformers import GenerationConfig
 
-    from trl import (
-        LogCompletionsCallback,
-        get_peft_config,
-        get_quantization_config,
-    )
+    from trl import LogCompletionsCallback, get_peft_config, get_quantization_config
     from trl.experimental.distillation import DistillationTrainer
 
     ################

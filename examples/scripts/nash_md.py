@@ -58,13 +58,7 @@ import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 
-from trl import (
-    LogCompletionsCallback,
-    ModelConfig,
-    ScriptArguments,
-    TrlParser,
-    get_quantization_config,
-)
+from trl import LogCompletionsCallback, ModelConfig, ScriptArguments, TrlParser, get_quantization_config
 from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 
 

@@ -52,12 +52,7 @@ from accelerate import logging
 from datasets import load_dataset
 from transformers import AutoModelForTokenClassification, AutoTokenizer, HfArgumentParser
 
-from trl import (
-    ModelConfig,
-    ScriptArguments,
-    get_peft_config,
-    get_quantization_config,
-)
+from trl import ModelConfig, ScriptArguments, get_peft_config, get_quantization_config
 from trl.experimental.prm import PRMConfig, PRMTrainer
 
 
