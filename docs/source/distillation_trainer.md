@@ -38,7 +38,7 @@ config = DistillationConfig(
     lmbda=1.0,                      # fully on-policy (student generates)
     beta=1.0,                       # reverse KL
     # Teacher
-    teacher_model_init_kwargs={"torch_dtype": "bfloat16"},
+    teacher_model_init_kwargs={"dtype": "bfloat16"},
 )
 
 # 3. Train
@@ -94,7 +94,7 @@ When using the teacher server:
 
 ### Expected dataset type
 
-The dataset should be formatted as a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language_modeling) dataset:
+The dataset should be formatted as a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language-modeling) dataset:
 
 ```python
 {"messages": [{"role": "user", "content": "What color is the sky?"},
@@ -109,11 +109,11 @@ When using fully on-policy distillation (`lmbda=1.0`), the assistant turn can be
 
 ## Example script
 
-Use [`trl/experimental/distillation/distillation.py`](https://github.com/huggingface/trl/blob/main/trl/experimental/distillation/distillation.py) to launch distillation training from the command line. The script supports full training, mixed on/off-policy, and LoRA via the standard `ModelConfig` flags.
+Use [`examples/scripts/distillation.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/distillation.py) to launch distillation training from the command line. The script supports full training, mixed on/off-policy, and LoRA via the standard `ModelConfig` flags.
 
 ```bash
 # Full training (off-policy only, lmbda=0):
-python trl/experimental/distillation/distillation.py \
+python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -127,7 +127,7 @@ python trl/experimental/distillation/distillation.py \
 
 ```bash
 # Mixed on/off-policy (lmbda=0.5):
-python trl/experimental/distillation/distillation.py \
+python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \

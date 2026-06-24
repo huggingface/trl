@@ -27,7 +27,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState, logging
+from accelerate import PartialState
+from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset
 from packaging.version import Version
@@ -69,7 +70,7 @@ if is_wandb_available():
     import wandb
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 class CPOTrainer(_BaseTrainer):
@@ -166,6 +167,8 @@ class CPOTrainer(_BaseTrainer):
                     )
                 model_init_kwargs["dtype"] = dtype
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
+
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)

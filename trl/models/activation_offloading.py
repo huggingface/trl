@@ -19,9 +19,11 @@
 # LICENSE file in the root directory of https://github.com/pytorch/torchtune.
 
 
+import sys
+
 import psutil
 import torch
-from accelerate import logging
+from accelerate.logging import get_logger
 from accelerate.utils.versions import is_torch_version
 from torch import nn
 from torch.autograd.graph import saved_tensors_hooks
@@ -43,7 +45,7 @@ if torch.distributed.is_available():
     except (ImportError, AttributeError):
         DTensor = None
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def _get_unique_tensor_key(tensor: torch.Tensor) -> tuple:
@@ -567,6 +569,39 @@ class OffloadActivations(saved_tensors_hooks):
                 continue
 
         self.param_storages = param_storages
+
+    def __enter__(self):
+        """Clear stale state and release BNB buffers before entering.
+
+        By the time __enter__ is called, the previous forward/backward has already completed, so anything still in
+        tracker, storage_to_tensor_id, or the stashes is leaked and safe to drop.
+
+        Two leak paths are handled:
+        1. MoE + sample_packing + torch.compile: dynamic expert routing may leave saved tensors on subgraphs whose
+           backward nodes never execute, so the unpack-then-delete logic never fires. tracker/stashes from the previous
+           step survive into the next.
+        2. QLoRA BNB dequantization buffers: tracker retains references to tensors sharing allocator blocks with BNB
+           buffers, and the allocator cache is never flushed between steps (~0.6 GiB/step, OOM after 30-40).
+
+        Returns super().__enter__() to register pack/unpack hooks via saved_tensors_hooks (PyTorch autograd engine).
+        """
+        self.tracker.clear()
+        self.storage_to_tensor_id.clear()
+        self.tensor_id = 0
+        self.is_first_forward_call = True
+        self.is_first_backward_call = True
+        if self.use_streams:
+            self.bwd_tensor_stash.clear()
+            self.bwd_ev_stash.clear()
+            self.fwd_stash.clear()
+        if "bitsandbytes" in sys.modules:
+            if self.accelerator_type == "xpu":
+                torch.xpu.empty_cache()
+            elif is_torch_npu_available() and self.accelerator_type == "npu":
+                torch.npu.empty_cache()
+            else:
+                torch.cuda.empty_cache()
+        return super().__enter__()
 
     def __exit__(self, *args, **kwargs):
         """Sync streams and clear stashes before parent cleanup.

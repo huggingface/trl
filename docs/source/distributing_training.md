@@ -292,7 +292,7 @@ training_args = SFTConfig(
     # required
     pad_to_multiple_of=2,    # Must equal sp_size
     # to get the most out of SP
-    max_seq_length=4096,
+    max_length=4096,
     packing=True,
     attn_implementation="flash_attention_2",
     per_device_train_batch_size=1,
@@ -343,7 +343,7 @@ accelerate launch --config_file examples/accelerate_configs/alst_ulysses_4gpu.ya
     --max_seq_length 4096 \
     --packing \
     --packing_strategy wrapped \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --attn_implementation flash_attention_2 \
     --output_dir output-alst-4gpu \
     --logging_steps 10 \

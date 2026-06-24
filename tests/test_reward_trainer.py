@@ -147,6 +147,37 @@ class TestRewardTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_evaluate_with_raw_dataset(self):
+        # `evaluate` should accept the same (unprocessed) dataset types as the trainer, e.g. a held-out test set
+        # passed directly to `evaluate`. See https://github.com/huggingface/trl/issues/6115.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        metrics = trainer.evaluate(eval_dataset=dataset)
+        assert metrics["eval_loss"] is not None
+
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            RewardTrainer(
+                model=model_id,
+                args=RewardConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = RewardTrainer(
+            model=model_id,
+            args=RewardConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForSequenceClassification"
+
     @pytest.mark.parametrize(
         "config_name",
         [
@@ -601,7 +632,12 @@ class TestRewardTrainer(TrlTestCase):
     def test_train_toolcall_data(self):
         dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")
 
-        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = RewardConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # toolcall sequences are longer than standard data, reduce batch size to avoid OOM
+            max_length=512,  # toolcall sequences are longer than standard data, limit length to avoid OOM
+            report_to="none",
+        )
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
@@ -631,7 +667,12 @@ class TestRewardTrainer(TrlTestCase):
 
         dataset = dataset.map(convert_to_json)
 
-        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = RewardConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # toolcall sequences are longer than standard data, reduce batch size to avoid OOM
+            max_length=512,  # toolcall sequences are longer than standard data, limit length to avoid OOM
+            report_to="none",
+        )
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,

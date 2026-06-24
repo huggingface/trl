@@ -14,6 +14,8 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 **TRL v1:** We released TRL v1 — a major milestone that marks a real shift in what TRL is. Read the [blog post](https://huggingface.co/blog/trl-v1) to learn more.
 
+**🚢 Harbor:** We now support [Harbor](harbor) — train agents against sandboxed task suites (instruction + sandbox image + in-sandbox verifier) via [`GRPOTrainer`]'s `environment_factory`.
+
 ## Taxonomy
 
 Below is the current list of TRL trainers, organized by method type (⚡️ = vLLM support; 🧪 = experimental).

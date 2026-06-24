@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import accelerate
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -47,7 +46,12 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..chat_template_utils import clone_chat_template, get_training_chat_template
+from ..chat_template_utils import (
+    clone_chat_template,
+    get_training_chat_template,
+    has_generation_markers,
+    is_chat_template_stop_token_trained,
+)
 from ..data_utils import (
     apply_chat_template,
     is_conversational,
@@ -73,6 +77,7 @@ _CHUNKED_LM_HEAD_CHUNK_SIZE = 256
 
 
 if is_peft_available():
+    import peft
     from peft import PeftConfig, PeftModel, PeftType, get_peft_model
 
 
@@ -86,10 +91,29 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
     aux_loss: torch.Tensor | None = None
 
 
+def _maybe_gather_lm_head_ctx(w, b):
+    # Allgather ZeRO-3 partitioned `lm_head` weight/bias for the chunked matmul. No-op if not ZeRO-3, or if the
+    # param is already gathered (tied embeddings: `embed_tokens` shares the weight and keeps it `AVAILABLE`, so
+    # partitioning on our exit would collide with its active-submodule tracking).
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+
+    if not is_deepspeed_zero3_enabled():
+        return contextlib.nullcontext()
+
+    import deepspeed
+    from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+
+    params = [w] if b is None else [w, b]
+    if all(p.ds_status == ZeroParamStatus.AVAILABLE for p in params):
+        return contextlib.nullcontext()
+    return deepspeed.zero.GatheredParameters(params)
+
+
 def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
-    logits = h.float() @ w.float().t()
-    if b is not None:
-        logits = logits + b.float()
+    with _maybe_gather_lm_head_ctx(w, b):
+        logits = h.float() @ w.float().t()
+        if b is not None:
+            logits = logits + b.float()
     if logit_scale != 1.0:
         logits = logits * logit_scale
     if final_logit_softcapping is not None:
@@ -179,9 +203,10 @@ def _chunked_cross_entropy_loss(
         # Whole micro-batch masked (e.g. completion-only loss + truncation). Keep the loss connected
         # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
         # FSDP gradient sync doesn't hang on a missing param.
-        loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
-        if lm_head_bias is not None:
-            loss = loss + lm_head_bias.float().sum() * 0.0
+        with _maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+            loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
+            if lm_head_bias is not None:
+                loss = loss + lm_head_bias.float().sum() * 0.0
         return loss, correct, entropy_sum, n_valid_tensor
 
     loss = hidden.new_zeros((), dtype=torch.float32)
@@ -212,31 +237,38 @@ def _chunked_cross_entropy_loss(
     return loss, correct, entropy_sum, n_valid_tensor
 
 
-def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
+def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: bool = False) -> None:
     """
-    Patch a causal LM so `forward` computes the language modeling loss via [`_chunked_cross_entropy_loss`].
+    Patch `model.forward` to compute the LM loss via [`_chunked_cross_entropy_loss`].
 
-    When `labels` (or pre-shifted `shift_labels`, for CP/SP) are provided, the patched forward calls
-    `model.get_decoder()` directly, drops positions with `labels == -100` before the `lm_head` matmul, and computes the
-    cross-entropy in chunks of `chunk_size` valid tokens. It returns a [`_ChunkedCELMHeadOutput`] with `loss` set,
-    `logits` set to `None`, and `num_correct_tokens` / `entropy_sum` / `num_valid_tokens` populated over non-ignored
-    tokens. For MoE models with `output_router_logits=True`, the load-balancing auxiliary loss is added with the same
-    coefficient and formula as the model's own forward, keeping the chunked path numerically equivalent to the
-    reference.
+    When `labels` (or pre-shifted `shift_labels`, for CP/SP) are provided, the patched forward runs the decoder up to
+    `last_hidden_state` (skipping the `lm_head` matmul), drops `labels == -100` positions, and computes the
+    cross-entropy in chunks of `chunk_size` valid tokens. Returns a [`_ChunkedCELMHeadOutput`] with `loss` set,
+    `logits=None`, and `num_correct_tokens` / `entropy_sum` / `num_valid_tokens` over non-ignored tokens. For MoE
+    models (`output_router_logits=True`), the load-balancing aux loss is added with the same coefficient and formula as
+    the model's reference forward.
 
-    With both `labels` and `shift_labels` set to `None` the original forward runs unchanged, so generation and
-    labels-free evaluation preserve any per-model logits post-processing (e.g. `logit_scale`,
-    `final_logit_softcapping`).
+    Without labels, the original forward runs unchanged — generation and labels-free eval preserve any per-model logits
+    post-processing (`logit_scale`, `final_logit_softcapping`, `logits_to_keep` slicing).
 
-    For PEFT, pass the inner causal LM (`peft_model.get_base_model()`) rather than the `PeftModel` wrapper, so that
-    prompt-learning variants (PromptTuning, PrefixTuning, PTuning) keep their virtual-token injection in
-    `PeftModel.forward` before delegating into the patched forward.
-
-    Not supported yet: VLM / multimodal models whose forward injects visual tokens outside the base decoder.
+    Args:
+        model (`torch.nn.Module`):
+            Model to patch. For PEFT, pass `peft_model.get_base_model()` rather than the `PeftModel` wrapper, so
+            prompt-learning variants (PromptTuning, PrefixTuning, PTuning) keep their virtual-token injection in
+            `PeftModel.forward` before delegating into the patched forward.
+        chunk_size (`int`):
+            Number of valid tokens processed per CE chunk.
+        is_vlm (`bool`):
+            Set to `True` for VLMs. Only used to read `logit_scale` / `final_logit_softcapping` /
+            `output_router_logits` from `model.config.text_config` instead of the top-level config.
     """
-    final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
-    logit_scale = getattr(model.config, "logit_scale", 1.0)
+    # VLM scaling configs (`logit_scale`, `final_logit_softcapping`, MoE `output_router_logits`) live on `text_config`;
+    # text-only models keep them on the top-level config.
+    text_config = model.config.text_config if is_vlm else model.config
+    final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
+    logit_scale = getattr(text_config, "logit_scale", 1.0)
     original_forward = model.forward
+    lm_head = model.get_output_embeddings()
 
     def _chunked_ce_forward(
         self: torch.nn.Module,
@@ -252,32 +284,55 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
         # preserve any per-model logits post-processing (e.g. Cohere `logit_scale`, Gemma
         # `final_logit_softcapping`, `logits_to_keep` slicing).
         if labels is None and shift_labels is None:
+            # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
+            # as a forward kwarg (not from the model config), so it must be passed here.
             if output_router_logits is not None:
                 kwargs["output_router_logits"] = output_router_logits
             return original_forward(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 
         if output_router_logits is None:
-            output_router_logits = getattr(self.config, "output_router_logits", False)
+            output_router_logits = getattr(text_config, "output_router_logits", False)
 
         kwargs.pop("use_cache", None)
         decoder_kwargs = {}
+        # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
+        # as a forward kwarg (not from the model config), so it must be passed here.
         if output_router_logits:
             decoder_kwargs["output_router_logits"] = True
-        outputs: BaseModelOutputWithPast = self.get_decoder()(
+        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper
+        # for VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
+        # returns just the text stack and feeds image-placeholder IDs through it.
+        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `self.base_model is self` (re-runs `lm_head`).
+        # Fall back to `self.model` there.
+        if is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+            backbone = self.model
+        else:
+            backbone = self.base_model
+        outputs: BaseModelOutputWithPast = backbone(
             input_ids=input_ids, attention_mask=attention_mask, use_cache=False, **decoder_kwargs, **kwargs
         )
         hidden_states = outputs.last_hidden_state
 
+        lm_head_weight = lm_head.weight
+        lm_head_bias = lm_head.bias
+        # Under FSDP2, lm_head.weight is a DTensor (Shard(0) or Replicate). Passing it directly
+        # into the gradient-checkpointed chunk loop causes FSDP2 to re-gather it once per chunk
+        # during backward recomputation. full_tensor() converts it to a plain tensor once; all
+        # chunks reference that tensor, so only one all-gather occurs (in full_tensor()'s backward).
+        if isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
+            lm_head_weight = lm_head_weight.full_tensor()
+            if lm_head_bias is not None:
+                lm_head_bias = lm_head_bias.full_tensor()
         loss, num_correct_tokens, entropy_sum, num_valid_tokens = _chunked_cross_entropy_loss(
             hidden_states,
-            self.lm_head.weight,
+            lm_head_weight,
             chunk_size,
             labels=labels,
             shift_labels=shift_labels,
             num_items_in_batch=num_items_in_batch,
             logit_scale=logit_scale,
             final_logit_softcapping=final_logit_softcapping,
-            lm_head_bias=self.lm_head.bias,
+            lm_head_bias=lm_head_bias,
         )
 
         aux_loss = None
@@ -288,13 +343,24 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int) -> None:
             # single import keeps us in lockstep with upstream for every family we test.
             from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
 
+            if Version(transformers.__version__) < Version("5.0.0") and not is_vlm:
+                num_experts = self.num_experts
+                num_experts_per_tok = self.num_experts_per_tok
+                router_aux_loss_coef = self.router_aux_loss_coef
+            else:
+                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
+                if text_config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
+                    transformers.__version__
+                ) < Version("5.6.0"):
+                    num_experts = self.num_experts
+                else:
+                    num_experts = text_config.num_experts
+                num_experts_per_tok = text_config.num_experts_per_tok
+                router_aux_loss_coef = text_config.router_aux_loss_coef
             aux_loss = load_balancing_loss_func(
-                outputs.router_logits,
-                self.num_experts,
-                self.num_experts_per_tok,
-                attention_mask,
+                outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
             )
-            loss = loss + self.router_aux_loss_coef * aux_loss.to(loss.device)
+            loss = loss + router_aux_loss_coef * aux_loss.to(loss.device)
 
         return _ChunkedCELMHeadOutput(
             loss=loss,
@@ -333,14 +399,13 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     Data collator used for language modeling data. Inputs are dynamically padded to the maximum length of a batch.
 
     This collator expects each example in the input list to be a dictionary containing at least the `"input_ids"` key.
-    If the input contains a `"completion_mask"`, it is used to set the labels to `-100` for tokens that are not in the
-    completion. If `"assistant_masks"` are present, they are used to set the labels to `-100` for tokens that are not
-    in the assistant part of the sequence. The collator returns a dictionary containing the following keys:
+    If the input contains `"labels"`, they are used as is (truncated and padded like the input IDs); otherwise the
+    labels default to the input IDs. Tokens that shouldn't contribute to the loss are expected to be already set to
+    `-100` in the labels; the [`SFTTrainer`] takes care of this during dataset preparation. The collator returns a
+    dictionary containing the following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
-    - `"labels"`: Tensor of labels, padded to the maximum length of the batch. If `completion_only_loss` is set to
-    `True`, tokens that are not in the completion are set to -100. If `assistant_masks` are present, tokens that are
-    not in the assistant part of the sequence are set to -100. If `padding_free` is set to `False`, the following key
-    is also returned:
+    - `"labels"`: Tensor of labels, padded with `-100` to the maximum length of the batch. If `padding_free` is set
+    to `False`, the following key is also returned:
     - `"attention_mask"`: Tensor of attention masks, padded to the maximum length of the batch.
     If `padding_free` is set to `True`, the following key is also returned:
     - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
@@ -354,9 +419,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
             Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
             `"keep_start"`.
-        completion_only_loss (`bool`, *optional*, defaults to `True`):
-            When the input contains a completion mask (`completion_mask`), the labels are set to -100 for the tokens
-            that are no in the completion.
         padding_free (`bool`, *optional*, defaults to `False`):
             If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
             generated accordingly and returned instead of the attention mask.
@@ -379,10 +441,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
      'labels': tensor([[   1,    2,    3],
                        [   4,    5, -100]])}
 
-    >>> # With completion mask
+    >>> # With prebuilt labels
     >>> examples = [
-    ...     {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
-    ...     {"input_ids": [4, 5], "completion_mask": [0, 1]},
+    ...     {"input_ids": [1, 2, 3], "labels": [-100, 2, 3]},
+    ...     {"input_ids": [4, 5], "labels": [-100, 5]},
     ... ]
     >>> collator(examples)
     {'input_ids': tensor([[  1,  2,  3],
@@ -397,14 +459,13 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     >>> collator(examples)
     {'input_ids': tensor([[ 1, 2, 3, 4, 5]]),
      'position_ids': tensor([[0, 1, 2, 0, 1]]),
-     'labels': tensor([[1, 2, 3, 4, 5]])}
+     'labels': tensor([[-100, 2, 3, -100, 5]])}
     ```
     """
 
     pad_token_id: int
     max_length: int | None = None
     truncation_mode: str = "keep_start"
-    completion_only_loss: bool = True
     padding_free: bool = False
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
@@ -413,14 +474,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         input_ids = [example["input_ids"] for example in examples]
         batch_seq_lengths = [example["seq_lengths"] for example in examples] if "seq_lengths" in examples[0] else None
         labels = [example.get("labels", example["input_ids"]) for example in examples]
-        completion_mask = (
-            [example["completion_mask"] for example in examples]
-            if self.completion_only_loss and "completion_mask" in examples[0]
-            else None
-        )
-        assistant_masks = (
-            [example["assistant_masks"] for example in examples] if "assistant_masks" in examples[0] else None
-        )
 
         # Truncate per sequence if necessary
         if self.max_length is not None and not self.padding_free:
@@ -434,18 +487,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 )
             input_ids = [ids[sl] for ids in input_ids]
             labels = [lbl[sl] for lbl in labels]
-            if completion_mask is not None:
-                completion_mask = [m[sl] for m in completion_mask]
-            if assistant_masks is not None:
-                assistant_masks = [m[sl] for m in assistant_masks]
 
         # Convert to tensor
         input_ids = [torch.tensor(ids) for ids in input_ids]
         labels = [torch.tensor(lbl) for lbl in labels]
-        if completion_mask is not None:
-            completion_mask = [torch.tensor(m) for m in completion_mask]
-        if assistant_masks is not None:
-            assistant_masks = [torch.tensor(m) for m in assistant_masks]
 
         # For padding-free, we should NOT create attention_mask as it causes FlashAttention to ignore position_ids and
         # compute wrong cu_seq_lens from the all-1s mask
@@ -463,10 +508,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             input_ids = [torch.cat(input_ids, dim=0)]
             labels = [torch.cat(labels, dim=0)]
             position_ids = [torch.cat(position_ids, dim=0)]
-            if completion_mask is not None:
-                completion_mask = [torch.cat(completion_mask, dim=0)]
-            if assistant_masks is not None:
-                assistant_masks = [torch.cat(assistant_masks, dim=0)]
 
         # Pad
         output["input_ids"] = pad(
@@ -487,16 +528,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             output["attention_mask"] = pad(
                 attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
-        if completion_mask is not None:
-            completion_mask = pad(
-                completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-            )
-            output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
-        if assistant_masks is not None:
-            assistant_masks = pad(
-                assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-            )
-            output["labels"][assistant_masks == 0] = -100
         return output
 
     @staticmethod
@@ -555,17 +586,17 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         processor ([`~transformers.ProcessorMixin`]):
             The processor used to tokenize text and process images. It must be a subclass of
             [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
-        max_length (`int` or `None`, optional, defaults to `None`):
+        max_length (`int`, *optional*):
             Maximum sequence length for input tokens. If `None`, no truncation is applied.
         completion_only_loss (`bool`, *optional*, defaults to `False`):
             Whether to compute loss only on the completion part of the sequence. When `True`, the labels for the prompt
             part are set to -100. It requires the dataset type to be prompt-completion.
-        pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
+        pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
-        dataset_text_field (`str`, optional, defaults to `"text"`):
+        dataset_text_field (`str`, *optional*, defaults to `"text"`):
             Name of the column that contains text data in the dataset. This parameter is only relevant for [standard
             datasets format](dataset_formats#standard).
-        return_tensors (`str`, optional, defaults to `"pt"`):
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
 
     Example:
@@ -771,7 +802,7 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
     Rectification](https://huggingface.co/papers/2508.05629)
     """
     labels = nn.functional.pad(labels, (0, 1), value=-100)
-    shift_labels = labels[..., 1:].contiguous()
+    shift_labels = labels[..., 1:]
     loss_mask = shift_labels != -100
     shift_labels[~loss_mask] = 0
     logprobs = selective_log_softmax(outputs.logits, shift_labels)
@@ -814,8 +845,6 @@ class SFTTrainer(_BaseTrainer):
               config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-            If you're training a model with an MoE architecture and want to include the load balancing/auxiliary loss
-            as a part of the final loss, remember to set the `output_router_logits` config of the model to `True`.
         args ([`SFTConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
@@ -930,6 +959,7 @@ class SFTTrainer(_BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
@@ -937,10 +967,14 @@ class SFTTrainer(_BaseTrainer):
                     "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
+        _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
+            processing_class = AutoProcessor.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            )
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -1036,7 +1070,26 @@ class SFTTrainer(_BaseTrainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
             # Create PEFT model
-            model = get_peft_model(model, peft_config)
+            # ZeRO-3 + PEFT for non-quantized models:
+            # - PEFT's default autocast_adapter_dtype=True upcasts LoRA adapter params to fp32 even when the base model is bf16.
+            # - ZeRO-3's _allgather_params_coalesced allocates output buffers using the dtype of the first persistent parameter,
+            #   so mixed-dtype persistent_parameters (bf16 base + fp32 LoRA) cause a TypeError on the first optimizer step.
+            # - Passing autocast_adapter_dtype=False keeps adapter params in the base model dtype (bf16), fixing the mismatch.
+            # - This is safe: the fp32 upcast is a QLoRA-specific concern (low-bit quantized base models), not needed for
+            #   non-quantized bf16 training.
+            # - See:
+            #   - TRL issue: https://github.com/huggingface/trl/issues/6089
+            #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
+            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
+            get_peft_model_kwargs = {}
+            if (
+                args.deepspeed_plugin is not None
+                and args.deepspeed_plugin.zero_stage == 3
+                and not _is_quantized_model
+                and Version(peft.__version__) >= Version("0.12.0")
+            ):
+                get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
         # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703
@@ -1065,8 +1118,7 @@ class SFTTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
-        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
-        if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
+        if _is_quantized_model:
             for param in model.parameters():
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
@@ -1095,7 +1147,7 @@ class SFTTrainer(_BaseTrainer):
             if not use_flash_attention:
                 logger.warning(
                     "Padding-free training is enabled, but the attention implementation is not set to a supported "
-                    "flash attention variant. Padding-free training flattens batches into a single sequence, and only "
+                    "Flash Attention variant. Padding-free training flattens batches into a single sequence, and only "
                     "the following implementations are known to reliably support this: "
                     f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to "
                     "unexpected behavior. To ensure compatibility, set `attn_implementation` in the model "
@@ -1140,7 +1192,6 @@ class SFTTrainer(_BaseTrainer):
                 pad_token_id=self._tokenizer.pad_token_id,
                 max_length=None if self.padding_free else args.max_length,
                 truncation_mode=args.truncation_mode,
-                completion_only_loss=self.completion_only_loss,
                 padding_free=self.padding_free,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
@@ -1155,7 +1206,7 @@ class SFTTrainer(_BaseTrainer):
 
         if args.packing and args.packing_strategy in {"bfd", "bfd_split"} and not use_flash_attention:
             logger.warning(
-                "You are using packing, but the attention implementation is not set to a supported flash attention "
+                "You are using packing, but the attention implementation is not set to a supported Flash Attention "
                 "variant. Packing gathers multiple samples into a single sequence, and only the following "
                 f"implementations are known to reliably support this: {', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. "
                 "Using other implementations may lead to cross-contamination between samples. To avoid this, either "
@@ -1170,10 +1221,20 @@ class SFTTrainer(_BaseTrainer):
 
         # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers
         # if the current template doesn't already have them.
-        if args.assistant_only_loss and "{% generation %}" not in processing_class.chat_template:
+        if args.assistant_only_loss and not has_generation_markers(processing_class.chat_template):
             self.chat_template = get_training_chat_template(processing_class)
         else:
             self.chat_template = None
+
+        # A template can define generation markers and still attribute the assistant's end-of-turn token to the next
+        # message, leaving it out of the assistant mask so the model is never trained to stop.
+        if args.assistant_only_loss and not is_chat_template_stop_token_trained(
+            processing_class, chat_template=self.chat_template
+        ):
+            logger.warning(
+                "The chat template does not include the assistant turn's end-of-turn token in the loss mask; "
+                "the model may not learn to stop."
+            )
 
         # Dataset
         if self.padding_free and not args.packing and args.max_length is not None and not self._is_vision_dataset:
@@ -1184,12 +1245,18 @@ class SFTTrainer(_BaseTrainer):
             )
         # Skip dataset preparation if `skip_prepare_dataset=True` in `dataset_kwargs`, or if it's a VLM, where
         # preprocessing (e.g., image-to-pixel conversion) is too costly and done on the fly instead.
-        skip_prepare_dataset = (
+        self._skip_prepare_dataset = (
             args.dataset_kwargs is not None
             and args.dataset_kwargs.get("skip_prepare_dataset", False)
             or self._is_vision_dataset
         )
-        if not skip_prepare_dataset:
+        # Kept on the instance so that `evaluate` can preprocess freshly-passed eval datasets the same way.
+        self._formatting_func = formatting_func
+        eval_datasets = (
+            eval_dataset if isinstance(eval_dataset, dict) else {"eval": eval_dataset} if eval_dataset else {}
+        )
+        self._reject_skip_prepare_without_labels({"train": train_dataset, **eval_datasets}, data_collator)
+        if not self._skip_prepare_dataset:
             if self.completion_only_loss and formatting_func:
                 raise ValueError(
                     "A formatting function was provided while `completion_only_loss=True`, which is incompatible. "
@@ -1228,27 +1295,24 @@ class SFTTrainer(_BaseTrainer):
                 # Same math as `"nll"` but the `lm_head` matmul is skipped on ignored tokens and the CE is computed in
                 # chunks of tokens. Implemented by patching the model's forward before `super().__init__` so accelerate
                 # wraps the patched forward.
-                if self._is_vlm:
-                    raise NotImplementedError("`loss_type='chunked_nll'` is not supported for VLM models yet.")
                 # For PEFT, patch the inner causal LM rather than the `PeftModel` wrapper. LoRA / IA³ /
                 # `modules_to_save` adapters live in the module tree, so they're hit even when we bypass
                 # `PeftModel.forward`. Prompt-learning variants need `PeftModel.forward` to run first (to inject
                 # virtual tokens), then it delegates into the patched inner forward.
                 target = model.get_base_model() if is_peft_model(model) else model
-                # The chunked path reads `lm_head.weight` directly, which would silently drop the adapter delta
-                # (and starve its parameters of gradients) if `lm_head` itself is a PEFT tuner layer.
+                # The chunked path reads the output projection weight directly, which would silently drop the
+                # adapter delta (and starve its parameters of gradients) if the head itself is a PEFT tuner layer.
                 if is_peft_model(model):
                     from peft.tuners.tuners_utils import BaseTunerLayer
 
-                    if isinstance(target.lm_head, BaseTunerLayer):
+                    if isinstance(target.get_output_embeddings(), BaseTunerLayer):
                         raise ValueError(
-                            "`loss_type='chunked_nll'` is not supported when `lm_head` is wrapped by a PEFT "
-                            "adapter (e.g. `target_modules='all-linear'` or explicitly including `'lm_head'`). "
-                            "Either remove `lm_head` from `target_modules`, or switch to `loss_type='nll'`. If "
-                            "this is a real use case for you, please open an issue at "
-                            "https://github.com/huggingface/trl/issues."
+                            "`loss_type='chunked_nll'` is not supported when `lm_head` is wrapped by a PEFT adapter "
+                            "(e.g. `target_modules='all-linear'` or explicitly including `'lm_head'`). Either remove "
+                            "`lm_head` from `target_modules`, or switch to `loss_type='nll'`. If this is a real use "
+                            "case for you, please open an issue at https://github.com/huggingface/trl/issues."
                         )
-                _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE)
+                _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
             else:
                 raise ValueError(
                     f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
@@ -1286,25 +1350,16 @@ class SFTTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-
-        # Under FSDP2 with `reshard_after_forward=True` (accelerate's default), the chunked CE path triggers a
-        # redundant `lm_head.weight` all-gather per chunk during backward, adding significant wall-time. Setting
-        # `reshard_after_forward=False` keeps the un-wrapped `lm_head` resident and closes the gap without meaningfully
-        # affecting peak memory.
-        # `AcceleratorState.is_fsdp2` was added in accelerate 1.6.0; guard so older (but still-supported) versions
-        # don't `AttributeError` on every SFTTrainer init.
-        if (
-            args.loss_type == "chunked_nll"
-            and Version(accelerate.__version__) >= Version("1.6.0")
-            and self.accelerator.state.is_fsdp2
-            and self.accelerator.state.fsdp_plugin.reshard_after_forward
-        ):
-            logger.warning(
-                "`loss_type='chunked_nll'` under FSDP2 with `reshard_after_forward=True` is significantly slower than "
-                "necessary due to per-chunk all-gathers of `lm_head.weight`. Consider passing "
-                "`--fsdp_reshard_after_forward false` to `accelerate launch` (or equivalent in your FSDP config)."
-            )
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        text_config = model.config.get_text_config()
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
+        self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
+        if is_moe:
+            # The native and chunked forwards add the aux loss from the model config, so keep the config in sync with
+            # the coef: enable it (and propagate the coef) when non-zero, disable it otherwise. This overrides any
+            # `output_router_logits` the model was loaded with, so `router_aux_loss_coef=0.0` reliably turns it off.
+            text_config.output_router_logits = self.aux_loss_enabled
+            text_config.router_aux_loss_coef = self.args.router_aux_loss_coef
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1358,6 +1413,15 @@ class SFTTrainer(_BaseTrainer):
         formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
+        if isinstance(dataset, Dataset) and dataset.format["type"] == "custom":
+            raise ValueError(
+                "SFTTrainer cannot prepare a dataset that uses `Dataset.with_transform()`. The preparation pipeline "
+                "calls `Dataset.map()`, which reads through the transform and can bake a random or stateful transform "
+                "into the tokenized columns. Pass `dataset_kwargs={'skip_prepare_dataset': True}` and make the "
+                "transform return trainer-ready examples, including tokenized fields, or materialize deterministic "
+                "transforms with `Dataset.map()` before constructing the trainer."
+            )
+
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = get_dataset_column_names(dataset)
         is_processed = "input_ids" in column_names
@@ -1498,6 +1562,30 @@ class SFTTrainer(_BaseTrainer):
                     **map_kwargs,
                 )
 
+            # Build a "labels" column, setting tokens that shouldn't contribute to the loss to -100 based on the
+            # available masks: "assistant_masks" always applies, "completion_mask" only when completion_only_loss
+            # is enabled. With no applicable mask, every token contributes (labels == input_ids). A dataset that
+            # already provides a "labels" column is left as is.
+            column_names = get_dataset_column_names(dataset)
+            if "labels" not in column_names:
+                mask_columns = []
+                if self.completion_only_loss and "completion_mask" in column_names:
+                    mask_columns.append("completion_mask")
+                if "assistant_masks" in column_names:
+                    mask_columns.append("assistant_masks")
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Building labels for {dataset_name} dataset"
+
+                def build_labels(example, mask_columns):
+                    masks = [example[column] for column in mask_columns]
+                    labels = [
+                        token_id if all(bits) else -100
+                        for token_id, *bits in zip(example["input_ids"], *masks, strict=False)
+                    ]
+                    return {"labels": labels}
+
+                dataset = dataset.map(build_labels, fn_kwargs={"mask_columns": mask_columns}, **map_kwargs)
+
             # Pack
             if packing:
                 if args.max_length is None:
@@ -1505,13 +1593,7 @@ class SFTTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
 
-                columns = ["input_ids"]
-                if "completion_mask" in get_dataset_column_names(dataset):
-                    columns.append("completion_mask")
-                if "assistant_masks" in get_dataset_column_names(dataset):
-                    columns.append("assistant_masks")
-
-                dataset = dataset.select_columns(columns)
+                dataset = dataset.select_columns(["input_ids", "labels"])
 
                 # Shuffle the dataset before packing. When using wrapped packing, it's important to shuffle before
                 # packing as well to avoid correlations between sequences packed together.
@@ -1522,7 +1604,7 @@ class SFTTrainer(_BaseTrainer):
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
-                collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
+                collator_expected_keys = {"input_ids", "seq_lengths", "labels"}
                 column_names = get_dataset_column_names(dataset)
                 dataset = dataset.select_columns(collator_expected_keys.intersection(column_names))
 
@@ -1533,14 +1615,71 @@ class SFTTrainer(_BaseTrainer):
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
-        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
-        # and "attention_mask"). When using `train_on_completion_only` we add a "completion_mask" column to the
-        # dataset. So we need to override the default signature columns to include "completion_mask" as well.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids",
+        # "attention_mask" and "labels"). Dataset preparation also produces a "seq_lengths" column (for packing /
+        # padding-free), so we override the default signature columns to keep it alongside the model inputs.
         if self._signature_columns is None:
             if self._is_vision_dataset:
                 self._signature_columns = ["messages", "prompt", "completion", "image", "images"]
             else:
-                self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
+                self._signature_columns = ["input_ids", "labels", "seq_lengths"]
+
+    def _reject_skip_prepare_without_labels(self, datasets: dict[str, Dataset], data_collator) -> None:
+        # This guard may look defensive, but it covers a behavior change introduced when label building moved from
+        # the collator to dataset preparation: the collator used to consume the mask columns directly, so a
+        # skipped-preparation dataset carrying masks trained correctly. Now labels are built during preparation, which
+        # is skipped here, and the collator ignores the mask columns. Without a "labels" column, such a dataset would
+        # silently optimize the loss over the full sequence, so we fail loudly instead. Checked both at init and in
+        # `evaluate`, since a dataset passed directly to `evaluate` also skips preparation.
+        if not (
+            self._skip_prepare_dataset
+            and not self._is_vision_dataset
+            and isinstance(data_collator, DataCollatorForLanguageModeling)
+        ):
+            return
+        for name, dataset in datasets.items():
+            cols = get_dataset_column_names(dataset)
+            if "labels" not in cols and ("completion_mask" in cols or "assistant_masks" in cols):
+                raise ValueError(
+                    f"The {name} dataset has mask columns but no 'labels', and `skip_prepare_dataset=True` skips "
+                    "label building, so it would train on the full sequence. Add a 'labels' column (-100 for "
+                    "non-loss tokens) or drop `skip_prepare_dataset`."
+                )
+
+    def evaluate(
+        self,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        ignore_keys: list[str] | None = None,
+        metric_key_prefix: str = "eval",
+    ) -> dict[str, float]:
+        # When a dataset is passed directly to `evaluate` (e.g. a held-out test set), preprocess it the same way
+        # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer (language modeling,
+        # prompt-completion, etc.). `_prepare_dataset` is idempotent: it skips datasets that are already tokenized. A
+        # `str` selects a dataset that was already prepared at init time, so it's left untouched.
+        if not self._skip_prepare_dataset and eval_dataset is not None and not isinstance(eval_dataset, str):
+            packing = self.args.packing if self.args.eval_packing is None else self.args.eval_packing
+            if isinstance(eval_dataset, dict):
+                eval_dataset = {
+                    key: self._prepare_dataset(
+                        dataset, self.processing_class, self.args, packing, self._formatting_func, key
+                    )
+                    for key, dataset in eval_dataset.items()
+                }
+            else:
+                eval_dataset = self._prepare_dataset(
+                    eval_dataset, self.processing_class, self.args, packing, self._formatting_func, "eval"
+                )
+        eval_datasets = (
+            eval_dataset
+            if isinstance(eval_dataset, dict)
+            else {"eval": eval_dataset}
+            if eval_dataset is not None and not isinstance(eval_dataset, str)
+            else {}
+        )
+        self._reject_skip_prepare_without_labels(eval_datasets, self.data_collator)
+        return super().evaluate(
+            eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
+        )
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
@@ -1553,6 +1692,11 @@ class SFTTrainer(_BaseTrainer):
 
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
+
+        # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
+        # as a forward kwarg (not from the model config), so it must be passed here.
+        if self.aux_loss_enabled:
+            inputs["output_router_logits"] = True
 
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
         if self.args.use_liger_kernel:
@@ -1576,9 +1720,18 @@ class SFTTrainer(_BaseTrainer):
             inputs["return_token_accuracy"] = True
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
 
-        (loss, outputs) = super().compute_loss(
-            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
-        )
+        try:
+            (loss, outputs) = super().compute_loss(
+                model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+            )
+        except ValueError as e:
+            if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
+                raise ValueError(
+                    f"The current `max_length` ({self.args.max_length}) is too short and causes image placeholder "
+                    f"tokens in `input_ids` to be truncated, while the corresponding image features remain intact. "
+                    f"Please increase `max_length` or set it to `None` to disable truncation."
+                ) from e
+            raise
 
         # Compute entropy
         if self.args.loss_type == "chunked_nll":
@@ -1594,11 +1747,11 @@ class SFTTrainer(_BaseTrainer):
             with torch.no_grad():
                 if "shift_labels" in inputs:
                     # When using CP or SP, labels are pre-shifted.
-                    shift_logits = outputs.logits.contiguous()
+                    shift_logits = outputs.logits
                     shift_labels = inputs["shift_labels"]
                 else:
-                    shift_logits = outputs.logits[..., :-1, :].contiguous()
-                    shift_labels = labels[..., 1:].contiguous()
+                    shift_logits = outputs.logits[..., :-1, :]
+                    shift_labels = labels[..., 1:]
 
                 # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
                 if (
@@ -1608,15 +1761,24 @@ class SFTTrainer(_BaseTrainer):
                     shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
                 per_token_entropy = entropy_from_logits(shift_logits)
+                predictions = shift_logits.argmax(dim=-1)
                 mask = shift_labels != -100
+
                 entropy_sum = (per_token_entropy * mask).sum()
                 total_tokens = mask.sum()
+                correct_predictions = (predictions == shift_labels) & mask
+                correct_tokens = correct_predictions.sum()
 
                 # Gather counts across ranks and weight-average
                 entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
                 total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
+                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
                 entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
+
+                total_sum = total_tokens.sum()
+                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
             self._metrics[mode]["entropy"].append(entropy)
+            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
@@ -1645,46 +1807,6 @@ class SFTTrainer(_BaseTrainer):
                     "not be logged. This is unexpected; please report it to the liger-kernel repository.",
                     stacklevel=2,
                 )
-        else:
-            # Compute accuracy from logits using argmax (traditional method)
-            with torch.no_grad():
-                if "shift_labels" in inputs:
-                    # When using CP or SP, labels are pre-shifted. We must use these (and cannot manually shift) because:
-                    # - The first discarded token from inputs["labels"] actually belongs to process n-1
-                    # - The last logits require the label from process n+1
-                    shift_logits = outputs.logits.contiguous()
-                    shift_labels = inputs["shift_labels"]
-                else:
-                    shift_logits = outputs.logits[..., :-1, :].contiguous()
-                    shift_labels = labels[..., 1:].contiguous()
-
-                # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
-                if (
-                    self.num_virtual_tokens > 0
-                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
-                ):
-                    shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
-
-                # Get predictions
-                predictions = shift_logits.argmax(dim=-1)
-
-                # Create mask for non-padding tokens (assuming ignore_index is -100)
-                mask = shift_labels != -100
-
-                # Calculate accuracy only on non-padding tokens
-                correct_predictions = (predictions == shift_labels) & mask
-                total_tokens = mask.sum()
-                correct_tokens = correct_predictions.sum()
-
-                # Gather the correct_tokens and total_tokens across all processes
-                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-                total_tokens = self.accelerator.gather_for_metrics(total_tokens)
-
-                # Compute the mean token accuracy and log it
-                total_sum = total_tokens.sum()
-                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-                self._metrics[mode]["mean_token_accuracy"].append(accuracy)
-
         # Log auxiliary loss if enabled (applies to both Liger and non-Liger)
         if self.aux_loss_enabled:
             aux_loss = outputs.aux_loss
@@ -1712,7 +1834,7 @@ class SFTTrainer(_BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
