@@ -204,13 +204,6 @@ def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | Non
     return quantization_config
 
 
-def get_kbit_device_map() -> dict[str, int] | None:
-    if torch.cuda.is_available() or is_torch_xpu_available():
-        return {"": PartialState().local_process_index}
-    else:
-        return None
-
-
 def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
     if model_args.use_peft is False:
         return None

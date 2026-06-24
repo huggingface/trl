@@ -84,7 +84,6 @@ def main(script_args, training_args, model_args):
 
     from trl import (
         LogCompletionsCallback,
-        get_kbit_device_map,
         get_peft_config,
         get_quantization_config,
     )
@@ -99,7 +98,6 @@ def main(script_args, training_args, model_args):
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
     training_args.model_init_kwargs = model_kwargs
@@ -109,7 +107,6 @@ def main(script_args, training_args, model_args):
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
     if training_args.teacher_model_init_kwargs is not None:
