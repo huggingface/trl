@@ -87,13 +87,11 @@ def resolve_target_path(target: str | Path, scope: str = "project") -> Path:
         >>> from trl.skills import resolve_target_path
 
         >>> # Resolve agent name with scope
-        >>> path = resolve_target_path("claude", "global")
-        >>> print(path)
+        >>> resolve_target_path("claude", "global")
         /home/user/.claude/skills
 
         >>> # Resolve custom path
-        >>> path = resolve_target_path("/custom/skills")
-        >>> print(path)
+        >>> resolve_target_path("/custom/skills")
         /custom/skills
         ```
     """
@@ -153,18 +151,15 @@ def list_skills(target: str | Path | None = None, scope: str = "project") -> lis
         >>> from trl.skills import list_skills
 
         >>> # List TRL's built-in skills
-        >>> skills = list_skills()
-        >>> print(skills)
+        >>> list_skills()
         ['trl-training']
 
         >>> # List skills installed for Claude globally
-        >>> installed = list_skills(target="claude", scope="global")
-        >>> print(installed)
+        >>> list_skills(target="claude", scope="global")
         ['trl-training', 'custom-skill']
 
         >>> # List skills in custom directory
-        >>> custom = list_skills(target="/path/to/skills")
-        >>> print(custom)
+        >>> list_skills(target="/path/to/skills")
         [...]
         ```
     """
