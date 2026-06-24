@@ -2794,6 +2794,10 @@ class GRPOTrainer(_BaseTrainer):
 
             loss = loss - apply_coef * entropy_loss
 
+            self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
+            self._metrics[mode]["entropy_loss"].append(world_entropy)
+            self._metrics[mode]["entropy_coef"].append(self.entropy_coef)
+
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
         if self.aux_loss_enabled:
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
@@ -2808,11 +2812,6 @@ class GRPOTrainer(_BaseTrainer):
                 return x.mean()
             else:
                 return (x * mask).sum() / completion_token_count
-
-        self._metrics[mode]["policy_loss"].append(self.accelerator.reduce(policy_loss, reduction="mean").item())
-        if self.entropy_coef != 0.0 or self.use_adaptive_entropy:
-            self._metrics[mode]["entropy_loss"].append(world_entropy)
-            self._metrics[mode]["entropy_coef"].append(self.entropy_coef)
 
         if self.beta != 0.0:
             mean_kl = masked_batch_mean(per_token_kl)
