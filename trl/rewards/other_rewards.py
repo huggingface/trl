@@ -102,12 +102,12 @@ def get_soft_overlong_punishment(max_completion_len: int, soft_punish_cache: int
 
     Example:
     ```python
-    from trl.rewards import get_soft_overlong_punishment
+    >>> from trl.rewards import get_soft_overlong_punishment
 
-    soft_overlong_punishment = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
-    completion_ids = [[1] * 90]  # simulating a completion with 90 tokens. 90 is between 80 and 100.
-    rewards = soft_overlong_punishment(completion_ids)
-    print(rewards)  # [-0.5]
+    >>> soft_overlong_punishment = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
+    >>> completion_ids = [[1] * 90]  # simulating a completion with 90 tokens. 90 is between 80 and 100.
+    >>> soft_overlong_punishment(completion_ids)
+    >>> [-0.5]
     ```
     """
     return _SoftOverlongPunishment(max_completion_len, soft_punish_cache)
