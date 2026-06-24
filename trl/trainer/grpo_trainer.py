@@ -2791,7 +2791,8 @@ class GRPOTrainer(_BaseTrainer):
                     # accumulation window apply the same bonus. Gated on train mode so evaluation
                     # cannot mutate the entropy controller state.
                     entropy_stats = self.accelerator.reduce(
-                        torch.stack([(entropies * mask).sum(), mask.sum()]).detach(), reduction="sum"
+                        torch.stack([(entropies * effective_mask).sum(), effective_mask.sum()]).detach(),
+                        reduction="sum",
                     )
                     world_entropy = (entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item()
                     if self.accelerator.sync_gradients:
