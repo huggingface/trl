@@ -2778,18 +2778,15 @@ class GRPOTrainer(_BaseTrainer):
             else:
                 raise ValueError(f"Unknown loss type: {self.loss_type}")
 
-            # True global mean per-token entropy (nats): reduce sum and token count jointly so
-            # that ranks with fewer tokens don't get equal weight (averaging per-rank means would
-            # be biased when completion lengths differ across ranks).
-            entropy_stats = self.accelerator.reduce(
-                torch.stack([(entropies * mask).sum(), mask.sum()]).detach(), reduction="sum"
-            )
-            world_entropy = (entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item()
             if self.use_adaptive_entropy:
-                # Update coefficient and cache entropy once per optimizer step, not per micro-batch.
-                # apply_coef uses the cached value so all micro-batches within one accumulation
-                # window apply the same bonus (using per-micro-batch world_entropy would cause
-                # the bonus to toggle on/off unpredictably across accumulation steps).
+                # Reduce sum and token count jointly for a true global mean (unbiased when ranks
+                # have different completion lengths). Update coefficient and cache entropy once per
+                # optimizer step; apply_coef uses the cached value so all micro-batches within one
+                # accumulation window apply the same bonus.
+                entropy_stats = self.accelerator.reduce(
+                    torch.stack([(entropies * mask).sum(), mask.sum()]).detach(), reduction="sum"
+                )
+                world_entropy = (entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item()
                 if self.accelerator.sync_gradients:
                     if world_entropy <= self.args.entropy_target:
                         self.entropy_coef = min(
@@ -2807,7 +2804,6 @@ class GRPOTrainer(_BaseTrainer):
             loss = loss - apply_coef * entropy_loss
 
             self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
-            self._metrics[mode]["entropy_loss"].append(world_entropy)
             # Log entropy_coef only on optimizer-step boundaries: it updates once per step (sync_gradients),
             # so logging K identical values per step would dilute the metric with stale data.
             if self.accelerator.sync_gradients:

@@ -1498,7 +1498,6 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         assert trainer.state.log_history[-1]["policy_loss"] is not None
-        assert trainer.state.log_history[-1]["entropy_loss"] is not None
         assert trainer.state.log_history[-1]["entropy_coef"] is not None
 
         # Check that the params have changed
@@ -1532,7 +1531,6 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         assert trainer.state.log_history[-1]["policy_loss"] is not None
-        assert trainer.state.log_history[-1]["entropy_loss"] is not None
         assert trainer.state.log_history[-1]["entropy_coef"] is not None
         # Coefficient should have increased since entropy < target throughout training
         assert trainer.entropy_coef > 0.01
