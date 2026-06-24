@@ -2959,7 +2959,7 @@ class GRPOTrainer(_BaseTrainer):
         super()._save_checkpoint(model, trial)
         if self.use_adaptive_entropy and self.is_world_process_zero():
             checkpoint_folder = f"checkpoint-{self.state.global_step}"
-            output_dir = os.path.join(self.args.output_dir, checkpoint_folder)
+            output_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
             with open(os.path.join(output_dir, "entropy_ctrl_state.json"), "w") as f:
                 json.dump({"entropy_coef": self.entropy_coef, "last_world_entropy": self._last_world_entropy}, f)
 
