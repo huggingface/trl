@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -376,3 +377,48 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+
+    def test_sft_chunked_nll_fsdp2_no_per_chunk_allgather(self, lazy_shared_datadir):
+        # Perf-regression guard for the PR #6077 class: a chunked cross-entropy path must NOT re-gather the
+        # sharded `lm_head.weight` once per vocab chunk under FSDP2 (correct loss, silently slow, invisible
+        # to a pass/fail test). The companion worker runs one SFT `chunked_nll` step under a 2-process FSDP2
+        # group (reshard_after_forward=True — the condition that triggers the bug) and counts the all-gather
+        # collectives during that step; here we assert the count stays O(1), not O(vocab / chunk_size).
+        #
+        # Counting real collectives is required: under FSDP2 the parameter unshard is driven by autograd
+        # hooks / c10d collectives, not by `DTensor.full_tensor()`, so the worker counts the actual
+        # all-gather collectives via CommDebugMode (torch's DTensor-native comm counter) for the step.
+        worker = Path(__file__).parent / "_chunked_nll_allgather_worker.py"
+        config_path = lazy_shared_datadir / "accelerate_configs" / "fsdp2_reshard.yaml"
+        # Pin the repo root onto PYTHONPATH for the child: `accelerate launch` re-execs each rank via
+        # torch.distributed.elastic, which sets sys.path[0] to the launched script's directory, not cwd.
+        # Without this, a non-editable `trl` already in site-packages would shadow the working tree.
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join([str(ROOT), env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
+        result = subprocess.run(
+            ["accelerate", "launch", "--config_file", str(config_path), str(worker)],
+            env=env,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"worker failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+        prefix = "CHUNKED_NLL_ALLGATHER_RESULT"
+        lines = [ln for ln in result.stdout.splitlines() if ln.startswith(prefix)]
+        assert len(lines) == 1, f"expected exactly one result line, got {lines}\n{result.stdout}"
+        measured = json.loads(lines[0][len(prefix) :].strip())
+
+        assert measured["loss_finite"], f"chunked_nll loss not finite under FSDP2: {measured}"
+        # A per-chunk-regather regression would do ~n_chunks all-gathers of lm_head.weight in the step; the
+        # fixed path does O(1). `all_gathers` is the total all-gather collective count for the step, measured
+        # by CommDebugMode (the DTensor-native counter that sees FSDP2's autograd-hook-driven gathers). It
+        # legitimately includes one gather per sharded parameter (a handful of decoder layers), so bound it
+        # well below the regression count rather than at exactly 1. The ceiling scales off n_chunks (never a
+        # hardcoded collective count) so it tracks the model's vocab/chunk arithmetic.
+        observed = measured["all_gathers"]
+        ceiling = max(16, measured["n_chunks_if_regressed"] // 4)
+        assert observed < measured["n_chunks_if_regressed"], (
+            f"per-chunk lm_head.weight all-gathers detected (#6077 regression): {measured}"
+        )
+        assert observed <= ceiling, f"unexpectedly many all-gathers (possible regression): {measured}"
