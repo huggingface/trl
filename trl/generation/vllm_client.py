@@ -118,10 +118,10 @@ class VLLMClientServer:
         There are several ways to initialize the client:
 
         ```python
-        VLLMClient(base_url="http://localhost:8000")
-        VLLMClient(base_url="http://192.168.1.100:8000")
-        VLLMClient(host="localhost", server_port=8000)
-        VLLMClient(host="192.168.1.100", server_port=8000)
+        >>> VLLMClient(base_url="http://localhost:8000")
+        >>> VLLMClient(base_url="http://192.168.1.100:8000")
+        >>> VLLMClient(host="localhost", server_port=8000)
+        >>> VLLMClient(host="192.168.1.100", server_port=8000)
         ```
     """
 
