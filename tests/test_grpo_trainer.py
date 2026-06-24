@@ -539,6 +539,10 @@ class TestGRPOTrainer(TrlTestCase):
     @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
     @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo", "stare"])
     def test_train_loss_types(self, loss_type, use_liger_kernel):
+        if loss_type == "stare" and use_liger_kernel:
+            pytest.skip(
+                "STARE is not yet supported with use_liger_kernel=True (validated by test_stare_rejects_liger_kernel)"
+            )
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -570,6 +574,24 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_stare_rejects_liger_kernel(self):
+        # STARE's per-token reweighting is not implemented in the fused Liger GRPO loss, so the combination must
+        # raise early rather than silently bypass the STARE objective.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with pytest.raises(ValueError, match="STARE loss is not yet supported with `use_liger_kernel=True`"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=GRPOConfig(
+                    output_dir=self.tmp_dir,
+                    loss_type="stare",
+                    use_liger_kernel=True,
+                    report_to="none",
+                ),
+                train_dataset=dataset,
+            )
 
     def test_train_with_eval(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")

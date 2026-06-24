@@ -712,6 +712,14 @@ class GRPOTrainer(_BaseTrainer):
                     f"'token_mask'. Got: {self.vllm_importance_sampling_mode}."
                 )
 
+        if self.loss_type == "stare" and args.use_liger_kernel:
+            raise ValueError(
+                "STARE loss is not yet supported with `use_liger_kernel=True`. The fused Liger GRPO loss does not "
+                "currently apply STARE's per-token reweighting, so enabling both would silently bypass the STARE "
+                "objective. Set `use_liger_kernel=False` (the default) to use `loss_type='stare'`, or open a "
+                "follow-up issue if Liger-fused STARE is needed."
+            )
+
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
         self.epsilon_low = args.epsilon
