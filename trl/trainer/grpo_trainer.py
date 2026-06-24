@@ -2775,6 +2775,8 @@ class GRPOTrainer(_BaseTrainer):
             elif self.loss_type == "luspo":
                 # luspo weights each sequence by its token count, so entropy is summed (not per-token averaged) per sequence
                 entropy_loss = (entropies * mask).sum(-1).mean() / normalizer
+            else:
+                raise ValueError(f"Unknown loss type: {self.loss_type}")
 
             # True global mean per-token entropy (nats): reduce sum and token count jointly so
             # that ranks with fewer tokens don't get equal weight (averaging per-rank means would
