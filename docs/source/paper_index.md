@@ -1747,7 +1747,7 @@ config = GOLDConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2605.21699
 
-X-Token extends the GOLD distillation framework to student-teacher pairs that **do not share a tokenizer**. A precomputed sparse projection matrix W ∈ ℝ^{V_s × V_t} maps each student token to the teacher tokens it most plausibly corresponds to, projecting the student distribution into the teacher vocab space so the two can be compared directly.
+X-Token extends the GOLD distillation framework to student-teacher pairs that **do not share a tokenizer**. It is an **off-policy** method (`lmbda=0`): the dataset provides the completion text, both student and teacher run forward passes on that text, and the cross-tokenizer KD loss is computed between their logits. No on-policy student rollouts are needed. A precomputed sparse projection matrix W ∈ ℝ^{V_s × V_t} maps each student token to the teacher tokens it most plausibly corresponds to, projecting the student distribution into the teacher vocab space so the two can be compared directly.
 
 Two loss formulations are provided:
 

@@ -13,16 +13,16 @@
 # limitations under the License.
 """X-Token off-policy distillation with GOLDTrainer.
 
-Pure off-policy (lmbda=0): no on-policy generation, the dataset feeds the student and teacher tokenizers directly via
-DataCollatorForChatML.
+X-Token KD is inherently off-policy: the dataset provides the completion text, both student and teacher run forward
+passes on that text, and the cross-tokenizer KD loss is computed between their logits. No on-policy generation.
 
 Usage:
 
     python trl/experimental/gold/scripts/xtoken/train_xtoken.py
         --projection-matrix cross_tokenizer_data/projection_map_..._top_4_sorted.pt --loss-type p_kl --max-steps 100
 
-    # Use Nemotron text corpus (matches the NeMo-RL reference run data): python
-    trl/experimental/gold/scripts/xtoken/train_xtoken.py
+    # Use Nemotron text corpus (matches the NeMo-RL reference run data):
+    python trl/experimental/gold/scripts/xtoken/train_xtoken.py
         --dataset nemotron --projection-matrix ... --max-length 512
 
 Build the projection matrix first with the three scripts in this directory. See
@@ -105,7 +105,6 @@ def main():
         # Sequence lengths
         max_length=args.max_length,
         max_completion_length=args.max_completion_length,
-        # Pure off-policy: no on-policy generation needed
         lmbda=0.0,
         use_vllm=False,
         # X-Token config
