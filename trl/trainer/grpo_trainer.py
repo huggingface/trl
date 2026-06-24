@@ -2957,7 +2957,7 @@ class GRPOTrainer(_BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-        if self.use_adaptive_entropy and self.is_world_process_zero():
+        if self.use_adaptive_entropy and self.args.should_save:
             checkpoint_folder = f"checkpoint-{self.state.global_step}"
             output_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
             with open(os.path.join(output_dir, "entropy_ctrl_state.json"), "w") as f:
