@@ -27,7 +27,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState, logging
+from accelerate import PartialState
+from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset
 from packaging.version import Version
@@ -73,7 +74,7 @@ if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def log1mexp(x: torch.FloatTensor) -> torch.FloatTensor:
