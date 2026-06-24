@@ -14,34 +14,25 @@
 
 import itertools
 import queue
-from types import SimpleNamespace
-from unittest.mock import patch
 
 import numpy as np
 import pytest
 import torch
+import transformers
 from datasets import load_dataset
+from packaging.version import Version
 from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.experimental.async_grpo import async_grpo_trainer as async_grpo_trainer_module
+from trl.experimental.async_grpo.async_grpo_trainer import _load_policy_model
 from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
 
-from ..testing_utils import TrlTestCase, is_ampere_or_newer
+from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_vision
 
 
 def dummy_reward_func(completions, **kwargs):
     return [float(hash(c[0]["content"]) % 100) / 100.0 for c in completions]
-
-
-class _DummyPolicy:
-    def __init__(self):
-        self.text = torch.nn.Parameter(torch.ones(1))
-        self.visual = torch.nn.Parameter(torch.ones(1))
-
-    def named_parameters(self):
-        return iter([("language_model.model.embed_tokens.weight", self.text), ("visual.blocks.0.weight", self.visual)])
 
 
 class _StubRolloutWorker:
@@ -104,42 +95,40 @@ class _StubRolloutWorker:
     reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
 )
 class TestAsyncGRPOTrainer(TrlTestCase):
-    def test_load_policy_model_keeps_text_models_on_causal_lm(self):
-        policy = _DummyPolicy()
-        config = SimpleNamespace(architectures=["Qwen2ForCausalLM"])
+    def test_load_policy_model_text(self):
+        # A text-only causal LM loads as-is, with every parameter trainable.
+        model = _load_policy_model("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        names = [n for n, _ in model.named_parameters()]
+        assert any(n.startswith("model.") for n in names)
+        assert all(p.requires_grad for _, p in model.named_parameters())
 
-        with (
-            patch.object(async_grpo_trainer_module.AutoConfig, "from_pretrained", return_value=config),
-            patch.object(
-                async_grpo_trainer_module.AutoModelForCausalLM, "from_pretrained", return_value=policy
-            ) as causal,
-            patch.object(async_grpo_trainer_module.AutoModelForImageTextToText, "from_pretrained") as image_text,
-        ):
-            model = async_grpo_trainer_module._load_policy_model("text-model")
-
-        assert model is policy
-        causal.assert_called_once_with("text-model", device_map=None, dtype=torch.float32)
-        image_text.assert_not_called()
-        assert policy.visual.requires_grad
-
-    def test_load_policy_model_uses_image_text_model_for_conditional_generation(self):
-        policy = _DummyPolicy()
-        config = SimpleNamespace(architectures=["Qwen3_5ForConditionalGeneration"])
-
-        with (
-            patch.object(async_grpo_trainer_module.AutoConfig, "from_pretrained", return_value=config),
-            patch.object(async_grpo_trainer_module.AutoModelForCausalLM, "from_pretrained") as causal,
-            patch.object(
-                async_grpo_trainer_module.AutoModelForImageTextToText, "from_pretrained", return_value=policy
-            ) as image_text,
-        ):
-            model = async_grpo_trainer_module._load_policy_model("vl-model")
-
-        assert model is policy
-        image_text.assert_called_once_with("vl-model", device_map=None, dtype=torch.float32)
-        causal.assert_not_called()
-        assert policy.text.requires_grad
-        assert not policy.visual.requires_grad
+    @require_vision
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_load_policy_model_vlm_freezes_vision(self, model_id):
+        # Image-text policies must load through AutoModelForImageTextToText so the
+        # weight-sync namespace matches what vLLM serves, with the vision tower
+        # frozen so only the language side receives gradients.
+        model = _load_policy_model(model_id)
+        names = [n for n, _ in model.named_parameters()]
+        assert any("visual" in n or "vision" in n for n in names)  # the vision tower is present
+        assert any(p.requires_grad for _, p in model.named_parameters())  # the language side still trains
+        for n, p in model.named_parameters():
+            assert p.requires_grad != ("visual" in n or "vision" in n)
 
     def test_init_minimal(self):
         # Test that AsyncGRPOTrainer can be instantiated with only model, reward_model and train_dataset
