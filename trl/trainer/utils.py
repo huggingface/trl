@@ -31,7 +31,6 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
@@ -50,7 +49,6 @@ from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import (
     is_peft_available,
     is_rich_available,
-    is_torch_xpu_available,
 )
 
 from ..trainer.model_config import ModelConfig
