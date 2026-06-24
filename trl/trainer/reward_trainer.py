@@ -312,8 +312,8 @@ class RewardTrainer(_BaseTrainer):
             Note that the labels (second parameter) will be `None` if the dataset does not have them.
         quantization_config ([`~transformers.BitsAndBytesConfig`], *optional*):
             Quantization configuration used when loading the model from a model identifier. Combine with `peft_config`
-            for QLoRA training. Ignored if the model is already instantiated, or if `quantization_config` is also set in
-            `args.model_init_kwargs`.
+            for QLoRA training. Ignored if the model is already instantiated, or if `quantization_config` is also set
+            in `args.model_init_kwargs`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped. Note that if the loaded
             model is a causal LM, it's highly recommended to set `modules_to_save=["score"]` in the PEFT configuration
