@@ -30,7 +30,7 @@ from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_
 from datasets.fingerprint import Hasher
 from packaging.version import Version
 from torch.nn import functional as F
-from torch.utils.data import DataLoader, SequentialSampler
+from torch.utils.data import DataLoader, Sampler, SequentialSampler
 from transformers import (
     AutoProcessor,
     DataCollator,
@@ -999,6 +999,17 @@ class KTOTrainer(_BaseTrainer):
                     "ref_KL_logps",
                 ]
 
+    def _get_train_sampler(self, train_dataset: Dataset | None = None) -> Sampler | None:
+        if self.calculate_KL and Version(transformers.__version__) < Version("5.2.0"):
+            if train_dataset is None:
+                train_dataset = self.train_dataset
+            if train_dataset is None or not has_length(train_dataset):
+                return None
+            return SequentialSampler(train_dataset)
+        return super()._get_train_sampler(
+            train_dataset
+        )  # Override training step to add activation offloading context.
+
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
@@ -1454,28 +1465,6 @@ class KTOTrainer(_BaseTrainer):
                 ) from e
             raise
 
-    def _get_train_sampler(self, train_dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
-        if self.calculate_KL and Version(transformers.__version__) < Version("5.2.0"):
-            if train_dataset is None:
-                train_dataset = self.train_dataset
-            if train_dataset is None or not has_length(train_dataset):
-                return None
-            return SequentialSampler(train_dataset)
-        return super()._get_train_sampler(train_dataset)
-
-    # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
-    # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
-    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
-        inputs = self._prepare_inputs(inputs)
-        with torch.no_grad(), self.compute_loss_context_manager():
-            if prediction_loss_only:
-                loss = self.compute_loss(model, inputs, return_outputs=False)  # logits aren't materialized with liger
-                logits, labels = None, None
-            else:
-                loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
-                logits, labels = outputs.logits, inputs["completion_input_ids"]
-        return loss, logits, labels
-
     # Override training step to add activation offloading context.
     def training_step(self, *args, **kwargs):
         with self.maybe_activation_offload_context:
@@ -1493,6 +1482,19 @@ class KTOTrainer(_BaseTrainer):
         logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
+
+    # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
+    # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
+        inputs = self._prepare_inputs(inputs)
+        with torch.no_grad(), self.compute_loss_context_manager():
+            if prediction_loss_only:
+                loss = self.compute_loss(model, inputs, return_outputs=False)  # logits aren't materialized with liger
+                logits, labels = None, None
+            else:
+                loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+                logits, labels = outputs.logits, inputs["completion_input_ids"]
+        return loss, logits, labels
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):
