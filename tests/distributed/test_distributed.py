@@ -380,10 +380,16 @@ class TestDistributed(TrlTestCase):
 
     def test_sft_chunked_nll_fsdp2_no_per_chunk_allgather(self, lazy_shared_datadir):
         # Perf-regression guard for the PR #6077 class: a chunked cross-entropy path must NOT re-gather the
-        # sharded `lm_head.weight` once per vocab chunk under FSDP2 (correct loss, silently slow, invisible
+        # sharded `lm_head.weight` once per token chunk under FSDP2 (correct loss, silently slow, invisible
         # to a pass/fail test). The companion worker runs one SFT `chunked_nll` step under a 2-process FSDP2
         # group (reshard_after_forward=True — the condition that triggers the bug) and counts the all-gather
-        # collectives during that step; here we assert the count stays O(1), not O(vocab / chunk_size).
+        # collectives during that step; here we assert the count stays O(1), not O(n_valid / chunk_size).
+        #
+        # `_chunked_cross_entropy_loss` chunks over VALID TOKENS, not vocab, so the regression scales with
+        # ceil(n_valid / chunk_size) and only manifests when more than one token chunk runs. The worker
+        # shrinks the chunk size so the tiny zen batch exercises many token chunks, and reports the exact
+        # n_valid / chunk_size it measured so this side can both bound the count and confirm the test is
+        # non-vacuous (n_chunks_if_regressed > 1 — otherwise a regression could never have been observed).
         #
         # Counting real collectives is required: under FSDP2 the parameter unshard is driven by autograd
         # hooks / c10d collectives, not by `DTensor.full_tensor()`, so the worker counts the actual
@@ -410,12 +416,19 @@ class TestDistributed(TrlTestCase):
         measured = json.loads(lines[0][len(prefix) :].strip())
 
         assert measured["loss_finite"], f"chunked_nll loss not finite under FSDP2: {measured}"
-        # A per-chunk-regather regression would do ~n_chunks all-gathers of lm_head.weight in the step; the
-        # fixed path does O(1). `all_gathers` is the total all-gather collective count for the step, measured
-        # by CommDebugMode (the DTensor-native counter that sees FSDP2's autograd-hook-driven gathers). It
-        # legitimately includes one gather per sharded parameter (a handful of decoder layers), so bound it
-        # well below the regression count rather than at exactly 1. The ceiling scales off n_chunks (never a
-        # hardcoded collective count) so it tracks the model's vocab/chunk arithmetic.
+        # Non-vacuity guard (the heart of this test): a per-token-chunk regression can only be detected if the
+        # step actually ran multiple token chunks. If only one chunk ran, a regression would gather exactly
+        # once too, so the test would pass for the wrong reason. Require a comfortably multi-chunk run.
+        assert measured["n_chunks_if_regressed"] > 4, (
+            f"test is vacuous — only {measured['n_chunks_if_regressed']} token chunk(s) ran, so a per-chunk "
+            f"regression could not be observed; increase batch/length or shrink chunk_size: {measured}"
+        )
+        # A per-token-chunk-regather regression would do ~n_chunks all-gathers of lm_head.weight in the step;
+        # the fixed path does O(1). `all_gathers` is the total all-gather collective count for the step,
+        # measured by CommDebugMode (the DTensor-native counter that sees FSDP2's autograd-hook-driven
+        # gathers). It legitimately includes one gather per sharded parameter (a handful of decoder layers),
+        # so bound it well below the regression count rather than at exactly 1. The ceiling scales off
+        # n_chunks (never a hardcoded collective count) so it tracks the model's token/chunk arithmetic.
         observed = measured["all_gathers"]
         ceiling = max(16, measured["n_chunks_if_regressed"] // 4)
         assert observed < measured["n_chunks_if_regressed"], (
