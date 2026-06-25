@@ -1347,6 +1347,10 @@ class TestComputeMfu(TrlTestCase):
         tps = peak * world_size / flops
         assert compute_mfu(flops, tps, world_size, peak_flops_per_device=peak) == pytest.approx(100.0)
 
+    def test_zero_world_size_returns_zero(self):
+        # A zero denominator (e.g. world_size == 0) must return 0.0, not raise ZeroDivisionError.
+        assert compute_mfu(100e9, 1000.0, 0) == 0.0
+
 
 class TestAdjustedMfu(TrlTestCase):
     MOE_MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"

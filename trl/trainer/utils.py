@@ -1472,7 +1472,11 @@ def compute_mfu(
     Returns:
         `float`: MFU as a percentage (0-100).
     """
-    return 100 * (flops_per_token * tokens_per_second) / (peak_flops_per_device * world_size)
+    denominator = peak_flops_per_device * world_size
+    if denominator == 0:
+        # No compute capacity to utilize (e.g. world_size == 0); MFU is 0 rather than a ZeroDivisionError.
+        return 0.0
+    return 100 * (flops_per_token * tokens_per_second) / denominator
 
 
 def adjusted_mfu(mfu: float, config: PretrainedConfig, seq_len: int) -> float:
