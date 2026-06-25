@@ -1540,6 +1540,93 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize("loss_type", ["grpo", "dapo", "luspo"])
+    def test_entropy_bonus_scale(self, loss_type):
+        # Regression test: the entropy bonus must be normalized like each loss type's policy loss. A previous
+        # "unified" formula divided the per-token mean entropy by the loss normalizer, which for the
+        # cispo/dapo/vespo family is a global token count, making the bonus ~1/sequence_length too small; and
+        # it put luspo's bonus on the per-token scale instead of luspo's sequence-weighted scale. With
+        # gradient_accumulation_steps=1 the per-step entropy contribution to the loss is
+        # contrib = policy_loss - loss = entropy_coef * entropy_loss, so contrib / entropy reveals the scale.
+        entropy_coef = 0.5
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            importance_sampling_level="sequence" if loss_type == "luspo" else "token",
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=16,  # long enough that the per-token vs sequence-weighted scales differ
+            gradient_accumulation_steps=1,  # so contrib == entropy_coef * entropy_loss holds per step
+            loss_type=loss_type,
+            logging_steps=1,
+            report_to="none",
+            entropy_coef=entropy_coef,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        logs = [h for h in trainer.state.log_history if "policy_loss" in h and "loss" in h and h.get("entropy")]
+        assert logs
+        ratios = sorted((h["policy_loss"] - h["loss"]) / h["entropy"] for h in logs)
+        ratio = ratios[len(ratios) // 2]  # median, robust to per-step noise
+        if loss_type == "luspo":
+            # luspo weights each sequence by its length, so the bonus is the per-sequence entropy sum: its
+            # scale is entropy_coef * (mean sequence length), well above entropy_coef. The buggy per-token
+            # formula gave ratio == entropy_coef.
+            assert ratio > 1.5 * entropy_coef
+        else:
+            # grpo (and the cispo/dapo/vespo family) regularize the per-token mean entropy, so the bonus is
+            # exactly entropy_coef * entropy. The buggy formula made dapo's ratio smaller by ~1/seq_len.
+            assert ratio == pytest.approx(entropy_coef, rel=0.3)
+
+    def test_train_with_adaptive_entropy_gradient_accumulation(self):
+        # Adaptive entropy must behave correctly under gradient accumulation: the coefficient and gating are
+        # frozen across an accumulation window and the controller updates once per optimizer step (not once
+        # per micro-batch). With entropy_target above any realistic entropy the coefficient is incremented by
+        # entropy_coef_delta on every optimizer step, so the final value pins down the number of updates.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            gradient_accumulation_steps=2,  # exercise the accumulation window
+            report_to="none",
+            entropy_coef=0.01,
+            use_adaptive_entropy=True,
+            entropy_target=15.0,  # above any realistic entropy → coef incremented once per optimizer step
+            entropy_coef_delta=0.005,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # Exactly one increment per optimizer step (global_step counts optimizer steps, not micro-batches);
+        # a per-micro-batch update would overshoot this.
+        expected_coef = min(0.01 + 0.005 * trainer.state.global_step, 1.0)
+        assert trainer.entropy_coef == pytest.approx(expected_coef, abs=1e-6)
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_train_with_entropy_filter(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
