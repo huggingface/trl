@@ -607,7 +607,6 @@ class _AsyncRolloutLoop:
     async def _score_group(self, group: RolloutGroup) -> list[RolloutSample]:
         kwargs = dict(
             completions=group.completions,
-            prompt=group.prompts[0],
             prompts=group.prompts,
             completion_ids=group.completions_ids,
             **group.reward_kwargs,
