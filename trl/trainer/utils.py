@@ -40,6 +40,7 @@ from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
+    AutoModelForSeq2SeqLM,
     BitsAndBytesConfig,
     PretrainedConfig,
     PreTrainedModel,
@@ -1031,12 +1032,12 @@ def create_model_from_path(
             # Remote-code checkpoint: the architecture name lives in the dynamic module, not in
             # `transformers`. Pick the most specific auto class declared in `config.auto_map`.
             auto_map = config.auto_map or {}
-            for candidate in (AutoModelForImageTextToText, AutoModelForCausalLM):
+            for candidate in (AutoModelForImageTextToText, AutoModelForSeq2SeqLM, AutoModelForCausalLM):
                 if candidate.__name__ in auto_map:
                     architecture = candidate
                     break
             else:
-                architecture = AutoModelForCausalLM
+                architecture = AutoModelForSeq2SeqLM if config.is_encoder_decoder else AutoModelForCausalLM
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
 

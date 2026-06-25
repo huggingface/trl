@@ -843,8 +843,9 @@ class SFTTrainer(_BaseTrainer):
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
               config) with the keyword arguments in `args.model_init_kwargs`.
-            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-            - A [`~peft.PeftModel`] object. Only causal language models are supported.
+            - A [`~transformers.PreTrainedModel`] object. Causal language models and encoder-decoder language models
+              are supported.
+            - A [`~peft.PeftModel`] object. Causal language models and encoder-decoder language models are supported.
         args ([`SFTConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
@@ -862,6 +863,8 @@ class SFTTrainer(_BaseTrainer):
               and content).
 
             The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
+            For encoder-decoder models, datasets must be prompt-completion datasets, or processed datasets with both
+            `input_ids` and `labels`.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
@@ -985,6 +988,7 @@ class SFTTrainer(_BaseTrainer):
             self._is_vlm = False
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+        self._is_encoder_decoder = getattr(model.config, "is_encoder_decoder", False)
 
         if args.eos_token is not None:
             if args.eos_token not in self._tokenizer.get_vocab():
@@ -1029,6 +1033,24 @@ class SFTTrainer(_BaseTrainer):
                 "drop them, causing pixel_values to be forwarded to the model with no corresponding visual "
                 "tokens in input_ids. Use truncation_mode='keep_start' (the default) or set max_length=None."
             )
+        if self._is_encoder_decoder:
+            if args.packing:
+                raise ValueError("Packing is not supported for encoder-decoder models. Please set `packing=False`.")
+            if args.padding_free:
+                raise ValueError(
+                    "Padding-free training is not supported for encoder-decoder models. Please set "
+                    "`padding_free=False`."
+                )
+            if args.loss_type == "chunked_nll":
+                logger.warning(
+                    "`loss_type='chunked_nll'` is only supported for causal language models. Using "
+                    "`loss_type='nll'` for encoder-decoder training."
+                )
+                args.loss_type = "nll"
+            elif args.loss_type == "dft":
+                raise ValueError("`loss_type='dft'` is not supported for encoder-decoder models.")
+            if args.use_liger_kernel:
+                raise ValueError("`use_liger_kernel=True` is not supported for encoder-decoder models.")
 
         # PEFT
         if peft_config is not None:
@@ -1425,6 +1447,8 @@ class SFTTrainer(_BaseTrainer):
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = get_dataset_column_names(dataset)
         is_processed = "input_ids" in column_names
+        if self._is_encoder_decoder and is_processed and "labels" not in column_names:
+            raise ValueError("Processed datasets for encoder-decoder models must include a `labels` column.")
 
         # Build the kwargs for the `map` function
         map_kwargs = {}
@@ -1511,24 +1535,47 @@ class SFTTrainer(_BaseTrainer):
                                 output["assistant_masks"] = prompt_completion_processed["assistant_masks"]
                         else:
                             prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
-                            prompt_completion_ids = self._tokenize(
-                                processing_class, example["prompt"] + example["completion"]
-                            )["input_ids"]
+                            if self._is_encoder_decoder:
+                                completion_ids = self._tokenize(processing_class, example["completion"])["input_ids"]
+                            else:
+                                prompt_completion_ids = self._tokenize(
+                                    processing_class, example["prompt"] + example["completion"]
+                                )["input_ids"]
 
-                        # Check if the tokenized prompt starts with the tokenized prompt+completion
-                        if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                            logger.warning(
-                                "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
-                                "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                                "token handling. Verify that the tokenizer is processing text consistently."
-                            )
-
-                        # Create completion mask
-                        completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                        output["input_ids"] = prompt_completion_ids
-                        output["completion_mask"] = completion_mask
+                        if self._is_encoder_decoder:
+                            output["input_ids"] = prompt_ids
+                            if is_conversational(example):
+                                # Check if the tokenized prompt starts with the tokenized prompt+completion
+                                if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
+                                    logger.warning(
+                                        "Mismatch between tokenized prompt and the start of tokenized "
+                                        "prompt+completion. This may be due to unexpected tokenizer behavior, "
+                                        "whitespace issues, or special token handling. Verify that the tokenizer is "
+                                        "processing text consistently."
+                                    )
+                                completion_ids = prompt_completion_ids[len(prompt_ids) :]
+                            output["labels"] = completion_ids
+                        else:
+                            # Check if the tokenized prompt starts with the tokenized prompt+completion
+                            if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
+                                logger.warning(
+                                    "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
+                                    "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
+                                    "token handling. Verify that the tokenizer is processing text consistently."
+                                )
+                            # Create completion mask
+                            completion_mask = [0] * len(prompt_ids) + [
+                                1
+                            ] * (len(prompt_completion_ids) - len(prompt_ids))
+                            output["input_ids"] = prompt_completion_ids
+                            output["completion_mask"] = completion_mask
 
                     else:  # language modeling case
+                        if self._is_encoder_decoder:
+                            raise ValueError(
+                                "Encoder-decoder models require a prompt-completion dataset with `prompt` and "
+                                "`completion` columns."
+                            )
                         if is_conversational(example):
                             processed = self._tokenize(
                                 processing_class,
@@ -1745,7 +1792,10 @@ class SFTTrainer(_BaseTrainer):
             self._metrics[mode]["entropy"].append(entropy)
         elif not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
-                if "shift_labels" in inputs:
+                if self._is_encoder_decoder:
+                    shift_logits = outputs.logits
+                    shift_labels = labels
+                elif "shift_labels" in inputs:
                     # When using CP or SP, labels are pre-shifted.
                     shift_logits = outputs.logits
                     shift_labels = inputs["shift_labels"]
@@ -1755,7 +1805,8 @@ class SFTTrainer(_BaseTrainer):
 
                 # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
                 if (
-                    self.num_virtual_tokens > 0
+                    not self._is_encoder_decoder
+                    and self.num_virtual_tokens > 0
                     and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
                 ):
                     shift_logits = shift_logits[:, self.num_virtual_tokens :, :]

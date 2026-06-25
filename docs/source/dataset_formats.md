@@ -343,6 +343,8 @@ prompt_completion_example = {"prompt": [{"role": "user", "content": "What color 
 
 For examples of prompt-completion datasets, refer to the [Prompt-completion datasets collection](https://huggingface.co/collections/trl-lib/prompt-completion-datasets-677ea2bb20bbb6bdccada216).
 
+For encoder-decoder models trained with [`SFTTrainer`], use the prompt-completion format. The `"prompt"` is used as the encoder input and the `"completion"` is used as the decoder target.
+
 #### Preference
 
 A preference dataset is used for tasks where the model is trained to choose between two or more possible completions to the same prompt. This dataset includes a `"prompt"`, a `"chosen"` completion, and a `"rejected"` completion. The model is trained to select the `"chosen"` response over the `"rejected"` response.
@@ -410,7 +412,7 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`GRPOTrainer`] | [Prompt-only](#prompt-only) |
 | [`RewardTrainer`] | [Preference (implicit prompt recommended)](#preference) |
 | [`RLOOTrainer`] | [Prompt-only](#prompt-only) |
-| [`SFTTrainer`] | [Language modeling](#language-modeling) or [Prompt-completion](#prompt-completion) |
+| [`SFTTrainer`] | [Language modeling](#language-modeling) or [Prompt-completion](#prompt-completion). Encoder-decoder models require [Prompt-completion](#prompt-completion). |
 | [`experimental.bco.BCOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`experimental.cpo.CPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
 | [`experimental.gkd.GKDTrainer`] | [Prompt-completion](#prompt-completion) |

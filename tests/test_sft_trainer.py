@@ -29,6 +29,7 @@ from packaging.version import parse as parse_version
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
+    AutoModelForSeq2SeqLM,
     AutoTokenizer,
     BitsAndBytesConfig,
     TrainingArguments,
@@ -409,6 +410,55 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_seq2seq_prompt_completion(self):
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
+        dataset = Dataset.from_list(
+            [
+                {"prompt": "Translate to German: Hello.", "completion": "Hallo."},
+                {"prompt": "Translate to German: Goodbye.", "completion": "Auf Wiedersehen."},
+            ]
+        )
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_steps=1,
+            per_device_train_batch_size=1,
+            gradient_checkpointing=False,
+            report_to="none",
+        )
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        assert trainer.args.loss_type == "nll"
+        assert trainer.train_dataset[0]["input_ids"] != trainer.train_dataset[0]["labels"]
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_seq2seq_prompt_completion_builds_decoder_labels(self):
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_id, dtype="float32")
+        dataset = Dataset.from_list([{"prompt": "Translate to German: Hello.", "completion": "Hallo."}])
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=False, report_to="none")
+        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset, processing_class=tokenizer)
+
+        decoded_input = tokenizer.decode(trainer.train_dataset[0]["input_ids"], skip_special_tokens=True)
+        decoded_labels = tokenizer.decode(trainer.train_dataset[0]["labels"], skip_special_tokens=True)
+
+        assert "Translate to German" in decoded_input
+        assert "Translate to German" not in decoded_labels
+        assert "Hallo" in decoded_labels
+
+    def test_seq2seq_rejects_packing(self):
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
+        dataset = Dataset.from_list([{"prompt": "Translate to German: Hello.", "completion": "Hallo."}])
+        training_args = SFTConfig(output_dir=self.tmp_dir, packing=True, report_to="none")
+
+        with pytest.raises(ValueError, match="Packing is not supported"):
+            SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")

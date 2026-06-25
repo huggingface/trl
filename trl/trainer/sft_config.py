@@ -37,12 +37,13 @@ class SFTConfig(_BaseConfig):
         > Parameters that control the model
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`SFTTrainer`] is provided as a string.
+            Keyword arguments for the model's `from_pretrained` method, used when the `model` argument of the
+            [`SFTTrainer`] is provided as a string. Causal language models are loaded with
+            [`~transformers.AutoModelForCausalLM`]; encoder-decoder models are loaded with
+            [`~transformers.AutoModelForSeq2SeqLM`].
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoProcessor.from_pretrained`].
+            the model's `from_pretrained` method and [`~transformers.AutoProcessor.from_pretrained`].
         router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
             Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
             (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
@@ -77,7 +78,7 @@ class SFTConfig(_BaseConfig):
             Whether to shuffle the dataset.
         packing (`bool`, *optional*, defaults to `False`):
             Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
-            padding. Uses `max_length` to define sequence length.
+            padding. Uses `max_length` to define sequence length. Only supported for causal language models.
         packing_strategy (`str`, *optional*, defaults to `"bfd"`):
             Strategy for packing sequences. Can be `"bfd"` (best-fit decreasing, truncates overflow), `"bfd_split"`
             (best-fit decreasing, splits overflow sequences), or `"wrapped"` (aggressive, cuts mid-sequence).
@@ -86,7 +87,7 @@ class SFTConfig(_BaseConfig):
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
             supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure. When
             packing is enabled with strategy `"bfd"`, padding-free is enabled, regardless of the value of this
-            parameter.
+            parameter. Only supported for causal language models.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         eval_packing (`bool`, *optional*):
@@ -99,21 +100,24 @@ class SFTConfig(_BaseConfig):
             only on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
             `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
             loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on the full
-            sequence for [language modeling](#language-modeling) datasets.
+            sequence for [language modeling](#language-modeling) datasets. For encoder-decoder models, prompt tokens
+            are used as encoder inputs and completion tokens are used as decoder labels, so the loss is computed on the
+            completion side.
         assistant_only_loss (`bool`, *optional*, defaults to `False`):
             Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
             on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
             `False`, loss is computed on the entire sequence.
         loss_type (`str`, *optional*, defaults to `"chunked_nll"`):
             Type of loss to use. When left unset, it defaults to `"chunked_nll"`, except when `use_liger_kernel=True`,
-            in which case it defaults to `"nll"`. Possible values are:
+            in which case it defaults to `"nll"`. Encoder-decoder models use `"nll"`. Possible values are:
 
             - `"nll"`: standard negative log-likelihood.
             - `"dft"`: Dynamic Fine-Tuning, as described in
               [this paper](https://huggingface.co/papers/2508.05629).
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
-              in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.
+              in chunks of tokens to reduce peak activation memory. Only supported for causal language models and not
+              compatible with `use_liger_kernel`.
 
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
@@ -149,7 +153,7 @@ class SFTConfig(_BaseConfig):
     model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
-            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
+            "help": "Keyword arguments for the model's `from_pretrained` method, used when the `model` argument of "
             "the `SFTTrainer` is provided as a string."
         },
     )
@@ -165,7 +169,7 @@ class SFTConfig(_BaseConfig):
         default=False,
         metadata={
             "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
-            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
+            "Forwarded to the model's `from_pretrained` method and `AutoProcessor.from_pretrained`."
         },
     )
     chat_template_path: str | None = field(
@@ -226,7 +230,8 @@ class SFTConfig(_BaseConfig):
         default=False,
         metadata={
             "help": "Whether to group multiple sequences into fixed-length blocks to improve computational efficiency "
-            "and reduce padding. Uses `max_length` to define sequence length."
+            "and reduce padding. Uses `max_length` to define sequence length. Only supported for causal language "
+            "models."
         },
     )
     packing_strategy: str = field(
@@ -245,7 +250,7 @@ class SFTConfig(_BaseConfig):
             "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
             "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
             "structure. When packing is enabled with strategy `'bfd'`, padding-free is enabled, regardless of the "
-            "value of this parameter."
+            "value of this parameter. Only supported for causal language models."
         },
     )
     pad_to_multiple_of: int | None = field(
@@ -266,7 +271,8 @@ class SFTConfig(_BaseConfig):
                 "computed only on the completion, which is supported only for prompt-completion datasets. If `False`, "
                 "loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset: "
                 "loss is computed on the completion for prompt-completion datasets, and on the full sequence for "
-                "language modeling datasets."
+                "language modeling datasets. For encoder-decoder models, prompt tokens are used as encoder inputs "
+                "and completion tokens are used as decoder labels."
             )
         },
     )
@@ -284,13 +290,14 @@ class SFTConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Type of loss to use. When left unset, it defaults to `'chunked_nll'`, except when "
-            "`use_liger_kernel=True`, in which case it defaults to `'nll'`. Possible values are `'nll'` (standard "
-            "negative log-likelihood), `'dft'` (Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), and "
-            "`'chunked_nll'` (same math as `'nll'`, but the `lm_head` projection is computed on non-ignored tokens "
-            "only — positions with `labels == -100` are dropped before the matmul — and the cross-entropy is "
-            "processed in chunks of tokens to reduce peak activation memory; not compatible with `use_liger_kernel`; "
-            "the patched `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level "
-            "`lm_head`, architectures with a non-standard head are not supported)."
+            "`use_liger_kernel=True`, in which case it defaults to `'nll'`. Encoder-decoder models use `'nll'`. "
+            "Possible values are `'nll'` (standard negative log-likelihood), `'dft'` (Dynamic Fine-Tuning, "
+            "https://huggingface.co/papers/2508.05629), and `'chunked_nll'` (same math as `'nll'`, but the "
+            "`lm_head` projection is computed on non-ignored tokens only — positions with `labels == -100` are "
+            "dropped before the matmul — and the cross-entropy is processed in chunks of tokens to reduce peak "
+            "activation memory; not compatible with `use_liger_kernel`; the patched `lm_head` path covers standard "
+            "causal LMs and VLMs whose language model exposes a top-level `lm_head`, architectures with a "
+            "non-standard head are not supported)."
         },
     )
     activation_offloading: bool = field(
