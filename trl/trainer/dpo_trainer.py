@@ -63,13 +63,13 @@ from .utils import (
 )
 
 
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearDPOLoss
+
+
 if is_peft_available():
     import peft
     from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearDPOLoss
 
 
 logger = get_logger(__name__)
