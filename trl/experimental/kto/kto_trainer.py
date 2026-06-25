@@ -101,12 +101,14 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     Data collator for unpaired preference data. Assembles completions from raw token IDs and pads sequences to the
     maximum length of the batch.
 
-    Each example is expected to contain `"prompt_ids"`, `"completion_ids"` (and optionally `"KL_completion_ids"`) keys.
-    The collator returns a dictionary with the following keys for each prefix (`"completion"` and, if present,
-    `"KL_completion"`):
-    - `"{prefix}_input_ids"`: full prompt + completion token IDs, padded to the batch maximum length.
-    - `"{prefix}_attention_mask"`: attention mask, padded with 0s.
-    - `"{prefix}_mask"`: binary mask where 1 marks completion tokens and 0 marks prompt or padding tokens.
+    Each example is expected to contain `"prompt_ids"` and `"completion_ids"` keys (and optionally a
+    `"KL_completion_ids"` key). The collator returns a dictionary containing:
+    - `"input_ids"`: prompt + completion token IDs, padded to the batch maximum length.
+    - `"attention_mask"`: attention mask, padded with 0s.
+    - `"completion_mask"`: binary mask where 1 marks completion tokens and 0 marks prompt or padding tokens.
+
+    When `"KL_completion_ids"` is present, the same three tensors are returned for the (mismatched) KL sequence under
+    the `"KL_input_ids"`, `"KL_attention_mask"` and `"KL_completion_mask"` keys.
 
     Args:
         pad_token_id (`int`):
@@ -126,7 +128,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         batch = {}
-        for prefix, ids_key in [("completion", "completion_ids"), ("KL_completion", "KL_completion_ids")]:
+        for prefix, ids_key in [("", "completion_ids"), ("KL_", "KL_completion_ids")]:
             if ids_key not in examples[0]:
                 continue
 
@@ -143,19 +145,19 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
                 full_ids_list.append(full_ids)
                 completion_mask_list.append(completion_mask)
 
-            batch[f"{prefix}_input_ids"] = pad(
+            batch[f"{prefix}input_ids"] = pad(
                 [torch.tensor(ids, dtype=torch.int64) for ids in full_ids_list],
                 padding_value=self.pad_token_id,
                 padding_side="right",
                 pad_to_multiple_of=self.pad_to_multiple_of,
             )
-            batch[f"{prefix}_attention_mask"] = pad(
+            batch[f"{prefix}attention_mask"] = pad(
                 [torch.ones(len(ids), dtype=torch.int64) for ids in full_ids_list],
                 padding_value=0,
                 padding_side="right",
                 pad_to_multiple_of=self.pad_to_multiple_of,
             )
-            batch[f"{prefix}_mask"] = pad(
+            batch[f"{prefix}completion_mask"] = pad(
                 [torch.tensor(m, dtype=torch.int64) for m in completion_mask_list],
                 padding_value=0,
                 padding_side="right",
@@ -188,10 +190,10 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
     - A `"label"` key (`bool`) indicating whether the completion is desirable.
 
     The collator outputs:
-    - `"completion_input_ids"`, `"completion_attention_mask"`, `"completion_mask"`: full prompt+completion sequence.
+    - `"input_ids"`, `"attention_mask"`, `"completion_mask"`: full prompt+completion sequence.
     - `"pixel_values"` and any additional processor outputs (e.g., `"image_grid_thw"`).
     - `"label"`: list of booleans.
-    - When `calculate_kl=True`: `"KL_completion_input_ids"`, `"KL_completion_attention_mask"`, `"KL_completion_mask"`
+    - When `calculate_kl=True`: `"KL_input_ids"`, `"KL_attention_mask"`, `"KL_completion_mask"`
       for the cycled KL sequences.
 
     Args:
@@ -300,10 +302,8 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
 
         # Build the output dictionary
         output = processed_prompts  # we take processed_prompts because it contains the images
-        output.pop("input_ids", None)
-        output.pop("attention_mask", None)
-        output["completion_input_ids"] = input_ids
-        output["completion_attention_mask"] = attention_mask
+        output["input_ids"] = input_ids
+        output["attention_mask"] = attention_mask
         output["completion_mask"] = completion_mask
         if has_tti:
             output["token_type_ids"] = token_type_ids
@@ -365,13 +365,13 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
                 if has_mm_tti:
                     kl_mm_token_type_ids = kl_mm_token_type_ids[:, : self.max_length]
 
-            output["KL_completion_input_ids"] = kl_input_ids
-            output["KL_completion_attention_mask"] = kl_attention_mask
+            output["KL_input_ids"] = kl_input_ids
+            output["KL_attention_mask"] = kl_attention_mask
             output["KL_completion_mask"] = kl_completion_mask
             if has_tti:
-                output["KL_completion_token_type_ids"] = kl_token_type_ids
+                output["KL_token_type_ids"] = kl_token_type_ids
             if has_mm_tti:
-                output["KL_completion_mm_token_type_ids"] = kl_mm_token_type_ids
+                output["KL_mm_token_type_ids"] = kl_mm_token_type_ids
 
         output["label"] = [ex["label"] for ex in examples]
         return output
@@ -1089,45 +1089,43 @@ class KTOTrainer(_BaseTrainer):
                     model = self.accelerator.unwrap_model(self.model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
                         completion_logits = self.model(
-                            inputs["completion_input_ids"],
-                            attention_mask=inputs["completion_attention_mask"],
+                            inputs["input_ids"],
+                            attention_mask=inputs["attention_mask"],
                         ).logits
 
                         if self.calculate_KL:
                             KL_logits = self.model(
-                                inputs["KL_completion_input_ids"],
-                                attention_mask=inputs["KL_completion_attention_mask"],
+                                inputs["KL_input_ids"],
+                                attention_mask=inputs["KL_attention_mask"],
                             ).logits
                 else:
                     completion_logits = self.model(
-                        inputs["completion_input_ids"],
-                        attention_mask=inputs["completion_attention_mask"],
+                        inputs["input_ids"],
+                        attention_mask=inputs["attention_mask"],
                     ).logits
 
                     if self.calculate_KL:
                         KL_logits = self.model(
-                            inputs["KL_completion_input_ids"],
-                            attention_mask=inputs["KL_completion_attention_mask"],
+                            inputs["KL_input_ids"],
+                            attention_mask=inputs["KL_attention_mask"],
                         ).logits
             else:
-                completion_logits = self.ref_model(
-                    inputs["completion_input_ids"], attention_mask=inputs["completion_attention_mask"]
-                ).logits
+                completion_logits = self.ref_model(inputs["input_ids"], attention_mask=inputs["attention_mask"]).logits
 
                 if self.calculate_KL:
                     KL_logits = self.ref_model(
-                        inputs["KL_completion_input_ids"],
-                        attention_mask=inputs["KL_completion_attention_mask"],
+                        inputs["KL_input_ids"],
+                        attention_mask=inputs["KL_attention_mask"],
                     ).logits
 
         shift_logits = completion_logits[:, :-1, :]
-        per_token_logps = selective_log_softmax(shift_logits, inputs["completion_input_ids"][:, 1:])
+        per_token_logps = selective_log_softmax(shift_logits, inputs["input_ids"][:, 1:])
         per_token_logps[inputs["completion_mask"][:, 1:] == 0] = 0.0
         completion_logps = per_token_logps.sum(-1)
 
         if self.calculate_KL:
             shift_KL_logits = KL_logits[:, :-1, :]
-            KL_per_token_logps = selective_log_softmax(shift_KL_logits, inputs["KL_completion_input_ids"][:, 1:])
+            KL_per_token_logps = selective_log_softmax(shift_KL_logits, inputs["KL_input_ids"][:, 1:])
             KL_per_token_logps[inputs["KL_completion_mask"][:, 1:] == 0] = 0.0
             KL_logps = KL_per_token_logps.sum(-1)
         else:
@@ -1140,31 +1138,31 @@ class KTOTrainer(_BaseTrainer):
         KL_logps = None
         if self.calculate_KL:
             _non_model_keys = {
-                "completion_input_ids",
-                "completion_attention_mask",
+                "input_ids",
+                "attention_mask",
                 "completion_mask",
                 "KL_completion_mask",
-                "KL_completion_token_type_ids",
-                "KL_completion_mm_token_type_ids",
+                "KL_token_type_ids",
+                "KL_mm_token_type_ids",
                 "label",
                 "ref_logps",
                 "ref_KL_logps",
             }
             KL_model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
-            KL_model_kwargs["input_ids"] = KL_model_kwargs.pop("KL_completion_input_ids")
-            KL_model_kwargs["attention_mask"] = KL_model_kwargs.pop("KL_completion_attention_mask")
+            KL_model_kwargs["input_ids"] = KL_model_kwargs.pop("KL_input_ids")
+            KL_model_kwargs["attention_mask"] = KL_model_kwargs.pop("KL_attention_mask")
             # KL sequences have different widths from the main completion after flush_left; override token-type
             # tensors with the KL-specific ones the collator built for exactly this purpose.
-            if "KL_completion_token_type_ids" in batch:
-                KL_model_kwargs["token_type_ids"] = batch["KL_completion_token_type_ids"]
-            if "KL_completion_mm_token_type_ids" in batch:
-                KL_model_kwargs["mm_token_type_ids"] = batch["KL_completion_mm_token_type_ids"]
+            if "KL_token_type_ids" in batch:
+                KL_model_kwargs["token_type_ids"] = batch["KL_token_type_ids"]
+            if "KL_mm_token_type_ids" in batch:
+                KL_model_kwargs["mm_token_type_ids"] = batch["KL_mm_token_type_ids"]
 
             with torch.no_grad():
                 KL_logits = model(**KL_model_kwargs).logits
 
             shift_KL_logits = KL_logits[:, :-1, :]
-            KL_per_token_logps = selective_log_softmax(shift_KL_logits, batch["KL_completion_input_ids"][:, 1:])
+            KL_per_token_logps = selective_log_softmax(shift_KL_logits, batch["KL_input_ids"][:, 1:])
             KL_per_token_logps[batch["KL_completion_mask"][:, 1:] == 0] = 0.0
             KL_logps = KL_per_token_logps.sum(-1)
         return KL_logps
@@ -1192,18 +1190,16 @@ class KTOTrainer(_BaseTrainer):
 
         _non_model_keys = {
             "completion_mask",
-            "KL_completion_input_ids",
-            "KL_completion_attention_mask",
+            "KL_input_ids",
+            "KL_attention_mask",
             "KL_completion_mask",
-            "KL_completion_token_type_ids",
-            "KL_completion_mm_token_type_ids",
+            "KL_token_type_ids",
+            "KL_mm_token_type_ids",
             "label",
             "ref_logps",
             "ref_KL_logps",
         }
         model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
-        model_kwargs["input_ids"] = model_kwargs.pop("completion_input_ids")
-        model_kwargs["attention_mask"] = model_kwargs.pop("completion_attention_mask")
         model_kwargs["use_cache"] = False
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
@@ -1227,7 +1223,7 @@ class KTOTrainer(_BaseTrainer):
         ref_lm_head = self.ref_model.get_output_embeddings()
 
         shift_completion_mask = batch["completion_mask"][:, 1:]
-        target = batch["completion_input_ids"][:, 1:].clone()
+        target = batch["input_ids"][:, 1:].clone()
         target[shift_completion_mask == 0] = -100
 
         (
@@ -1301,18 +1297,16 @@ class KTOTrainer(_BaseTrainer):
 
         _non_model_keys = {
             "completion_mask",
-            "KL_completion_input_ids",
-            "KL_completion_attention_mask",
+            "KL_input_ids",
+            "KL_attention_mask",
             "KL_completion_mask",
-            "KL_completion_token_type_ids",
-            "KL_completion_mm_token_type_ids",
+            "KL_token_type_ids",
+            "KL_mm_token_type_ids",
             "label",
             "ref_logps",
             "ref_KL_logps",
         }
         model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
-        model_kwargs["input_ids"] = model_kwargs.pop("completion_input_ids")
-        model_kwargs["attention_mask"] = model_kwargs.pop("completion_attention_mask")
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
@@ -1321,7 +1315,7 @@ class KTOTrainer(_BaseTrainer):
             aux_loss = outputs.aux_loss
 
         shift_logits = outputs.logits[:, :-1, :]
-        per_token_logps = selective_log_softmax(shift_logits, batch["completion_input_ids"][:, 1:])
+        per_token_logps = selective_log_softmax(shift_logits, batch["input_ids"][:, 1:])
         per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
         completion_logps = per_token_logps.sum(-1)
 
@@ -1362,7 +1356,7 @@ class KTOTrainer(_BaseTrainer):
                     ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
                     ref_outputs = self.ref_model(**ref_model_kwargs)
             ref_shift_logits = ref_outputs.logits[:, :-1, :]
-            ref_per_token_logps = selective_log_softmax(ref_shift_logits, batch["completion_input_ids"][:, 1:])
+            ref_per_token_logps = selective_log_softmax(ref_shift_logits, batch["input_ids"][:, 1:])
             ref_per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
             ref_completion_logps = ref_per_token_logps.sum(-1)
             ref_chosen_logps = ref_completion_logps.index_select(0, chosen_idx)
@@ -1521,7 +1515,7 @@ class KTOTrainer(_BaseTrainer):
                 logits, labels = None, None
             else:
                 loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
-                logits, labels = outputs.logits, inputs["completion_input_ids"]
+                logits, labels = outputs.logits, inputs["input_ids"]
         return loss, logits, labels
 
     # Ensure the model card is saved along with the checkpoint
