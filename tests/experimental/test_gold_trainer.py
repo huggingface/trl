@@ -245,6 +245,7 @@ def build_config(**overrides):
         uld_skip_student_eos=False,
         uld_skip_teacher_eos=False,
         use_extended_uld=True,
+        uld_token_merge_strategy="observed",
         uld_use_hybrid_loss=False,
         uld_hybrid_matched_weight=None,
         uld_hybrid_unmatched_weight=None,
@@ -878,8 +879,30 @@ def test_on_policy_completion_byte_offsets_match_encode_offsets(smollm_tokenizer
     assert [tuple(offset) for offset in updated_slice["byte_offsets"][0, 1:].tolist()] == expected_offsets
 
 
-def test_merge_probabilities_multiplies_split_tokens():
-    config = build_config()
+def test_merge_probabilities_multiplies_split_tokens_observed():
+    config = build_config(uld_token_merge_strategy="observed")
+    # Use simple 3-token vocabulary to validate merging behaviour
+    # probs[0] = marginal P(token | context) at position 0 for all vocab tokens
+    # probs[1] = P(token | context, token_0) at position 1 for all vocab tokens
+    probs = torch.tensor([[0.6, 0.3, 0.1], [0.2, 0.5, 0.3]])
+    loss = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+
+    # token_ids[1] = 1 means the actual token at position 1 is token ID 1
+    # So we should extract P(token_id=1 | ...) = probs[1, 1] = 0.5
+    token_ids = [0, 1]  # Actual generated tokens
+
+    merged = loss._merge_probabilities_with_alignment_groups(probs, [[0, 1]], token_ids=token_ids)
+
+    # Expected: first position's marginal distribution × scalar conditional prob of actual token at later position
+    # P_merged(y) = probs[0](y) × probs[1, token_ids[1]] = probs[0] × probs[1, 1]
+    expected = probs[0] * probs[1, 1]  # probs[1, 1] = 0.5
+    # Expected unnormalized: [0.6 * 0.5, 0.3 * 0.5, 0.1 * 0.5] = [0.30, 0.15, 0.05]
+
+    torch.testing.assert_close(merged[0], expected)
+
+
+def test_merge_probabilities_multiplies_split_tokens_bayesian():
+    config = build_config(uld_token_merge_strategy="bayesian")
     # Use simple 3-token vocabulary to validate merging behaviour
     # probs[0] = P(token | context) at position 0 for all vocab tokens
     # probs[1] = P(token | context, token_0) at position 1 for all vocab tokens

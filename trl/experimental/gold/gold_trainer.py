@@ -251,6 +251,7 @@ class ULDLoss(nn.Module):
         self.skip_student_eos = config.uld_skip_student_eos
         self.skip_teacher_eos = config.uld_skip_teacher_eos
         self.use_extended_uld = config.use_extended_uld
+        self.token_merge_strategy = config.uld_token_merge_strategy
         self.ignore_index = -100
 
         # Add tokenizers for enhanced alignment
@@ -404,9 +405,13 @@ class ULDLoss(nn.Module):
                 distillation_losses.append(loss_i)
                 continue
 
-            # Extract answer logits (start one position earlier so probs[k] predicts token_ids[k])
-            student_answer_logits = student_logits[i, student_start - 1 : student_start + student_size - 1]
-            teacher_answer_logits = teacher_logits[i, teacher_start - 1 : teacher_start + teacher_size - 1]
+            # Extract answer logits. "bayesian" starts one position earlier so probs[k] predicts token_ids[k].
+            if self.token_merge_strategy == "bayesian":
+                student_answer_logits = student_logits[i, student_start - 1 : student_start + student_size - 1]
+                teacher_answer_logits = teacher_logits[i, teacher_start - 1 : teacher_start + teacher_size - 1]
+            else:
+                student_answer_logits = student_logits[i, student_start : student_start + student_size]
+                teacher_answer_logits = teacher_logits[i, teacher_start : teacher_start + teacher_size]
 
             # Convert to probabilities
             student_probs = F.softmax(student_answer_logits / self.student_temperature, dim=-1)
@@ -496,19 +501,16 @@ class ULDLoss(nn.Module):
 
     def _merge_probabilities_with_alignment_groups(self, probs, alignment_groups, token_ids=None):
         """
-        Merge probabilities based on alignment groups using the last position's conditional distribution.
+        Merge probabilities based on alignment groups, using either the "observed" or "bayesian" strategy
+        (`self.token_merge_strategy`).
 
-        For a group merging tokens at positions [i, i+1, ..., i+k], we compute:
-            P_merged(y | x) = P(token_i | x) × ... × P(token_{i+k-1} | ..., x) × P(y | token_i, ..., token_{i+k-1}, x)
+        For a group merging tokens at positions [i, ..., i+k]:
+        - "observed": multiply the marginal distribution at the FIRST position by the scalar conditional probabilities
+          of the actual later tokens.
+        - "bayesian": multiply the full distribution at the LAST position (conditioned on the actual prefix tokens) by
+          the scalar probabilities of the actual earlier tokens, following the chain rule.
 
-        Where:
-        - P(y | token_i, ..., token_{i+k-1}, x) is the full distribution at the LAST position, conditioned on the
-          actual prefix tokens that were generated
-        - token_i, ..., token_{i+k-1} are the ACTUAL tokens at earlier positions, extracted as SCALARS
-        - y ranges over all vocabulary tokens at the last position
-
-        The last position's distribution is valid for all vocabulary entries because it conditions on the actual prefix
-        tokens. The merged distribution is unnormalized but preserves correct relative probabilities.
+        Both produce an unnormalized distribution that preserves correct relative probabilities.
 
         Args:
             probs: Probability tensor [seq_len, vocab_size]
@@ -542,19 +544,21 @@ class ULDLoss(nn.Module):
                         "This is required for mathematically correct probability merging."
                     )
 
-                # Use the last position's full distribution (conditioned on actual prefix tokens)
-                last_pos = group[-1]
-                last_pos_probs = probs[last_pos]
+                if self.token_merge_strategy == "bayesian":
+                    base_probs = probs[group[-1]]  # last position's full distribution
+                    scalar_positions = group[:-1]
+                else:
+                    base_probs = probs[group[0]]  # first position's marginal distribution
+                    scalar_positions = group[1:]
 
-                # For each earlier token in the group, extract the SCALAR probability
-                # of the actual token that was generated, and multiply
+                # Multiply base_probs by the scalar probabilities of the actual tokens at scalar_positions
                 conditional_prob_product = 1.0
-                for idx in group[:-1]:
+                for idx in scalar_positions:
                     actual_token_id = token_ids[idx]
                     token_prob = probs[idx, actual_token_id].clamp_min(eps)
                     conditional_prob_product *= token_prob
 
-                merged_probs = last_pos_probs * conditional_prob_product
+                merged_probs = base_probs * conditional_prob_product
                 aligned_probs[group_idx] = merged_probs
 
             elif len(group) == 1:

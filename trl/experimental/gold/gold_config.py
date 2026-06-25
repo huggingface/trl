@@ -79,6 +79,12 @@ class GOLDConfig(SFTConfig):
             across student and teacher tokenizations. When `True`, the trainer will compute token mappings and merge
             probabilities for split tokens; when `False`, ULD will use simple positional truncation like in the
             original ULD paper.
+        uld_token_merge_strategy (`str`, *optional*, defaults to `"observed"`):
+            Strategy used to merge token probabilities across split tokens when extended ULD alignment is enabled.
+            Either `"observed"` (multiply the marginal distribution at the first position by the scalar conditional
+            probabilities of the actual later tokens) or `"bayesian"` (use the last position's full distribution,
+            conditioned on the actual prefix tokens, multiplied by the scalar probabilities of the earlier tokens,
+            following the chain rule).
         uld_use_hybrid_loss (`bool`, *optional*, defaults to `False`):
             Whether to use a hybrid loss that combines ULD loss and JSD loss. When `True`, the final loss is a
             combination of JSD for known token mappings and ULD for unknown token mappings.
@@ -266,6 +272,18 @@ class GOLDConfig(SFTConfig):
         default=False,
         metadata={
             "help": "Whether to use Universal Logit Distillation (ULD) loss instead of Generalized Jensen-Shannon Divergence loss."
+        },
+    )
+    uld_token_merge_strategy: str = field(
+        default="observed",
+        metadata={
+            "help": (
+                'Strategy used to merge token probabilities across split tokens when extended ULD alignment is '
+                'enabled. Either "observed" (multiply the marginal distribution at the first position by the scalar '
+                'conditional probabilities of the actual later tokens) or "bayesian" (use the last position\'s full '
+                'distribution, conditioned on the actual prefix tokens, multiplied by the scalar probabilities of the '
+                'earlier tokens, following the chain rule).'
+            )
         },
     )
     use_extended_uld: bool = field(
@@ -486,6 +504,11 @@ class GOLDConfig(SFTConfig):
                 raise ValueError("uld_student_temperature must be positive.")
             if self.uld_teacher_temperature <= 0.0:
                 raise ValueError("uld_teacher_temperature must be positive.")
+            if self.uld_token_merge_strategy not in ("observed", "bayesian"):
+                raise ValueError(
+                    'uld_token_merge_strategy must be either "observed" or "bayesian", got '
+                    f'"{self.uld_token_merge_strategy}".'
+                )
 
             # Validate hybrid loss weights - both must be None or both must be set
             if self.uld_use_hybrid_loss:
