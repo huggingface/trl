@@ -455,10 +455,18 @@ class TestSFTTrainer(TrlTestCase):
     def test_seq2seq_rejects_packing(self):
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         dataset = Dataset.from_list([{"prompt": "Translate to German: Hello.", "completion": "Hallo."}])
-        training_args = SFTConfig(output_dir=self.tmp_dir, packing=True, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, packing=True, bf16=False, report_to="none")
 
         with pytest.raises(ValueError, match="Packing is not supported"):
             SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+    def test_seq2seq_rejects_eval_packing(self):
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
+        dataset = Dataset.from_list([{"prompt": "Translate to German: Hello.", "completion": "Hallo."}])
+        training_args = SFTConfig(output_dir=self.tmp_dir, eval_packing=True, bf16=False, report_to="none")
+
+        with pytest.raises(ValueError, match="Eval packing is not supported"):
+            SFTTrainer(model=model_id, args=training_args, train_dataset=dataset, eval_dataset=dataset)
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")

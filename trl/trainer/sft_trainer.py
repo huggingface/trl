@@ -1036,6 +1036,8 @@ class SFTTrainer(_BaseTrainer):
         if self._is_encoder_decoder:
             if args.packing:
                 raise ValueError("Packing is not supported for encoder-decoder models. Please set `packing=False`.")
+            if args.eval_packing:
+                raise ValueError("Eval packing is not supported for encoder-decoder models. Please set `eval_packing=False`.")
             if args.padding_free:
                 raise ValueError(
                     "Padding-free training is not supported for encoder-decoder models. Please set "
