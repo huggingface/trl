@@ -119,9 +119,9 @@ class BEMACallback(_BEMACallback):
     Example:
 
     ```python
-    from trl import BEMACallback
+    >>> from trl import BEMACallback
 
-    trainer = Trainer(..., callbacks=[BEMACallback()])
+    >>> trainer = Trainer(..., callbacks=[BEMACallback()])
     ```
     """
 
