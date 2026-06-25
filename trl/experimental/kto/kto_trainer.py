@@ -193,8 +193,8 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
     - `"input_ids"`, `"attention_mask"`, `"completion_mask"`: full prompt+completion sequence.
     - `"pixel_values"` and any additional processor outputs (e.g., `"image_grid_thw"`).
     - `"label"`: list of booleans.
-    - When `calculate_kl=True`: `"KL_input_ids"`, `"KL_attention_mask"`, `"KL_completion_mask"`
-      for the cycled KL sequences.
+    - When `calculate_kl=True`: `"KL_input_ids"`, `"KL_attention_mask"`, `"KL_completion_mask"` for the cycled KL
+      sequences.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
