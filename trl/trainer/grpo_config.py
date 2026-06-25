@@ -317,8 +317,10 @@ class GRPOConfig(_BaseConfig):
             applied when the current entropy falls at or below this value. Measured over the same token set as
             the policy loss: all completion tokens by default, or only the high-entropy subset when
             `top_entropy_quantile < 1.0`. Typical language models have per-token entropies in the range 2–10
-            nats; the default of `0.2` nearly always triggers regularization, so users should tune this to a
-            value appropriate for their model and task (and token subset when using `top_entropy_quantile`).
+            nats, so the default of `0.2` almost never triggers regularization (only on near-complete entropy
+            collapse); set it close to the entropy you observe early in training (logged as the `entropy`
+            metric) so the bonus engages before the policy collapses (and account for the token subset when
+            using `top_entropy_quantile`).
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
@@ -890,8 +892,9 @@ class GRPOConfig(_BaseConfig):
             "help": "Target mean per-token entropy (nats) for adaptive entropy control. The coefficient is only "
             "applied when current entropy is at or below this value. Measured over the same token set as the "
             "policy loss (all completion tokens, or the high-entropy subset when top_entropy_quantile < 1.0). "
-            "Typical language models have per-token entropies of 2–10 nats; the default of 0.2 nearly always "
-            "triggers regularization, so tune this."
+            "Typical language models have per-token entropies of 2–10 nats, so the default of 0.2 almost never "
+            "triggers regularization (only on near-complete collapse); set it close to the entropy observed "
+            "early in training and tune from there."
         },
     )
     max_tool_calling_iterations: int | None = field(
