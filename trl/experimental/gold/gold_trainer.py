@@ -537,11 +537,11 @@ class ULDLoss(nn.Module):
         for group_idx, group in enumerate(alignment_groups):
             # Handle probability merging
             if len(group) > 1:
-                # Multiple tokens map to this group - merge using corrected conditional probability approach
+                # Multiple tokens map to this group - merge by multiplying in the scalar probabilities of the tokens
                 if token_ids is None:
                     raise ValueError(
                         "token_ids must be provided when merging multi-token groups. "
-                        "This is required for mathematically correct probability merging."
+                        "They are needed to extract the scalar probabilities of the actually generated tokens."
                     )
 
                 if self.token_merge_strategy == "bayesian":

@@ -922,6 +922,42 @@ def test_merge_probabilities_multiplies_split_tokens_bayesian():
     torch.testing.assert_close(merged[0], expected)
 
 
+def test_compute_distillation_loss_bayesian_shifts_answer_logits():
+    # The "bayesian" strategy shifts the answer-logit slice one position earlier (probs[k] predicts token_ids[k]).
+    # This also applies on the positional path (use_extended_uld=False), so check the loss uses the shifted slice.
+    config = build_config(use_extended_uld=False, uld_token_merge_strategy="bayesian")
+    loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+
+    torch.manual_seed(0)
+    student_logits = torch.randn(1, 3, 4)
+    teacher_logits = torch.randn(1, 3, 4)
+    # Answer span starts at position 1 (size 2), leaving position 0 as the context the shift relies on.
+    student_labels = torch.tensor([[-100, 1, 2]])
+    teacher_labels = torch.tensor([[-100, 1, 2]])
+    student_input_ids = torch.tensor([[0, 1, 2]])
+    teacher_input_ids = torch.tensor([[0, 1, 2]])
+
+    result = loss_fn._compute_distillation_loss(
+        student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+    )
+
+    # Expected: probabilities come from the shifted positions [0, 1], not the answer positions [1, 2].
+    student_probs = torch.softmax(student_logits[0, 0:2], dim=-1)
+    teacher_probs = torch.softmax(teacher_logits[0, 0:2], dim=-1)
+    student_sorted = student_probs.sort(dim=-1, descending=True).values
+    teacher_sorted = teacher_probs.sort(dim=-1, descending=True).values
+    expected = (student_sorted - teacher_sorted).abs().sum() / student_probs.size(0)
+
+    torch.testing.assert_close(result, expected)
+
+    # The "observed" strategy uses the unshifted answer positions [1, 2], so it gives a different loss.
+    observed_fn = ULDLoss(build_config(use_extended_uld=False), student_tokenizer=None, teacher_tokenizer=None)
+    observed = observed_fn._compute_distillation_loss(
+        student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+    )
+    assert not torch.allclose(observed, expected)
+
+
 def test_uldloss_positional_mode_does_not_require_byte_offsets():
     config = build_config(use_extended_uld=False)
     loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)

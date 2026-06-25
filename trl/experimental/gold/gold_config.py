@@ -80,11 +80,13 @@ class GOLDConfig(SFTConfig):
             probabilities for split tokens; when `False`, ULD will use simple positional truncation like in the
             original ULD paper.
         uld_token_merge_strategy (`str`, *optional*, defaults to `"observed"`):
-            Strategy used to merge token probabilities across split tokens when extended ULD alignment is enabled.
-            Either `"observed"` (multiply the marginal distribution at the first position by the scalar conditional
-            probabilities of the actual later tokens) or `"bayesian"` (use the last position's full distribution,
-            conditioned on the actual prefix tokens, multiplied by the scalar probabilities of the earlier tokens,
-            following the chain rule).
+            Strategy used to align answer logits and merge token probabilities in the ULD loss. With `"observed"`, the
+            answer logits are sliced at the answer positions and split tokens (when `use_extended_uld=True`) are merged
+            by multiplying the marginal distribution at the first position by the scalar conditional probabilities of
+            the actual later tokens. With `"bayesian"`, the answer-logit slice is shifted one position earlier so that
+            `probs[k]` predicts `token_ids[k]` (chain rule), and split tokens are merged using the last position's full
+            distribution, conditioned on the actual prefix tokens, multiplied by the scalar probabilities of the
+            earlier tokens. The logit-alignment shift applies whether or not `use_extended_uld` is enabled.
         uld_use_hybrid_loss (`bool`, *optional*, defaults to `False`):
             Whether to use a hybrid loss that combines ULD loss and JSD loss. When `True`, the final loss is a
             combination of JSD for known token mappings and ULD for unknown token mappings.
@@ -278,11 +280,14 @@ class GOLDConfig(SFTConfig):
         default="observed",
         metadata={
             "help": (
-                'Strategy used to merge token probabilities across split tokens when extended ULD alignment is '
-                'enabled. Either "observed" (multiply the marginal distribution at the first position by the scalar '
-                'conditional probabilities of the actual later tokens) or "bayesian" (use the last position\'s full '
-                'distribution, conditioned on the actual prefix tokens, multiplied by the scalar probabilities of the '
-                'earlier tokens, following the chain rule).'
+                'Strategy used to align answer logits and merge token probabilities in the ULD loss. With "observed", '
+                'the answer logits are sliced at the answer positions and split tokens (when use_extended_uld=True) '
+                'are merged by multiplying the marginal distribution at the first position by the scalar conditional '
+                'probabilities of the actual later tokens. With "bayesian", the answer-logit slice is shifted one '
+                "position earlier so probs[k] predicts token_ids[k] (chain rule), and split tokens are merged using "
+                "the last position's full distribution, conditioned on the actual prefix tokens, multiplied by the "
+                "scalar probabilities of the earlier tokens. The logit-alignment shift applies whether or not "
+                "use_extended_uld is enabled."
             )
         },
     )
