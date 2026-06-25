@@ -1067,6 +1067,10 @@ class TestParseResponse:
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
         ):
             pytest.skip("This tokenizer doesn't support inline reasoning_content.")
+        if model_name == "trl-internal-testing/tiny-GptOssForCausalLM" and not _SUPPORTS_RESPONSE_TEMPLATE:
+            # gpt-oss surfaces the analysis channel as `thinking` (separate from `content`) only with the new-style
+            # `response_template` parser. The legacy `gptoss_schema` folds the analysis channel into `content`.
+            pytest.skip("gpt-oss thinking/content separation requires the response_template parser (>= 5.13).")
 
         processing_class = self._load(model_name)
         # gpt-oss uses the `thinking` field name (matching its harmony chat template) rather
@@ -1133,13 +1137,12 @@ class TestParseResponse:
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         ):
             pytest.skip("Llama 3.1 / 3.2 templates only allow a single tool call per assistant turn, with no content.")
-        if model_name in ("trl-internal-testing/tiny-GptOssForCausalLM",) and Version(
-            transformers.__version__
-        ) < Version("5.5.0"):
-            pytest.skip("Upstream bug in response parsing (see #5753; fixed in transformers#45166)")
+        if model_name == "trl-internal-testing/tiny-GptOssForCausalLM" and not _SUPPORTS_RESPONSE_TEMPLATE:
+            # gpt-oss surfaces the content-before-tool-call (analysis channel) as `thinking` only with the new-style
+            # `response_template` parser. The legacy `gptoss_schema` folds the analysis channel into `content`.
+            pytest.skip("gpt-oss thinking-before-tool-call requires the response_template parser (>= 5.13).")
         processing_class = self._load(model_name)
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
-        # gpt-oss renders content-before-tool-call into the `analysis` channel, which we parse as `thinking`.
         assistant = {"role": "assistant", "tool_calls": tool_calls}
         if model_name == "trl-internal-testing/tiny-GptOssForCausalLM":
             assistant["thinking"] = "Let's call the tool."
