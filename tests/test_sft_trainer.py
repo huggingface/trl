@@ -1304,6 +1304,49 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_assistant_only_loss_drops_examples_with_no_trainable_tokens_after_truncation(self, caplog):
+        """Examples whose assistant tokens all lie beyond `max_length` have every label set to -100 after
+        truncation, so they contribute nothing to the loss; before being dropped, a batch made entirely of them
+        silently produced a zero loss. Regression test for #3927."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        # `max_length` is small enough that some examples keep only prompt tokens (the assistant turn comes later).
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=18, assistant_only_loss=True, report_to="none")
+        with caplog.at_level("INFO", logger="trl.trainer.sft_trainer"):
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
+            )
+
+        assert len(trainer.train_dataset) == 13
+        assert "Dropped 4 of 17 examples of the train dataset" in caplog.text
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_assistant_only_loss_raises_if_no_example_has_trainable_tokens(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        # `max_length` is so small that the kept prefix is entirely prompt tokens for every example.
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=4, assistant_only_loss=True, report_to="none")
+        with pytest.raises(ValueError, match="dropped because none of them have trainable tokens"):
+            SFTTrainer(model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset)
+
+    def test_completion_only_loss_drops_examples_with_no_trainable_tokens_after_truncation(self, caplog):
+        """Same as above for prompt-completion datasets: examples whose prompt alone reaches `max_length` have
+        no completion token left after truncation."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
+
+        # `max_length` is small enough that some examples keep only prompt tokens (the completion comes later).
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=8, report_to="none")
+        with caplog.at_level("INFO", logger="trl.trainer.sft_trainer"):
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+        assert len(trainer.train_dataset) == 15
+        assert "Dropped 2 of 17 examples of the train dataset" in caplog.text
+
     def test_dataset_prep_builds_labels_for_assistant_only_loss(self):
         """Dataset preparation must bake the assistant masks into a labels column."""
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
@@ -1321,27 +1364,6 @@ class TestSFTTrainer(TrlTestCase):
                 for token_id, mask in zip(example["input_ids"], example["assistant_masks"], strict=True)
             ]
             assert example["labels"] == expected
-
-    def test_labels_all_masked_after_truncation(self):
-        """Regression test for #3927: when the assistant response lies beyond `max_length`, dataset preparation
-        builds labels that still hold real token IDs, but the slice surviving the collator's truncation is all -100
-        (the prompt). The bug was masking happening after truncation; building labels before truncation makes this
-        surfaceable."""
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-
-        # `max_length` is small enough that the kept prefix is entirely prompt tokens (the assistant turn comes later).
-        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, max_length=4, report_to="none")
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
-        )
-
-        # Before truncation, the prepared labels contain real (non -100) assistant token IDs.
-        labels = trainer.train_dataset[0]["labels"]
-        assert any(token_id != -100 for token_id in labels)
-
-        # After the collator truncates to `max_length` (keep_start), the surviving labels are all -100.
-        batch = trainer.data_collator([trainer.train_dataset[0]])
-        assert batch["labels"].eq(-100).all()
 
     def test_dataset_prep_builds_labels_for_completion_only(self):
         """Dataset preparation must bake the completion mask into a labels column when completion_only_loss
