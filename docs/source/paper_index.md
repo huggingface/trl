@@ -1250,7 +1250,7 @@ KTO derives an alignment objective from prospect theory and learns directly from
 To reproduce the paper's setting, you can use the default configuration of [`experimental.kto.KTOTrainer`]:
 
 ```python
-from trl.experimental.kto import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained(model_id)

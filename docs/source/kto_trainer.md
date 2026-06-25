@@ -35,7 +35,7 @@ Below is the script to train the model:
 ```python
 # train_kto.py
 from datasets import load_dataset
-from trl.experimental.kto import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
