@@ -2775,11 +2775,18 @@ class GRPOTrainer(_BaseTrainer):
                 # normalizer is a global token count, so summing the entropies accumulates over the
                 # optimizer step to the global token-weighted mean entropy, matching world_entropy below.
                 entropy_loss = (entropies * effective_mask).sum() / normalizer
+            elif self.loss_type == "dr_grpo":
+                # Dr. GRPO normalizes by the fixed budget (batch size × max completion length) instead of the
+                # actual token count, to remove length bias; scale the entropy bonus the same way so that
+                # entropy_coef stays consistent with the policy term when completions are shorter than the max.
+                entropy_loss = (
+                    (entropies * effective_mask).sum() / (entropies.size(0) * self.max_completion_length) / normalizer
+                )
             elif self.loss_type == "luspo":
                 # luspo weights each sequence by its token count, so entropy is summed per sequence (not
                 # per-token averaged) to stay on the same scale as the policy loss.
                 entropy_loss = (entropies * effective_mask).sum(-1).mean() / normalizer
-            else:  # grpo, sapo, bnpo, dr_grpo: normalizer is the gradient accumulation step count
+            else:  # grpo, sapo, bnpo: normalizer is the gradient accumulation step count
                 # Token-weighted mean entropy of active tokens, matching world_entropy below.
                 entropy_loss = (entropies * effective_mask).sum() / effective_mask.sum().clamp(min=1.0) / normalizer
 
