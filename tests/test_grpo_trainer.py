@@ -1540,14 +1540,16 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("loss_type", ["grpo", "dapo", "luspo"])
+    @pytest.mark.parametrize("loss_type", ["grpo", "dr_grpo", "dapo", "luspo"])
     def test_entropy_bonus_scale(self, loss_type):
-        # Regression test: the entropy bonus must be normalized like each loss type's policy loss. A previous
-        # "unified" formula divided the per-token mean entropy by the loss normalizer, which for the
-        # cispo/dapo/vespo family is a global token count, making the bonus ~1/sequence_length too small; and
-        # it put luspo's bonus on the per-token scale instead of luspo's sequence-weighted scale. With
-        # gradient_accumulation_steps=1 the per-step entropy contribution to the loss is
-        # contrib = policy_loss - loss = entropy_coef * entropy_loss, so contrib / entropy reveals the scale.
+        # Regression test: the entropy bonus is the mean per-token entropy H for every loss type (documented
+        # objective L = L_policy - entropy_coef * H), so it must not inherit any loss-type-specific policy
+        # normalization. A previous "unified" formula divided H by a global token count for the
+        # cispo/dapo/vespo family, making the bonus ~1/sequence_length too small; conversely, scaling the
+        # bonus like the dr_grpo (fixed budget) or luspo (sequence-weighted) policy term would also be wrong.
+        # With gradient_accumulation_steps=1 the per-step entropy contribution to the loss is
+        # contrib = policy_loss - loss = entropy_coef * entropy_loss, so contrib / entropy must equal
+        # entropy_coef for all loss types.
         entropy_coef = 0.5
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
@@ -1556,7 +1558,7 @@ class TestGRPOTrainer(TrlTestCase):
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=16,  # long enough that the per-token vs sequence-weighted scales differ
+            max_completion_length=16,  # reduce the completion length to reduce memory usage
             gradient_accumulation_steps=1,  # so contrib == entropy_coef * entropy_loss holds per step
             loss_type=loss_type,
             logging_steps=1,
@@ -1576,15 +1578,8 @@ class TestGRPOTrainer(TrlTestCase):
         assert logs
         ratios = sorted((h["policy_loss"] - h["loss"]) / h["entropy"] for h in logs)
         ratio = ratios[len(ratios) // 2]  # median, robust to per-step noise
-        if loss_type == "luspo":
-            # luspo weights each sequence by its length, so the bonus is the per-sequence entropy sum: its
-            # scale is entropy_coef * (mean sequence length), well above entropy_coef. The buggy per-token
-            # formula gave ratio == entropy_coef.
-            assert ratio > 1.5 * entropy_coef
-        else:
-            # grpo (and the cispo/dapo/vespo family) regularize the per-token mean entropy, so the bonus is
-            # exactly entropy_coef * entropy. The buggy formula made dapo's ratio smaller by ~1/seq_len.
-            assert ratio == pytest.approx(entropy_coef, rel=0.3)
+        # Every loss type regularizes the mean per-token entropy, so contrib == entropy_coef * entropy.
+        assert ratio == pytest.approx(entropy_coef, rel=0.3)
 
     def test_train_with_adaptive_entropy_gradient_accumulation(self):
         # Adaptive entropy must behave correctly under gradient accumulation: the coefficient and gating are
