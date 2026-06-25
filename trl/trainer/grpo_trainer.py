@@ -2767,10 +2767,21 @@ class GRPOTrainer(_BaseTrainer):
             # When top_entropy_quantile < 1.0, entropy_mask restricts policy gradients to high-entropy
             # tokens. Use the same effective mask for the entropy bonus so it acts on the same tokens.
             effective_mask = mask if entropy_mask is None else mask * entropy_mask
-            # Mean per-active-token entropy, scaled for gradient accumulation like the policy loss.
-            # Uniform across all loss types so entropy_target and entropy_coef have consistent units
-            # (per-token nats) and match the world_entropy computed in the adaptive block below.
-            entropy_loss = (entropies * effective_mask).sum() / effective_mask.sum().clamp(min=1.0) / normalizer
+            # The entropy bonus must be normalized exactly like each loss type's policy loss, so that
+            # entropy_coef stays on a consistent scale and gradient accumulation remains correct. The
+            # normalizer differs by loss type: it is the gradient accumulation step count for the grpo
+            # family, but a global token count for the cispo/dapo/vespo family.
+            if self.loss_type in ["cispo", "dapo", "vespo"]:
+                # normalizer is a global token count, so summing the entropies accumulates over the
+                # optimizer step to the global token-weighted mean entropy, matching world_entropy below.
+                entropy_loss = (entropies * effective_mask).sum() / normalizer
+            elif self.loss_type == "luspo":
+                # luspo weights each sequence by its token count, so entropy is summed per sequence (not
+                # per-token averaged) to stay on the same scale as the policy loss.
+                entropy_loss = (entropies * effective_mask).sum(-1).mean() / normalizer
+            else:  # grpo, sapo, bnpo, dr_grpo: normalizer is the gradient accumulation step count
+                # Token-weighted mean entropy of active tokens, matching world_entropy below.
+                entropy_loss = (entropies * effective_mask).sum() / effective_mask.sum().clamp(min=1.0) / normalizer
 
             if self.use_adaptive_entropy:
                 if mode == "train":
