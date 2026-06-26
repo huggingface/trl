@@ -364,7 +364,7 @@ class RewardTrainer(_BaseTrainer):
         # be done before loading the model to ensure reproducibility.
         set_seed(args.seed)
         if isinstance(model, str):
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             if quantization_config is not None:
                 if "quantization_config" in model_init_kwargs:
                     raise ValueError(
