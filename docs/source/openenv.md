@@ -1,8 +1,8 @@
 # OpenEnv Integration for Training LLMs with Environments
 
-[OpenEnv](https://github.com/meta-pytorch/OpenEnv) is an open-source framework for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It provides standardized APIs for environment interaction and supports running environments as backend servers (via WebSocket or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/openenv-environment-hub).
+[OpenEnv](https://github.com/huggingface/OpenEnv) is an open-source framework for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It provides standardized APIs for environment interaction and supports running environments as backend servers (via WebSocket or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/openenv-environment-hub).
 
-This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv itself, see the [OpenEnv docs](https://meta-pytorch.org/OpenEnv/).
+This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv itself, see the [OpenEnv docs](https://huggingface.co/docs/openenv).
 
 > [!NOTE]
 > You can explore ready-to-use example [scripts](example_overview#openenv-scripts) and [notebooks](example_overview#openenv-notebooks) in the Examples Overview.
@@ -10,6 +10,10 @@ This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv its
 ## When to use environments
 
 [`GRPOTrainer`] can be used to train agents. For agentic tasks, it supports two modes: **tools**, where the model can call external functions but each call is stateless and independent, and **environments**, which maintain state across turns, enabling genuine multi-turn interaction where the agent's actions shape future observations. Use environments when continuity matters — for example, navigating a game, browsing a web page, or any task where what the agent sees next depends on what it did before.
+
+## Choosing an environment integration
+
+OpenEnv is the native path documented here. Two further integrations — [OpenReward](openreward) and [Harbor](harbor) — conform to the same `environment_factory` contract and are interchangeable at the TRL level. See the [comparison of environment integrations](grpo_trainer#agent-training) in the GRPO guide to pick the one whose ecosystem fits your task.
 
 ## Installation
 
@@ -26,18 +30,18 @@ pip install "openenv-textarena @ git+https://huggingface.co/spaces/openenv/wordl
 pip install "openenv-openspiel-env @ git+https://huggingface.co/spaces/openenv/openspiel_env"
 ```
 
-This installs the **environment client** (e.g., `EchoEnv`) that communicates with the remote environment server via WebSocket, along with the action/observation models and all required dependencies (including `openenv-core`).
+This installs the **environment client** (e.g., `EchoEnv`) that communicates with the remote environment server via WebSocket, along with the action/observation models and all required dependencies (including `openenv`).
 
 > [!TIP]
 > You can find the install command for any environment on its HF Space page. Click the **⋮ (three dots)** menu and select **"Use this Space"** to see the install instructions.
 
 > [!TIP]
-> You can also install the core package from PyPI with `pip install "openenv-core[core]>=0.2.1"`, but note that environment-specific dependencies may need to be installed separately.
+> You can also install the core package from PyPI with `pip install "openenv[core]>=0.3.1"`, but note that environment-specific dependencies may need to be installed separately.
 
 For development, you can clone the OpenEnv repo and install locally:
 
 ```bash
-git clone https://github.com/meta-pytorch/OpenEnv.git
+git clone https://github.com/huggingface/OpenEnv.git
 cd OpenEnv/envs/echo_env
 pip install -e .
 ```
@@ -53,7 +57,7 @@ pip install -e .
 
 ## Quick start
 
-The fastest way to understand the integration is a complete example. The [echo.py](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/echo.py) script trains a model with the [Echo environment](https://meta-pytorch.org/OpenEnv/environments/echo.html), which rewards completions based on their text length:
+The fastest way to understand the integration is a complete example. The [echo.py](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/echo.py) script trains a model with the [Echo environment](https://huggingface.co/docs/openenv/environments/echo), which rewards completions based on their text length:
 
 ```python
 from datasets import Dataset
@@ -138,8 +142,8 @@ TRL's [`GRPOTrainer`] supports interactive environment training through the `env
 
 Your environment class must follow these rules:
 
-- **`__init__(self)`** *(optional)*: If provided, must take no arguments. Use it to initialize state or clients. If you need external configuration (e.g., a URL), capture it from the enclosing scope or module-level variables.
-- **`reset(self, **kwargs)`**: Called at the start of each episode. Receives all dataset columns as keyword arguments. Return a string observation (or `None` for no initial observation).
+- `__init__(self)` *(optional)*: If provided, must take no arguments. Use it to initialize state or clients. If you need external configuration (e.g., a URL), capture it from the enclosing scope or module-level variables.
+- `reset(self, **kwargs)`: Called at the start of each episode. Receives all dataset columns as keyword arguments. Return a string observation (or `None` for no initial observation).
 - **Tool methods**: Any public method (not starting with `_`) other than `reset` is automatically exposed as a tool. Each tool method must have a docstring with `Args:` descriptions, since the trainer uses these to generate the tool schema for the model.
 
 ### Tips for environment classes
@@ -186,7 +190,7 @@ def reward_func(environments, **kwargs) -> list[float]:
     return [env.reward for env in environments]
 ```
 
-For more information on reward functions, see the [GRPO - Custom Reward Functions](grpo_trainer#custom-reward-functions).
+For more information on reward functions, see the [GRPO - Custom Reward Functions](grpo_trainer#using-a-custom-reward-function).
 
 ### Tips for reward functions
 
@@ -211,7 +215,7 @@ If episodes are being cut short (model stops mid-game), this is likely the cause
 
 ## Advanced example: Wordle
 
-Let's train a model to play [Wordle](https://www.nytimes.com/games/wordle/index.html) using the [`TextArena`](https://meta-pytorch.org/OpenEnv/environments/textarena.html) environment. This demonstrates multi-turn interaction, cumulative feedback handling, and episode termination via exceptions.
+Let's train a model to play [Wordle](https://www.nytimes.com/games/wordle/index.html) using the [`TextArena`](https://huggingface.co/docs/openenv/environments/textarena) environment. This demonstrates multi-turn interaction, cumulative feedback handling, and episode termination via exceptions.
 
 > [!NOTE]
 > You can explore the notebook version of this example in [the OpenEnv Wordle GRPO example](https://github.com/huggingface/trl/blob/main/examples/notebooks/openenv_wordle_grpo.ipynb).
@@ -549,7 +553,7 @@ Then connect:
 env = EchoEnv(base_url="http://0.0.0.0:8001")
 ```
 
-For more details, see the [OpenEnv catalog](https://meta-pytorch.org/OpenEnv/environments.html).
+For more details, see the [OpenEnv catalog](https://huggingface.co/docs/openenv/environments).
 
 </hfoption>
 
@@ -559,7 +563,7 @@ For more details, see the [OpenEnv catalog](https://meta-pytorch.org/OpenEnv/env
 
 The best way to explore the current catalog of maintained environments is by visiting the official OpenEnv [catalog](https://huggingface.co/collections/openenv/environment-hub).
 
-To create your own environment, check out the guide on [Building Your Own Environment with OpenEnv](https://meta-pytorch.org/OpenEnv/auto_getting_started/plot_03_building_environments.html). Environments are tightly integrated with the Hub, so you can push new environments for the community to reuse.
+To create your own environment, check out the guide on [Building Your Own Environment with OpenEnv](https://huggingface.co/docs/openenv/getting_started/environment-builder). Environments are tightly integrated with the Hub, so you can push new environments for the community to reuse.
 
 ## Server concurrency
 
@@ -592,7 +596,7 @@ app = create_app(
 - **`environment_factory`** (recommended): You define an environment class with tool methods, and the trainer handles generation, tool-call parsing, and the multi-turn loop automatically. This is the approach used throughout this guide.
 - **`rollout_func`**: You write the entire generation and environment interaction loop yourself. This gives full control over how completions are produced, how tools are executed, and how rewards are computed.
 
-Use `rollout_func` when `environment_factory` doesn't fit your use case. For example, **external agent servers** like [NeMo-Gym](nemo_gym), where an external server owns the generation loop and manages its own agent-environment interaction protocol.
+Use `rollout_func` when `environment_factory` doesn't fit your use case. For example, **external agent servers** where an external server owns the generation loop and manages its own agent-environment interaction protocol.
 
 ### Migrating from `rollout_func` to `environment_factory`
 

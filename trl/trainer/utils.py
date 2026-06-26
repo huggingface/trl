@@ -22,7 +22,6 @@ import threading
 import types
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import contextmanager
-from dataclasses import dataclass
 from importlib.metadata import version
 from itertools import accumulate
 from typing import TypeVar
@@ -32,18 +31,21 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState, logging
+from accelerate import PartialState
+from accelerate.logging import get_logger
 from huggingface_hub import ModelCard, ModelCardData
+from packaging.version import Version
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
     BitsAndBytesConfig,
     PretrainedConfig,
     PreTrainedModel,
     is_comet_available,
     is_trackio_available,
 )
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import (
     is_peft_available,
@@ -67,7 +69,7 @@ if is_peft_available():
     from peft import LoraConfig, PeftConfig, PeftModel
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
@@ -887,39 +889,53 @@ def identity(x):
 
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | list[torch.Tensor]]:
     """
-    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in `batch["image_grid_thw"]`
-    and batch["num_images"] while keeping other entries unchanged. For models without `image_grid_thw` (e.g. Gemma),
-    splits by `num_images` directly.
+    Splits `batch["pixel_values"]` into a list of tensors, one per sample, based on `batch["num_images"]`.
+
+    For models with `image_grid_thw` (e.g. Qwen), the grid dimensions determine how many rows of `pixel_values` belong
+    to each image. For models with `image_position_ids` instead (e.g. Gemma), `pixel_values` is indexed directly by
+    image count. For models with `spatial_shapes` (e.g. LFM2-VL), tile-indexed tensors are split using `num_tiles`.
     """
     if "pixel_values" not in batch or "num_images" not in batch:
         return batch
 
+    num_images = batch["num_images"]
+    pixel_values = batch["pixel_values"]  # [total, feature_dim]
+
     if "image_grid_thw" in batch:
         lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
-        pixel_values = batch["pixel_values"]  # [total, feature_dim]
-
         if sum(lengths) != pixel_values.size(0):
             raise ValueError(
                 f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}"
             )
 
-        boundaries = [0, *accumulate(batch["num_images"])]  # [3, 4, 5] -> [0, 3, 7, 12]
-        sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(batch["num_images"]))]
-        split_values = list(torch.split(batch["pixel_values"], sections, dim=0))
-        image_grid_thw = list(torch.split(batch["image_grid_thw"], batch["num_images"], dim=0))
-        return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
-    else:
-        # Models without image_grid_thw (e.g. Gemma): split pixel_values by num_images per sample
-        num_images = batch["num_images"]
-        num_images_list = num_images.tolist() if isinstance(num_images, torch.Tensor) else list(num_images)
-        split_values = list(torch.split(batch["pixel_values"], [int(n) for n in num_images_list], dim=0))
-        result = {**batch, "pixel_values": split_values}
-        # Also split image_position_ids if present (indexed by image, same as pixel_values)
-        if "image_position_ids" in batch:
-            result["image_position_ids"] = list(
-                torch.split(batch["image_position_ids"], [int(n) for n in num_images_list], dim=0)
-            )
-        return result
+        boundaries = [0, *accumulate(num_images)]
+        image_grid_thw = batch["image_grid_thw"]  # [total, 3]
+        sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(num_images))]
+        split_pixel_values = list(torch.split(pixel_values, sections, dim=0))
+        split_image_grid_thw = list(torch.split(image_grid_thw, num_images, dim=0))
+        return {**batch, "pixel_values": split_pixel_values, "image_grid_thw": split_image_grid_thw}
+
+    if "image_position_ids" in batch:
+        image_position_ids = batch["image_position_ids"]  # [total]
+        split_pixel_values = list(torch.split(pixel_values, num_images, dim=0))
+        split_image_position_ids = list(torch.split(image_position_ids, num_images, dim=0))
+        return {**batch, "pixel_values": split_pixel_values, "image_position_ids": split_image_position_ids}
+
+    if "spatial_shapes" in batch:
+        num_tiles = batch["num_tiles"]
+        pixel_attention_mask = batch["pixel_attention_mask"]
+        spatial_shapes = batch["spatial_shapes"]
+        split_pixel_values = list(torch.split(pixel_values, num_tiles, dim=0))
+        split_pixel_attention_mask = list(torch.split(pixel_attention_mask, num_tiles, dim=0))
+        split_spatial_shapes = list(torch.split(spatial_shapes, num_tiles, dim=0))
+        return {
+            **batch,
+            "pixel_values": split_pixel_values,
+            "pixel_attention_mask": split_pixel_attention_mask,
+            "spatial_shapes": split_spatial_shapes,
+        }
+
+    return batch
 
 
 def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tensor]]) -> dict[str, torch.Tensor]:
@@ -941,6 +957,16 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
     if isinstance(image_position_ids, list):
         merged = torch.cat(image_position_ids, dim=0)
         batch = {**batch, "image_position_ids": merged}
+
+    pixel_attention_mask = batch.get("pixel_attention_mask")
+    if isinstance(pixel_attention_mask, list):
+        merged = torch.cat(pixel_attention_mask, dim=0)
+        batch = {**batch, "pixel_attention_mask": merged}
+
+    spatial_shapes = batch.get("spatial_shapes")
+    if isinstance(spatial_shapes, list):
+        merged = torch.cat(spatial_shapes, dim=0)
+        batch = {**batch, "spatial_shapes": merged}
 
     return batch
 
@@ -1022,8 +1048,19 @@ def create_model_from_path(
         )
     kwargs["device_map"] = kwargs.get("device_map", "auto")
     if architecture is None:
-        config = AutoConfig.from_pretrained(model_id)
-        architecture = getattr(transformers, config.architectures[0])
+        # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
+        architecture = getattr(transformers, config.architectures[0], None)
+        if architecture is None:
+            # Remote-code checkpoint: the architecture name lives in the dynamic module, not in
+            # `transformers`. Pick the most specific auto class declared in `config.auto_map`.
+            auto_map = config.auto_map or {}
+            for candidate in (AutoModelForImageTextToText, AutoModelForCausalLM):
+                if candidate.__name__ in auto_map:
+                    architecture = candidate
+                    break
+            else:
+                architecture = AutoModelForCausalLM
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
 
@@ -1052,66 +1089,6 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
-
-
-@dataclass
-class CausalLMOutputWithPastAndFlatLogits(CausalLMOutputWithPast):
-    flat_logits: torch.Tensor | None = None
-
-
-def forward_masked_logits(
-    model: PreTrainedModel, logits_mask: torch.LongTensor, **kwargs
-) -> CausalLMOutputWithPastAndFlatLogits:
-    """
-    Run a Causal LM forward pass while computing logits only for masked positions to reduce memory usage.
-
-    These are always equal:
-
-    ```python
-    full_outputs = model(input_ids=input_ids)
-    masked_outputs = forward_masked_logits(model, mask, input_ids=input_ids)
-
-    assert torch.equal(
-        masked_outputs.flat_logits,
-        full_outputs.logits[mask.bool()],
-    )
-    ```
-
-    Args:
-        model ([`~transformers.PreTrainedModel`]):
-            A causal language model.
-        logits_mask (`torch.LongTensor`):
-            Boolean-like tensor indicating which token positions should have logits computed. Shape should match the
-            input sequence shape in `kwargs` (typically `[batch, seq_len]`).
-        **kwargs:
-            Keyword arguments forwarded to the inner decoder (e.g., `input_ids`, `attention_mask`, `past_key_values`).
-
-    Returns:
-        `CausalLMOutputWithPastAndFlatLogits`: Output containing logits only for the unmasked positions.
-
-    Raises:
-        ValueError: If `logits_to_keep` or `labels` are provided in `kwargs`.
-    """
-    if kwargs.get("logits_to_keep") is not None:
-        raise ValueError("`logits_to_keep` is not supported by this forward helper.")
-    if kwargs.get("labels") is not None:
-        raise ValueError("`labels` is not yet supported by this forward helper.")
-
-    outputs: BaseModelOutputWithPast = model.get_decoder()(**kwargs)
-    hidden_states = outputs.last_hidden_state
-
-    # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-    flat_logits = model.lm_head(hidden_states[logits_mask.bool()])
-    if hasattr(model, "logit_scale"):  # CohereForCausalLM has this attribute
-        flat_logits = flat_logits * model.logit_scale
-
-    return CausalLMOutputWithPastAndFlatLogits(
-        flat_logits=flat_logits,
-        # We use .get(...) because some models like FalconMambaForCausalLM don't return past_key_values or attentions
-        past_key_values=outputs.get("past_key_values"),
-        hidden_states=outputs.hidden_states,
-        attentions=outputs.get("attentions"),
-    )
 
 
 @contextmanager
@@ -1220,12 +1197,13 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         targets: torch.Tensor,  # [N]
         temperature: float,
         chunk_size: int,
+        final_logit_softcapping: float | None = None,
         logit_scale: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         device = last_hidden.device
         N, _ = last_hidden.shape
         vocab, _ = weight.shape
-        inv_t = logit_scale / temperature
+        inv_t = 1 / temperature
 
         # NOTE(@aminediro): always acc in fp32 for stability
         max_old = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
@@ -1246,6 +1224,11 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             torch.mm(last_hidden, w_chunk.t(), out=mm_buf[:, :C])
             logits_chunk = logits_buf[:, :C]
             logits_chunk.copy_(mm_buf[:, :C])
+
+            logits_chunk.mul_(logit_scale)
+            if final_logit_softcapping is not None:
+                logits_chunk.div_(final_logit_softcapping).tanh_().mul_(final_logit_softcapping)
+
             logits_chunk.mul_(inv_t)  # [N, C]
 
             # Online logsumexp update
@@ -1272,6 +1255,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         ctx.temperature = temperature
         ctx.chunk_size = chunk_size
         ctx.logit_scale = logit_scale
+        ctx.final_logit_softcapping = final_logit_softcapping
 
         return logprobs, entropy
 
@@ -1281,7 +1265,8 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         temperature: float = ctx.temperature
         chunk_size: int = ctx.chunk_size
         logit_scale: float = ctx.logit_scale
-        inv_t = logit_scale / temperature
+        final_logit_softcapping: float = ctx.final_logit_softcapping
+        inv_t = 1 / temperature
 
         N, _ = hidden.shape
         vocab = weight.shape[0]
@@ -1305,6 +1290,12 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
             logits_chunk = logits_buf[:, :C]
             logits_chunk.copy_(mm_buf[:, :C])
+
+            logits_chunk.mul_(logit_scale)
+            if final_logit_softcapping is not None:
+                tanh_scaled = torch.tanh(logits_chunk / final_logit_softcapping)
+                logits_chunk.copy_(tanh_scaled * final_logit_softcapping)
+
             logits_chunk.mul_(inv_t)  # [N, C]
             probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
 
@@ -1315,20 +1306,23 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             local_idx = torch.clamp(labels - start, 0, end - start - 1)
             # If label in chunk add g to grad else it stays the same
             grad_logits[row_idx, local_idx] += g * in_chunk_cond
+
             grad_logits = grad_logits * inv_t
+            if final_logit_softcapping is not None:
+                grad_logits.mul_(1 - tanh_scaled.pow(2))
+
+            grad_logits = grad_logits * logit_scale
 
             grad_hidden.add_(grad_logits @ w_chunk.float())
             grad_weight[start:end].add_(grad_logits.t() @ hidden.float())
 
-        return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None
+        return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None, None
 
 
-def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: float) -> None:
-    if getattr(model.config, "final_logit_softcapping", None) is not None:
-        raise NotImplementedError(
-            "The model uses `final_logit_softcapping` which is not yet supported. Please open an issue if you "
-            "want your model to be supported."
-        )
+def patch_chunked_lm_head(
+    model: torch.nn.Module, chunk_size: int, temperature: float, output_router_logits: bool = False
+) -> None:
+    final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
 
     def _chunked_forward(
         self: torch.nn.Module,
@@ -1341,7 +1335,10 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
     ) -> dict[str, torch.Tensor]:
         assert labels is not None, "requires labels to not be None for logprob computation"
 
-        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **kwargs)
+        decoder_kwargs = {"output_router_logits": True} if output_router_logits else {}
+        outputs = self.model(
+            input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **decoder_kwargs, **kwargs
+        )
         # NOTE(@aminediro): supporting Cohere2 models
         logit_scale = getattr(self.config, "logit_scale", 1.0)
         hidden_states = outputs.last_hidden_state  # [B, S+1, H]
@@ -1351,8 +1348,8 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
         labels = labels[:, 1:]  # [B, S-1]
 
         b, s, h = hidden_states.shape
-        hidden_flat = hidden_states.reshape(b * s, h).contiguous()
-        targets_flat = labels.reshape(b * s).contiguous()
+        hidden_flat = hidden_states.reshape(b * s, h)
+        targets_flat = labels.reshape(b * s)
 
         # Filter to completion tokens only to avoid expensive matmuls on prompt tokens and tool results
         valid_mask = None
@@ -1363,7 +1360,13 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
             targets_flat = targets_flat[valid_mask]  # [N_valid]
 
         logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
-            hidden_flat, self.lm_head.weight, targets_flat, temperature, chunk_size, logit_scale
+            hidden_flat,
+            self.lm_head.weight,
+            targets_flat,
+            temperature,
+            chunk_size,
+            final_logit_softcapping,
+            logit_scale,
         )
 
         if valid_mask is not None:
@@ -1375,9 +1378,148 @@ def patch_chunked_lm_head(model: torch.nn.Module, chunk_size: int, temperature: 
             logprobs = logprobs_valid
             entropy = entropy_valid
 
+        aux_loss = None
+        if output_router_logits:
+            # Mirror the per-family MoE forward: add `router_aux_loss_coef * load_balancing_loss_func(...)` to
+            # the main loss. Mixtral is the source of truth — every MoE family (Qwen3Moe, GptOss, OLMoE,
+            # Qwen2Moe, DBRX, JetMoE, PhiMoE, …) pulls this function from mixtral via the modular system, so a
+            # single import keeps us in lockstep with upstream for every family we test.
+            from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
+
+            if Version(transformers.__version__) < Version("5.0.0"):
+                num_experts = self.num_experts
+                num_experts_per_tok = self.num_experts_per_tok
+            else:
+                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
+                if self.config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
+                    transformers.__version__
+                ) < Version("5.6.0"):
+                    num_experts = self.num_experts
+                else:
+                    num_experts = self.config.num_experts
+                num_experts_per_tok = self.config.num_experts_per_tok
+            # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
+            aux_loss = load_balancing_loss_func(
+                outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
+            )
+
         return {
             "log_probs": logprobs.reshape(b, s),
             "entropy": entropy.reshape(b, s),
+            "aux_loss": aux_loss,
         }
 
     model.forward = types.MethodType(_chunked_forward, model)
+
+
+def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
+    """
+    Estimate training FLOPs per token for a causal language model (forward + backward).
+
+    Supports dense and MoE architectures. Backward is assumed to cost 2× the forward pass, so total training FLOPs = 3
+    × forward FLOPs. The attention-score term uses the non-causal convention (every token attends to the full
+    `seq_len`, matching PaLM / Megatron / nanoGPT); pass the resulting MFU through [`adjusted_mfu`] for the Llama /
+    DeepSpeed Ulysses causal-corrected convention.
+
+    Args:
+        config ([`~transformers.PretrainedConfig`]):
+            The model configuration.
+        seq_len (`int`):
+            The sequence length used for training.
+
+    Returns:
+        `int`: Estimated training FLOPs per token.
+    """
+    h = config.hidden_size
+    L = config.num_hidden_layers
+    V = config.vocab_size
+    n_heads = config.num_attention_heads
+    n_kv_heads = config.num_key_value_heads
+    head_dim = config.head_dim
+
+    # Attention: Q/K/V/O projections + attention score (Q·Kᵀ and attn·V).
+    qkv_flops = 2 * h * (n_heads * head_dim + 2 * n_kv_heads * head_dim)
+    o_proj_flops = 2 * n_heads * head_dim * h
+    attn_score_flops = 2 * 2 * n_heads * head_dim * seq_len
+    attn_flops = qkv_flops + o_proj_flops + attn_score_flops
+
+    # MoE dispatch: `num_experts_per_tok` is the canonical MoE marker — present on Mixtral,
+    # Qwen3-MoE, DeepSeek-V2, etc.; absent on dense configs.
+    num_experts_per_tok = getattr(config, "num_experts_per_tok", None)
+    if num_experts_per_tok is None:
+        mlp_flops = 2 * 3 * h * config.intermediate_size
+        total_layer_flops = L * (attn_flops + mlp_flops)
+    else:
+        # Routed experts (gate + up + down, 3 matmuls each) + router.
+        if Version(transformers.__version__) >= Version("5.1.0"):
+            num_experts = config.num_local_experts
+        else:
+            num_experts = config.num_experts
+        moe_mlp_flops = num_experts_per_tok * 2 * 3 * h * config.moe_intermediate_size
+        moe_mlp_flops += 2 * h * num_experts
+        dense_mlp_flops = 2 * 3 * h * config.intermediate_size  # interspersed dense layers
+        sparse_step = config.decoder_sparse_step
+        total_layer_flops = sum(
+            attn_flops + (moe_mlp_flops if layer_idx % sparse_step == 0 else dense_mlp_flops) for layer_idx in range(L)
+        )
+
+    embed_flops = 2 * V * h
+    lm_head_flops = 0 if config.tie_word_embeddings else 2 * V * h
+
+    forward_flops = total_layer_flops + embed_flops + lm_head_flops
+    return 3 * forward_flops
+
+
+def compute_mfu(
+    flops_per_token: int,
+    tokens_per_second: float,
+    world_size: int,
+    peak_flops_per_device: float = 989.5e12,
+) -> float:
+    """
+    Compute Model FLOPs Utilization (MFU) as a percentage.
+
+    The caller is responsible for correcting `tokens_per_second` for any parallelism dimension that causes the
+    trainer's token counter to over-count (e.g. context parallelism, sequence parallelism, tensor parallelism — every
+    rank in those dims sees the same input tokens).
+
+    Args:
+        flops_per_token (`int`):
+            Training FLOPs per token (from [`compute_flops_per_token`]).
+        tokens_per_second (`float`):
+            Aggregate tokens per second across all devices, after any parallelism corrections.
+        world_size (`int`):
+            Number of devices (GPUs).
+        peak_flops_per_device (`float`, *optional*, defaults to `989.5e12`):
+            Theoretical peak FLOPs per device in bf16. Defaults to H100 SXM5.
+
+    Returns:
+        `float`: MFU as a percentage (0-100).
+    """
+    return 100 * (flops_per_token * tokens_per_second) / (peak_flops_per_device * world_size)
+
+
+def adjusted_mfu(mfu: float, config: PretrainedConfig, seq_len: int) -> float:
+    """
+    Apply a causal-masking correction to an MFU computed with [`compute_flops_per_token`].
+
+    [`compute_flops_per_token`] uses the non-causal attention convention (every token treated as attending to the full
+    `seq_len`, matching PaLM / Megatron / nanoGPT). With causal masking, only half of the attention-score FLOPs (`Q·Kᵀ`
+    and `attn·V`) are actually performed. This function subtracts that half from the per-token total and rescales `mfu`
+    accordingly. Use it to compare against reports that follow the Llama 2/3 / DeepSpeed Ulysses convention.
+
+    Args:
+        mfu (`float`):
+            MFU as a percentage, computed via [`compute_mfu`] (i.e., using the non-causal [`compute_flops_per_token`]).
+        config ([`~transformers.PretrainedConfig`]):
+            The model configuration.
+        seq_len (`int`):
+            The sequence length used for training.
+
+    Returns:
+        `float`: Causal-corrected MFU as a percentage.
+    """
+    flops_full = compute_flops_per_token(config, seq_len)
+    # Half of the attention-score FLOPs (Q·Kᵀ and attn·V), per layer, ×3 for fwd+bwd.
+    half_attn_score = config.num_hidden_layers * 3 * 2 * config.num_attention_heads * config.head_dim * seq_len
+    return mfu * (flops_full - half_attn_score) / flops_full

@@ -28,10 +28,10 @@ jobs:
         shell: bash
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: '3.12'
 
@@ -40,8 +40,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
 
       - name: Create Python virtual environment
         run: |
@@ -49,10 +48,13 @@ jobs:
           uv pip install --upgrade setuptools wheel
 
       - name: Install dependencies
+        env:
+          TRANSFORMERS_REF: ${{ inputs.transformers_ref }}
         run: |
           source .venv/bin/activate
-          uv pip install ".[dev]"
-          uv pip install -U git+https://github.com/huggingface/transformers.git@${{ inputs.transformers_ref }}
+          uv pip install -U \
+            ".[dev]" \
+            "transformers @ git+https://github.com/huggingface/transformers.git@${TRANSFORMERS_REF}"
 
       - name: Test with pytest
         run: |
@@ -82,10 +84,10 @@ jobs:
       CUDA_VISIBLE_DEVICES: "0,1"
     steps:
       - name: Git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: '3.12'
 
@@ -94,8 +96,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
 
       - name: Create Python virtual environment
         run: |
@@ -103,10 +104,13 @@ jobs:
           uv pip install --upgrade setuptools wheel
 
       - name: Install dependencies
+        env:
+          TRANSFORMERS_REF: ${{ inputs.transformers_ref }}
         run: |
           source .venv/bin/activate
-          uv pip install ".[dev]"
-          uv pip install -U git+https://github.com/huggingface/transformers.git@${{ inputs.transformers_ref }}
+          uv pip install -U \
+            ".[dev]" \
+            "transformers @ git+https://github.com/huggingface/transformers.git@${TRANSFORMERS_REF}"
 
       - name: Run distributed smoke tests
         run: |

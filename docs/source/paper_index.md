@@ -56,7 +56,6 @@ from trl import GRPOConfig, GRPOTrainer
 # Based on the Open-R1 recipe for Qwen-7B
 training_args = GRPOConfig(
     learning_rate=4.0e-5,
-    max_prompt_length=4096,
     max_completion_length=32768, # Support for long Chain-of-Thought
     num_generations=16,          # Sample 16 outputs per prompt for group relative advantage
     beta=0.001,                  # KL coefficient
@@ -96,7 +95,7 @@ training_args = GRPOConfig(
 
 Note that this method only has an effect when training goes slightly off-policy—for example, when `steps_per_generation > gradient_accumulation_steps` or `num_iterations > 1`. Otherwise, it is effectively equivalent to no modification.
 
-TRL also provide an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](experimental#gspo-token).
+TRL also provide an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](gspo_token).
 
 #### Policy ratio: GRPO vs. GSPO
 
@@ -123,6 +122,31 @@ w_{i,t}(\theta) = \frac{\pi_\theta (o_{i,t} | q, o_{i,< t})}{\pi_{\theta_{\text{
 $$
 
 This token-level ratio is then combined with a shared advantage  \\( \hat{A}_i \\), and the GRPO objective clips and optimizes each token independently across the sequence.
+
+### Geometric-Mean Policy Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2507.20673
+
+Geometric-Mean Policy Optimization (GMPO) is a GRPO variant that maximizes the *geometric* mean of the token-level importance ratios instead of the arithmetic mean. The geometric mean is far less sensitive to outlier ratios, so the policy update is more stable and tolerates a much wider clipping range. Clipping is applied per token, in log space, and is one-sided per the advantage sign (the standard PPO trust region) — crucially, *before* the geometric mean is taken. This is what distinguishes GMPO from GSPO (`importance_sampling_level="sequence"`), which clips the sequence-level ratio *after* averaging.
+
+The GMPO objective replaces GRPO's per-token arithmetic mean with the geometric mean of the (clipped) token ratios:
+
+$$
+\mathcal{J}_{\text{GMPO}}(\theta) = \mathbb{E}_{q, \{o_i\}} \left[ \frac{1}{G} \sum_{i=1}^{G} \left( \prod_{t=1}^{|o_i|} \min\left[ w_{i,t}(\theta)^{\operatorname{sgn}(\hat{A}_i)},\ \operatorname{clip}\left(w_{i,t}(\theta)^{\operatorname{sgn}(\hat{A}_i)}, \epsilon_1, \epsilon_2\right) \right]^{\operatorname{sgn}(\hat{A}_i)} \right)^{\frac{1}{|o_i|}} \hat{A}_i \right]
+$$
+
+where  \\( w_{i,t}(\theta) \\) is the per-token importance ratio. In practice the product and clipping are computed in log space for numerical stability, and the clip range  \\( (\epsilon_1, \epsilon_2) = (e^{-0.4}, e^{0.4}) \\) is markedly wider than GRPO/DAPO to encourage exploration.
+
+TRL provides an experimental implementation, see [Experimental - GMPO](gmpo):
+
+```python
+from trl.experimental.gmpo import GMPOConfig, GMPOTrainer
+
+training_args = GMPOConfig(
+    epsilon=0.4,  # log-space clip range -> ratios clipped to (exp(-0.4), exp(0.4)); paper, Sec. 4
+    beta=0.0,
+)
+```
 
 ### DAPO: An Open-Source LLM Reinforcement Learning System at Scale
 
@@ -162,6 +186,31 @@ trainer = GRPOTrainer(
     ...,
     args=training_args,
     reward_funcs=[..., sop_reward],
+)
+```
+
+### Demystifying Long Chain-of-Thought Reasoning in LLMs
+
+**📜 Paper**: https://huggingface.co/papers/2502.03373
+
+This paper studies long chain-of-thought RL and introduces two complementary rule-based rewards:
+
+- A **cosine length-scaled reward** ([`~rewards.get_cosine_scaled_reward`], Appendix C.1) that scales the correctness reward by completion length: a correct completion is rewarded more when it is shorter, while a wrong completion is penalized less when it is longer (preserving exploration).
+- An **n-gram repetition penalty** ([`~rewards.get_repetition_penalty_reward`], Appendix C.2) that discourages the degenerate, repetitive completions that emerge as a reward-hacking strategy under length shaping.
+
+The two are designed to be used together:
+
+```python
+from trl import GRPOTrainer
+from trl.rewards import get_cosine_scaled_reward, get_repetition_penalty_reward
+
+# max_len should match the generation budget (in tokens)
+cosine_scaled_reward = get_cosine_scaled_reward(max_len=4096)
+# Penalize repeated 3-grams, down to -1.0 for fully repetitive completions
+repetition_penalty = get_repetition_penalty_reward(ngram_size=3, max_penalty=-1.0)
+trainer = GRPOTrainer(
+    ...,
+    reward_funcs=[cosine_scaled_reward, repetition_penalty],
 )
 ```
 
@@ -272,11 +321,13 @@ training_args = GRPOConfig(
 )
 ```
 
-Note that when using gradient accumulation, the loss is aggregated over the total number of tokens in the batch, but not over the accumulated batch. For more details, see the [GRPO Trainer - Loss types](grpo_trainer#loss_types).
+Note that when using gradient accumulation, the loss is aggregated over the total number of tokens in the batch, but not over the accumulated batch. For more details, see the [GRPO Trainer - Loss types](grpo_trainer#loss-types).
 
 ### Truncated Importance Sampling
 
 **📰 Blog**: https://fengyao.notion.site/off-policy-rl
+
+**📜 Paper**: https://huggingface.co/papers/1606.02647
 
 Online policy learning methods commonly use an optimized inference framework for rollout generation (e.g vLLM) that is separate from the training backend. This introduces a rollout-training mismatch, exemplified in the following PPO objective:
 
@@ -300,7 +351,7 @@ $$
 \small{
 \mathbb{E}_{a\sim\textcolor{red}{\pi_{\text{inference}}}(\theta_{\mathrm{old}})}
 \Bigl[
-\underbrace{\min(\frac{\textcolor{blue}{\pi_{\text{training}}}(a, \theta_{\mathrm{old}})}{\textcolor{red}{\pi_{\text{inference}}}(a, \theta_{\mathrm{old}})}, C)}_{\text{truncated importance ratio}} \cdot
+\underbrace{\text{clip}\bigl(\frac{\textcolor{blue}{\pi_{\text{training}}}(a, \theta_{\mathrm{old}})}{\textcolor{red}{\pi_{\text{inference}}}(a, \theta_{\mathrm{old}})}, C_{\min}, C_{\max}\bigr)}_{\text{truncated importance ratio}} \cdot
 \nabla_\theta
 \min\Bigl(
 \frac{\textcolor{blue}{\pi_{\text{training}}}(a, \theta)}{\textcolor{blue}{\pi_{\text{training}}}(a, \theta_{\mathrm{old}})}\,\hat A,
@@ -310,7 +361,7 @@ $$
 }
 $$
 
-where  \\( C \\) is a hyper-parameter. TIS is implemented in GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `truncate`, such as `"sequence_truncate"` or `"token_truncate"`.
+where  \\( C_{\min} \\) and  \\( C_{\max} \\) are hyper-parameters. TIS is implemented in GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `truncate`, such as `"sequence_truncate"` or `"token_truncate"`.
 
 ```python
 from trl import GRPOConfig
@@ -320,7 +371,7 @@ training_args = GRPOConfig(
     use_vllm=True,
     vllm_importance_sampling_correction=True, # default True
     vllm_importance_sampling_mode="sequence_truncate", # or "token_truncate"
-    vllm_importance_sampling_cap=2.0, # hyper-parameter C
+    vllm_importance_sampling_clip_max=2.0, # hyper-parameter C_max
 )
 ```
 
@@ -328,9 +379,11 @@ training_args = GRPOConfig(
 
 **📰 Blog**: https://ringtech.notion.site/icepop
 
+**📜 Paper**: https://huggingface.co/papers/2510.18855
+
 **📰 Blog**: https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda
 
-Masked Importance Sampling (MIS) addresses the same issue as [Truncated Importance Sampling](#truncated-importance-sampling) but replaces clipping with masking. MIS takes a more decisive stance by discarding updates whose discrepancy exceeds a threshold  \\( C \\). We apply upper-side masking, so any ratio above  \\( C \\) is removed from the update.
+Masked Importance Sampling (MIS) addresses the same issue as [Truncated Importance Sampling](#truncated-importance-sampling) but replaces clipping with masking. MIS takes a more decisive stance by discarding updates whose discrepancy falls outside the range  \\( [C_{\min}, C_{\max}] \\).
 
 
 $$
@@ -338,9 +391,9 @@ $$
 \mathbb{E}_{a\sim\textcolor{red}{\pi_{\text{inference}}}(\theta_{\mathrm{old}})}
 \Bigl[
 \underbrace{\mathbf{1}\left[
-\frac{\pi_{\text{training}}(a, \theta_{\mathrm{old}})}
+C_{\min} \le \frac{\pi_{\text{training}}(a, \theta_{\mathrm{old}})}
 {\pi_{\text{inference}}(a, \theta_{\mathrm{old}})}
-\le C
+\le C_{\max}
 \right]
 \cdot
 \frac{\pi_{\text{training}}(a, \theta_{\mathrm{old}})}
@@ -364,7 +417,8 @@ training_args = GRPOConfig(
     use_vllm=True,
     vllm_importance_sampling_correction=True, # default True
     vllm_importance_sampling_mode="sequence_mask", # or "token_mask"
-    vllm_importance_sampling_cap=2.0, # hyper-parameter C
+    vllm_importance_sampling_clip_max=2.0, # hyper-parameter C_max
+    vllm_importance_sampling_clip_min=0.5, # hyper-parameter C_min
 )
 ```
 
@@ -404,7 +458,7 @@ TRL exposes the Importance Sampling granularity level through the `vllm_importan
 
 **📜 Paper**: https://huggingface.co/papers/2508.09726
 
-See [Experimental - GFPO](experimental#gfpo).
+See [Experimental - GFPO](gfpo).
 
 ### Perception-Aware Policy Optimization for Multimodal Reasoning
 
@@ -667,6 +721,34 @@ trainer.train()
 ```
 
 The official code [sail-sg/Stable-RL](https://github.com/sail-sg/Stable-RL)
+
+## Optimal Advantage Regression
+
+Papers relating to the [`experimental.a2po.A2POTrainer`].
+
+### Accelerating RL for LLM Reasoning with Optimal Advantage Regression
+
+**📜 Paper**: https://huggingface.co/papers/2505.20686
+
+A\*-PO (Optimal Advantage Regression) is a two-stage RL method for LLM reasoning that avoids both an online critic and multi-sample group rollouts. Stage 1 estimates the optimal value `V*(x) = β·log E_{y∼π_ref}[exp(r(x, y)/β)]` offline from reference-policy samples; Stage 2 performs on-policy updates with a single generation per prompt using a squared-error regression loss `(β·log(π(y|x)/π_ref(y|x)) − (r(x, y) − V*(x)))²`. This yields faster training and lower peak memory than PPO/GRPO/REBEL. The method assumes a binary verifiable reward and cannot exceed the reference policy's Pass@K. See [A2PO](a2po_trainer). The official code can be found in [ZhaolinGao/A-PO](https://github.com/ZhaolinGao/A-PO).
+
+```python
+from trl.experimental.a2po import A2POConfig, A2POTrainer
+
+# Hyperparameters from the paper (Qwen2.5, GSM8K/MATH)
+training_args = A2POConfig(
+    beta1=0.5,  # KL temperature for offline V* estimation
+    beta2=1e-3,  # KL temperature for the on-policy regression target
+    num_value_samples=8,  # N samples per prompt from the reference policy
+)
+trainer = A2POTrainer(
+    model=...,
+    reward_funcs=...,  # should return a binary reward in {0, 1}
+    args=training_args,
+    train_dataset=...,
+)
+trainer.train()
+```
 
 ## Direct Policy Optimization
 
@@ -1137,6 +1219,25 @@ training_args = DPOConfig(
 )
 ```
 
+### TÜLU 3: Pushing Frontiers in Open Language Model Post-Training
+
+**📜 Paper**: https://huggingface.co/papers/2411.15124
+
+The length-normalized sigmoid loss addresses length bias in DPO by dividing chosen and rejected log-ratio scores by their respective completion lengths before computing the Bradley-Terry loss. This per-token normalization was introduced in [SimPO](https://huggingface.co/papers/2405.14734) (Appendix I "DPO w/ LN" ablation) as an average log-probability reward for a reference-free setting, and was later adopted for standard reference-model-based DPO in post-training recipes such as [Tülu 3](https://huggingface.co/papers/2411.15124) (Section 4.3). The loss is:
+
+$$
+\mathcal{L}_{\text{sigmoid\_norm}} = -\log\sigma\!\left(\beta \left({\color{red}\frac{1}{|y_w|}}\log\frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - {\color{red}\frac{1}{|y_l|}}\log\frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)\right),
+$$
+which can be set with:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="sigmoid_norm",
+)
+```
+
 ## Kahneman–Tversky Optimization
 
 Papers relating to the [`experimental.kto.KTOTrainer`]
@@ -1295,10 +1396,10 @@ from trl import RLOOConfig
 
 training_args = RLOOConfig(
     per_device_train_batch_size=512,  # section C Training Detail of the paper
-    steps_per_generation=2  # section C Training Detail of the paper
-    beta=0.03  # section C Training Detail of the paper
+    steps_per_generation=2,  # section C Training Detail of the paper
+    beta=0.03,  # section C Training Detail of the paper
     num_generations=2,  # experiments of paper different num_generations={2,4}
-    learning_rate=1e-6  # section C Training Detail of the paper
+    learning_rate=1e-6,  # section C Training Detail of the paper
 )
 ```
 
@@ -1403,6 +1504,44 @@ training_args = CPOConfig(
 )
 ```
 
+## Triple Preference Optimization
+
+Papers relating to the [`experimental.tpo.TPOTrainer`]
+
+### Triple Preference Optimization: Achieving Better Alignment using a Single Step Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2405.16681
+
+Introduces Triple Preference Optimization (TPO), a preference learning method that aligns an LLM with three responses per prompt — a gold (`reference`) completion, a preferred (`chosen`) completion and a dispreferred (`rejected`) completion — in a single optimization step. TPO combines a contrastive objective on the (chosen, rejected) pair with a supervised NLL term on the gold response, removing the need for a separate SFT stage and the reference model used in DPO. Used in TRL via [`experimental.tpo.TPOTrainer`]. To reproduce the paper's setting (Llama-3-Base, 5K), use this configuration:
+
+```python
+from trl.experimental.tpo import TPOConfig
+
+training_args = TPOConfig(
+    loss_type="sigmoid",  # contrastive loss between chosen and rejected (Section 3 of the paper)
+    tpo_alpha=1.0,  # weight of the NLL term on the gold response (Section 3 of the paper)
+    beta=0.01,  # β temperature (Table 6 of the paper)
+    learning_rate=5e-7,  # Table 6 of the paper
+    num_train_epochs=1,
+    max_length=1024,
+)
+```
+
+To use the TPO-L variant (length-normalized log-probabilities with a target reward margin γ), set `loss_type="tpo-l"` and `tpo_l_gamma`:
+
+```python
+from trl.experimental.tpo import TPOConfig
+
+training_args = TPOConfig(
+    loss_type="tpo-l",  # length-normalized variant (Section 3 of the paper)
+    tpo_alpha=1.0,
+    beta=0.01,
+    tpo_l_gamma=0.5,  # γ target reward margin (Table 6 of the paper, Llama-3-Base 5K)
+    learning_rate=5e-7,
+    num_train_epochs=1,
+)
+```
+
 ## Nash Learning from Human Feedback
 
 Papers relating to the [`experimental.nash_md.NashMDTrainer`]
@@ -1414,17 +1553,16 @@ Papers relating to the [`experimental.nash_md.NashMDTrainer`]
 Introduces Nash-MD, an alternative to standard RLHF that learns a preference model conditioned on two inputs and finds a policy at the Nash equilibrium. Instead of optimizing against a reward model, Nash-MD produces policies that consistently generate responses preferred over those of any competing policy. The algorithm is based on mirror descent principles. Used in TRL via [`experimental.nash_md.NashMDTrainer`].
 
 ```python
-from trl.experimental.judges import PairRMJudge
 from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained(model_id)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
-judge = PairRMJudge()
+reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id, num_labels=1)
 
 trainer = NashMDTrainer(
     model=model,
-    judge=judge,
+    reward_funcs=reward_model,
     args=NashMDConfig(),
     processing_class=tokenizer,
     train_dataset=...,
@@ -1511,35 +1649,6 @@ Online DPO improves direct alignment from preferences methods by providing real-
 
 To use Online DPO, you can use the [`experimental.odpo.OnlineDPOTrainer`].
 
-### The Perfect Blend: Redefining RLHF with Mixture of Judges
-
-**📜 Paper**: https://huggingface.co/papers/2409.20370
-
-This paper introduces Constrained Generative Policy Optimization (CGPO), a post-training RLHF paradigm for multi-task learning. Its core contribution is the Mixture of Judges (MoJ) framework, which aggregates multiple reward signals to mitigate reward hacking and achieve Pareto-optimal trade-offs across many objectives. CGPO outperforms common RLHF algorithms like PPO and DPO across general chat, STEM reasoning, instruction following, math, coding, and knowledge benchmarks.
-
-⚠️ Experimental: CGPO is not yet implemented as a TRL trainer. Users can experiment with multiple reward/judge aggregation using [`trl.experimental.judges.AllTrueJudge`].
-
-```python
-from trl.experimental.judges import AllTrueJudge, BaseBinaryJudge
-
-# Example placeholder judges
-class RewardJudge(BaseBinaryJudge):
-    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
-        return [1 for _ in completions]
-
-class SafetyJudge(BaseBinaryJudge):
-    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
-        return [1 for _ in completions]
-
-moj = AllTrueJudge(judges=[RewardJudge(), SafetyJudge()])
-
-results = moj.judge(
-    prompts=["Explain gravity."],
-    completions=["Gravity is a fundamental force of nature."]
-)
-print(results)  
-```
-
 ### Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF
 
 **📜 Paper**: https://huggingface.co/papers/2405.21046
@@ -1563,13 +1672,13 @@ Papers relating to training a student model with the help of a teacher model.
 
 **📜 Paper**: https://huggingface.co/papers/2306.13649
 
-Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`]. To reproduce the paper's setting, use this configuration:
+Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.distillation.DistillationTrainer`] and [`experimental.gkd.GKDTrainer`]. To reproduce the paper's setting, use this configuration:
 
 ```python
-from trl.experimental.gkd import GKDConfig
+from trl.experimental.distillation import DistillationConfig
 
 # XSum summarization task (Table A.1 of the paper)
-training_args = GKDConfig(
+training_args = DistillationConfig(
     lmbda=0.5,  # λ student data fraction (Section 3 of the paper)
     beta=0.5,  # β Generalized JSD interpolation, 0=KL, 1=reverse KL (Section 3 of the paper)
     temperature=1.0,  # student training temperature (Appendix A of the paper)
@@ -1577,7 +1686,7 @@ training_args = GKDConfig(
     learning_rate=3e-4,  # learning rate (Table A.1 of the paper)
     per_device_train_batch_size=32,  # batch size (Table A.1 of the paper)
     warmup_steps=2000,  # warm-up steps (Table A.1 of the paper)
-    max_new_tokens=64,  # max output tokens (Table A.1 of the paper)
+    max_completion_length=64,  # max output tokens (Table A.1 of the paper)
 )
 ```
 
@@ -1597,20 +1706,31 @@ On-Policy Distillation has been shown to outperform SFT, GRPO and can be used to
 
 Additionally on-policy distillation is more compute efficient and is less prone to overfitting when trained with limited data.
 
-To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`experimental.gkd.GKDTrainer`] and [`experimental.gkd.GKDConfig`]:
+To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`experimental.distillation.DistillationTrainer`] and [`experimental.distillation.DistillationConfig`]:
+
+```python
+from trl.experimental.distillation import DistillationConfig
+
+training_args = DistillationConfig(
+    lmbda=1.0,  # student produces rollouts for all batches
+    beta=1.0,  # to ensure reverse-kl as the loss function
+    teacher_model_name_or_path="teacher-model",  # specify the teacher model
+)
+```
+
+Alternatively, you can use the [`experimental.gkd.GKDTrainer`] and [`experimental.gkd.GKDConfig`]:
 
 ```python
 from trl.experimental.gkd import GKDConfig
 
 training_args = GKDConfig(
-    lmbda=1.0, # student produces rollouts for all batches
-    beta=1.0, # to ensure reverse-kl as the loss function
-    teacher_model_name_or_path="teacher-model", # specify the teacher model
-
+    lmbda=1.0,  # student produces rollouts for all batches
+    beta=1.0,  # to ensure reverse-kl as the loss function
+    teacher_model_name_or_path="teacher-model",  # specify the teacher model
 )
 ```
 
-Alternatively, you can use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
+You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
 
 ```python
 from trl.experimental import GOLDConfig
@@ -1647,7 +1767,7 @@ trainer = MiniLLMTrainer(
 trainer.train()
 ```
 
-For more details, see the [MiniLLM Trainer documentation](minillm) documentation.
+For more details, see the [MiniLLM Trainer documentation](minillm_trainer).
 
 ### Reinforcement Learning via Self-Distillation
 
@@ -1660,13 +1780,12 @@ from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
 training_args = SDPOConfig(
     distillation_alpha=0.5,                # Jensen-Shannon divergence (recommended)
-    distillation_topk=100,                 # Top-K logit distillation approximation
-    full_logit_distillation=True,          # Required for top-K logit-level SDPO
+    distillation_mode="topk_logits",       # Explicitly select top-K logit distillation
+    distillation_topk=100,                 # Required for top-K logit distillation
     distillation_is_clip=2.0,              # Importance sampling clipping
-    distillation_weight=1.0,               # Weight for self-distillation loss
-    sdpo_policy_loss_mode="distillation_only",
+    distillation_weight=1.0,               # Convex weight: (1-w)*policy + w*distillation; 1.0 = pure distillation
     use_successful_as_teacher=True,        # Use successful rollouts as teacher
-    teacher_regularization="ema",          # Supported: "ema", "none"
+    teacher_model_kind="ema",              # Supported: "base", "live", "ema"
     teacher_update_rate=0.05,              # EMA update rate
     include_environment_feedback=False,    # Use dataset privileged_context when available
 )
@@ -1687,12 +1806,11 @@ Expected dataset columns:
 
 For more details, see the [SDPO Trainer documentation](sdpo_trainer).
 
-### Self-Training with On-Policy Self-Distillation for Language Model Alignment
+### Self-Distillation Enables Continual Learning
 
 **📜 Paper**: https://huggingface.co/papers/2601.19897
 
-Self-Distilled Fine-Tuning (SDFT) performs on-policy self-distillation by generating completions during training, then distilling an explicit teacher-conditioned view of those same completions back into the student. In TRL, SDFT uses a shared self-distillation core with SDPO where the teacher is the model itself (base weights with adapter disabled for PEFT, or the same model under `no_grad` for non-PEFT).
-The teacher prompt is composed internally from the student `prompt` plus the dataset `privileged_context`.
+Self-Distilled Fine-Tuning (SDFT) performs on-policy self-distillation by generating completions during training, then distilling an explicit teacher-conditioned view of those same completions back into the student. The teacher is selected by `teacher_model_kind`: `"base"` (the initial student), `"live"` (the current student), or `"ema"` (an exponentially averaged teacher). The teacher prompt is composed internally from the student `prompt` plus the dataset `privileged_context`.
 
 ```python
 from datasets import Dataset
@@ -1708,6 +1826,7 @@ dataset = Dataset.from_dict(
 
 training_args = SDFTConfig(
     distillation_alpha=0.5,
+    distillation_mode="topk_logits",
     distillation_topk=5,
     max_completion_length=64,
 )
@@ -1726,6 +1845,37 @@ Expected dataset columns:
 - `privileged_context` containing only the extra teacher-only information
 
 For more details, see the [SDFT Trainer documentation](sdft_trainer).
+
+### Embarrassingly Simple Self-Distillation Improves Code Generation
+
+**📜 Paper**: https://huggingface.co/papers/2604.01193
+
+Simple Self-Distillation (SSD) improves code generation by sampling completions from the model at a training-time temperature and truncation configuration, then fine-tuning on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or reinforcement learning is needed. SSD reshapes token distributions in a context-dependent way: suppressing distractor tails at "lock" positions (where syntax leaves little ambiguity) while preserving diversity at "fork" positions (where multiple valid continuations exist).
+
+```python
+from trl.experimental.ssd import SSDConfig, SSDTrainer
+
+training_args = SSDConfig(
+    temperature=0.6,                       # Training-time sampling temperature (T_train)
+    top_k=20,                              # Training-time top-k truncation
+    top_p=0.95,                            # Training-time top-p truncation
+    max_completion_length=65536,
+    learning_rate=5e-6,
+)
+
+trainer = SSDTrainer(
+    model="Qwen/Qwen3-4B-Instruct",
+    args=training_args,
+    train_dataset=...,
+)
+trainer.train()
+```
+
+Expected dataset columns:
+
+- `prompt`
+
+For more details, see the [SSD Trainer documentation](ssd_trainer).
 
 ## Distributed Training
 

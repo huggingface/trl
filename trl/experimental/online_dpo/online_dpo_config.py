@@ -35,12 +35,10 @@ class OnlineDPOConfig(_BaseConfig):
 
     Parameters:
         reward_model_path (`str`, *optional*):
-            Path to the reward model. Either `judge` or `reward_model_path` must be set, but not both.
-        judge (`str`, *optional*):
-            Name of the judge to use. Either `judge` or `reward_model_path` must be set, but not both.
+            Path to the reward model.
         max_new_tokens (`int`, *optional*, defaults to `64`):
             Maximum number of tokens to generate per completion.
-        max_length (`int`, *optional*, defaults to `256`):
+        max_length (`int`, *optional*, defaults to `512`):
             Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If the
             sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the completion as
             possible.
@@ -49,7 +47,7 @@ class OnlineDPOConfig(_BaseConfig):
         missing_eos_penalty (`float`, *optional*):
             Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage to
             generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
-            value. This parameter only works when using `reward_funcs` and not when using `judge`.
+            value.
         beta (`float` or `list[float]`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
@@ -78,10 +76,6 @@ class OnlineDPOConfig(_BaseConfig):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
             tokens.
-        use_transformers_paged (`bool`, *optional*, defaults to `False`):
-            Whether to use the `transformers` paged implementation for generation. If set to `True`, the `transformers`
-            paged implementation will be used for generation instead of the default padded implementation. This
-            parameter is only effective when `use_vllm` is set to `False`.
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
         generation_kwargs (`dict[str, Any]`, *optional*):
@@ -150,6 +144,13 @@ class OnlineDPOConfig(_BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`]. Also applied to reward-model and reward-tokenizer
+            loads.
+        reward_weights (`list[float]`, *optional*):
+            Weights for combining multiple reward functions. Must match the number of reward functions. If `None`, all
+            reward functions are equally weighted.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -174,15 +175,7 @@ class OnlineDPOConfig(_BaseConfig):
 
     reward_model_path: str | None = field(
         default=None,
-        metadata={
-            "help": "Path to the reward model. Either `judge` or `reward_model_path` must be set, but not both."
-        },
-    )
-    judge: str | None = field(
-        default=None,
-        metadata={
-            "help": "Name of the judge to use. Either `judge` or `reward_model_path` must be set, but not both."
-        },
+        metadata={"help": "Path to the reward model."},
     )
     max_new_tokens: int = field(
         default=64,
@@ -236,14 +229,6 @@ class OnlineDPOConfig(_BaseConfig):
             "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
             "generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that "
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
-        },
-    )
-    use_transformers_paged: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
-            "`transformers` paged implementation will be used for generation instead of the default padded "
-            "implementation. This parameter is only effective when `use_vllm` is set to `False`."
         },
     )
     cache_implementation: str | None = field(
@@ -373,6 +358,13 @@ class OnlineDPOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
             "from a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models that ship custom Python code from the Hub. Forwarded to "
+            "`AutoModelForCausalLM.from_pretrained`. Also applied to reward-model and reward-tokenizer loads."
         },
     )
     reward_weights: list[float] | None = field(

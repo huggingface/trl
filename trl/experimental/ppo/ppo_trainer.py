@@ -27,7 +27,8 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import transformers
-from accelerate import Accelerator, logging
+from accelerate import Accelerator
+from accelerate.logging import get_logger
 from accelerate.utils import gather_object
 from datasets import Dataset
 from packaging.version import Version
@@ -71,7 +72,7 @@ if is_rich_available():
     from rich.table import Table
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
@@ -416,12 +417,18 @@ class PPOTrainer(_BaseTrainer):
                 "[Approximating KL Divergence](http://joschu.net/blog/kl-approx.html) for details."
             )
 
-        # peft support
-        if not is_peft_available() and peft_config is not None:
-            raise ImportError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
-            )
-        elif is_peft_available() and peft_config is not None:
+        # PEFT
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
             if isinstance(self.policy_model, PeftModel):
                 raise ValueError(
                     "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "

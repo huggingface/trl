@@ -50,11 +50,7 @@ from trl import (
     get_kbit_device_map,
     get_quantization_config,
 )
-from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge, PairRMJudge
 from trl.experimental.xpo import XPOConfig, XPOTrainer
-
-
-JUDGES = {"pair_rm": PairRMJudge, "openai": OpenAIPairwiseJudge, "hf": HfPairwiseJudge}
 
 
 if __name__ == "__main__":
@@ -75,32 +71,19 @@ if __name__ == "__main__":
         model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-    )
-    ref_model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-    )
+    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+    ref_model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     if training_args.reward_model_path is not None:
         reward_model = AutoModelForSequenceClassification.from_pretrained(
             training_args.reward_model_path,
             num_labels=1,
-            trust_remote_code=model_args.trust_remote_code,
             **model_kwargs,
         )
     else:
         reward_model = None
 
-    if training_args.judge is not None:
-        judge_cls = JUDGES[training_args.judge]
-        judge = judge_cls()
-    else:
-        judge = None
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, padding_side="left", trust_remote_code=model_args.trust_remote_code
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, padding_side="left")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -110,7 +93,6 @@ if __name__ == "__main__":
         model=model,
         ref_model=ref_model,
         reward_funcs=reward_model,
-        judge=judge,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,

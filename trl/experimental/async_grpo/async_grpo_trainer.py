@@ -18,7 +18,7 @@ import queue
 import textwrap
 import time
 from collections import defaultdict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -30,11 +30,11 @@ from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
 
-from trl.trainer.base_trainer import _BaseTrainer
-from trl.trainer.utils import pad, patch_chunked_lm_head
-
+from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.utils import nanmax, nanmin, pad, patch_chunked_lm_head
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker
+from .weight_transfer import WeightTransferClient
 
 
 logger = get_logger(__name__)
@@ -53,14 +53,34 @@ EnvironmentFactory = Callable[[], _SupportsReset]
 
 
 class RolloutWorkerProtocol(Protocol):
+    """Interface a rollout worker must implement to be passed as `rollout_worker` to [`AsyncGRPOTrainer`].
+
+    The default [`AsyncRolloutWorker`] spawns a CUDA-free child process and scores completions with the trainer's
+    `reward_funcs`. Implement this protocol to plug in a custom rollout/scoring backend instead — for example, one that
+    runs reward models on their own GPUs.
+
+    Attributes:
+        rollout_buffer (`queue.Queue`):
+            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it.
+    """
+
     rollout_buffer: queue.Queue
 
-    def start(self) -> None: ...
-    def stop(self) -> None: ...
-    def pause(self) -> None: ...
-    def resume(self) -> None: ...
-    def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None: ...
-    def update_model_version(self, version: int) -> None: ...
+    def start(self) -> None:
+        """Begin producing rollouts. Called once on train begin, after the initial weight sync."""
+        ...
+
+    def stop(self) -> None:
+        """Stop the worker and release its resources. Called on train end."""
+        ...
+
+    def update_model_version(self, version: int) -> None:
+        """Tell the worker which policy version is now live, so it can tag or discard stale samples."""
+        ...
+
+    def check_health(self, stale_after_s: float) -> None:
+        """Raise if the worker has crashed or stopped producing within `stale_after_s` seconds."""
+        ...
 
 
 class StepIntervalCallback(TrainerCallback):
@@ -77,24 +97,65 @@ class StepIntervalCallback(TrainerCallback):
             self.fn()
 
 
+class _InitialWeightSyncCallback(TrainerCallback):
+    """Idempotent: NCCL group setup + cold weight sync to vLLM on train begin."""
+
+    def __init__(self, trainer: "AsyncGRPOTrainer"):
+        self._trainer = trainer
+        self._fired = False
+
+    def on_train_begin(self, _args, _state, _control, **_kwargs):
+        if self._fired:
+            return
+        self._fired = True
+        if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
+            self._trainer.weight_transfer.init_weight_transfer()
+        self._trainer._sync_weight()
+
+
+class _StartRolloutWorkerCallback(TrainerCallback):
+    """Idempotent: starts the rollout worker. Must be registered AFTER `_InitialWeightSyncCallback`."""
+
+    def __init__(self, trainer: "AsyncGRPOTrainer"):
+        self._trainer = trainer
+        self._fired = False
+
+    def on_train_begin(self, _args, _state, _control, **_kwargs):
+        if self._fired:
+            return
+        self._fired = True
+        if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker is not None:
+            self._trainer.rollout_worker.start()
+
+
 class RolloutQueueDataset(torch.utils.data.IterableDataset):
-    def __init__(self, rollout_queue, model_version_fn, max_staleness=3, timeout=120.0):
+    def __init__(
+        self,
+        rollout_queue,
+        model_version_fn,
+        check_health_fn,
+        stale_after_s,
+        max_staleness=3,
+        poll_interval_s=5.0,
+    ):
         self.queue = rollout_queue
         self.model_version_fn = model_version_fn
+        self.check_health_fn = check_health_fn
+        self.stale_after_s = stale_after_s
         self.max_staleness = max_staleness
-        self.timeout = timeout
+        self.poll_interval_s = poll_interval_s
 
     def __iter__(self):
         while True:
             t0 = time.time()
-            qsize = self.queue.qsize()
-            if qsize == 0:
+            if self.queue.qsize() == 0:
                 logger.info("queue empty, waiting for rollout samples...")
             try:
-                sample = self.queue.get(timeout=self.timeout)
+                sample = self.queue.get(timeout=self.poll_interval_s)
             except queue.Empty:
-                logger.warning(f"Rollout queue empty for {self.timeout}s, stopping epoch")
-                return  # StopIteration ends epoch
+                # Returning here would broadcast None through accelerate's dispatch loop.
+                self.check_health_fn(self.stale_after_s)
+                continue
             queue_wait_time_s = time.time() - t0
             if queue_wait_time_s > 1.0:
                 logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={self.queue.qsize()})")
@@ -122,33 +183,72 @@ class _EmptyIterableDataset(torch.utils.data.IterableDataset):
 
 @dataclass
 class DataCollatorForRollout(DataCollatorMixin):
+    """
+    Padding-free collator for rollout samples. Splits the global batch into `num_processes` groups (one per rank) and
+    concatenates each group's samples into a single packed row, with `position_ids` resetting per sequence and
+    advantages expanded per-token. Rows are padded only to the longest group, so the batch stays rectangular for
+    `DataLoaderDispatcher` to scatter row `i` -> rank `i`; this inter-rank padding is stripped per-rank in
+    `compute_loss`.
+
+    Args:
+        pad_token_id (`int`):
+            Token id used to pad `input_ids`.
+        num_processes (`int`, *optional*, defaults to `1`):
+            Number of ranks; the global batch is packed into this many rows.
+    """
+
     pad_token_id: int
+    num_processes: int = 1
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        input_ids = [torch.tensor(example["input_ids"], dtype=torch.long) for example in examples]
-        attention_mask = [torch.ones(len(ids), dtype=torch.long) for ids in input_ids]
-        completion_mask = [torch.tensor(example["completion_mask"], dtype=torch.float32) for example in examples]
-        old_log_probs = [torch.tensor(example["old_log_probs"], dtype=torch.float32) for example in examples]
-        advantages = torch.tensor([example["advantage"] for example in examples], dtype=torch.float32)
+        groups = [examples[i :: self.num_processes] for i in range(self.num_processes)]
+
+        input_ids, attention_mask, completion_mask, old_log_probs, position_ids, advantages = [], [], [], [], [], []
+        for group in groups:
+            seq_lengths = [len(example["input_ids"]) for example in group]
+            ids = [token for example in group for token in example["input_ids"]]
+            input_ids.append(torch.tensor(ids, dtype=torch.long))
+            attention_mask.append(torch.ones(len(ids), dtype=torch.long))
+            completion_mask.append(
+                torch.tensor([m for example in group for m in example["completion_mask"]], dtype=torch.long)
+            )
+            old_log_probs.append(
+                torch.tensor([lp for example in group for lp in example["old_log_probs"]], dtype=torch.float32)
+            )
+            position_ids.append(torch.cat([torch.arange(n) for n in seq_lengths]))
+            advantages.append(
+                torch.cat(
+                    [torch.full((n,), example["advantage"]) for example, n in zip(group, seq_lengths, strict=False)]
+                )
+            )
 
         input_ids = pad(input_ids, padding_value=self.pad_token_id)
         attention_mask = pad(attention_mask, padding_value=0)
         completion_mask = pad(completion_mask, padding_value=0)
-        old_log_probs = pad(old_log_probs, padding_value=0)
+        old_log_probs = pad(old_log_probs, padding_value=0.0)
+        position_ids = pad(position_ids, padding_value=0)
+        advantages = pad(advantages, padding_value=0.0)
 
         # Total valid completion tokens across all samples in the full batch.
-        # Repeated per sample so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
-        global_n_tokens = completion_mask.sum()
-        global_n_tokens_repeated = torch.full((len(examples),), global_n_tokens.item(), dtype=torch.float32)
+        # Repeated per rank so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
+        global_n_tokens = sum(sum(example["completion_mask"]) for example in examples)
+        global_n_tokens = torch.full((self.num_processes,), float(global_n_tokens), dtype=torch.float32)
 
-        # Convert per-sample metrics dicts to a dict of 1D tensors so that Accelerate's
-        # recursive broadcast (dispatch_batches=True) can handle them — it traverses nested
-        # dicts of tensors but chokes on plain Python floats.
+        # Per-sample metrics grouped per rank, as a dict of 2D tensors (one row per rank) so that Accelerate's
+        # recursive broadcast (dispatch_batches=True) can scatter them — it traverses nested dicts of tensors but
+        # chokes on plain Python floats. Rows are padded with NaN so padded slots are ignored by the nan-aware
+        # aggregation in `compute_loss`.
         metrics_list = [example["metrics"] for example in examples]
         metrics = (
             {
-                key: torch.tensor([m.get(key, 0.0) for m in metrics_list], dtype=torch.float32)
+                key: pad(
+                    [
+                        torch.tensor([example["metrics"].get(key, 0.0) for example in group], dtype=torch.float32)
+                        for group in groups
+                    ],
+                    padding_value=float("nan"),
+                )
                 for key in metrics_list[0]
             }
             if metrics_list and metrics_list[0]
@@ -160,8 +260,9 @@ class DataCollatorForRollout(DataCollatorMixin):
             "attention_mask": attention_mask,
             "completion_mask": completion_mask,
             "old_log_probs": old_log_probs,
+            "position_ids": position_ids,
             "advantages": advantages,
-            "global_n_tokens": global_n_tokens_repeated,
+            "global_n_tokens": global_n_tokens,
             "metrics": metrics,
         }
 
@@ -177,18 +278,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
     Example:
 
     ```python
-    from trl.experimental.async_grpo import AsyncGRPOTrainer
-    from trl.rewards import accuracy_reward
-    from datasets import load_dataset
+    >>> from trl.experimental.async_grpo import AsyncGRPOTrainer
+    >>> from trl.rewards import accuracy_reward
+    >>> from datasets import load_dataset
 
-    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+    >>> dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-    trainer = AsyncGRPOTrainer(
-        model="Qwen/Qwen2.5-0.5B-Instruct",
-        reward_funcs=accuracy_reward,
-        train_dataset=dataset,
-    )
-    trainer.train()
+    >>> trainer = AsyncGRPOTrainer(
+    ...     model="Qwen/Qwen2.5-0.5B-Instruct",
+    ...     reward_funcs=accuracy_reward,
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
     ```
 
     Args:
@@ -211,6 +312,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
               function](#using-a-custom-reward-function).
             - A list of reward functions, where each item is a reward function as described above. Rewards from all
               functions are summed.
+
+            Unlike [`GRPOTrainer`], rewards are computed in a spawned child process, so each reward function (along
+            with `tools` and `environment_factory`) must be picklable: use a module-level function,
+            `functools.partial`, or a callable class instance — lambdas and closures will fail at startup. The child
+            process also runs with `CUDA_VISIBLE_DEVICES=""`, so a GPU-backed reward model runs on CPU (slow), not the
+            trainer's GPU.
         args ([`AsyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -250,6 +357,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             method should return either `None` or a string: when it returns a string, that string is appended to the
             last user message before generation. This feature is experimental and may change or be removed at any time
             without prior notice.
+        rollout_worker (`RolloutWorkerProtocol`, *optional*):
+            Custom rollout worker implementing [`RolloutWorkerProtocol`]. If `None`, a default [`AsyncRolloutWorker`]
+            is created, which spawns a CUDA-free child process and scores completions with the trainer's
+            `reward_funcs`. Pass a custom worker to plug in a different rollout/scoring backend instead — for example,
+            one that runs reward models on their own GPUs.
     """
 
     _tag_names = ["trl", "async-grpo"]
@@ -284,21 +396,39 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # Training arguments
         self.epsilon_low = self.args.epsilon
-        self.epsilon_high = self.args.epsilon_high
+        self.epsilon_high = self.args.epsilon_high if self.args.epsilon_high is not None else self.args.epsilon
         self.temperature = self.args.temperature
 
         # Model
         model_name = model
-        model = AutoModelForCausalLM.from_pretrained(model, device_map=None, dtype=torch.float32)
+        model_init_kwargs = self.args.model_init_kwargs or {}
+        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
+        # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            device_map=None,
+            dtype=torch.float32,
+            attn_implementation="kernels-community/flash-attn3",
+            **model_init_kwargs,
+        )
 
         if self.args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
-        patch_chunked_lm_head(model, chunk_size=8192, temperature=self.temperature)
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        text_config = model.config.get_text_config()
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
+        self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = self.args.router_aux_loss_coef
+
+        patch_chunked_lm_head(
+            model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
+        )
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name)
+            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=self.args.trust_remote_code)
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
@@ -352,7 +482,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
+                # Weight transfer is also expected to be wired by the test fixture (or left as None
+                # if the stub doesn't sync to a real vLLM).
                 self.rollout_worker = rollout_worker
+                self.weight_transfer = None
             else:
                 # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
                 # DTensor.shape returns the global shape without triggering any all-gather.
@@ -363,10 +496,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     weight_names.append(name)
                     weight_dtype_names.append(str(param.dtype).split(".")[-1])
                     weight_shapes.append(list(param.shape))
+                self.weight_transfer = WeightTransferClient(
+                    vllm_server_url=self.args.vllm_server_base_url,
+                    server_timeout=self.args.vllm_server_timeout,
+                    weight_update_info={
+                        "names": weight_names,
+                        "dtype_names": weight_dtype_names,
+                        "shapes": weight_shapes,
+                        "packed": True,
+                    },
+                )
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=model_name,
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
+                    processing_class=processing_class,
                     tools=tools,
                     environment_factory=environment_factory,
                     num_generations=self.args.num_generations,
@@ -376,21 +520,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     max_tokens=self.args.max_completion_length,
                     temperature=self.args.temperature,
                     request_timeout=self.args.request_timeout,
-                    server_timeout=self.args.vllm_server_timeout,
                     chat_template_kwargs=self.args.chat_template_kwargs,
                     max_tool_calling_iterations=self.args.max_tool_calling_iterations,
                     log_completions=self.args.log_completions,
                     num_completions_to_print=self.args.num_completions_to_print,
-                    weight_names=weight_names,
-                    weight_dtype_names=weight_dtype_names,
-                    weight_shapes=weight_shapes,
                 )
+            # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
             self.rollout_queue = None
             self.rollout_worker = None
+            self.weight_transfer = None
 
-        # Add callbacks
+        # Add callbacks. Registration order matters: weight sync first, then worker start.
+        self.add_callback(_InitialWeightSyncCallback(self))
+        self.add_callback(_StartRolloutWorkerCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
 
     def get_train_dataloader(self) -> DataLoader:
@@ -398,8 +542,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             dataset = RolloutQueueDataset(
                 rollout_queue=self.rollout_queue,
                 model_version_fn=lambda: self.model_version,
+                check_health_fn=self.rollout_worker.check_health,
+                stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
-                timeout=self.args.vllm_server_timeout,
             )
         else:
             dataset = _EmptyIterableDataset()
@@ -408,7 +553,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             DataLoader(
                 dataset,
                 batch_size=self.args.per_device_train_batch_size * self.accelerator.num_processes,
-                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id),
+                collate_fn=DataCollatorForRollout(self.processing_class.pad_token_id, self.accelerator.num_processes),
                 num_workers=0,
                 # NOTE(@aminediro):
                 # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
@@ -427,31 +572,28 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "attention_mask",
                 "completion_mask",
                 "old_log_probs",
+                "position_ids",
                 "advantages",
                 "global_n_tokens",
                 "metrics",
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
-        completion_mask = inputs["completion_mask"]
-        old_log_probs = inputs["old_log_probs"]
-        advantages = inputs["advantages"]
-
-        # The collator pads to the global batch max length (across all ranks). After DataLoaderDispatcher slices and
-        # sends rows to each rank, the local slice is still padded to that global max. Truncate to the longest real
-        # sequence in this rank's slice so we don't run the forward pass over pure-padding columns.
-        local_max_len = attention_mask.sum(dim=1).max()
-        input_ids = input_ids[:, :local_max_len]
-        attention_mask = attention_mask[:, :local_max_len]
-        completion_mask = completion_mask[:, :local_max_len]
-        old_log_probs = old_log_probs[:, :local_max_len]
+        # Padding-free: the collator already packed this rank's samples into a single row (real tokens concatenated,
+        # `position_ids` resetting per sequence, advantages expanded per-token), then padded the row to the longest
+        # rank's length so DataLoaderDispatcher could scatter rectangular rows. Strip that trailing inter-rank padding
+        # here.
+        mask_bool = inputs["attention_mask"].bool()
+        input_ids = inputs["input_ids"][mask_bool].unsqueeze(0)
+        completion_mask = inputs["completion_mask"][mask_bool].unsqueeze(0)
+        old_log_probs = inputs["old_log_probs"][mask_bool].unsqueeze(0)
+        position_ids = inputs["position_ids"][mask_bool].unsqueeze(0)
+        advantages = inputs["advantages"][mask_bool].unsqueeze(0)
 
         forward_start = time.time()
         outputs = model(
             input_ids=input_ids,
-            attention_mask=attention_mask,
+            position_ids=position_ids,
             labels=input_ids,
             completion_mask=completion_mask,
             use_cache=False,
@@ -461,11 +603,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         completion_mask = completion_mask[:, 1:]
         old_log_probs = old_log_probs[:, 1:]
-        advantages = advantages.unsqueeze(1)
+        advantages = advantages[:, 1:]
         log_ratio = log_probs - old_log_probs
-        ratio = torch.exp(log_ratio)
-        clipped = torch.clamp(ratio, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss = -torch.min(ratio * advantages, clipped * advantages)
+        coef_1 = torch.exp(log_ratio)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        per_token_loss1 = coef_1 * advantages
+        per_token_loss2 = coef_2 * advantages
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
 
         # DDP/FSDP averages gradients across ranks (world_size).
         # To get correct per-token normalization we scale by 1/tokens_per_rank
@@ -479,16 +623,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # loss = loss / max(per_token_loss.size(0), 1)
         loss = loss / self.current_gradient_accumulation_steps
 
+        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
+        if self.aux_loss_enabled:
+            aux_loss = outputs["aux_loss"]
+            loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
+
         with torch.no_grad():
             valid_mask = completion_mask > 0
             local_count = valid_mask.sum().float()
 
             local_ratio_sum = (
-                ratio[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
+                coef_1[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
             # Approx KL: http://joschu.net/blog/kl-approx.html
             local_kl_sum = (
-                ((ratio[valid_mask] - 1) - log_ratio[valid_mask]).sum()
+                ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
                 if valid_mask.any()
                 else torch.zeros((), device=completion_mask.device)
             )
@@ -497,38 +646,93 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
             )
 
-            clipped = (ratio < 1 - self.epsilon_low) | (ratio > 1 + self.epsilon_high)
-            local_clip_sum = (
-                clipped[valid_mask].float().sum()
+            # Compute the clipped probability ratios. A token is counted as clipped only when clipping is binding in a
+            # policy-relevant direction: low clip when the advantage is negative, high clip when it is positive.
+            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
+            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
+            is_region_clipped = is_low_clipped | is_high_clipped
+            local_low_clip_sum = (
+                is_low_clipped[valid_mask].float().sum()
+                if valid_mask.any()
+                else torch.zeros((), device=completion_mask.device)
+            )
+            local_high_clip_sum = (
+                is_high_clipped[valid_mask].float().sum()
+                if valid_mask.any()
+                else torch.zeros((), device=completion_mask.device)
+            )
+            local_region_clip_sum = (
+                is_region_clipped[valid_mask].float().sum()
                 if valid_mask.any()
                 else torch.zeros((), device=completion_mask.device)
             )
 
-            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, clip_sum, count]
-            stats = torch.stack([local_ratio_sum, local_kl_sum, local_entropy_sum, local_clip_sum, local_count])
+            # Per-rank clip fractions, gathered below to report the cross-rank saturation extrema.
+            local_low_clip_mean = local_low_clip_sum / local_count.clamp(min=1.0)
+            local_high_clip_mean = local_high_clip_sum / local_count.clamp(min=1.0)
+
+            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum, count]
+            stats = torch.stack(
+                [
+                    local_ratio_sum,
+                    local_kl_sum,
+                    local_entropy_sum,
+                    local_low_clip_sum,
+                    local_high_clip_sum,
+                    local_region_clip_sum,
+                    local_count,
+                ]
+            )
             stats = self.accelerator.reduce(stats, reduction="sum")
-            global_ratio_sum, global_kl_sum, global_entropy_sum, global_clip_sum, global_count = stats.unbind(0)
+            (
+                global_ratio_sum,
+                global_kl_sum,
+                global_entropy_sum,
+                global_low_clip_sum,
+                global_high_clip_sum,
+                global_region_clip_sum,
+                global_count,
+            ) = stats.unbind(0)
             self._metrics["train"]["ratio"].append((global_ratio_sum / global_count).item())
             self._metrics["train"]["kl"].append((global_kl_sum / global_count).item())
             self._metrics["train"]["entropy"].append((global_entropy_sum / global_count).item())
-            self._metrics["train"]["clip_ratio"].append((global_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/low_mean"].append((global_low_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
+
+            # Cross-rank saturation extrema, mirroring GRPOTrainer's clip_ratio/low_min and clip_ratio/high_max:
+            # the smallest per-rank low-clip and largest per-rank high-clip fractions across ranks.
+            gathered_low_clip = self.accelerator.gather(local_low_clip_mean)
+            gathered_high_clip = self.accelerator.gather(local_high_clip_mean)
+            self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
+            self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
+
+            if self.aux_loss_enabled:
+                gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
+                self._metrics["train"]["aux_loss"].append((gathered_aux / world_size).item())
 
             # Logging metrics from the rollout worker (reward, reward_std, etc.).
-            # inputs["metrics"] is a dict of 1D tensors keyed by metric name.
-            sample_metrics = inputs["metrics"]  # dict[str, Tensor(shape=[B_local])]
+            # inputs["metrics"] is a dict keyed by metric name; each value is this rank's row of per-sample values,
+            # NaN-padded (the nan-aware aggregation below ignores both padding and unscorable samples).
+            sample_metrics = inputs["metrics"]  # dict[str, Tensor(shape=[1, n_samples_local])]
             keys = list(sample_metrics.keys())
             device = completion_mask.device
-            n_samples = torch.tensor(completion_mask.shape[0], dtype=torch.float32, device=device)
+            n_samples = (position_ids == 0).sum().to(torch.float32)
             if keys:
-                local_sums = torch.stack([sample_metrics[k].to(device).sum() for k in keys])
-                stats = torch.cat([local_sums, n_samples.unsqueeze(0)])
+                # nan-aware per key: unscorable samples carry NaN, so a plain .sum() would poison the whole metric.
+                local_sums = torch.stack([torch.nansum(sample_metrics[k].to(device)) for k in keys])
+                local_counts = torch.stack(
+                    [(~torch.isnan(sample_metrics[k].to(device))).sum().to(torch.float32) for k in keys]
+                )
+                stats = torch.cat([local_sums, local_counts])
                 stats = self.accelerator.reduce(stats, reduction="sum")
-                global_sums, global_n_samples = stats[:-1], stats[-1]
-                for k, global_sum in zip(keys, global_sums, strict=True):
-                    self._metrics["train"][k].append((global_sum / global_n_samples).item())
+                n = len(keys)
+                global_sums, global_counts = stats[:n], stats[n:]
+                for k, global_sum, global_count in zip(keys, global_sums, global_counts, strict=True):
+                    metric = (global_sum / global_count).item() if global_count > 0 else float("nan")
+                    self._metrics["train"][k].append(metric)
 
-            completion_length = completion_mask.sum(dim=1).float()
-            length_stats = torch.stack([completion_length.sum(), n_samples])
+            length_stats = torch.stack([completion_mask.sum().float(), n_samples])
             length_stats = self.accelerator.reduce(length_stats, reduction="sum")
             self._metrics["train"]["completions/mean_length"].append((length_stats[0] / length_stats[1]).item())
 
@@ -542,7 +746,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
             self._metrics["train"]["forward_time_s"].append(self._last_forward_time_s)
             # NOTE: in dynamic mbs setup, we would need to agg across DP ranks.
-            self._metrics["train"]["train_seq_len"].append(float(local_max_len))
+            self._metrics["train"]["train_seq_len"].append(float(position_ids.max() + 1))
         return loss
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
@@ -562,7 +766,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
@@ -580,8 +784,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def _sync_weight(self):
         t0 = time.time()
         logger.info("Weight sync: pausing vLLM...")
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.pause()
+        if self.accelerator.is_main_process and self.weight_transfer:
+            self.weight_transfer.pause()
         t_pause = time.time()
         logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
 
@@ -589,8 +793,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         t_barrier = time.time()
 
         logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.send_weights(self._streaming_iter())
+        if self.accelerator.is_main_process and self.weight_transfer:
+            self.weight_transfer.send_weights(self._streaming_iter())
         else:
             # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
             for _ in self._streaming_iter():
@@ -600,24 +804,22 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.accelerator.wait_for_everyone()
 
         logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.resume()
+        if self.accelerator.is_main_process:
+            if self.weight_transfer:
+                self.weight_transfer.resume()
             self.model_version += 1
-            self.rollout_worker.update_model_version(self.model_version)
+            if self.rollout_worker:
+                self.rollout_worker.update_model_version(self.model_version)
         weight_sync_time_s = time.time() - t0
         self._metrics["train"]["weight_sync_time_s"].append(weight_sync_time_s)
         logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
 
     def _inner_training_loop(self, *args, **kwargs):
-        # Start the rollout worker here (not in __init__) so that checkpoint loading in Trainer.train()
-        # has already restored the model weights. The sequence is: start worker thread → wait for NCCL
-        # init → sync weights to vLLM → begin generation. This ensures vLLM always uses the current
-        # policy before producing any samples (matters for resumed runs, harmless for fresh ones).
-        self._sync_weight()
-        if self.accelerator.is_main_process and self.rollout_worker:
-            self.rollout_worker.start()
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
-            if self.accelerator.is_main_process and self.rollout_worker:
-                self.rollout_worker.stop()
+            if self.accelerator.is_main_process:
+                if self.rollout_worker:
+                    self.rollout_worker.stop()
+                if self.weight_transfer:
+                    self.weight_transfer.destroy()

@@ -23,16 +23,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+from transformers import AutoConfig, AutoModelForCausalLM
+from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import ModelConfig
 from trl.trainer.utils import (
     RepeatSampler,
     _ChunkedLogProbFunction,
+    adjusted_mfu,
+    compute_flops_per_token,
+    compute_mfu,
     entropy_from_logits,
     flush_left,
-    forward_masked_logits,
     generate_model_card,
     get_peft_config,
     hash_module,
@@ -48,7 +51,7 @@ from trl.trainer.utils import (
     use_adapter,
 )
 
-from .testing_utils import TrlTestCase, require_peft, require_rich
+from .testing_utils import TrlTestCase, require_peft, require_rich, require_torch_accelerator
 
 
 if is_peft_available():
@@ -960,6 +963,43 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 1, 2]]))
         assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2], [1, 2, 1]]))
 
+    def test_split_by_image_position_ids(self):
+        # Gemma-style: no image_grid_thw, split by num_images using image_position_ids
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(3 * 4).reshape(3, 4),
+            "image_position_ids": torch.tensor([[0, 1], [2, 3], [4, 5]]),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:1])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][1:])
+        assert isinstance(result["image_position_ids"], list)
+        assert len(result["image_position_ids"]) == 2
+        assert torch.equal(result["image_position_ids"][0], batch["image_position_ids"][:1])
+        assert torch.equal(result["image_position_ids"][1], batch["image_position_ids"][1:])
+
+    def test_split_by_spatial_shapes(self):
+        batch = {
+            "num_images": [2, 1],
+            "num_tiles": [3, 2],
+            "pixel_values": torch.arange(5 * 4).reshape(5, 4),
+            "pixel_attention_mask": torch.arange(5 * 6).reshape(5, 6),
+            "spatial_shapes": torch.arange(5 * 2).reshape(5, 2),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:3])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][3:])
+        assert isinstance(result["pixel_attention_mask"], list)
+        assert torch.equal(result["pixel_attention_mask"][0], batch["pixel_attention_mask"][:3])
+        assert torch.equal(result["pixel_attention_mask"][1], batch["pixel_attention_mask"][3:])
+        assert isinstance(result["spatial_shapes"], list)
+        assert torch.equal(result["spatial_shapes"][0], batch["spatial_shapes"][:3])
+        assert torch.equal(result["spatial_shapes"][1], batch["spatial_shapes"][3:])
+
 
 class TestUnsplitPixelValuesByGrid(TrlTestCase):
     def test_unsplit_correctly(self):
@@ -975,97 +1015,37 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["image_grid_thw"], image_grid_thw_merged)
         assert "other_key" in result
 
+    def test_unsplit_image_position_ids(self):
+        image_position_ids = [torch.tensor([[0, 1]]), torch.tensor([[2, 3], [4, 5]])]
+        image_position_ids_merged = torch.cat(image_position_ids, dim=0)
+        pixel_values = [torch.randn(1, 4), torch.randn(2, 4)]
+        batch = {"pixel_values": pixel_values, "image_position_ids": image_position_ids}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["image_position_ids"], torch.Tensor)
+        assert torch.equal(result["image_position_ids"], image_position_ids_merged)
+
+    def test_unsplit_spatial_shapes(self):
+        pixel_values = [torch.randn(3, 4), torch.randn(2, 4)]
+        pixel_attention_mask = [torch.randn(3, 6), torch.randn(2, 6)]
+        spatial_shapes = [torch.tensor([[1, 2], [3, 4], [5, 6]]), torch.tensor([[7, 8], [9, 10]])]
+        batch = {
+            "pixel_values": pixel_values,
+            "pixel_attention_mask": pixel_attention_mask,
+            "spatial_shapes": spatial_shapes,
+        }
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_values"], torch.cat(pixel_values, dim=0))
+        assert isinstance(result["pixel_attention_mask"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_attention_mask"], torch.cat(pixel_attention_mask, dim=0))
+        assert isinstance(result["spatial_shapes"], torch.Tensor)
+        assert torch.equal(result["spatial_shapes"], torch.cat(spatial_shapes, dim=0))
+
     def test_no_op_if_not_list(self):
         original = torch.randn(5, 3)
         batch = {"pixel_values": original}
         result = unsplit_pixel_values_by_grid(batch)
         assert torch.equal(result["pixel_values"], original)
-
-
-class TestForwardMaskedLogits:
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            "trl-internal-testing/tiny-CohereForCausalLM",
-            "trl-internal-testing/tiny-Cohere2ForCausalLM",
-            "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-            "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
-            "trl-internal-testing/tiny-Gemma2ForCausalLM",
-            "trl-internal-testing/tiny-GemmaForCausalLM",
-            "trl-internal-testing/tiny-Glm4MoeForCausalLM",
-            "trl-internal-testing/tiny-GptOssForCausalLM",
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-LlamaForCausalLM-3",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.1",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-            "trl-internal-testing/tiny-Phi3ForCausalLM",
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            "trl-internal-testing/tiny-Qwen3ForCausalLM",
-        ],
-    )
-    def test_llm(self, model_id):
-        device = torch.device("cuda")
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto", device_map=device)
-        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=device)
-        logits_mask = torch.tensor(
-            [[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]],
-            device=device,
-        )
-
-        full_outputs = model(input_ids=input_ids)
-        masked_outputs = forward_masked_logits(model, logits_mask, input_ids=input_ids)
-
-        torch.testing.assert_close(
-            masked_outputs.flat_logits,
-            full_outputs.logits[logits_mask.bool()],
-        )
-
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
-            "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("4.57.0"),
-                        reason="Qwen3-VL series were introduced in transformers-4.57.0",
-                    ),
-                ],
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
-            ),
-        ],
-    )
-    def test_vlm(self, model_id):
-        device = torch.device("cuda")
-        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="auto", device_map=device)
-        input_ids = torch.randint(0, model.config.text_config.vocab_size, (2, 8), device=device)
-        logits_mask = torch.tensor(
-            [[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]],
-            device=device,
-        )
-
-        full_outputs = model(input_ids=input_ids)
-        masked_outputs = forward_masked_logits(model, logits_mask, input_ids=input_ids)
-
-        torch.testing.assert_close(
-            masked_outputs.flat_logits,
-            full_outputs.logits[logits_mask.bool()],
-        )
 
 
 class TestChunkedLogProbFunction:
@@ -1197,12 +1177,29 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-LlamaForCausalLM-3",
     "trl-internal-testing/tiny-MistralForCausalLM-0.1",
     "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-    "trl-internal-testing/tiny-Phi3ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.3.0"),
+            reason="Nemotron 3 was introduced in transformers>=5.3.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Olmo3ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("4.57.0"),
+            reason="Olmo 3 was introduced in transformers>=4.57.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3",
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
 ]
 
 
+@require_torch_accelerator
 class TestPatchChunkedLMHead:
     B, S = 4, 16  # batch size, sequence length (including prompt + completion)
     H, V = 32, 128
@@ -1285,15 +1282,12 @@ class TestPatchChunkedLMHead:
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_forward(self, model_id, temperature):
-        device = torch.device("cuda")
-        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(device)
-        if getattr(model.config, "final_logit_softcapping", None) is not None:
-            pytest.skip("model uses final_logit_softcapping, not supported by chunked LM head")
+        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
         model.eval()
 
         B, S, chunk_size = 2, 8, 32
         torch.manual_seed(42)
-        input_ids = torch.randint(0, model.config.vocab_size, (B, S), device=device)
+        input_ids = torch.randint(0, model.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
 
         # Reference: standard forward → shifted logits → logprobs & entropy
@@ -1316,15 +1310,12 @@ class TestPatchChunkedLMHead:
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, model_id, temperature):
-        device = torch.device("cuda")
-        model_ref = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(device)
-        if getattr(model_ref.config, "final_logit_softcapping", None) is not None:
-            pytest.skip("model uses final_logit_softcapping, not supported by chunked LM head")
+        model_ref = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
         model_chunked = copy.deepcopy(model_ref)
 
         B, S, chunk_size = 2, 8, 32
         torch.manual_seed(42)
-        input_ids = torch.randint(0, model_ref.config.vocab_size, (B, S), device=device)
+        input_ids = torch.randint(0, model_ref.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
         shifted_labels = labels[:, 1:]
 
@@ -1342,3 +1333,85 @@ class TestPatchChunkedLMHead:
         chunked_grad = model_chunked.lm_head.weight.grad.clone()
 
         torch.testing.assert_close(chunked_grad, ref_grad, atol=5e-2, rtol=5e-2)
+
+
+class TestComputeFlopsPerToken(TrlTestCase):
+    DENSE_MODEL_ID = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+    MOE_MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+
+    def test_seq_scaling_linear(self):
+        # Attention-score FLOPs per token scale linearly with seq_len; everything else
+        # is seq-len-independent. Doubling seq_len should double the seq-dependent delta,
+        # which differences cancel out from. `F(32k) - F(16k) == 2 * (F(16k) - F(8k))`.
+        cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
+        f_8k = compute_flops_per_token(cfg, 8192)
+        f_16k = compute_flops_per_token(cfg, 16384)
+        f_32k = compute_flops_per_token(cfg, 32768)
+        assert f_32k - f_16k == 2 * (f_16k - f_8k)
+
+    def test_tied_vs_untied_lm_head(self):
+        # Untied lm_head adds `2 * V * h` forward FLOPs, ×3 for fwd+bwd.
+        cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
+        cfg.tie_word_embeddings = True
+        f_tied = compute_flops_per_token(cfg, 16384)
+        cfg.tie_word_embeddings = False
+        f_untied = compute_flops_per_token(cfg, 16384)
+        expected_delta = 3 * 2 * cfg.vocab_size * cfg.hidden_size
+        assert f_untied - f_tied == expected_delta
+
+    def test_moe_active_vs_total_experts(self):
+        # Doubling `num_experts_per_tok` (active experts) changes FLOPs by exactly the
+        # routed-experts contribution: `num_experts_per_tok × 3 matmuls × 2 × h × moe_intermediate`
+        # per MoE layer, ×3 for fwd+bwd. Holding `num_local_experts` constant pins the
+        # router term so the delta is purely the active-expert math.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        cfg.num_experts_per_tok = 1
+        f_lo = compute_flops_per_token(cfg, 16384)
+        cfg.num_experts_per_tok = 2
+        f_hi = compute_flops_per_token(cfg, 16384)
+        moe_layers = sum(1 for i in range(cfg.num_hidden_layers) if i % cfg.decoder_sparse_step == 0)
+        per_expert_per_layer = 2 * 3 * cfg.hidden_size * cfg.moe_intermediate_size
+        expected_delta = 3 * moe_layers * (2 - 1) * per_expert_per_layer
+        assert f_hi - f_lo == expected_delta
+
+
+class TestComputeMfu(TrlTestCase):
+    def test_perfect_utilization(self):
+        # If aggregate TPS is exactly `peak * world_size / flops_per_token`, MFU is 100%.
+        flops = 100e9
+        peak = 989.5e12
+        world_size = 8
+        tps = peak * world_size / flops
+        assert compute_mfu(flops, tps, world_size, peak_flops_per_device=peak) == pytest.approx(100.0)
+
+
+class TestAdjustedMfu(TrlTestCase):
+    MOE_MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+
+    def test_consistent_with_formula(self):
+        # `adjusted_mfu(mfu, cfg, seq_len) == mfu * (full - half_attn) / full`, with
+        # `full = compute_flops_per_token(cfg, seq_len)` and
+        # `half_attn = L * 3 * 2 * n_heads * head_dim * seq_len`. Cross-check the two helpers.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        seq_len = 16384
+        flops_full = compute_flops_per_token(cfg, seq_len)
+        half_attn = cfg.num_hidden_layers * 3 * 2 * cfg.num_attention_heads * cfg.head_dim * seq_len
+        expected = 100.0 * (flops_full - half_attn) / flops_full
+        assert adjusted_mfu(100.0, cfg, seq_len) == pytest.approx(expected)
+
+    def test_proportional_to_input(self):
+        # The correction is purely multiplicative in `mfu`. `adjusted_mfu(2*x, ...)` should
+        # equal `2 * adjusted_mfu(x, ...)`.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        a = adjusted_mfu(50.0, cfg, 16384)
+        b = adjusted_mfu(100.0, cfg, 16384)
+        assert b == pytest.approx(2 * a)
+
+    def test_decreases_with_seq_len(self):
+        # Longer sequences → attention takes a larger share of total compute → causal
+        # correction subtracts a larger absolute amount → factor strictly decreases.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        f_short = adjusted_mfu(100.0, cfg, 4096)
+        f_med = adjusted_mfu(100.0, cfg, 16384)
+        f_long = adjusted_mfu(100.0, cfg, 65536)
+        assert f_short > f_med > f_long

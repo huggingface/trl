@@ -24,7 +24,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from operator import itemgetter
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -32,8 +32,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import Accelerator, PartialState, logging
-from accelerate.utils import tqdm
+from accelerate import Accelerator, PartialState
+from accelerate.logging import get_logger
+from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset
 from packaging.version import Version
 from torch import autocast
@@ -65,7 +66,7 @@ from .bco_config import BCOConfig
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
 
 if is_wandb_available():
     import wandb
@@ -76,10 +77,7 @@ if is_sklearn_available():
 if is_joblib_available():
     import joblib
 
-if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizer
-
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 RUNNING_NAME = "running.json"
 CLF_NAME = "clf.pkl"
@@ -167,8 +165,8 @@ class RunningMoments:
 
 def _tokenize(
     batch: dict[str, list[Any]],
-    tokenizer: "PreTrainedTokenizer",
-    embedding_tokenizer: Optional["PreTrainedTokenizer"] = None,
+    tokenizer: PreTrainedTokenizerBase,
+    embedding_tokenizer: PreTrainedTokenizerBase | None = None,
 ) -> dict[str, list[Any]]:
     """Tokenize a batch from a BCO specific dataset."""
     prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
@@ -380,7 +378,7 @@ class BCOTrainer(_BaseTrainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        peft_config (`dict`, defaults to `None`):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
             a PEFT model.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -390,6 +388,12 @@ class BCOTrainer(_BaseTrainer):
             Name of the train target PEFT adapter, when using LoRA with multiple adapters.
         ref_adapter_name (`str`, defaults to `None`):
             Name of the reference PEFT adapter, when using LoRA with multiple adapters.
+        embedding_func (`Callable`, *optional*):
+            Function to compute prompt embeddings, used to train the underlying distribution matching (UDM) classifier
+            when the desirable and undesirable datasets have divergent prompt distributions. Requires the scikit-learn
+            and joblib libraries.
+        embedding_tokenizer ([`~transformers.PreTrainedTokenizerBase`], *optional*):
+            Tokenizer used to prepare prompts for `embedding_func`.
     """
 
     _tag_names = ["trl", "bco"]
@@ -424,7 +428,7 @@ class BCOTrainer(_BaseTrainer):
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
-        peft_config: dict | None = None,
+        peft_config: "PeftConfig | None" = None,
         compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
         model_adapter_name: str | None = None,
         ref_adapter_name: str | None = None,
@@ -466,22 +470,30 @@ class BCOTrainer(_BaseTrainer):
                 model_init_kwargs["dtype"] = dtype
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
         if isinstance(ref_model, str):
             ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **model_init_kwargs)
 
+        # PEFT
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
         self._peft_has_been_casted_to_bf16 = False
-
-        if not is_peft_available() and peft_config is not None:
-            raise ValueError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it with `pip install peft` to use the PEFT models"
-            )
-        elif is_peft_available() and peft_config is not None:
-            if isinstance(model, PeftModel):
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            if is_peft_model(model):
                 raise ValueError(
                     "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
                     "merge and unload the existing adapter, save the resulting base model, and then pass that base "
@@ -546,13 +558,12 @@ class BCOTrainer(_BaseTrainer):
         else:
             self.is_encoder_decoder = args.is_encoder_decoder
 
-        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = model_adapter_name
         self.ref_adapter_name = ref_adapter_name
 
         if ref_model:
             self.ref_model = ref_model
-        elif self.is_peft_model or args.precompute_ref_log_probs:
+        elif is_peft_model(model) or args.precompute_ref_log_probs:
             # The `model` with adapters turned off will be used as the reference model
             self.ref_model = None
         else:
@@ -645,7 +656,9 @@ class BCOTrainer(_BaseTrainer):
             )
             # Apply the chat template if needed
             train_dataset = train_dataset.map(
-                maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
+                maybe_apply_chat_template,
+                fn_kwargs={"processing_class": processing_class},
+                num_proc=args.dataset_num_proc,
             )
             if eval_dataset is not None:
                 # Extract the prompt if needed
@@ -658,7 +671,7 @@ class BCOTrainer(_BaseTrainer):
                 )
                 eval_dataset = eval_dataset.map(
                     maybe_apply_chat_template,
-                    fn_kwargs={"tokenizer": processing_class},
+                    fn_kwargs={"processing_class": processing_class},
                     num_proc=args.dataset_num_proc,
                 )
 
@@ -762,7 +775,7 @@ class BCOTrainer(_BaseTrainer):
                 )
 
         if self.ref_model is None:
-            if not (self.is_peft_model or self.precompute_ref_log_probs):
+            if not (is_peft_model(model) or self.precompute_ref_log_probs):
                 raise ValueError(
                     "No reference model and model is not a Peft model. Try setting `precompute_ref_log_probs=True`"
                 )
@@ -934,7 +947,7 @@ class BCOTrainer(_BaseTrainer):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
         with (
             self.accelerator.unwrap_model(self.model).disable_adapter()
-            if self.is_peft_model and not self.ref_adapter_name
+            if is_peft_model(self.model) and not self.ref_adapter_name
             else nullcontext()
         ):
             if self.ref_adapter_name:

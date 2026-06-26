@@ -33,6 +33,28 @@ if is_peft_available():
 
 @pytest.mark.low_priority
 class TestBCOTrainer(TrlTestCase):
+    @require_sklearn
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+
+        with pytest.raises(ValueError, match="custom code"):
+            BCOTrainer(
+                model=model_id,
+                args=BCOConfig(output_dir=self.tmp_dir, report_to="none"),
+                processing_class=tokenizer,
+                train_dataset=dataset,
+            )
+
+        trainer = BCOTrainer(
+            model=model_id,
+            args=BCOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     @pytest.mark.parametrize(
         "config_name",
         [
@@ -74,7 +96,7 @@ class TestBCOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -111,7 +133,7 @@ class TestBCOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -249,7 +271,7 @@ class TestBCOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -298,7 +320,7 @@ class TestBCOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -335,7 +357,7 @@ class TestBCOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             if "lora" in n:
                 new_param = trainer.model.get_parameter(n)
@@ -381,7 +403,7 @@ class TestBCOTrainer(TrlTestCase):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         training_args = BCOConfig(
             output_dir=self.tmp_dir,
@@ -393,7 +415,7 @@ class TestBCOTrainer(TrlTestCase):
             model=model,
             args=training_args,
             processing_class=tokenizer,
-            train_dataset=dataset["train"],
+            train_dataset=dataset,
             peft_config=lora_config,
         )
 

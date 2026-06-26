@@ -34,6 +34,27 @@ class TestCPOTrainer(TrlTestCase):
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id, dtype="float32")
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+
+        with pytest.raises(ValueError, match="custom code"):
+            CPOTrainer(
+                model=model_id,
+                args=CPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                processing_class=tokenizer,
+                train_dataset=dataset,
+            )
+
+        trainer = CPOTrainer(
+            model=model_id,
+            args=CPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     @pytest.mark.parametrize(
         "name, loss_type, config_name",
         [
@@ -60,7 +81,7 @@ class TestCPOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        dataset = load_dataset("trl-internal-testing/zen", config_name)
 
         if name == "qwen":
             model = self.model
@@ -74,8 +95,8 @@ class TestCPOTrainer(TrlTestCase):
             model=model,
             args=training_args,
             processing_class=tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -84,7 +105,7 @@ class TestCPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
@@ -124,14 +145,14 @@ class TestCPOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        dataset = load_dataset("trl-internal-testing/zen", config_name)
 
         trainer = CPOTrainer(
             model=self.model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
             peft_config=lora_config,
         )
 
@@ -141,7 +162,7 @@ class TestCPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the parameters have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             if "lora" in n:
                 new_param = trainer.model.get_parameter(n)
@@ -149,7 +170,7 @@ class TestCPOTrainer(TrlTestCase):
                     assert not torch.equal(param, new_param)
 
     def test_compute_metrics(self):
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
         def dummy_compute_metrics(*args, **kwargs):
             return {"test": 0.0}
@@ -169,8 +190,8 @@ class TestCPOTrainer(TrlTestCase):
             model=self.model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
             compute_metrics=dummy_compute_metrics,
         )
 
@@ -194,14 +215,14 @@ class TestCPOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
         trainer = CPOTrainer(
             model=self.model,
             args=training_args,
             processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}

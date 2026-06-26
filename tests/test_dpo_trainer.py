@@ -17,8 +17,8 @@ import torch
 import transformers
 from datasets import load_dataset
 from packaging.version import Version
-from packaging.version import parse as parse_version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer
@@ -26,7 +26,7 @@ from trl.trainer.dpo_trainer import DataCollatorForPreference, DataCollatorForVi
 
 from .testing_utils import (
     TrlTestCase,
-    require_ampere_or_newer,
+    is_ampere_or_newer,
     require_bitsandbytes,
     require_kernels,
     require_liger_kernel,
@@ -168,16 +168,36 @@ class TestDPOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
+            "trl-internal-testing/tiny-Cohere2ForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="GLM4 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            "trl-internal-testing/tiny-GptOssForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.7.0"),
+                    reason="Nemotron 3 gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Olmo3ForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="Olmo 3 requires transformers>=4.57.0",
+                ),
+            ),
         ],
     )
     def test_train(self, model_id):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -185,26 +205,88 @@ class TestDPOTrainer(TrlTestCase):
         )
         trainer = DPOTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize("precompute_ref_log_probs", [False, True])
+    def test_evaluate_with_raw_dataset(self, precompute_ref_log_probs):
+        # `evaluate` should accept the same (unprocessed) dataset types as the trainer, e.g. a held-out test set
+        # passed directly to `evaluate`. With `precompute_ref_log_probs=True`, the reference log-probs must also be
+        # precomputed for the freshly-passed dataset. See https://github.com/huggingface/trl/issues/6115.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir, precompute_ref_log_probs=precompute_ref_log_probs, report_to="none"
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        metrics = trainer.evaluate(eval_dataset=dataset)
+        assert metrics["eval_loss"] is not None
+
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            DPOTrainer(
+                model=model_id,
+                args=DPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = DPOTrainer(
+            model=model_id,
+            args=DPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
+    @pytest.mark.parametrize(
+        "config_name",
+        [
+            "standard_preference",
+            "conversational_preference",
+            "standard_implicit_prompt_preference",
+            "conversational_implicit_prompt_preference",
+        ],
+    )
+    def test_train_dataset_format(self, config_name):
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # Special case for harmony
     def test_train_gpt_oss(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/harmony", "preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -214,31 +296,25 @@ class TestDPOTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-GptOssForCausalLM", args=training_args, train_dataset=dataset
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_model(self):
-        # Instantiate the model
         model = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             dtype="float32",
         )
 
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -246,19 +322,16 @@ class TestDPOTrainer(TrlTestCase):
         )
         trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize(
         "loss_type",
@@ -277,13 +350,12 @@ class TestDPOTrainer(TrlTestCase):
             "apo_down",
             "discopop",
             "sft",
+            "sigmoid_norm",
         ],
     )
     def test_train_loss_types(self, loss_type):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             loss_type=loss_type,
@@ -300,25 +372,20 @@ class TestDPOTrainer(TrlTestCase):
             eval_dataset=dataset["test"],
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_multi_loss_types(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -331,25 +398,20 @@ class TestDPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_wpo(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -362,25 +424,20 @@ class TestDPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_ld(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -393,29 +450,24 @@ class TestDPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize(
         "f_divergence_type",
         ["reverse_kl", "forward_kl", "js_divergence", "alpha_divergence"],
     )
     def test_train_with_f_divergence(self, f_divergence_type):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -428,28 +480,23 @@ class TestDPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_explicit_ref_model(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
         # When specifying a ref model, it's usually because we want it to be a different checkpoint, but for testing
@@ -464,27 +511,22 @@ class TestDPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
             new_ref_param = trainer.ref_model.get_parameter(n)
-            torch.testing.assert_close(param, new_ref_param), f"Reference model parameter {n} has changed"
+            torch.testing.assert_close(param, new_ref_param, msg=f"Reference model parameter {n} has changed.")
 
-    def test_training_with_sync_ref_model(self):
-        # Get the dataset
+    def test_train_with_sync_ref_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -496,15 +538,12 @@ class TestDPOTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
         assert trainer.ref_model is not None
         previous_ref_params = {n: param.clone() for n, param in trainer.ref_model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
@@ -515,10 +554,8 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
 
     def test_train_model_dtype(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             model_init_kwargs={"dtype": torch.float16},
@@ -529,16 +566,13 @@ class TestDPOTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             # For some reasonn model.layers.0.input_layernorm.weight doesn't change in GitHub Actions but does
             # locally. We ignore this parameter for now
@@ -547,19 +581,16 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             # Check the torch dtype
             assert new_param.dtype == torch.float16
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
     def test_train_dense_with_peft_config_lora(self):
-        # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=1.0,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -573,34 +604,28 @@ class TestDPOTrainer(TrlTestCase):
             peft_config=LoraConfig(),
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the peft params have changed and the base model params have not changed
+        # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
-            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
     def test_train_moe_with_peft_config(self):
-        # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -614,40 +639,32 @@ class TestDPOTrainer(TrlTestCase):
             peft_config=LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"]),
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the peft params have changed and the base model params have not changed
+        # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
-            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
     def test_train_peft_model(self):
-        # Get the base model
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
-        # Get the base model parameter names
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        # Turn the model into a peft model
         lora_config = LoraConfig()
         model = get_peft_model(model, lora_config)
 
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=1.0,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -655,37 +672,68 @@ class TestDPOTrainer(TrlTestCase):
         )
         trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the peft params have changed and the base model params have not changed
+        # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_train_moe_peft_model(self):
+        # Regression test for https://github.com/huggingface/trl/issues/5222. PEFT only supports one adapter per model
+        # when the LoRA config uses `target_parameters` (see peft#3340), so no "ref" adapter can be created and the
+        # reference log probs are computed with adapters disabled instead.
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+
+        lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
+        model = get_peft_model(model, lora_config)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert "ref" not in trainer.model.peft_config
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_dense_with_peft_config_lora`, since gradient checkpointing is
     # enabled by default in `DPOTrainer`. We keep it as a regression guard: if the default ever changes, we still
     # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
     @require_peft
     def test_train_with_peft_config_and_gradient_checkpointing(self):
-        # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -700,29 +748,24 @@ class TestDPOTrainer(TrlTestCase):
             peft_config=LoraConfig(),
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the peft params have changed and the base model params have not changed
+        # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
-            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_liger_kernel
     def test_train_with_liger(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -733,25 +776,39 @@ class TestDPOTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    @require_peft
+    def test_init_fails_with_peft_and_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+
+        with pytest.raises(NotImplementedError, match="Liger DPO loss is not implemented for PEFT models."):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
 
     def test_train_with_iterable_dataset(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train", streaming=True)
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -762,27 +819,25 @@ class TestDPOTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_kernels
-    @require_ampere_or_newer  # Flash attention 2 requires Ampere or newer GPUs
+    @pytest.mark.skipif(
+        not is_ampere_or_newer() and torch_device != "xpu",
+        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    )
     def test_train_padding_free(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -795,25 +850,20 @@ class TestDPOTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_chat_template_kwargs(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -837,10 +887,8 @@ class TestDPOTrainer(TrlTestCase):
             processing_class=tokenizer,
         )
 
-        # Assert trainer uses the same chat template as tokenizer
         assert trainer.processing_class.chat_template == tokenizer.chat_template
 
-        # Assert chat_template is applied
         for i in range(2):
             role = "SYSTEM" if i else "system"
             system_prompt = (
@@ -849,53 +897,45 @@ class TestDPOTrainer(TrlTestCase):
             system_prompt_ids = trainer.processing_class(system_prompt)["input_ids"]
             assert trainer.train_dataset[i]["prompt_ids"][: len(system_prompt_ids)] == system_prompt_ids
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_toolcall_data(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # toolcall sequences are longer than standard data, reduce batch size to avoid OOM
+            max_length=512,  # toolcall sequences are longer than standard data, limit length to avoid OOM
             report_to="none",
         )
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_eval(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
-        # Initialize the trainer
         training_args = DPOConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -904,17 +944,13 @@ class TestDPOTrainer(TrlTestCase):
             eval_dataset=dataset["test"],
         )
 
-        # Train the model
         trainer.train()
 
-        # Check that the eval loss is not None
         assert trainer.state.log_history[0]["eval_loss"] is not None
 
     def test_train_with_multiple_eval_dataset(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
-        # Initialize the trainer
         training_args = DPOConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -922,21 +958,17 @@ class TestDPOTrainer(TrlTestCase):
             train_dataset=dataset["train"],
             eval_dataset={"data1": dataset["test"], "data2": dataset["test"]},
         )
-        # Train the model
         trainer.train()
 
-        # Check that the eval losses are not None
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
     def test_train_with_compute_metrics(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
         def dummy_compute_metrics(eval_pred):
             return {"my_metric": 0.123}
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             eval_strategy="steps",
@@ -951,20 +983,16 @@ class TestDPOTrainer(TrlTestCase):
             compute_metrics=dummy_compute_metrics,
         )
 
-        # Train the model
         trainer.train()
 
-        # Check that the custom metric is logged
         assert trainer.state.log_history[-2]["eval_my_metric"] == 0.123
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
     # `DPOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
     # checkpointing, which has caused issues in the past.
     def test_train_with_gradient_checkpointing(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -975,25 +1003,20 @@ class TestDPOTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_tag_added(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             train_dataset=dataset,
@@ -1004,10 +1027,8 @@ class TestDPOTrainer(TrlTestCase):
 
     @require_peft
     def test_tag_added_peft(self):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # Initialize the trainer
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             train_dataset=dataset,
@@ -1017,10 +1038,72 @@ class TestDPOTrainer(TrlTestCase):
         for tag in ["dpo", "trl"]:
             assert tag in trainer.model.model_tags
 
+    @require_peft
+    @require_bitsandbytes
+    def test_peft_with_quantization(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype="float32",
+            quantization_config=quantization_config,
+        )
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        # Initialize the trainer with the already configured PeftModel
+        training_args = DPOConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
+        trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset, peft_config=LoraConfig())
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["mean_token_accuracy"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            # In bitsandbytes, bias parameters are automatically cast to the input dtype during the forward pass if
+            # their dtype doesn’t match. This causes the module to change unexpectedly during the first forward pass of
+            # the training. To handle this, we cast these specific bias parameters to float32 before comparison.
+            # https://github.com/bitsandbytes-foundation/bitsandbytes/blob/45553f7392e524eacf400b132cfe01261f6477be/bitsandbytes/nn/modules.py#L518
+            # We still need to investigate why the compute dtype ends up being different than for these parameters.
+            if n in [
+                "base_model.model.model.layers.1.self_attn.k_proj.bias",
+                "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
+                "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
+            ]:
+                param = param.float()
+
+            if "lora" not in n:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "lora" in n:  # We expect the peft params to be different
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            else:
+                raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
+
+
+@require_vision
+class TestDPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
             # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
             # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  high memory peak, skipped for now
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
@@ -1038,7 +1121,14 @@ class TestDPOTrainer(TrlTestCase):
                 ],
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1046,12 +1136,9 @@ class TestDPOTrainer(TrlTestCase):
             ),
         ],
     )
-    @require_vision
     def test_train_vlm(self, model_id):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
@@ -1060,32 +1147,25 @@ class TestDPOTrainer(TrlTestCase):
         )
         trainer = DPOTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            # For some reason, these params are not updated. This is probably not related to TRL, but to
-            # the model itself. We should investigate this further, but for now we just skip these params.
-            # fmt: off
-            if (
-                model_id == "trl-internal-testing/tiny-Gemma3ForConditionalGeneration" and "model.vision_tower.vision_model.head" in n or
-                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or
-                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or
-                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or
-                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or
-                model_id == "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration" and "model.visual.deepstack_merger_list" in n
-            ):
-            # fmt: on
-                continue
-            assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
+            # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
+            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen — if they
+            # ever start training, the feature-selection plumbing has likely regressed.
+            if model_id in (
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            ) and ("encoder.layers.1" in n or "post_layernorm" in n):
+                assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     @pytest.mark.parametrize(
         "model_id",
@@ -1094,16 +1174,13 @@ class TestDPOTrainer(TrlTestCase):
         ],
     )
     @pytest.mark.xfail(
-        parse_version(transformers.__version__) < parse_version("4.57.0"),
+        Version(transformers.__version__) < Version("4.57.0"),
         reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
         strict=False,
     )
-    @require_vision
     def test_train_vlm_multi_image(self, model_id):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_preference", split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -1117,56 +1194,16 @@ class TestDPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
-
-    # Gemma 3n uses a timm encoder, making it difficult to create a smaller variant for testing.
-    # To ensure coverage, we run tests on the full model but mark them as slow to exclude from default runs.
-    @pytest.mark.slow
-    @require_vision
-    @pytest.mark.skip(reason="Model google/gemma-3n-E2B-it is gated and requires HF token")
-    def test_train_vlm_gemma_3n(self):
-        # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
-
-        # Initialize the trainer
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
-            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
-            model_init_kwargs={"dtype": "bfloat16"},
-            report_to="none",
-        )
-        trainer = DPOTrainer(model="google/gemma-3n-E2B-it", args=training_args, train_dataset=dataset)
-
-        # Save the initial parameters to compare them later
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        # Train the model
-        trainer.train()
-
-        # Check that the training loss is not None
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if "model.audio_tower" in n or "model.embed_audio" in n:
-                # The audio embedding parameters are not updated because this dataset contains no audio data
-                continue
-            assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     @pytest.mark.parametrize(
         "model_id",
@@ -1178,12 +1215,9 @@ class TestDPOTrainer(TrlTestCase):
         "dataset_config",
         ["conversational_preference", "standard_preference"],
     )
-    @require_vision
     def test_train_vlm_text_only_data(self, model_id, dataset_config):
-        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", dataset_config, split="train")
 
-        # Initialize the trainer
         training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = DPOTrainer(
             model=model_id,
@@ -1191,24 +1225,20 @@ class TestDPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check the params have changed
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n.startswith("model.visual"):
-                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is updated"
+                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
             else:
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
-    @require_vision
     def test_train_vlm_with_max_length(self):
         # Regression test for #5283: mm_token_type_ids must be truncated alongside input_ids when max_length is set,
         # otherwise a shape mismatch crashes the model forward pass.
@@ -1228,76 +1258,100 @@ class TestDPOTrainer(TrlTestCase):
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    @require_peft
-    @require_bitsandbytes
-    def test_peft_with_quantization(self):
-        # Get the base model
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
-        )
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            dtype="float32",
-            quantization_config=quantization_config,
-        )
-
-        # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
-
-        # Initialize the trainer with the already configured PeftModel
-        training_args = DPOConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
-        trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset, peft_config=LoraConfig())
-
-        # Save initial parameters to check they change during training
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        # Check that training completed successfully
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-        assert trainer.state.log_history[-1]["mean_token_accuracy"] is not None
-
-        # Check the peft params have changed and the base model params have not changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            # In bitsandbytes, bias parameters are automatically cast to the input dtype during the forward pass if
-            # their dtype doesn’t match. This causes the module to change unexpectedly during the first forward pass of
-            # the training. To handle this, we cast these specific bias parameters to float32 before comparison.
-            # https://github.com/bitsandbytes-foundation/bitsandbytes/blob/45553f7392e524eacf400b132cfe01261f6477be/bitsandbytes/nn/modules.py#L518
-            # We still need to investigate why the compute dtype ends up being different than for these parameters.
-            if n in [
-                "base_model.model.model.layers.1.self_attn.k_proj.bias",
-                "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
-                "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
-            ]:
-                param = param.float()
-
-            if "lora" not in n:  # We expect the base model parameters to be the same
-                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
-            elif "lora" in n:  # We expect the peft parameters to be different
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
-            else:
-                raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
-
-    @require_vision
     def test_train_vlm_keep_end_raises(self):
         # Regression test for #5285: keep_end with a VLM must raise at init time, not silently corrupt training.
         # Image tokens live at the start of the sequence (in the prompt); keep_end would drop them.
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            max_length=32,
-            truncation_mode="keep_end",
-            report_to="none",
-        )
+        with pytest.warns(FutureWarning, match="keep_end.*deprecated"):
+            training_args = DPOConfig(
+                output_dir=self.tmp_dir,
+                max_length=32,
+                truncation_mode="keep_end",
+                report_to="none",
+            )
         with pytest.raises(ValueError, match="truncation_mode='keep_end' is not supported for vision-language models"):
             DPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
                 args=training_args,
                 train_dataset=dataset,
             )
+
+    def test_vision_dataset_with_text_model_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match="vision-related.*vision-language model"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    def test_precompute_ref_log_probs_raises_for_vision(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none", precompute_ref_log_probs=True)
+        with pytest.raises(ValueError, match="precompute_ref_log_probs.*not supported for vision datasets"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    @require_liger_kernel
+    def test_train_vlm_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+
+@pytest.mark.slow
+class TestDPOTrainerSlow(TrlTestCase):
+    # Gemma 3n uses a timm encoder, making it difficult to create a smaller variant for testing.
+    # To ensure coverage, we run tests on the full model but mark them as slow to exclude from default runs.
+    @pytest.mark.skip(reason="Model google/gemma-3n-E2B-it is gated and requires HF token")
+    @require_vision
+    def test_train_vlm_gemma_3n(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            model_init_kwargs={"dtype": "bfloat16"},
+            report_to="none",
+        )
+        trainer = DPOTrainer(model="google/gemma-3n-E2B-it", args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "model.audio_tower" in n or "model.embed_audio" in n:
+                # The audio embedding parameters are not updated because this dataset contains no audio data
+                continue
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"

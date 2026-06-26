@@ -119,21 +119,14 @@ if __name__ == "__main__":
     # Load the VLM model using correct architecture (from GRPO pattern)
     config = AutoConfig.from_pretrained(model_args.model_name_or_path)
     architecture = getattr(transformers, config.architectures[0])
-    model = architecture.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-    )
+    model = architecture.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     # For VLM online DPO, using a reward model is complex because it needs images
-    # Instead, we'll use a simple random judge for testing
-    # In production, you'd want to use a proper text-only reward model or a custom judge
     reward_model = None
     reward_processor = None
 
     # Load processor for main model
-    processor = AutoProcessor.from_pretrained(
-        model_args.model_name_or_path,
-        trust_remote_code=model_args.trust_remote_code,
-    )
+    processor = AutoProcessor.from_pretrained(model_args.model_name_or_path)
     if hasattr(processor, "tokenizer"):
         processor.tokenizer.padding_side = "left"
         if processor.tokenizer.pad_token_id is None:
