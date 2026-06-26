@@ -405,6 +405,30 @@ class ULDLoss(nn.Module):
                 distillation_losses.append(loss_i)
                 continue
 
+            # The "bayesian" shift has no predictor logit for an answer span starting at index 0 (front-truncation can
+            # drop the whole prompt). Skip that unscorable leading span on both sides to keep them on a shared span.
+            if self.token_merge_strategy == "bayesian" and (student_start == 0 or teacher_start == 0):
+                if self.use_extended_uld:
+                    if student_byte_offsets is None or teacher_byte_offsets is None:
+                        raise ValueError("Byte offsets are required when `use_extended_uld=True`.")
+                    s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
+                    t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
+                    student_groups, teacher_groups = self._align_by_byte_offsets(s_answer, t_answer)
+                    if not student_groups or not teacher_groups:
+                        distillation_losses.append(student_logits[i].sum() * 0.0)
+                        continue
+                    # Drop the first aligned group pair (advance by the tokens it covered).
+                    student_drop, teacher_drop = len(student_groups[0]), len(teacher_groups[0])
+                else:
+                    # Drop the first positional target from both sides.
+                    student_drop = teacher_drop = 1
+
+                student_start, student_size = student_start + student_drop, student_size - student_drop
+                teacher_start, teacher_size = teacher_start + teacher_drop, teacher_size - teacher_drop
+                if student_size <= 0 or teacher_size <= 0:
+                    distillation_losses.append(student_logits[i].sum() * 0.0)
+                    continue
+
             # Extract answer logits. "bayesian" starts one position earlier so probs[k] predicts token_ids[k].
             if self.token_merge_strategy == "bayesian":
                 student_answer_logits = student_logits[i, student_start - 1 : student_start + student_size - 1]
