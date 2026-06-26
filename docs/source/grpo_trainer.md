@@ -651,7 +651,7 @@ $$
 \mathcal{L}(\theta) = \mathcal{L}_{\text{GRPO}}(\theta) - \alpha \cdot \mathcal{H}(\pi_\theta),
 $$
 
-where \\(\mathcal{H}(\pi_\theta)\\) is the mean per-token entropy of the policy and \\(\alpha\\) is the entropy coefficient.
+where \\(\mathcal{H}(\pi_\theta)\\) is the mean per-token entropy of the policy and \\(\alpha\\) is the entropy coefficient. The bonus is always the mean per-token entropy regardless of `loss_type`; it is not rescaled to match a loss type's policy normalization (e.g. Dr. GRPO's `batch_size * max_completion_length` denominator), so `entropy_coef` has the same meaning for every loss type.
 
 **Static entropy** — a fixed coefficient throughout training:
 

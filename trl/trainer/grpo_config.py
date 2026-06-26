@@ -297,7 +297,9 @@ class GRPOConfig(_BaseConfig):
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
         entropy_coef (`float`, *optional*, defaults to `0.0`):
             Coefficient of the entropy regularization term in the loss. A positive value adds an entropy bonus that
-            encourages exploration by keeping the policy from collapsing to near-deterministic outputs. When
+            encourages exploration by keeping the policy from collapsing to near-deterministic outputs. The bonus is
+            always the mean per-token entropy regardless of `loss_type`; it is not rescaled to match a loss type's
+            policy normalization, so `entropy_coef` has the same meaning for every loss type. When
             `use_adaptive_entropy=True`, this serves as the initial coefficient and is updated each optimizer step.
             Has no effect when set to `0.0` (default).
         use_adaptive_entropy (`bool`, *optional*, defaults to `False`):
@@ -862,7 +864,9 @@ class GRPOConfig(_BaseConfig):
         default=0.0,
         metadata={
             "help": "Coefficient of the entropy regularization term in the loss. A positive value adds an entropy "
-            "bonus that encourages exploration. When `use_adaptive_entropy=True`, this serves as the initial "
+            "bonus that encourages exploration. The bonus is always the mean per-token entropy regardless of "
+            "`loss_type` (not rescaled to a loss type's policy normalization), so `entropy_coef` has the same "
+            "meaning for every loss type. When `use_adaptive_entropy=True`, this serves as the initial "
             "coefficient and is updated each optimizer step. Has no effect when set to `0.0` (default)."
         },
     )
