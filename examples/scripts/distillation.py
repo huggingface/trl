@@ -14,74 +14,88 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "peft",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
 # docstyle-ignore
 """
-# Full training:
-python trl/experimental/gold/gold.py \
-    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
-    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
+# Full training (off-policy only, lmbda=0):
+```
+python examples/scripts/distillation.py \
+    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
     --learning_rate 2e-5 \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
-    --output_dir gold-model \
-    --num_train_epochs 1 \
-    --push_to_hub
+    --lmbda 0.0 \
+    --output_dir distilled-model \
+    --num_train_epochs 1
+```
+
+# Mixed on/off-policy (lmbda=0.5):
+```
+python examples/scripts/distillation.py \
+    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --learning_rate 2e-5 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 8 \
+    --lmbda 0.5 \
+    --beta 0.5 \
+    --output_dir distilled-model \
+    --num_train_epochs 1
+```
 
 # LoRA:
-python trl/experimental/gold/gold.py \
-    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
-    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
+```
+python examples/scripts/distillation.py \
+    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
     --learning_rate 2e-4 \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
-    --output_dir gold-model \
+    --lmbda 0.0 \
+    --output_dir distilled-model \
     --num_train_epochs 1 \
-    --push_to_hub \
     --use_peft \
     --lora_r 64 \
     --lora_alpha 16
+```
 """
 
-import logging
-
-from datasets import load_dataset
-from transformers import AutoTokenizer, GenerationConfig
-
-from trl import (
-    LogCompletionsCallback,
-    ModelConfig,
-    ScriptArguments,
-    TrlParser,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
-)
-from trl.experimental.gold.gold_config import GOLDConfig
-from trl.experimental.gold.gold_trainer import GOLDTrainer
+import argparse
+import os
 
 
-logger = logging.getLogger(__name__)
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
-if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, GOLDConfig, ModelConfig))
-    script_args, training_args, model_args = parser.parse_args_and_config()
+def main(script_args, training_args, model_args):
+    from datasets import load_dataset
+    from transformers import GenerationConfig
+
+    from trl import (
+        LogCompletionsCallback,
+        get_kbit_device_map,
+        get_peft_config,
+        get_quantization_config,
+    )
+    from trl.experimental.distillation import DistillationTrainer
 
     ################
-    # Model & Tokenizer
+    # Model init kwargs
     ################
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
@@ -90,11 +104,8 @@ if __name__ == "__main__":
     )
     training_args.model_init_kwargs = model_kwargs
 
-    if training_args.teacher_tokenizer_name_or_path is None and training_args.use_uld_loss:
-        training_args.teacher_tokenizer_name_or_path = training_args.teacher_model_name_or_path
     teacher_model_kwargs = dict(
         revision=training_args.teacher_model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=True,
@@ -104,14 +115,6 @@ if __name__ == "__main__":
     if training_args.teacher_model_init_kwargs is not None:
         teacher_model_kwargs.update(training_args.teacher_model_init_kwargs)
     training_args.teacher_model_init_kwargs = teacher_model_kwargs
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path,
-        revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
 
     ################
     # Dataset
@@ -130,13 +133,12 @@ if __name__ == "__main__":
         elif "dev" in dataset:
             eval_dataset = dataset["dev"]
 
-    trainer = GOLDTrainer(
+    trainer = DistillationTrainer(
         model=model_args.model_name_or_path,
         teacher_model=training_args.teacher_model_name_or_path,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=eval_dataset,
-        processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )
 
@@ -149,7 +151,27 @@ if __name__ == "__main__":
 
     trainer.train()
 
-    # Save and push to hub
+    # Save and push to Hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+
+def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
+    from trl import ModelConfig, ScriptArguments, TrlParser
+    from trl.experimental.distillation import DistillationConfig
+
+    dataclass_types = (ScriptArguments, DistillationConfig, ModelConfig)
+    if subparsers is not None:
+        parser = subparsers.add_parser(
+            "distillation", help="Run the distillation training script", dataclass_types=dataclass_types
+        )
+    else:
+        parser = TrlParser(dataclass_types, prog=prog)
+    return parser
+
+
+if __name__ == "__main__":
+    parser = make_parser()
+    script_args, training_args, model_args = parser.parse_args_and_config(fail_with_unknown_args=False)
+    main(script_args, training_args, model_args)
