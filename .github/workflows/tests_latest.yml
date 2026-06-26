@@ -51,7 +51,7 @@ jobs:
           uv pip install -U \
             ".[dev]" \
             "accelerate @ git+https://github.com/huggingface/accelerate.git" \
-            "datasets @ git+https://github.com/huggingface/datasets.git" \
+            "datasets @ git+https://github.com/albertvillanova/huggingface_datasets.git@random-hash-raises" \
             "transformers @ git+https://github.com/huggingface/transformers.git"
 
       - name: Test with pytest
