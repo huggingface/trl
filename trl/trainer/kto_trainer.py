@@ -43,19 +43,20 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
-from ...data_utils import (
+from ..data_utils import (
     apply_chat_template,
     extract_prompt,
     is_conversational,
     prepare_multimodal_messages,
     unpair_preference_dataset,
 )
-from ...import_utils import is_liger_kernel_available
-from ...models import get_act_offloading_ctx_manager
-from ...models.utils import disable_gradient_checkpointing, prepare_deepspeed, prepare_fsdp
-from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.callbacks import SyncRefModelCallback
-from ...trainer.utils import (
+from ..import_utils import is_liger_kernel_available
+from ..models import get_act_offloading_ctx_manager
+from ..models.utils import disable_gradient_checkpointing, prepare_deepspeed, prepare_fsdp
+from .base_trainer import _BaseTrainer
+from .callbacks import SyncRefModelCallback
+from .kto_config import KTOConfig
+from .utils import (
     create_model_from_path,
     disable_dropout_in_model,
     flush_left,
@@ -65,7 +66,6 @@ from ...trainer.utils import (
     selective_log_softmax,
     use_adapter,
 )
-from .kto_config import KTOConfig
 
 
 if is_liger_kernel_available():
