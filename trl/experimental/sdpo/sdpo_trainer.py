@@ -24,6 +24,7 @@ from typing import Any
 
 import datasets
 import torch
+from accelerate.logging import get_logger
 from accelerate.utils import gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
@@ -40,7 +41,7 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available, logging
+from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available
 
 from ...data_utils import apply_chat_template, is_conversational
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
@@ -70,7 +71,7 @@ from .sdpo_config import SDPOConfig
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 if is_peft_available():
@@ -362,6 +363,7 @@ class SDPOTrainer(_BaseTrainer):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
             logger.warning(
@@ -404,7 +406,10 @@ class SDPOTrainer(_BaseTrainer):
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), truncation_side="left", padding_side="left"
+                get_config_model_id(model.config),
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
             )
 
         if isinstance(processing_class, ProcessorMixin):
@@ -598,6 +603,14 @@ class SDPOTrainer(_BaseTrainer):
         self.epsilon_high = args.epsilon_high
         self.beta = args.beta
 
+        if args.importance_sampling_level == "sequence" and args.loss_type in ["bnpo", "dr_grpo", "dapo"]:
+            logger.warning(
+                f"When using `importance_sampling_level='sequence'`, the `'{args.loss_type}'` loss sums per-token "
+                "contributions, which effectively weights each sequence by its completion length instead of "
+                "optimizing the per-sequence objective. To reproduce the GSPO paper's setup, set `loss_type='grpo'` "
+                "(see https://huggingface.co/docs/trl/main/en/paper_index#group-sequence-policy-optimization)."
+            )
+
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
@@ -606,6 +619,7 @@ class SDPOTrainer(_BaseTrainer):
                 reward_model_init_kwargs = args.model_init_kwargs or {}
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     reward_model_init_kwargs["device_map"] = None
+                reward_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func,
                     num_labels=1,
@@ -636,7 +650,9 @@ class SDPOTrainer(_BaseTrainer):
         ):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(get_config_model_id(reward_func.config))
+                    reward_processing_class = AutoTokenizer.from_pretrained(
+                        get_config_model_id(reward_func.config), trust_remote_code=args.trust_remote_code
+                    )
                 if reward_processing_class.pad_token_id is None:
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 reward_func.config.pad_token_id = reward_processing_class.pad_token_id
@@ -728,6 +744,7 @@ class SDPOTrainer(_BaseTrainer):
         model_init_kwargs = self.args.model_init_kwargs or {}
         if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
             model_init_kwargs["device_map"] = None
+        model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
         self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()

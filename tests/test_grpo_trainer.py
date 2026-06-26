@@ -369,6 +369,29 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        def reward_func(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        with pytest.raises(ValueError, match="custom code"):
+            GRPOTrainer(
+                model=model_id,
+                args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                reward_funcs=reward_func,
+                train_dataset=dataset,
+            )
+
+        trainer = GRPOTrainer(
+            model=model_id,
+            args=GRPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            reward_funcs=reward_func,
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
     @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"])
     def test_train_loss_types(self, loss_type, use_liger_kernel):
@@ -1866,6 +1889,35 @@ class TestGRPOTrainer(TrlTestCase):
 
         expected_warning = "All reward functions returned None for the following kwargs:"
         assert expected_warning in caplog.text
+
+    @pytest.mark.parametrize("loss_type", ["grpo", "bnpo", "dr_grpo", "dapo", "cispo"])
+    def test_warning_raised_sequence_level_with_token_summed_loss(self, caplog, loss_type):
+        """Test that a warning is raised when sequence-level importance sampling is combined with a loss type that
+        sums per-token contributions (length-weighting each sequence instead of following the GSPO objective)."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def dummy_reward_func(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            importance_sampling_level="sequence",
+            loss_type=loss_type,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        with caplog.at_level("WARNING", logger="trl.trainer.grpo_trainer"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=dummy_reward_func,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+        expected_warning = "weights each sequence by its completion length"
+        assert (expected_warning in caplog.text) == (loss_type != "grpo")
 
     def test_train_num_generations_larger_than_batch_size(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

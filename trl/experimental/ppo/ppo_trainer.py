@@ -27,7 +27,8 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import transformers
-from accelerate import Accelerator, logging
+from accelerate import Accelerator
+from accelerate.logging import get_logger
 from accelerate.utils import gather_object
 from datasets import Dataset
 from packaging.version import Version
@@ -71,7 +72,7 @@ if is_rich_available():
     from rich.table import Table
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model

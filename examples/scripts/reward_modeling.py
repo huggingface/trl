@@ -89,7 +89,7 @@ if __name__ == "__main__":
         model_kwargs["quantization_config"] = quantization_config
 
     model = AutoModelForSequenceClassification.from_pretrained(
-        model_args.model_name_or_path, num_labels=1, trust_remote_code=model_args.trust_remote_code, **model_kwargs
+        model_args.model_name_or_path, num_labels=1, **model_kwargs
     )
 
     if model_args.use_peft and model_args.lora_task_type != "SEQ_CLS":
