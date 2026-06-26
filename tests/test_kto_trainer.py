@@ -21,14 +21,14 @@ from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
 
-from trl.experimental.kto import KTOConfig, KTOTrainer
-from trl.experimental.kto.kto_trainer import (
+from trl import KTOConfig, KTOTrainer
+from trl.trainer.kto_trainer import (
     DataCollatorForUnpairedPreference,
     DataCollatorForVisionUnpairedPreference,
     _get_kl_completion_ids,
 )
 
-from ..testing_utils import TrlTestCase, require_bitsandbytes, require_liger_kernel, require_peft, require_vision
+from .testing_utils import TrlTestCase, require_bitsandbytes, require_liger_kernel, require_peft, require_vision
 
 
 if is_peft_available():
