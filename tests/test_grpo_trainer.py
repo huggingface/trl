@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import gc
 import os
 import warnings
@@ -56,6 +57,7 @@ from .testing_utils import (
 
 
 if is_peft_available():
+    import peft
     from peft import LoraConfig, PeftModel, get_peft_model
 
 
@@ -574,13 +576,20 @@ class TestGRPOTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        with pytest.raises(ValueError, match="lm_head"):
+        # ensure_weight_tying suppresses the PEFT weight-tying warning; support for target_modules landed in PEFT 0.19.0
+        if Version(peft.__version__) >= Version("0.19.0"):
+            lora_config = LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"], ensure_weight_tying=True)
+            warn_ctx = contextlib.nullcontext()
+        else:
+            lora_config = LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"])
+            warn_ctx = pytest.warns(UserWarning, match="tie_word_embeddings")
+        with warn_ctx, pytest.raises(ValueError, match="lm_head"):
             GRPOTrainer(
                 model=model,
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
-                peft_config=LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"]),
+                peft_config=lora_config,
             )
 
     @require_peft
@@ -614,17 +623,27 @@ class TestGRPOTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        # ensure_weight_tying suppresses the PEFT weight-tying warning; support for modules_to_save landed in PEFT 0.18.0
+        if Version(peft.__version__) >= Version("0.18.0"):
+            peft_config = LoraConfig(
+                target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"], ensure_weight_tying=True
+            )
+            warn_ctx = contextlib.nullcontext()
+        else:
+            peft_config = LoraConfig(target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"])
+            warn_ctx = pytest.warns(UserWarning, match="tie_word_embeddings")
         kwargs = {
             "model": model,
             "reward_funcs": "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             "args": training_args,
             "train_dataset": dataset,
-            "peft_config": LoraConfig(target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]),
+            "peft_config": peft_config,
         }
         if is_liger_kernel_available():
-            GRPOTrainer(**kwargs)  # must construct without raising
+            with warn_ctx:
+                GRPOTrainer(**kwargs)  # must construct without raising
         else:
-            with pytest.raises(ImportError):
+            with warn_ctx, pytest.raises(ImportError):
                 GRPOTrainer(**kwargs)
 
     @require_peft
