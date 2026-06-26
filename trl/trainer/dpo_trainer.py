@@ -65,7 +65,7 @@ from .utils import (
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -765,6 +765,18 @@ class DPOTrainer(_BaseTrainer):
                         "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The Liger "
                         "fused DPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and "
                         "never trained. Either remove `'lm_head'` from your `target_modules`, or set "
+                        "`use_liger_kernel=False`."
+                    )
+                # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
+                # `PeftModel.forward()`. The Liger DPO loss bypasses `PeftModel.forward()` by calling the backbone
+                # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
+                # Fail loudly rather than train on a silently corrupted input.
+                if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                    raise ValueError(
+                        "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
+                        "PrefixTuning, P-Tuning). The Liger DPO loss bypasses `PeftModel.forward()` by calling the "
+                        "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
+                        "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
                         "`use_liger_kernel=False`."
                     )
 
