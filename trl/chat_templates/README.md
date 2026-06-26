@@ -25,6 +25,10 @@ Original Cohere2 chat template (as shipped by `CohereLabs/c4ai-command-r7b-12-20
 
 Original DeepSeek-V3 chat template.
 
+### `falconmamba.jinja`
+
+Original Falcon Mamba chat template.
+
 ### `gemma.jinja`
 
 Original Gemma chat template. Used by both Gemma (v1) and Gemma2, which ship identical templates.
@@ -126,6 +130,12 @@ Patched DeepSeek-V3 template. Diff vs `deepseekv3.jinja`:
 
 - Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict` (the documented format per [transformers docs](https://huggingface.co/docs/transformers/en/chat_extras#tool-calling-example)). The original template uses raw string concatenation, which crashes on dict inputs.
 - Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss.
+
+### `falconmamba_training.jinja`
+
+Patched Falcon Mamba template. Diff vs `falconmamba.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `gemma_training.jinja`
 
