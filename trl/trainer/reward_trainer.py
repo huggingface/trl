@@ -257,8 +257,8 @@ class RewardTrainer(_BaseTrainer):
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               using `AutoModelForSequenceClassification.from_pretrained` with the keyword arguments in
               `args.model_init_kwargs`. If `dtype` is not specified in `args.model_init_kwargs`, it defaults to
-              `float32`. This differs from [`~transformers.PreTrainedModel.from_pretrained`], where (since
-              Transformers v5) the dtype is inferred from the model config.
+              `float32`. This differs from [`~transformers.PreTrainedModel.from_pretrained`], where (since Transformers
+              v5) the dtype is inferred from the model config.
             - A sequence classification [`~transformers.PreTrainedModel`] object.
             - A sequence classification [`~peft.PeftModel`] object.
         args ([`RewardConfig`], *optional*):
