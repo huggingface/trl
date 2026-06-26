@@ -18,6 +18,7 @@ import queue
 import numpy as np
 import pytest
 import torch
+from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
@@ -213,6 +214,31 @@ class TestPackingAwareBatching(TrlTestCase):
 
         assert all(len(group) == 1 for group in long_mb)  # 5 + 5 > 8 -> one per row
         assert all(len(group) == 4 for group in short_mb)  # 2 * 4 = 8 -> four per row
+
+    def test_token_budget_batcher_drops_oversized_sample(self):
+        # A sample longer than the whole budget (12 > 8) fits in no row, so it is dropped, never emptying a row.
+        PartialState()  # the drop path logs via accelerate's logger, which needs an initialized state
+        source = (_rollout_sample(n) for n in ([12] + [3] * 60))
+        batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=8)
+        for groups in itertools.islice(iter(batcher), 5):
+            assert len(groups) == 2
+            assert all(len(group) > 0 for group in groups)  # every row stays non-empty
+            lengths = [len(sample["input_ids"]) for group in groups for sample in group]
+            assert all(length <= 8 for length in lengths)  # the oversized sample (12) was dropped
+
+    def test_token_budget_defaults_to_per_device_bs_times_completion_length(self):
+        # Unset token_budget resolves to per_device_train_batch_size * max_completion_length = 3 * 8.
+        args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            max_completion_length=8,
+            bf16=False,
+            report_to="none",
+        )
+        assert args.token_budget == 24
+        # An explicit <= 0 value is left untouched and disables budgeting (-> FixedCountBatcher).
+        args = AsyncGRPOConfig(output_dir=self.tmp_dir, token_budget=-1, bf16=False, report_to="none")
+        assert args.token_budget == -1
 
     def test_fixed_count_batcher_yields_balanced_fixed_count_micro_batches(self):
         source = (_rollout_sample(length) for length in itertools.cycle((4, 3, 2, 1)))

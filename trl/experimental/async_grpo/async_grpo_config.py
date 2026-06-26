@@ -73,13 +73,15 @@ class AsyncGRPOConfig(_BaseConfig):
         epsilon_high (`float`, *optional*):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
-        token_budget (`int`, *optional*, defaults to `-1`):
+        token_budget (`int`, *optional*):
             Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic
             token-budgeted micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches
-            whose rows each stay within this budget, bounding peak memory independently of
-            `per_device_train_batch_size` (the number of samples per row becomes dynamic). When `<= 0` (default),
-            each micro-batch holds a fixed `per_device_train_batch_size × num_processes` samples, Σ Lᵢ²-balanced
-            across the rows.
+            whose rows each stay within this budget, bounding peak memory independently of the sample count (the
+            number of samples per row becomes dynamic). If `None` (default), it is set to
+            `per_device_train_batch_size * max_completion_length`. A sample longer than `token_budget` fits in no
+            row and is dropped with a warning, so raise it to avoid dropping samples. Set `<= 0` to disable token
+            budgeting and instead pack a fixed `per_device_train_batch_size × num_processes` samples per
+            micro-batch, Σ Lᵢ²-balanced across the rows.
 
         > Parameters that control the async rollout pipeline
 
@@ -211,14 +213,16 @@ class AsyncGRPOConfig(_BaseConfig):
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
         },
     )
-    token_budget: int = field(
-        default=-1,
+    token_budget: int | None = field(
+        default=None,
         metadata={
             "help": "Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic "
             "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches "
-            "whose rows each stay within this budget, bounding peak memory independently of "
-            "`per_device_train_batch_size`. When <= 0 (default), each micro-batch holds a fixed "
-            "`per_device_train_batch_size × num_processes` samples, Σ Lᵢ²-balanced across the rows."
+            "whose rows each stay within this budget, bounding peak memory independently of the sample count. If "
+            "None (default), it is set to `per_device_train_batch_size * max_completion_length`. A sample longer "
+            "than `token_budget` fits in no row and is dropped with a warning, so raise it to avoid dropping "
+            "samples. Set <= 0 to disable token budgeting and instead pack a fixed `per_device_train_batch_size × "
+            "num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows."
         },
     )
 
@@ -271,6 +275,11 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        # Default the per-row budget to ~`per_device_train_batch_size` worst-case samples (set <= 0 to disable
+        # budgeting and use FixedCountBatcher).
+        if self.token_budget is None:
+            self.token_budget = self.per_device_train_batch_size * self.max_completion_length
 
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader

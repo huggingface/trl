@@ -234,7 +234,9 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
     straggles at the per-micro-batch all-reduce.
 
     Every emitted micro-batch has all `num_processes` rows non-empty (a rank forwarding zero tokens would desync
-    FSDP/EP collectives); this holds as long as each sample is at most `token_budget` tokens.
+    FSDP/EP collectives): a micro-batch is only closed once every row holds at least one sample. A sample longer than
+    `token_budget` fits in no row, so it is dropped with a warning; set `token_budget` ≥ the longest sample
+    (`max_completion_length` + the longest prompt) to avoid dropping samples.
 
     Args:
         dataset ([`RolloutQueueDataset`]):
@@ -256,9 +258,17 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
         token_counts = [0] * self.num_processes  # tokens per row, drives the budget
         for sample in self.dataset:
             n = len(sample["input_ids"])
+            if n > self.token_budget:
+                # Longer than the whole budget: fits in no row, so drop it (placing it would overshoot the budget
+                # or force an empty row that desyncs FSDP/EP collectives).
+                logger.warning(
+                    f"Dropping a rollout sample of {n} tokens that exceeds token_budget={self.token_budget}. "
+                    "Raise token_budget to avoid dropping samples."
+                )
+                continue
             fits = [i for i in range(self.num_processes) if token_counts[i] + n <= self.token_budget]
             if not fits:
-                # No row has room for this sample: close the micro-batch and start a fresh one.
+                # No row has room (all are non-empty, since this sample fits an empty one): close and reset.
                 yield rows
                 rows = [[] for _ in range(self.num_processes)]
                 squared_loads = [0] * self.num_processes
