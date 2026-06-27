@@ -269,6 +269,30 @@ training_args = RewardConfig(..., pad_to_multiple_of=2048)
 </hfoption>
 </hfoptions>
 
+## PyTorch caching allocator
+
+PyTorch's caching allocator can fragment over long training runs — separate caches for forward activations, optimizer states, KL reference logits, and FlashAttention workspace each grow and shrink at different rates, leaving holes that cannot satisfy a new large allocation even though aggregate free memory is high. This is especially common in online RL methods (GRPO, RLOO, Online DPO) where the rollout, log-prob, and update steps allocate at different sizes within each iteration.
+
+Setting `expandable_segments:True` lets the allocator grow existing segments instead of fragmenting into fresh fixed blocks, typically reclaiming 2–5 GB per GPU on long-context training with no measurable throughput cost.
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTORCH_ALLOC_CONF=expandable_segments:True   # canonical name in PyTorch >= 2.11
+```
+
+Set both names: `PYTORCH_ALLOC_CONF` is the canonical knob in PyTorch ≥ 2.11; older versions only read the legacy `PYTORCH_CUDA_ALLOC_CONF` alias.
+
+> [!WARNING]
+> `expandable_segments:True` is **incompatible with vLLM's `CuMemAllocator`**. If you use vLLM as the generation backend (e.g. `use_vllm=True` in [`GRPOConfig`]), clear the variable in the worker environment before vLLM initializes, or vLLM will assert on startup.
+
+For runs where fragmentation persists despite this knob (typically chunked-LM-head and other custom kernels that allocate transient ~GB tensors), append `garbage_collection_threshold:0.85` to trigger the allocator's defragmentation pass earlier:
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.85
+```
+
+This is a defragmentation-only knob; it does not change peak memory or training dynamics. See the [PyTorch CUDA semantics docs](https://pytorch.org/docs/stable/notes/cuda.html#environment-variables) for the full list of options.
+
 ## Disabling model gathering for generation in online methods
 
 When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Online methods involve generating completions from the model as part of the training process. During this step, the model weights are temporarily gathered on a single GPU for generation. For very large models, this gathering can lead to OOM errors, as described in this issue: [#2250](https://github.com/huggingface/trl/issues/2250#issue-2598304204).
