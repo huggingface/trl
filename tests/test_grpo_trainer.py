@@ -501,6 +501,141 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer.train()
 
+    def test_train_with_compute_metrics(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        def reward_func(completions, **kwargs):
+            return [float(len(completion)) for completion in completions]
+
+        def compute_metrics(eval_pred):
+            return {"custom_accuracy": 1.0}
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            eval_strategy="steps",
+            eval_steps=2,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            compute_metrics=compute_metrics,
+        )
+
+        trainer.train()
+
+        logged_keys = {k for entry in trainer.state.log_history for k in entry}
+        assert "eval_custom_accuracy" in logged_keys
+
+    def test_compute_metrics_receives_correct_inputs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        def reward_func(completions, **kwargs):
+            return [float(len(completion)) for completion in completions]
+
+        was_called = [False]
+
+        def compute_metrics(eval_pred):
+            assert isinstance(eval_pred.predictions, list)
+            assert isinstance(eval_pred.predictions[0], str)
+            assert isinstance(eval_pred.label_ids, torch.Tensor)
+            was_called[0] = True
+            return {}
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            eval_strategy="steps",
+            eval_steps=2,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            compute_metrics=compute_metrics,
+        )
+
+        trainer.train()
+
+        assert was_called[0] is True
+
+    def test_compute_metrics_none_does_not_break(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        def reward_func(completions, **kwargs):
+            return [float(len(completion)) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            eval_strategy="steps",
+            eval_steps=2,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            compute_metrics=None,
+        )
+
+        trainer.train()
+
+        logged_keys = {k for entry in trainer.state.log_history for k in entry}
+        assert "eval_reward" in logged_keys
+
+    def test_compute_metrics_does_not_break_reward_metrics(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        def reward_func(completions, **kwargs):
+            return [float(len(completion)) for completion in completions]
+
+        def compute_metrics(eval_pred):
+            return {"custom_accuracy": 0.5}
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            eval_strategy="steps",
+            eval_steps=2,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            compute_metrics=compute_metrics,
+        )
+
+        trainer.train()
+
+        logged_keys = {k for entry in trainer.state.log_history for k in entry}
+        assert "eval_custom_accuracy" in logged_keys
+        assert "eval_reward" in logged_keys
+
     def test_train_multiple_iterations(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
