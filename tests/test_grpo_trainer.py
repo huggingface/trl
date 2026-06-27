@@ -16,6 +16,7 @@ import gc
 import os
 import warnings
 from collections.abc import Callable
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -38,6 +39,7 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.generation.vllm_generation import VLLMGeneration
 from trl.import_utils import is_liger_kernel_available
 from trl.trainer.utils import get_kbit_device_map
 
@@ -274,6 +276,120 @@ class TestTransformersContinuousBatchingContract:
 
 
 class TestGRPOTrainer(TrlTestCase):
+    def get_vllm_args(self, **kwargs):
+        defaults = {
+            "output_dir": self.tmp_dir,
+            "report_to": "none",
+            "use_vllm": True,
+            "vllm_mode": "server",
+        }
+        defaults.update(kwargs)
+        return GRPOConfig(**defaults)
+
+    def get_prompt_dataset(self):
+        return Dataset.from_dict({"prompt": ["hello", "hello"]})
+
+    @staticmethod
+    def reward_func(completions, **kwargs):
+        return [0.0] * len(completions)
+
+    @require_peft
+    def test_is_lora_model_passed_to_vllm_generation(self):
+        # Adapter-only LoRA sync is auto-detected, so the trainer just reports whether the model is a PEFT model and
+        # lets the generation backend decide based on the server's reported `enable_lora`.
+        training_args = self.get_vllm_args()
+        with (
+            patch("trl.trainer.grpo_trainer.is_vllm_available", return_value=True),
+            patch("trl.trainer.grpo_trainer.VLLMGeneration") as mock_vllm_generation,
+        ):
+            mock_vllm_generation.return_value.lora_sync = False
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=self.reward_func,
+                args=training_args,
+                train_dataset=self.get_prompt_dataset(),
+                peft_config=LoraConfig(),
+            )
+
+        assert mock_vllm_generation.call_args.kwargs["is_lora_model"] is True
+        assert mock_vllm_generation.call_args.kwargs["lora_sync_output_dir"] == self.tmp_dir
+
+    @require_peft
+    @pytest.mark.parametrize(
+        ("peft_config_kwargs", "error_message"),
+        [
+            ({"modules_to_save": ["lm_head"]}, "does not support LoRA configs with `modules_to_save`"),
+            ({"use_dora": True}, "does not support DoRA adapters"),
+            ({"bias": "all"}, "does not support LoRA adapters with bias"),
+        ],
+    )
+    def test_vllm_lora_sync_rejects_unsupported_lora_configs(self, peft_config_kwargs, error_message):
+        # When the generation backend auto-detects adapter-only sync (`lora_sync=True`), the trainer validates that the
+        # active adapter is syncable as a plain LoRA adapter.
+        training_args = self.get_vllm_args()
+        with (
+            patch("trl.trainer.grpo_trainer.is_vllm_available", return_value=True),
+            patch("trl.trainer.grpo_trainer.VLLMGeneration") as mock_vllm_generation,
+        ):
+            mock_vllm_generation.return_value.lora_sync = True
+            with pytest.raises(ValueError, match=error_message):
+                GRPOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs=self.reward_func,
+                    args=training_args,
+                    train_dataset=self.get_prompt_dataset(),
+                    peft_config=LoraConfig(**peft_config_kwargs),
+                )
+
+    def test_vllm_lora_sync_path_loads_adapter_without_merging(self):
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.mode = "server"
+        vllm_generation.enable_sleep_mode = False
+        vllm_generation.lora_sync = True
+        vllm_generation.lora_name = "trl_lora_adapter"
+        vllm_generation.accelerator = SimpleNamespace(is_main_process=True, wait_for_everyone=MagicMock())
+        vllm_generation.vllm_client = MagicMock()
+        vllm_generation.model = MagicMock()
+        vllm_generation.model.merge_adapter = MagicMock()
+        vllm_generation.model.unmerge_adapter = MagicMock()
+        vllm_generation._save_lora_adapter = MagicMock(return_value="/tmp/adapter")
+
+        vllm_generation.sync_weights()
+
+        vllm_generation._save_lora_adapter.assert_called_once()
+        vllm_generation.vllm_client.load_lora_adapter.assert_called_once_with(
+            "trl_lora_adapter", "/tmp/adapter", load_inplace=True
+        )
+        vllm_generation.vllm_client.reset_prefix_cache.assert_called_once()
+        vllm_generation.model.merge_adapter.assert_not_called()
+        vllm_generation.model.unmerge_adapter.assert_not_called()
+
+    @require_peft
+    def test_save_lora_adapter_writes_non_empty_adapter(self):
+        from safetensors.torch import load_file
+
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        model = get_peft_model(model, LoraConfig(task_type="CAUSAL_LM", target_modules=["q_proj", "v_proj"]))
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.model = model
+        vllm_generation.accelerator = SimpleNamespace(
+            is_main_process=True,
+            wait_for_everyone=lambda: None,
+            state=SimpleNamespace(deepspeed_plugin=None),
+        )
+        vllm_generation._dist = SimpleNamespace(
+            gather_params=lambda params: nullcontext(),
+            summon_full_params=lambda model, **kwargs: nullcontext(),
+        )
+        vllm_generation.lora_sync_output_dir = self.tmp_dir
+        vllm_generation._lora_sync_version = 0
+
+        adapter_dir = vllm_generation._save_lora_adapter()
+
+        assert os.path.exists(os.path.join(adapter_dir, "adapter_config.json"))
+        adapter_state_dict = load_file(os.path.join(adapter_dir, "adapter_model.safetensors"))
+        assert adapter_state_dict
+
     def test_init_minimal(self):
         # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -3038,6 +3154,46 @@ class TestGRPOTrainerSlow(TrlTestCase):
         gc.collect()
         backend_empty_cache(torch_device)
         gc.collect()
+
+    @require_bitsandbytes
+    @require_peft
+    @require_torch_accelerator
+    def test_save_lora_adapter_with_qlora_writes_non_empty_adapter(self):
+        from safetensors.torch import load_file
+
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            quantization_config=quantization_config,
+            device_map=get_kbit_device_map(),
+        )
+        model = get_peft_model(model, LoraConfig(task_type="CAUSAL_LM", target_modules=["q_proj", "v_proj"]))
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.model = model
+        vllm_generation.accelerator = SimpleNamespace(
+            is_main_process=True,
+            wait_for_everyone=lambda: None,
+            state=SimpleNamespace(deepspeed_plugin=None),
+        )
+        vllm_generation._dist = SimpleNamespace(
+            gather_params=lambda params: nullcontext(),
+            summon_full_params=lambda model, **kwargs: nullcontext(),
+        )
+        vllm_generation.lora_sync_output_dir = self.tmp_dir
+        vllm_generation._lora_sync_version = 0
+
+        adapter_dir = vllm_generation._save_lora_adapter()
+
+        assert os.path.exists(os.path.join(adapter_dir, "adapter_config.json"))
+        adapter_state_dict = load_file(os.path.join(adapter_dir, "adapter_model.safetensors"))
+        assert adapter_state_dict
+
+        release_memory(model)
 
     @pytest.mark.parametrize(
         "model_name",
