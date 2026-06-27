@@ -1890,6 +1890,35 @@ class TestGRPOTrainer(TrlTestCase):
         expected_warning = "All reward functions returned None for the following kwargs:"
         assert expected_warning in caplog.text
 
+    def test_warning_raised_high_clipped_ratio(self, caplog):
+        """Test that a warning is raised when the completion clipping ratio is high."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def dummy_reward_func(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=1,
+            max_steps=1,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        with caplog.at_level("WARNING", logger="trl.trainer.grpo_trainer"):
+            trainer.train()
+
+        expected_warning = "All completions were truncated"
+        assert expected_warning in caplog.text
+
     @pytest.mark.parametrize("loss_type", ["grpo", "bnpo", "dr_grpo", "dapo", "cispo"])
     def test_warning_raised_sequence_level_with_token_summed_loss(self, caplog, loss_type):
         """Test that a warning is raised when sequence-level importance sampling is combined with a loss type that

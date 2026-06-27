@@ -1602,6 +1602,14 @@ class RLOOTrainer(_BaseTrainer):
             valid = [v for v in val if not math.isnan(v)]
             metrics[key] = sum(valid) / len(valid) if valid else None
 
+        if mode == "train" and metrics.get("completions/clipped_ratio") == 1.0:
+            logger.warning(
+                f"All completions were truncated (i.e., did not generate an EOS token before "
+                f"`max_completion_length={self.args.max_completion_length}`). This may indicate that "
+                f"`max_completion_length` is too short for your task. Consider increasing it or setting "
+                f"`mask_truncated_completions=True` to exclude truncated completions from the loss."
+            )
+
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
