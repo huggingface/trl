@@ -30,7 +30,7 @@ from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_
 from datasets.fingerprint import Hasher
 from packaging.version import Version
 from torch.nn import functional as F
-from torch.utils.data import DataLoader, SequentialSampler
+from torch.utils.data import DataLoader, Sampler, SequentialSampler
 from transformers import (
     AutoProcessor,
     DataCollator,
@@ -54,6 +54,7 @@ from ...import_utils import is_liger_kernel_available
 from ...models import get_act_offloading_ctx_manager
 from ...models.utils import disable_gradient_checkpointing, prepare_deepspeed, prepare_fsdp
 from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
@@ -76,8 +77,6 @@ if is_peft_available():
 
 
 logger = get_logger(__name__)
-
-RUNNING_NAME = "running.pt"
 
 
 def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
@@ -734,6 +733,25 @@ class KTOTrainer(_BaseTrainer):
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
+        if args.sync_ref_model:
+            if is_peft_model(self.model):
+                raise NotImplementedError(
+                    "You passed `sync_ref_model=True` while using a PEFT model, which is currently not supported. "
+                    "With PEFT, KTOTrainer does not keep a separate reference model in memory; instead, it recovers "
+                    "reference behavior by temporarily disabling the adapter. As a result, there is no standalone "
+                    "`ref_model` instance to synchronize. Use `sync_ref_model=False`, or opt for full fine-tuning if "
+                    "you need a synced reference model. If you need `sync_ref_model` to work with PEFT, please open a "
+                    "feature request at https://github.com/huggingface/trl/issues."
+                )
+            if args.precompute_ref_log_probs:
+                raise ValueError(
+                    "You cannot use `sync_ref_model=True` together with `precompute_ref_log_probs=True`. "
+                    "`precompute_ref_log_probs=True` assumes a fixed reference model, but with `sync_ref_model=True` "
+                    "the reference model is periodically updated during training, making any precomputed reference "
+                    "log-probs stale. Set `precompute_ref_log_probs=False` or disable `sync_ref_model`."
+                )
+            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+
         self.use_liger_kernel = args.use_liger_kernel
         # Import Liger kernel if enabled
         if self.use_liger_kernel:
@@ -999,6 +1017,17 @@ class KTOTrainer(_BaseTrainer):
                     "ref_KL_logps",
                 ]
 
+    def _get_train_sampler(self, train_dataset: Dataset | None = None) -> Sampler | None:
+        if self.calculate_KL and Version(transformers.__version__) < Version("5.2.0"):
+            if train_dataset is None:
+                train_dataset = self.train_dataset
+            if train_dataset is None or not has_length(train_dataset):
+                return None
+            return SequentialSampler(train_dataset)
+        return super()._get_train_sampler(
+            train_dataset
+        )  # Override training step to add activation offloading context.
+
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
         fingerprint = Hasher.hash((dataset._fingerprint, model_hash, self.calculate_KL))
@@ -1250,6 +1279,11 @@ class KTOTrainer(_BaseTrainer):
                 self.accelerator.gather_for_metrics(rejected_logits_sum.nansum()).nansum().item() / all_num_rejected
             )
 
+        if all_num_chosen > 0 and all_num_rejected > 0:
+            self._metrics[mode]["rewards/margins"].append(
+                self._metrics[mode]["rewards/chosen"][-1] - self._metrics[mode]["rewards/rejected"][-1]
+            )
+
         return loss
 
     def _compute_loss(self, model, inputs, return_outputs):
@@ -1401,11 +1435,49 @@ class KTOTrainer(_BaseTrainer):
                 self.accelerator.gather_for_metrics(policy_rejected_logits.nansum()).nansum().item() / all_num_rejected
             )
 
+        if all_num_chosen > 0 and all_num_rejected > 0:
+            self._metrics[mode]["rewards/margins"].append(
+                self._metrics[mode]["rewards/chosen"][-1] - self._metrics[mode]["rewards/rejected"][-1]
+            )
+
         loss = losses.nanmean()
         if self.aux_loss_enabled:
             loss += self.aux_loss_coef * aux_loss
 
         return (loss, outputs) if return_outputs else loss
+
+    def evaluate(
+        self,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        ignore_keys: list[str] | None = None,
+        metric_key_prefix: str = "eval",
+    ) -> dict[str, float]:
+        # When a dataset is passed directly to `evaluate` (e.g. a held-out test set), preprocess it the same way
+        # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer. `_prepare_dataset` is
+        # idempotent: it skips datasets that are already tokenized. A `str` selects a dataset that was already prepared
+        # at init time, so it's left untouched.
+        if not self._is_vision_dataset and eval_dataset is not None and not isinstance(eval_dataset, str):
+            if isinstance(eval_dataset, dict):
+                eval_dataset = {
+                    key: self._prepare_dataset(dataset, self.processing_class, self.args, key)
+                    for key, dataset in eval_dataset.items()
+                }
+            else:
+                eval_dataset = self._prepare_dataset(eval_dataset, self.processing_class, self.args, "eval")
+            # With `precompute_ref_log_probs`, `_compute_loss` reads the reference log-probs from the batch, so they
+            # must be precomputed here as well, mirroring `__init__`.
+            if self.precompute_ref_logps:
+                batch_size = self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
+                if isinstance(eval_dataset, dict):
+                    eval_dataset = {
+                        name: self._precompute_ref_logps(dataset, name, batch_size)
+                        for name, dataset in eval_dataset.items()
+                    }
+                else:
+                    eval_dataset = self._precompute_ref_logps(eval_dataset, "eval", batch_size)
+        return super().evaluate(
+            eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
+        )
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
@@ -1421,18 +1493,25 @@ class KTOTrainer(_BaseTrainer):
                 ) from e
             raise
 
-    def _get_train_sampler(self, train_dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
-        if self.calculate_KL and Version(transformers.__version__) < Version("5.2.0"):
-            if train_dataset is None:
-                train_dataset = self.train_dataset
-            if train_dataset is None or not has_length(train_dataset):
-                return None
-            return SequentialSampler(train_dataset)
-        return super()._get_train_sampler(train_dataset)
+    # Override training step to add activation offloading context.
+    def training_step(self, *args, **kwargs):
+        with self.maybe_activation_offload_context:
+            return super().training_step(*args, **kwargs)
+
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        mode = "train" if self.model.training else "eval"
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        if mode == "eval":
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+        logs.update(metrics)
+        super().log(logs, start_time)
+        self._metrics[mode].clear()
 
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
     # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
-    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad(), self.compute_loss_context_manager():
             if prediction_loss_only:
@@ -1442,24 +1521,6 @@ class KTOTrainer(_BaseTrainer):
                 loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
                 logits, labels = outputs.logits, inputs["completion_input_ids"]
         return loss, logits, labels
-
-    # Override training step to add activation offloading context.
-    def training_step(self, *args, **kwargs):
-        with self.maybe_activation_offload_context:
-            return super().training_step(*args, **kwargs)
-
-    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
-        mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
-        if "rewards/chosen" in metrics and "rewards/rejected" in metrics:
-            metrics["rewards/margins"] = metrics["rewards/chosen"] - metrics["rewards/rejected"]
-        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
-        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
-        if mode == "eval":
-            metrics = {f"eval_{key}": val for key, val in metrics.items()}
-        logs.update(metrics)
-        super().log(logs, start_time)
-        self._metrics[mode].clear()
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):

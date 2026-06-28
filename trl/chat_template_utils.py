@@ -72,12 +72,12 @@ def clone_chat_template(
 
     Example:
     ```python
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    from trl import clone_chat_template
+    >>> from transformers import AutoModelForCausalLM, AutoTokenizer
+    >>> from trl import clone_chat_template
 
-    model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
-    model, tokenizer, added_tokens = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
+    >>> model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
+    >>> tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
+    >>> model, tokenizer, added_tokens = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
     ```
     """
     # Load the source tokenizer containing the desired chat template
