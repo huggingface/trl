@@ -577,8 +577,7 @@ class BCOTrainer(_BaseTrainer):
 
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                get_config_model_id(model.config),
-                trust_remote_code=model_init_kwargs.get("trust_remote_code", False),
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
             )
         if args.max_length is None:
             logger.warning(
