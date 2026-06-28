@@ -82,6 +82,17 @@ class TestVLLMClient(TrlTestCase):
             client = VLLMClient(base_url="http://localhost:8000", connection_timeout=0)
         assert client.server_enable_lora is enable_lora
 
+    @pytest.mark.parametrize("max_lora_rank", [16, None])
+    def test_check_server_reads_max_lora_rank(self, max_lora_rank):
+        response = SimpleNamespace(
+            status_code=200,
+            headers={},
+            json=lambda: {"status": "ok", "enable_lora": True, "max_lora_rank": max_lora_rank},
+        )
+        with patch("trl.generation.vllm_client.requests.get", return_value=response):
+            client = VLLMClient(base_url="http://localhost:8000", connection_timeout=0)
+        assert client.server_max_lora_rank == max_lora_rank
+
     def test_load_lora_adapter_posts_payload(self):
         with patch.object(VLLMClient, "check_server"):
             client = VLLMClient(base_url="http://localhost:8000", connection_timeout=0)
