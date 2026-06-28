@@ -320,6 +320,7 @@ class VLLMGeneration:
                 # the model is LoRA but the server is not LoRA-enabled, fall back to merged-weight sync and warn loudly,
                 # since the user likely intended the fast adapter path.
                 lora_sync = self.is_lora_model and self.vllm_client.server_enable_lora
+                server_max_lora_rank = self.vllm_client.server_max_lora_rank
                 if self.is_lora_model and not self.vllm_client.server_enable_lora:
                     logger.warning(
                         "Training a LoRA model against a vLLM server that was not launched with `--enable-lora`. "
@@ -328,11 +329,25 @@ class VLLMGeneration:
                     )
             else:
                 lora_sync = False
+                server_max_lora_rank = None
             # Broadcast the decision so every process agrees: `_save_lora_adapter` runs collective gathers that would
-            # otherwise deadlock against the merged-sync path.
-            obj_list = [lora_sync]
+            # otherwise deadlock against the merged-sync path. `server_max_lora_rank` rides along so the rank check
+            # below fires identically on every rank.
+            obj_list = [lora_sync, server_max_lora_rank]
             broadcast_object_list(obj_list, from_process=0)
-            self.lora_sync = obj_list[0]
+            self.lora_sync, server_max_lora_rank = obj_list
+            # Fail fast with a clear message if the adapter rank exceeds the server's `--max-lora-rank` (only knowable
+            # when the server reported it), instead of hitting the server's opaque load-time error. `rank_pattern` may
+            # raise individual modules above the base `r`.
+            if self.lora_sync and server_max_lora_rank is not None:
+                active_peft_config = model.peft_config[model.active_adapters[0]]
+                adapter_rank = max([active_peft_config.r, *active_peft_config.rank_pattern.values()])
+                if adapter_rank > server_max_lora_rank:
+                    raise ValueError(
+                        f"The LoRA adapter rank ({adapter_rank}) exceeds the vLLM server's `--max-lora-rank` "
+                        f"({server_max_lora_rank}). Relaunch the server with `trl vllm-serve ... --max-lora-rank "
+                        f"{adapter_rank}` (or higher)."
+                    )
             if accelerator.is_main_process and not self.lora_sync:
                 self.vllm_client.init_communicator(device=torch.cuda.current_device())
 
@@ -472,6 +487,10 @@ class VLLMGeneration:
         self._lora_sync_version += 1
         root_dir = os.path.join(self.lora_sync_output_dir or os.getcwd(), ".vllm_lora_sync")
         adapter_dir = os.path.join(root_dir, f"sync_{self._lora_sync_version}")
+        # Write to a temp dir and atomically rename into place, so the server (which may read over NFS) never sees a
+        # half-flushed adapter dir. `os.rename` is atomic within the same filesystem, and tmp_dir/adapter_dir share
+        # root_dir.
+        tmp_dir = f"{adapter_dir}.tmp"
 
         with self._dist.gather_params([p for p in model.parameters() if p.requires_grad]):
             with self._dist.summon_full_params(model, recurse=True, writeback=False):
@@ -485,13 +504,15 @@ class VLLMGeneration:
                     for name, param in state_dict.items()
                 }
                 if accelerator.is_main_process:
-                    os.makedirs(adapter_dir, exist_ok=True)
+                    shutil.rmtree(tmp_dir, ignore_errors=True)  # clear any leftover from a crashed prior run
+                    os.makedirs(tmp_dir, exist_ok=True)
                     model.save_pretrained(
-                        adapter_dir,
+                        tmp_dir,
                         selected_adapters=[adapter_name],
                         state_dict=state_dict,
                         safe_serialization=True,
                     )
+                    os.rename(tmp_dir, adapter_dir)
 
         accelerator.wait_for_everyone()
         if accelerator.is_main_process and self._lora_sync_version > 2:

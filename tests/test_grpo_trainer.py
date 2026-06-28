@@ -364,6 +364,75 @@ class TestGRPOTrainer(TrlTestCase):
         vllm_generation.model.merge_adapter.assert_not_called()
         vllm_generation.model.unmerge_adapter.assert_not_called()
 
+    @staticmethod
+    def _run_server_autodetect(*, is_lora_model, server_enable_lora, server_max_lora_rank=None, model=None):
+        # Drive the server-mode auto-detect block of `VLLMGeneration._init_vllm` with a fake client, so we can assert
+        # the `lora_sync` decision without a live server or distributed setup.
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.mode = "server"
+        vllm_generation.is_lora_model = is_lora_model
+        vllm_generation.lora_sync = False
+        vllm_generation.server_base_url = "http://localhost:8000"
+        vllm_generation.group_port = 51216
+        vllm_generation.server_timeout = 0
+        vllm_generation.model = model if model is not None else MagicMock()
+        vllm_generation.accelerator = SimpleNamespace(is_main_process=True, wait_for_everyone=MagicMock())
+        fake_client = SimpleNamespace(
+            server_enable_lora=server_enable_lora,
+            server_max_lora_rank=server_max_lora_rank,
+            init_communicator=MagicMock(),
+        )
+        with (
+            patch("trl.generation.vllm_generation.is_vllm_available", return_value=True),
+            patch("trl.generation.vllm_generation.VLLMClient", return_value=fake_client),
+            patch("trl.generation.vllm_generation.broadcast_object_list"),  # single process: leave obj_list unchanged
+            patch("torch.cuda.current_device", return_value=0),
+        ):
+            vllm_generation._init_vllm()
+        return vllm_generation, fake_client
+
+    @pytest.mark.parametrize("is_lora_model", [True, False])
+    @pytest.mark.parametrize("server_enable_lora", [True, False])
+    def test_vllm_lora_sync_auto_detect_decision(self, is_lora_model, server_enable_lora):
+        # Adapter-only sync activates iff the model is LoRA *and* the server was launched with `--enable-lora`.
+        vllm_generation, fake_client = self._run_server_autodetect(
+            is_lora_model=is_lora_model, server_enable_lora=server_enable_lora
+        )
+        assert vllm_generation.lora_sync is (is_lora_model and server_enable_lora)
+        # The merged-sync communicator is initialized only when adapter sync is off.
+        if vllm_generation.lora_sync:
+            fake_client.init_communicator.assert_not_called()
+        else:
+            fake_client.init_communicator.assert_called_once()
+
+    def test_vllm_lora_sync_warns_on_merged_fallback(self):
+        # A LoRA model against a non-LoRA server falls back to merged-weight sync and warns loudly.
+        with patch("trl.generation.vllm_generation.logger") as mock_logger:
+            vllm_generation, _ = self._run_server_autodetect(is_lora_model=True, server_enable_lora=False)
+        assert vllm_generation.lora_sync is False
+        mock_logger.warning.assert_called_once()
+        assert "--enable-lora" in mock_logger.warning.call_args.args[0]
+
+    def test_vllm_lora_sync_rejects_adapter_rank_above_server_max(self):
+        # The adapter rank must fit the server's `--max-lora-rank`; otherwise fail fast with a clear message.
+        model = MagicMock()
+        model.active_adapters = ["default"]
+        model.peft_config = {"default": SimpleNamespace(r=16, rank_pattern={})}
+        with pytest.raises(ValueError, match=r"adapter rank \(16\) exceeds the vLLM server's `--max-lora-rank` \(8\)"):
+            self._run_server_autodetect(
+                is_lora_model=True, server_enable_lora=True, server_max_lora_rank=8, model=model
+            )
+
+    def test_vllm_lora_sync_accepts_adapter_rank_within_server_max(self):
+        # rank_pattern can raise individual modules above the base `r`; the max must still fit.
+        model = MagicMock()
+        model.active_adapters = ["default"]
+        model.peft_config = {"default": SimpleNamespace(r=8, rank_pattern={"q_proj": 16})}
+        vllm_generation, _ = self._run_server_autodetect(
+            is_lora_model=True, server_enable_lora=True, server_max_lora_rank=16, model=model
+        )
+        assert vllm_generation.lora_sync is True
+
     @require_peft
     def test_save_lora_adapter_writes_non_empty_adapter(self):
         from safetensors.torch import load_file

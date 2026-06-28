@@ -164,6 +164,7 @@ class VLLMClient:
             self.base_url = f"http://{self.host}:{self.server_port}"
         self.group_port = group_port
         self.server_enable_lora = False  # set from the /health/ response in check_server
+        self.server_max_lora_rank = None  # the server's `--max-lora-rank`, set from /health/ (`None` if unset)
         self.check_server(connection_timeout)  # check server and fail after timeout
 
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
@@ -197,7 +198,9 @@ class VLLMClient:
                         self.host = response.headers["X-Forwarded-For"]
                     # The server reports whether it was launched with `--enable-lora`, so the trainer can auto-detect
                     # whether adapter-only LoRA sync is available.
-                    self.server_enable_lora = response.json().get("enable_lora", False)
+                    health = response.json()
+                    self.server_enable_lora = health.get("enable_lora", False)
+                    self.server_max_lora_rank = health.get("max_lora_rank")
                     logger.info("Server is up!")
                     return None
 

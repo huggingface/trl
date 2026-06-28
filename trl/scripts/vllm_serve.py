@@ -523,9 +523,14 @@ def main(script_args: ScriptArguments):
     async def health():
         """
         Health check endpoint to verify that the server is running. Also reports whether the server was launched with
-        LoRA support, so the client can auto-detect whether adapter-only sync is available.
+        LoRA support (and the `--max-lora-rank` it was launched with), so the client can auto-detect whether
+        adapter-only sync is available and validate the adapter rank fits.
         """
-        return {"status": "ok", "enable_lora": script_args.enable_lora}
+        return {
+            "status": "ok",
+            "enable_lora": script_args.enable_lora,
+            "max_lora_rank": script_args.max_lora_rank,
+        }
 
     @app.get("/get_world_size/")
     async def get_world_size():
