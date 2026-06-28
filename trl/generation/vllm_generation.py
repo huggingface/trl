@@ -668,7 +668,7 @@ class VLLMGeneration:
             # forces NCCL to fully drain before vLLM's TP communication starts.
             # See https://github.com/huggingface/trl/issues/3671
             if is_peft_model(self.model) and self.tensor_parallel_size > 1:
-                torch.distributed.barrier()
+                torch.distributed.barrier(device_ids=[torch.cuda.current_device()])
 
             with profiler:
                 all_outputs = self.llm.generate(vllm_prompts, sampling_params=sampling_params, use_tqdm=False)
