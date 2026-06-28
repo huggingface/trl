@@ -81,7 +81,7 @@ def parse_args():
     p.add_argument("--output-dir", default="output/xtoken_run")
     p.add_argument("--logging-steps", type=int, default=1)
     p.add_argument("--report-to", default="trackio")
-    p.add_argument("--bf16", action="store_true", default=True)
+    p.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True)
     return p.parse_args()
 
 
