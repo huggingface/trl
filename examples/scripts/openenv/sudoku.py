@@ -410,7 +410,8 @@ def main() -> None:
 
     class SudokuEnv:
         def __init__(self):
-            self.client = TextArenaEnv(base_url=env_url)
+            # OpenEnv's client API is async-first; .sync() exposes blocking reset()/step().
+            self.client = TextArenaEnv(base_url=env_url).sync()
             self._difficulty = difficulty
             self._max_turns = max_turns
             self._api_delay = api_delay

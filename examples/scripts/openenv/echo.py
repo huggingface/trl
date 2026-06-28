@@ -93,7 +93,8 @@ def main():
 
     class EchoToolEnv:
         def __init__(self):
-            self.env = EchoEnv(base_url=args.env_host)
+            # OpenEnv's client API is async-first; .sync() exposes blocking reset()/step().
+            self.env = EchoEnv(base_url=args.env_host).sync()
             self.reward = 0.0
 
         def reset(self, **kwargs) -> None | str:

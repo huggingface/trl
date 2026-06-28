@@ -206,7 +206,8 @@ def main() -> None:
 
     class WordleEnv:
         def __init__(self):
-            self.client = TextArenaEnv(base_url=env_url)
+            # OpenEnv's client API is async-first; .sync() exposes blocking reset()/step().
+            self.client = TextArenaEnv(base_url=env_url).sync()
 
         def reset(self, **kwargs) -> str | None:
             result = self.client.reset()
