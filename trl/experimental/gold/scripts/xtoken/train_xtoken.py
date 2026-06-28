@@ -62,10 +62,10 @@ def build_nemotron_dataset(num_samples=2000):
 
 def parse_args():
     p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    p.add_argument("--student-model", default="HuggingFaceTB/SmolLM2-135M-Instruct")
-    p.add_argument("--teacher-model", default="Qwen/Qwen3-0.6B")
+    p.add_argument("--student-model", default="meta-llama/Llama-3.2-1B-Instruct")
+    p.add_argument("--teacher-model", default="Qwen/Qwen3-4B")
     p.add_argument("--projection-matrix", required=True)
-    p.add_argument("--dataset", default="chatbot_arena", choices=["chatbot_arena", "nemotron"])
+    p.add_argument("--dataset", default="nemotron", choices=["chatbot_arena", "nemotron"])
     p.add_argument("--num-samples", type=int, default=2000)
     p.add_argument("--loss-type", default="p_kl", choices=["p_kl", "h_kl"])
     p.add_argument("--max-steps", type=int, default=100)
