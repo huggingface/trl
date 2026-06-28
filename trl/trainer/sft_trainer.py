@@ -41,7 +41,12 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.modeling_outputs import (
+    BaseModelOutput,
+    BaseModelOutputWithPast,
+    CausalLMOutputWithPast,
+    Seq2SeqLMOutput,
+)
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
@@ -58,6 +63,7 @@ from ..data_utils import (
     is_conversational_from_value,
     maybe_convert_to_chatml,
     pack_dataset,
+    pack_seq2seq_dataset,
     prepare_multimodal_messages,
 )
 from ..models import get_act_offloading_ctx_manager
@@ -74,6 +80,7 @@ from .utils import (
 
 
 _CHUNKED_LM_HEAD_CHUNK_SIZE = 256
+_T5_CHUNKED_LM_HEAD_CHUNK_SIZE = 64
 
 
 if is_peft_available():
@@ -89,6 +96,15 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
     entropy_sum: torch.Tensor | None = None
     num_valid_tokens: torch.Tensor | None = None
     aux_loss: torch.Tensor | None = None
+
+
+@dataclass
+class _ChunkedCESeq2SeqLMOutput(Seq2SeqLMOutput):
+    """`Seq2SeqLMOutput` with metrics populated by the chunked-CE path."""
+
+    num_correct_tokens: torch.Tensor | None = None
+    entropy_sum: torch.Tensor | None = None
+    num_valid_tokens: torch.Tensor | None = None
 
 
 def _maybe_gather_lm_head_ctx(w, b):
@@ -109,16 +125,19 @@ def _maybe_gather_lm_head_ctx(w, b):
     return deepspeed.zero.GatheredParameters(params)
 
 
-def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
+def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping, upcast_lm_head):
     with _maybe_gather_lm_head_ctx(w, b):
-        logits = h.float() @ w.float().t()
-        if b is not None:
-            logits = logits + b.float()
+        if upcast_lm_head:
+            logits = h.float() @ w.float().t()
+            if b is not None:
+                logits = logits + b.float()
+        else:
+            logits = F.linear(h, w, b)
     if logit_scale != 1.0:
         logits = logits * logit_scale
     if final_logit_softcapping is not None:
         logits = final_logit_softcapping * torch.tanh(logits / final_logit_softcapping)
-    log_p = F.log_softmax(logits, dim=-1)
+    log_p = F.log_softmax(logits.float(), dim=-1)
     chunk_loss = F.nll_loss(log_p, lbl, reduction="sum")
     chunk_correct = (logits.argmax(dim=-1) == lbl).sum().float()
     chunk_entropy = -(log_p.exp() * log_p).sum(dim=-1).sum()
@@ -135,6 +154,7 @@ def _chunked_cross_entropy_loss(
     logit_scale: float = 1.0,
     final_logit_softcapping: float | None = None,
     lm_head_bias: torch.Tensor | None = None,
+    upcast_lm_head: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Memory-efficient next-token cross-entropy over hidden states and an `lm_head` weight.
@@ -175,6 +195,9 @@ def _chunked_cross_entropy_loss(
             matching the `final_logit_softcapping` behavior of Gemma-style models. Applied after `logit_scale`.
         lm_head_bias (`torch.Tensor`, *optional*):
             Bias of the `lm_head` linear layer, shape `(V,)`. Added to each chunk's logits when provided.
+        upcast_lm_head (`bool`, *optional*, defaults to `True`):
+            Whether to compute the output projection in float32. T5-family models set this to `False` to match their
+            native mixed-precision projection and avoid copying a very large shared output embedding to float32.
 
     Returns:
         `tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]`: scalar loss, number of correctly-predicted
@@ -204,9 +227,9 @@ def _chunked_cross_entropy_loss(
         # to the autograd graph through every trainable parameter so `.backward()` succeeds and DDP /
         # FSDP gradient sync doesn't hang on a missing param.
         with _maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
-            loss = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
+            loss = (hidden_states.float().sum() + lm_head_weight.sum().float()) * 0.0
             if lm_head_bias is not None:
-                loss = loss + lm_head_bias.float().sum() * 0.0
+                loss = loss + lm_head_bias.sum().float() * 0.0
         return loss, correct, entropy_sum, n_valid_tensor
 
     loss = hidden.new_zeros((), dtype=torch.float32)
@@ -222,6 +245,7 @@ def _chunked_cross_entropy_loss(
             lbl_chunk,
             logit_scale,
             final_logit_softcapping,
+            upcast_lm_head,
             use_reentrant=False,
         )
         loss = loss + chunk_loss
@@ -375,6 +399,191 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         )
 
     model.forward = types.MethodType(_chunked_ce_forward, model)
+
+
+def _packed_t5_attention_mask(
+    query_segment_ids: torch.Tensor,
+    key_segment_ids: torch.Tensor,
+    dtype: torch.dtype,
+    causal: bool = False,
+) -> torch.Tensor:
+    """Build a dense additive T5 attention mask that isolates packed segments."""
+    allowed = query_segment_ids.unsqueeze(-1) == key_segment_ids.unsqueeze(-2)
+    allowed = allowed & (query_segment_ids.unsqueeze(-1) != 0) & (key_segment_ids.unsqueeze(-2) != 0)
+    if causal:
+        query_positions = torch.arange(query_segment_ids.size(1), device=query_segment_ids.device).view(1, -1, 1)
+        key_positions = torch.arange(key_segment_ids.size(1), device=key_segment_ids.device).view(1, 1, -1)
+        allowed = allowed & (key_positions <= query_positions)
+
+    mask = torch.zeros(allowed.shape, device=allowed.device, dtype=dtype)
+    mask.masked_fill_(~allowed, torch.finfo(dtype).min)
+    return mask.unsqueeze(1)
+
+
+def _patch_t5_seq2seq_forward(model: torch.nn.Module, chunk_size: int | None = None) -> None:
+    """Patch a T5-family model for packed seq2seq attention and optional chunked cross-entropy."""
+    original_forward = model.forward
+    lm_head = model.get_output_embeddings()
+
+    def _seq2seq_forward(
+        self: torch.nn.Module,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        decoder_input_ids: torch.Tensor | None = None,
+        decoder_attention_mask: torch.Tensor | None = None,
+        encoder_outputs: tuple[tuple[torch.Tensor]] | None = None,
+        past_key_values=None,
+        inputs_embeds: torch.Tensor | None = None,
+        decoder_inputs_embeds: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+        encoder_segment_ids: torch.Tensor | None = None,
+        decoder_segment_ids: torch.Tensor | None = None,
+        num_items_in_batch: torch.Tensor | int | None = None,
+        **kwargs,
+    ) -> Seq2SeqLMOutput:
+        is_packed = encoder_segment_ids is not None or decoder_segment_ids is not None
+        if (encoder_segment_ids is None) != (decoder_segment_ids is None):
+            raise ValueError("Packed T5 inputs require both `encoder_segment_ids` and `decoder_segment_ids`.")
+        if is_packed and Version(transformers.__version__) < Version("5.0.0"):
+            raise ValueError("Packed T5 training requires `transformers>=5.0.0`.")
+
+        # Labels-free calls retain the model's native behavior, including generation and logits post-processing.
+        if labels is None:
+            if is_packed:
+                raise ValueError("Packed seq2seq inputs are training-only and require `labels`.")
+            return original_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                decoder_input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
+                encoder_outputs=encoder_outputs,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                decoder_inputs_embeds=decoder_inputs_embeds,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                **kwargs,
+            )
+        if not is_packed and chunk_size is None:
+            return original_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                decoder_input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
+                encoder_outputs=encoder_outputs,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                decoder_inputs_embeds=decoder_inputs_embeds,
+                labels=labels,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                **kwargs,
+            )
+        if kwargs:
+            raise ValueError(f"Unsupported keyword arguments for packed T5 training: {sorted(kwargs)}")
+
+        return_dict = return_dict if return_dict is not None else self.config.return_dict
+        use_cache = False if use_cache is None else use_cache
+        if is_packed and use_cache:
+            raise ValueError("Packed T5 training does not support `use_cache=True`.")
+
+        mask_dtype = self.shared.weight.dtype
+        if is_packed:
+            encoder_attention_mask = _packed_t5_attention_mask(encoder_segment_ids, encoder_segment_ids, mask_dtype)
+            decoder_attention_mask = _packed_t5_attention_mask(
+                decoder_segment_ids, decoder_segment_ids, mask_dtype, causal=True
+            )
+            cross_attention_mask = _packed_t5_attention_mask(decoder_segment_ids, encoder_segment_ids, mask_dtype)
+        else:
+            encoder_attention_mask = attention_mask
+            cross_attention_mask = attention_mask
+
+        if encoder_outputs is None:
+            encoder_outputs = self.encoder(
+                input_ids=input_ids,
+                attention_mask=encoder_attention_mask,
+                inputs_embeds=inputs_embeds,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=True,
+            )
+        elif not isinstance(encoder_outputs, BaseModelOutput):
+            encoder_outputs = BaseModelOutput(
+                last_hidden_state=encoder_outputs[0],
+                hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
+                attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
+            )
+
+        if decoder_input_ids is None and decoder_inputs_embeds is None:
+            if is_packed:
+                raise ValueError("Packed T5 inputs require segment-aware `decoder_input_ids` from the data collator.")
+            decoder_input_ids = self._shift_right(labels)
+
+        decoder_outputs = self.decoder(
+            input_ids=decoder_input_ids,
+            attention_mask=decoder_attention_mask,
+            inputs_embeds=decoder_inputs_embeds,
+            past_key_values=past_key_values,
+            encoder_hidden_states=encoder_outputs.last_hidden_state,
+            encoder_attention_mask=cross_attention_mask,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+        )
+        sequence_output = decoder_outputs.last_hidden_state
+        scale_decoder_outputs = getattr(self.config, "scale_decoder_outputs", self.config.tie_word_embeddings)
+        if scale_decoder_outputs:
+            sequence_output = sequence_output * (self.model_dim**-0.5)
+
+        if chunk_size is None:
+            logits = lm_head(sequence_output)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), labels.to(logits.device).view(-1))
+            output = Seq2SeqLMOutput(loss=loss, logits=logits)
+        else:
+            lm_head_weight = lm_head.weight
+            lm_head_bias = lm_head.bias
+            if isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
+                lm_head_weight = lm_head_weight.full_tensor()
+                if lm_head_bias is not None:
+                    lm_head_bias = lm_head_bias.full_tensor()
+            loss, num_correct_tokens, entropy_sum, num_valid_tokens = _chunked_cross_entropy_loss(
+                sequence_output,
+                lm_head_weight,
+                chunk_size,
+                shift_labels=labels,
+                num_items_in_batch=num_items_in_batch,
+                lm_head_bias=lm_head_bias,
+                upcast_lm_head=False,
+            )
+            output = _ChunkedCESeq2SeqLMOutput(
+                loss=loss,
+                logits=None,
+                num_correct_tokens=num_correct_tokens,
+                entropy_sum=entropy_sum,
+                num_valid_tokens=num_valid_tokens,
+            )
+
+        output.past_key_values = decoder_outputs.past_key_values
+        output.decoder_hidden_states = decoder_outputs.hidden_states
+        output.decoder_attentions = decoder_outputs.attentions
+        output.cross_attentions = decoder_outputs.cross_attentions
+        output.encoder_last_hidden_state = encoder_outputs.last_hidden_state
+        output.encoder_hidden_states = encoder_outputs.hidden_states
+        output.encoder_attentions = encoder_outputs.attentions
+        if not return_dict:
+            return output.to_tuple()
+        return output
+
+    model.forward = types.MethodType(_seq2seq_forward, model)
 
 
 logger = get_logger(__name__)
@@ -556,6 +765,123 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         position_ids = position_ids.cumsum(0)
         # Split back into one tensor per example
         return list(position_ids.split(example_lengths))
+
+
+@dataclass
+class DataCollatorForSeq2SeqLanguageModeling(DataCollatorMixin):
+    """Pad seq2seq examples and create segment-aware decoder inputs for packed T5 training."""
+
+    pad_token_id: int
+    decoder_start_token_id: int
+    max_source_length: int | None = None
+    max_target_length: int | None = None
+    truncation_mode: str = "keep_start"
+    pad_to_multiple_of: int | None = None
+    return_tensors: str = "pt"
+
+    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        is_packed = "encoder_seq_lengths" in examples[0] or "decoder_seq_lengths" in examples[0]
+        if is_packed and not all(
+            "encoder_seq_lengths" in example and "decoder_seq_lengths" in example for example in examples
+        ):
+            raise ValueError("Packed seq2seq examples require both encoder and decoder sequence lengths.")
+
+        input_ids = [example["input_ids"] for example in examples]
+        labels = [example["labels"] for example in examples]
+        if not is_packed:
+            if self.truncation_mode == "keep_start":
+                source_slice = slice(None, self.max_source_length)
+                target_slice = slice(None, self.max_target_length)
+            elif self.truncation_mode == "keep_end":
+                source_slice = (
+                    slice(-self.max_source_length, None) if self.max_source_length is not None else slice(None)
+                )
+                target_slice = (
+                    slice(-self.max_target_length, None) if self.max_target_length is not None else slice(None)
+                )
+            else:
+                raise ValueError(
+                    f"Unsupported truncation mode: {self.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                )
+            input_ids = [ids[source_slice] for ids in input_ids]
+            labels = [target[target_slice] for target in labels]
+
+        input_ids = [torch.tensor(ids, dtype=torch.long) for ids in input_ids]
+        labels = [torch.tensor(target, dtype=torch.long) for target in labels]
+        attention_mask = [torch.ones_like(ids) for ids in input_ids]
+        output = {
+            "input_ids": pad(
+                input_ids,
+                padding_value=self.pad_token_id,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            ),
+            "attention_mask": pad(
+                attention_mask,
+                padding_value=0,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            ),
+            "labels": pad(
+                labels,
+                padding_value=-100,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            ),
+        }
+
+        if is_packed:
+            encoder_segment_ids = []
+            decoder_segment_ids = []
+            decoder_input_ids = []
+            for example, source_ids, target_ids in zip(examples, input_ids, labels, strict=True):
+                source_lengths = example["encoder_seq_lengths"]
+                target_lengths = example["decoder_seq_lengths"]
+                if len(source_lengths) != len(target_lengths):
+                    raise ValueError("Packed seq2seq rows must contain the same number of source and target segments.")
+                if any(length <= 0 for length in source_lengths + target_lengths):
+                    raise ValueError("Packed seq2seq segment lengths must be positive.")
+                if sum(source_lengths) != len(source_ids) or sum(target_lengths) != len(target_ids):
+                    raise ValueError("Packed seq2seq segment lengths must match their token streams.")
+
+                source_segments = torch.repeat_interleave(
+                    torch.arange(1, len(source_lengths) + 1), torch.tensor(source_lengths)
+                )
+                target_segments = torch.repeat_interleave(
+                    torch.arange(1, len(target_lengths) + 1), torch.tensor(target_lengths)
+                )
+                shifted_targets = []
+                offset = 0
+                for target_length in target_lengths:
+                    target = target_ids[offset : offset + target_length]
+                    shifted = torch.cat((torch.tensor([self.decoder_start_token_id]), target[:-1]))
+                    shifted.masked_fill_(shifted == -100, self.pad_token_id)
+                    shifted_targets.append(shifted)
+                    offset += target_length
+
+                encoder_segment_ids.append(source_segments)
+                decoder_segment_ids.append(target_segments)
+                decoder_input_ids.append(torch.cat(shifted_targets))
+
+            output["encoder_segment_ids"] = pad(
+                encoder_segment_ids,
+                padding_value=0,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
+            output["decoder_segment_ids"] = pad(
+                decoder_segment_ids,
+                padding_value=0,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
+            output["decoder_input_ids"] = pad(
+                decoder_input_ids,
+                padding_value=self.pad_token_id,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
+        return output
 
 
 @dataclass
@@ -843,9 +1169,8 @@ class SFTTrainer(_BaseTrainer):
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
               config) with the keyword arguments in `args.model_init_kwargs`.
-            - A [`~transformers.PreTrainedModel`] object. Causal language models and encoder-decoder language models
-              are supported.
-            - A [`~peft.PeftModel`] object. Causal language models and encoder-decoder language models are supported.
+            - A [`~transformers.PreTrainedModel`] object. Causal and seq2seq language models are supported.
+            - A [`~peft.PeftModel`] object. Causal and seq2seq language models are supported.
         args ([`SFTConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
@@ -863,7 +1188,7 @@ class SFTTrainer(_BaseTrainer):
               and content).
 
             The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
-            For encoder-decoder models, datasets must be prompt-completion datasets, or processed datasets with both
+            For seq2seq models, datasets must be prompt-completion datasets, or processed datasets with both
             `input_ids` and `labels`.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
@@ -989,6 +1314,7 @@ class SFTTrainer(_BaseTrainer):
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
         self._is_encoder_decoder = getattr(model.config, "is_encoder_decoder", False)
+        self._is_t5_seq2seq = self._is_encoder_decoder and model.config.model_type == "t5"
 
         if args.eos_token is not None:
             if args.eos_token not in self._tokenizer.get_vocab():
@@ -1034,25 +1360,28 @@ class SFTTrainer(_BaseTrainer):
                 "tokens in input_ids. Use truncation_mode='keep_start' (the default) or set max_length=None."
             )
         if self._is_encoder_decoder:
-            if args.packing:
-                raise ValueError("Packing is not supported for encoder-decoder models. Please set `packing=False`.")
+            if args.packing and not self._is_t5_seq2seq:
+                raise ValueError("Seq2seq packing is currently supported only for T5-family models.")
+            if args.packing and Version(transformers.__version__) < Version("5.0.0"):
+                raise ValueError("T5 seq2seq packing requires `transformers>=5.0.0`.")
+            if args.packing and args.packing_strategy != "bfd":
+                raise ValueError("T5 seq2seq packing only supports `packing_strategy='bfd'`.")
             if args.eval_packing:
-                raise ValueError("Eval packing is not supported for encoder-decoder models. Please set `eval_packing=False`.")
+                raise ValueError("Eval packing is not supported for seq2seq models. Please set `eval_packing=False`.")
             if args.padding_free:
                 raise ValueError(
-                    "Padding-free training is not supported for encoder-decoder models. Please set "
-                    "`padding_free=False`."
+                    "Padding-free training is not supported for seq2seq models. Please set `padding_free=False`."
                 )
-            if args.loss_type == "chunked_nll":
+            if args.loss_type == "chunked_nll" and not self._is_t5_seq2seq:
                 logger.warning(
-                    "`loss_type='chunked_nll'` is only supported for causal language models. Using "
-                    "`loss_type='nll'` for encoder-decoder training."
+                    "`loss_type='chunked_nll'` is currently supported only for causal and T5-family models. Using "
+                    "`loss_type='nll'` for this seq2seq model."
                 )
                 args.loss_type = "nll"
             elif args.loss_type == "dft":
-                raise ValueError("`loss_type='dft'` is not supported for encoder-decoder models.")
+                raise ValueError("`loss_type='dft'` is not supported for seq2seq models.")
             if args.use_liger_kernel:
-                raise ValueError("`use_liger_kernel=True` is not supported for encoder-decoder models.")
+                raise ValueError("`use_liger_kernel=True` is not supported for seq2seq models.")
 
         # PEFT
         if peft_config is not None:
@@ -1158,7 +1487,9 @@ class SFTTrainer(_BaseTrainer):
         # Data collator
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
-        self.padding_free = args.padding_free or (args.packing and args.packing_strategy in {"bfd", "bfd_split"})
+        self.padding_free = args.padding_free or (
+            not self._is_encoder_decoder and args.packing and args.packing_strategy in {"bfd", "bfd_split"}
+        )
         use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
         if self.padding_free:
             if data_collator is not None:
@@ -1212,13 +1543,27 @@ class SFTTrainer(_BaseTrainer):
                     "in the vocabulary before using it as a padding token."
                 )
             self._tokenizer.pad_token = pad_token
-            data_collator = DataCollatorForLanguageModeling(
-                pad_token_id=self._tokenizer.pad_token_id,
-                max_length=None if self.padding_free else args.max_length,
-                truncation_mode=args.truncation_mode,
-                padding_free=self.padding_free,
-                pad_to_multiple_of=args.pad_to_multiple_of,
-            )
+            if self._is_encoder_decoder:
+                if model.config.decoder_start_token_id is None:
+                    raise ValueError("Seq2seq models require `decoder_start_token_id` in the model config.")
+                data_collator = DataCollatorForSeq2SeqLanguageModeling(
+                    pad_token_id=self._tokenizer.pad_token_id,
+                    decoder_start_token_id=model.config.decoder_start_token_id,
+                    max_source_length=args.max_length,
+                    max_target_length=args.max_target_length
+                    if args.max_target_length is not None
+                    else args.max_length,
+                    truncation_mode=args.truncation_mode,
+                    pad_to_multiple_of=args.pad_to_multiple_of,
+                )
+            else:
+                data_collator = DataCollatorForLanguageModeling(
+                    pad_token_id=self._tokenizer.pad_token_id,
+                    max_length=None if self.padding_free else args.max_length,
+                    truncation_mode=args.truncation_mode,
+                    padding_free=self.padding_free,
+                    pad_to_multiple_of=args.pad_to_multiple_of,
+                )
         elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionLanguageModeling(
                 processor=processing_class,
@@ -1228,7 +1573,12 @@ class SFTTrainer(_BaseTrainer):
                 dataset_text_field=args.dataset_text_field,
             )
 
-        if args.packing and args.packing_strategy in {"bfd", "bfd_split"} and not use_flash_attention:
+        if (
+            not self._is_encoder_decoder
+            and args.packing
+            and args.packing_strategy in {"bfd", "bfd_split"}
+            and not use_flash_attention
+        ):
             logger.warning(
                 "You are using packing, but the attention implementation is not set to a supported Flash Attention "
                 "variant. Packing gathers multiple samples into a single sequence, and only the following "
@@ -1292,7 +1642,11 @@ class SFTTrainer(_BaseTrainer):
                 train_dataset, processing_class, args, args.packing, formatting_func, "train"
             )
             if eval_dataset is not None:
-                packing = args.packing if args.eval_packing is None else args.eval_packing
+                packing = (
+                    False
+                    if self._is_encoder_decoder and args.eval_packing is None
+                    else (args.packing if args.eval_packing is None else args.eval_packing)
+                )
                 if isinstance(eval_dataset, dict):
                     eval_dataset = {
                         key: self._prepare_dataset(dataset, processing_class, args, packing, formatting_func, key)
@@ -1302,6 +1656,27 @@ class SFTTrainer(_BaseTrainer):
                     eval_dataset = self._prepare_dataset(
                         eval_dataset, processing_class, args, packing, formatting_func, "eval"
                     )
+
+        # T5 packing needs independent encoder, decoder, and cross-attention masks. The same adapter implements
+        # seq2seq chunked NLL so the two features compose without order-dependent forward patches.
+        seq2seq_forward_patched = False
+        if self._is_t5_seq2seq and (args.packing or args.loss_type == "chunked_nll"):
+            target = model.get_base_model() if is_peft_model(model) else model
+            if is_peft_model(model):
+                from peft.tuners.tuners_utils import BaseTunerLayer
+
+                if model.active_peft_config.is_prompt_learning and args.packing:
+                    raise ValueError("T5 seq2seq packing does not support prompt-learning PEFT methods.")
+                if args.loss_type == "chunked_nll" and isinstance(target.get_output_embeddings(), BaseTunerLayer):
+                    raise ValueError(
+                        "`loss_type='chunked_nll'` is not supported when `lm_head` is wrapped by a PEFT adapter. "
+                        "Remove `lm_head` from `target_modules`, or switch to `loss_type='nll'`."
+                    )
+            _patch_t5_seq2seq_forward(
+                target,
+                chunk_size=_T5_CHUNKED_LM_HEAD_CHUNK_SIZE if args.loss_type == "chunked_nll" else None,
+            )
+            seq2seq_forward_patched = True
 
         # Loss function
         if not args.use_liger_kernel:  # liger supports dft loss by just passing use_token_scaling=True
@@ -1336,7 +1711,8 @@ class SFTTrainer(_BaseTrainer):
                             "`lm_head` from `target_modules`, or switch to `loss_type='nll'`. If this is a real use "
                             "case for you, please open an issue at https://github.com/huggingface/trl/issues."
                         )
-                _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
+                if not seq2seq_forward_patched:
+                    _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
             else:
                 raise ValueError(
                     f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
@@ -1450,7 +1826,7 @@ class SFTTrainer(_BaseTrainer):
         column_names = get_dataset_column_names(dataset)
         is_processed = "input_ids" in column_names
         if self._is_encoder_decoder and is_processed and "labels" not in column_names:
-            raise ValueError("Processed datasets for encoder-decoder models must include a `labels` column.")
+            raise ValueError("Processed datasets for seq2seq models must include a `labels` column.")
 
         # Build the kwargs for the `map` function
         map_kwargs = {}
@@ -1566,9 +1942,9 @@ class SFTTrainer(_BaseTrainer):
                                     "token handling. Verify that the tokenizer is processing text consistently."
                                 )
                             # Create completion mask
-                            completion_mask = [0] * len(prompt_ids) + [
-                                1
-                            ] * (len(prompt_completion_ids) - len(prompt_ids))
+                            completion_mask = [0] * len(prompt_ids) + [1] * (
+                                len(prompt_completion_ids) - len(prompt_ids)
+                            )
                             output["input_ids"] = prompt_completion_ids
                             output["completion_mask"] = completion_mask
 
@@ -1649,8 +2025,20 @@ class SFTTrainer(_BaseTrainer):
                 if args.shuffle_dataset:
                     dataset = dataset.shuffle(seed=args.seed)
 
-                # Packing adds new column "seq_lengths" needed for document aware FlashAttention
-                dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
+                if self._is_encoder_decoder:
+                    max_target_length = (
+                        args.max_target_length if args.max_target_length is not None else args.max_length
+                    )
+                    dataset = pack_seq2seq_dataset(
+                        dataset,
+                        max_source_length=args.max_length,
+                        max_target_length=max_target_length,
+                        strategy=args.packing_strategy,
+                        map_kwargs=map_kwargs,
+                    )
+                else:
+                    # Causal packing adds "seq_lengths" for document-aware FlashAttention.
+                    dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
                 collator_expected_keys = {"input_ids", "seq_lengths", "labels"}
@@ -1671,7 +2059,17 @@ class SFTTrainer(_BaseTrainer):
             if self._is_vision_dataset:
                 self._signature_columns = ["messages", "prompt", "completion", "image", "images"]
             else:
-                self._signature_columns = ["input_ids", "labels", "seq_lengths"]
+                self._signature_columns = [
+                    "input_ids",
+                    "labels",
+                    "seq_lengths",
+                    "encoder_seq_lengths",
+                    "decoder_seq_lengths",
+                    "encoder_segment_ids",
+                    "decoder_segment_ids",
+                    "decoder_input_ids",
+                    "attention_mask",
+                ]
 
     def _reject_skip_prepare_without_labels(self, datasets: dict[str, Dataset], data_collator) -> None:
         # This guard may look defensive, but it covers a behavior change introduced when label building moved from
@@ -1706,7 +2104,11 @@ class SFTTrainer(_BaseTrainer):
         # prompt-completion, etc.). `_prepare_dataset` is idempotent: it skips datasets that are already tokenized. A
         # `str` selects a dataset that was already prepared at init time, so it's left untouched.
         if not self._skip_prepare_dataset and eval_dataset is not None and not isinstance(eval_dataset, str):
-            packing = self.args.packing if self.args.eval_packing is None else self.args.eval_packing
+            packing = (
+                False
+                if self._is_encoder_decoder and self.args.eval_packing is None
+                else (self.args.packing if self.args.eval_packing is None else self.args.eval_packing)
+            )
             if isinstance(eval_dataset, dict):
                 eval_dataset = {
                     key: self._prepare_dataset(

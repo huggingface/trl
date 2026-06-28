@@ -70,7 +70,10 @@ class SFTConfig(_BaseConfig):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left
             or right depending on `truncation_mode`. If `None`, no truncation is applied. When packing is enabled,
-            this value sets the sequence length.
+            this value sets the sequence length. For seq2seq models, this is the encoder sequence length.
+        max_target_length (`int` or `None`, *optional*):
+            Maximum decoder target length for seq2seq models. Defaults to `max_length` when unset. This setting has no
+            effect for causal language models.
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
             Truncation mode to use when the sequence exceeds `max_length`. The only supported value is
             `"keep_start"`. The `"keep_end"` value is deprecated and will be removed in v2.0.0.
@@ -78,7 +81,8 @@ class SFTConfig(_BaseConfig):
             Whether to shuffle the dataset.
         packing (`bool`, *optional*, defaults to `False`):
             Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
-            padding. Uses `max_length` to define sequence length. Only supported for causal language models.
+            padding. Uses `max_length` to define sequence length. T5-family seq2seq models use `max_length` for the
+            encoder stream and `max_target_length` for the decoder stream.
         packing_strategy (`str`, *optional*, defaults to `"bfd"`):
             Strategy for packing sequences. Can be `"bfd"` (best-fit decreasing, truncates overflow), `"bfd_split"`
             (best-fit decreasing, splits overflow sequences), or `"wrapped"` (aggressive, cuts mid-sequence).
@@ -91,7 +95,8 @@ class SFTConfig(_BaseConfig):
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         eval_packing (`bool`, *optional*):
-            Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
+            Whether to pack the eval dataset. If `None`, uses the same value as `packing` for causal models and
+            defaults to `False` for seq2seq models. Packed seq2seq evaluation is not supported.
 
         > Parameters that control the training
 
@@ -109,14 +114,15 @@ class SFTConfig(_BaseConfig):
             `False`, loss is computed on the entire sequence.
         loss_type (`str`, *optional*, defaults to `"chunked_nll"`):
             Type of loss to use. When left unset, it defaults to `"chunked_nll"`, except when `use_liger_kernel=True`,
-            in which case it defaults to `"nll"`. Encoder-decoder models use `"nll"`. Possible values are:
+            in which case it defaults to `"nll"`. T5-family seq2seq models support `"chunked_nll"`; other
+            encoder-decoder models use `"nll"`. Possible values are:
 
             - `"nll"`: standard negative log-likelihood.
             - `"dft"`: Dynamic Fine-Tuning, as described in
               [this paper](https://huggingface.co/papers/2508.05629).
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
-              in chunks of tokens to reduce peak activation memory. Only supported for causal language models and not
+              in chunks of tokens to reduce peak activation memory. Supported for causal and T5-family models and not
               compatible with `use_liger_kernel`.
 
         activation_offloading (`bool`, *optional*, defaults to `False`):
@@ -214,6 +220,10 @@ class SFTConfig(_BaseConfig):
             "is enabled, this value sets the sequence length."
         },
     )
+    max_target_length: int | None = field(
+        default=None,
+        metadata={"help": "Maximum decoder target length for seq2seq models. Defaults to `max_length` when unset."},
+    )
     truncation_mode: str = field(
         default="keep_start",
         metadata={
@@ -230,8 +240,8 @@ class SFTConfig(_BaseConfig):
         default=False,
         metadata={
             "help": "Whether to group multiple sequences into fixed-length blocks to improve computational efficiency "
-            "and reduce padding. Uses `max_length` to define sequence length. Only supported for causal language "
-            "models."
+            "and reduce padding. Uses `max_length` to define sequence length. T5-family seq2seq models use "
+            "`max_length` for the encoder stream and `max_target_length` for the decoder stream."
         },
     )
     packing_strategy: str = field(
@@ -259,7 +269,10 @@ class SFTConfig(_BaseConfig):
     )
     eval_packing: bool | None = field(
         default=None,
-        metadata={"help": "Whether to pack the eval dataset. If `None`, uses the same value as `packing`."},
+        metadata={
+            "help": "Whether to pack the eval dataset. If `None`, uses the same value as `packing` for causal "
+            "models and defaults to `False` for seq2seq models. Packed seq2seq evaluation is not supported."
+        },
     )
 
     # Parameters that control the training
@@ -290,14 +303,15 @@ class SFTConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Type of loss to use. When left unset, it defaults to `'chunked_nll'`, except when "
-            "`use_liger_kernel=True`, in which case it defaults to `'nll'`. Encoder-decoder models use `'nll'`. "
+            "`use_liger_kernel=True`, in which case it defaults to `'nll'`. T5-family seq2seq models support "
+            "`'chunked_nll'`; other encoder-decoder models use `'nll'`. "
             "Possible values are `'nll'` (standard negative log-likelihood), `'dft'` (Dynamic Fine-Tuning, "
             "https://huggingface.co/papers/2508.05629), and `'chunked_nll'` (same math as `'nll'`, but the "
             "`lm_head` projection is computed on non-ignored tokens only — positions with `labels == -100` are "
             "dropped before the matmul — and the cross-entropy is processed in chunks of tokens to reduce peak "
             "activation memory; not compatible with `use_liger_kernel`; the patched `lm_head` path covers standard "
-            "causal LMs and VLMs whose language model exposes a top-level `lm_head`, architectures with a "
-            "non-standard head are not supported)."
+            "causal LMs, T5-family models, and VLMs whose language model exposes a top-level `lm_head`; "
+            "architectures with a non-standard head are not supported)."
         },
     )
     activation_offloading: bool = field(

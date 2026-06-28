@@ -32,6 +32,7 @@ from trl.data_utils import (
     maybe_extract_prompt,
     maybe_unpair_preference_dataset,
     pack_dataset,
+    pack_seq2seq_dataset,
     prepare_multimodal_messages,
     prepare_multimodal_messages_vllm,
     unpair_preference_dataset,
@@ -1288,6 +1289,92 @@ class TestPackDatasetBfd(TrlTestCase):
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
         assert dataset.to_dict() == expected_output
+
+
+class TestPackSeq2SeqDataset(TrlTestCase):
+    def test_packs_paired_streams_with_independent_lengths(self):
+        dataset = Dataset.from_dict(
+            {
+                "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8], [9, 10]],
+                "labels": [[11], [12, 13, 14], [15, 16], [17, 18, 19, 20]],
+            }
+        )
+
+        packed = pack_seq2seq_dataset(dataset, max_source_length=5, max_target_length=5)
+
+        assert packed.to_dict() == {
+            "input_ids": [[4, 5, 6, 7, 8], [9, 10, 1, 2, 3]],
+            "labels": [[12, 13, 14, 15, 16], [17, 18, 19, 20, 11]],
+            "encoder_seq_lengths": [[4, 1], [2, 3]],
+            "decoder_seq_lengths": [[3, 2], [4, 1]],
+        }
+
+    def test_truncates_source_and_target_independently(self):
+        dataset = Dataset.from_dict({"input_ids": [[1, 2, 3, 4], [5]], "labels": [[6, 7, 8, 9, 10], [11, 12]]})
+
+        packed = pack_seq2seq_dataset(dataset, max_source_length=3, max_target_length=4)
+
+        assert packed.to_dict() == {
+            "input_ids": [[1, 2, 3], [5]],
+            "labels": [[6, 7, 8, 9], [11, 12]],
+            "encoder_seq_lengths": [[3], [1]],
+            "decoder_seq_lengths": [[4], [2]],
+        }
+
+    def test_is_deterministic_and_preserves_format(self):
+        dataset = Dataset.from_dict(
+            {"input_ids": [[1, 2], [3], [4, 5]], "labels": [[11], [12, 13], [14]]}
+        ).with_format("numpy", dtype="int64")
+        format = dataset.format
+
+        first = pack_seq2seq_dataset(dataset, max_source_length=3, max_target_length=3)
+        second = pack_seq2seq_dataset(dataset, max_source_length=3, max_target_length=3)
+
+        assert first.with_format(None).to_dict() == second.with_format(None).to_dict()
+        expected_format = first.format
+        expected_format["columns"].remove("encoder_seq_lengths")
+        expected_format["columns"].remove("decoder_seq_lengths")
+        assert expected_format == format
+
+    def test_with_iterable_dataset(self):
+        dataset = Dataset.from_dict(
+            {"input_ids": [[1, 2], [3], [4, 5]], "labels": [[11], [12, 13], [14]]}
+        ).to_iterable_dataset()
+        dataset = dataset.with_format("numpy")
+        formatting = dataset._formatting
+
+        packed = pack_seq2seq_dataset(dataset, max_source_length=3, max_target_length=3)
+        rows = list(packed.with_format(None))
+
+        assert rows == [
+            {
+                "input_ids": [1, 2, 3],
+                "labels": [11, 12, 13],
+                "encoder_seq_lengths": [2, 1],
+                "decoder_seq_lengths": [1, 2],
+            },
+            {
+                "input_ids": [4, 5],
+                "labels": [14],
+                "encoder_seq_lengths": [2],
+                "decoder_seq_lengths": [1],
+            },
+        ]
+        assert packed._formatting == formatting
+
+    @pytest.mark.parametrize("strategy", ["wrapped", "bfd_split"])
+    def test_rejects_pair_splitting_strategies(self, strategy):
+        dataset = Dataset.from_dict({"input_ids": [[1]], "labels": [[2]]})
+
+        with pytest.raises(ValueError, match="only supports `strategy='bfd'`"):
+            pack_seq2seq_dataset(dataset, 4, 4, strategy=strategy)
+
+    @pytest.mark.parametrize(("input_ids", "labels"), [([], [1]), ([1], [])])
+    def test_rejects_empty_pairs(self, input_ids, labels):
+        dataset = Dataset.from_dict({"input_ids": [input_ids], "labels": [labels]})
+
+        with pytest.raises(ValueError, match="empty source or target"):
+            pack_seq2seq_dataset(dataset, 4, 4)
 
 
 class TestMaybeConvertToChatML(TrlTestCase):

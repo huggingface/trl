@@ -797,6 +797,138 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
     return pa.Table.from_arrays(columns, names=examples.column_names)
 
 
+def _pack_seq2seq_bfd(examples: pa.Table, max_source_length: int, max_target_length: int) -> pa.Table:
+    """Pack paired source and target sequences with two-dimensional Best Fit Decreasing."""
+    examples = examples.combine_chunks()
+    if examples.column_names != ["input_ids", "labels"]:
+        raise ValueError("Seq2seq packing requires exactly `input_ids` and `labels` columns.")
+
+    input_ids = examples["input_ids"].chunks[0]
+    labels = examples["labels"].chunks[0]
+    if not (pa.types.is_list(input_ids.type) or pa.types.is_large_list(input_ids.type)):
+        raise TypeError("Seq2seq packing requires `input_ids` to be a list column.")
+    if not (pa.types.is_list(labels.type) or pa.types.is_large_list(labels.type)):
+        raise TypeError("Seq2seq packing requires `labels` to be a list column.")
+
+    input_ids = pc.list_slice(input_ids, 0, max_source_length)
+    labels = pc.list_slice(labels, 0, max_target_length)
+    source_lengths = pc.list_value_length(input_ids).to_numpy()
+    target_lengths = pc.list_value_length(labels).to_numpy()
+
+    if np.any(source_lengths == 0) or np.any(target_lengths == 0):
+        raise ValueError("Seq2seq packing does not support empty source or target sequences.")
+
+    # Sort by the fullest normalized dimension, then use the raw lengths and original index as stable tie breakers.
+    # This extends one-dimensional BFD without allowing either the source or target capacity to overflow.
+    order = sorted(
+        range(len(source_lengths)),
+        key=lambda idx: (
+            -max(source_lengths[idx] / max_source_length, target_lengths[idx] / max_target_length),
+            -source_lengths[idx],
+            -target_lengths[idx],
+            idx,
+        ),
+    )
+
+    bins = []
+    for idx in order:
+        source_length = source_lengths[idx]
+        target_length = target_lengths[idx]
+        best_bin = None
+        best_score = None
+        for bin_idx, bin_ in enumerate(bins):
+            source_remaining = max_source_length - bin_["source_length"] - source_length
+            target_remaining = max_target_length - bin_["target_length"] - target_length
+            if source_remaining < 0 or target_remaining < 0:
+                continue
+            normalized_source_remaining = source_remaining / max_source_length
+            normalized_target_remaining = target_remaining / max_target_length
+            score = (
+                max(normalized_source_remaining, normalized_target_remaining),
+                normalized_source_remaining + normalized_target_remaining,
+                bin_idx,
+            )
+            if best_score is None or score < best_score:
+                best_bin = bin_
+                best_score = score
+
+        if best_bin is None:
+            best_bin = {"ids": [], "source_length": 0, "target_length": 0}
+            bins.append(best_bin)
+        best_bin["ids"].append(idx)
+        best_bin["source_length"] += source_length
+        best_bin["target_length"] += target_length
+
+    packed_order = [idx for bin_ in bins for idx in bin_["ids"]]
+    input_ids = pc.take(input_ids, packed_order)
+    labels = pc.take(labels, packed_order)
+
+    bin_offsets = np.cumsum([0] + [len(bin_["ids"]) for bin_ in bins], dtype=np.int32)
+    encoder_seq_lengths = pa.ListArray.from_arrays(bin_offsets, pa.array(source_lengths[packed_order]))
+    decoder_seq_lengths = pa.ListArray.from_arrays(bin_offsets, pa.array(target_lengths[packed_order]))
+
+    def concatenate_by_bin(column, length_key):
+        offsets_type = column.offsets.type.to_pandas_dtype()
+        offsets = np.cumsum([0] + [bin_[length_key] for bin_ in bins], dtype=offsets_type)
+        return type(column).from_arrays(offsets, pc.list_flatten(column))
+
+    input_ids = concatenate_by_bin(input_ids, "source_length")
+    labels = concatenate_by_bin(labels, "target_length")
+    return pa.Table.from_arrays(
+        [input_ids, labels, encoder_seq_lengths, decoder_seq_lengths],
+        names=["input_ids", "labels", "encoder_seq_lengths", "decoder_seq_lengths"],
+    )
+
+
+def pack_seq2seq_dataset(
+    dataset: DatasetType,
+    max_source_length: int,
+    max_target_length: int,
+    strategy: str = "bfd",
+    map_kwargs: dict[str, Any] | None = None,
+) -> DatasetType:
+    r"""
+    Pack paired encoder inputs and decoder labels while preserving source-target alignment.
+
+    Unlike causal packing, seq2seq packing has two independent capacities. Each source-target pair remains an
+    indivisible segment and is placed only in a bin where both sequences fit. The resulting
+    `encoder_seq_lengths` and `decoder_seq_lengths` columns describe corresponding segments in the two streams.
+
+    Args:
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
+            Dataset containing `input_ids` and `labels` list columns.
+        max_source_length (`int`):
+            Maximum number of encoder tokens in each packed row.
+        max_target_length (`int`):
+            Maximum number of decoder target tokens in each packed row.
+        strategy (`str`, *optional*, defaults to `"bfd"`):
+            Packing strategy. Only pair-preserving two-dimensional `"bfd"` is supported.
+        map_kwargs (`dict`, *optional*):
+            Additional keyword arguments passed to the dataset's `map` method.
+
+    Returns:
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The packed dataset.
+    """
+    if max_source_length <= 0 or max_target_length <= 0:
+        raise ValueError("`max_source_length` and `max_target_length` must both be positive.")
+    if strategy != "bfd":
+        raise ValueError("Seq2seq packing only supports `strategy='bfd'`; splitting can break source-target pairs.")
+    if map_kwargs is None:
+        map_kwargs = {}
+
+    format = _get_dataset_format(dataset)
+    dataset = dataset.with_format("arrow")
+    dataset = dataset.map(
+        _pack_seq2seq_bfd,
+        batched=True,
+        fn_kwargs={"max_source_length": max_source_length, "max_target_length": max_target_length},
+        **map_kwargs,
+    )
+    if "columns" in format:
+        format["columns"] = format["columns"] + ["encoder_seq_lengths", "decoder_seq_lengths"]
+    return dataset.with_format(**format)
+
+
 def pack_dataset(
     dataset: DatasetType,
     seq_length: int,

@@ -343,7 +343,7 @@ prompt_completion_example = {"prompt": [{"role": "user", "content": "What color 
 
 For examples of prompt-completion datasets, refer to the [Prompt-completion datasets collection](https://huggingface.co/collections/trl-lib/prompt-completion-datasets-677ea2bb20bbb6bdccada216).
 
-For encoder-decoder models trained with [`SFTTrainer`], use the prompt-completion format. The `"prompt"` is used as the encoder input and the `"completion"` is used as the decoder target.
+For seq2seq encoder-decoder models trained with [`SFTTrainer`], use the prompt-completion format. The `"prompt"` is used as the encoder input and the `"completion"` is used as the decoder target. A raw text corpus must first be transformed into an objective with separate source and target streams, such as T5 span corruption.
 
 #### Preference
 
