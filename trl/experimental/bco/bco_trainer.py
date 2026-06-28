@@ -576,7 +576,10 @@ class BCOTrainer(_BaseTrainer):
             self.ref_model = create_reference_model(model)
 
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(get_config_model_id(model.config))
+            processing_class = AutoTokenizer.from_pretrained(
+                get_config_model_id(model.config),
+                trust_remote_code=model_init_kwargs.get("trust_remote_code", False),
+            )
         if args.max_length is None:
             logger.warning(
                 "When using DPODataCollatorWithPadding, you should set `max_length` in the `BCOConfig`. "
