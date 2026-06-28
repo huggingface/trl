@@ -1239,6 +1239,12 @@ class GOLDTrainer(SFTTrainer):
                 "Set either `use_uld_loss=False` or `xtoken_loss_type='none'`."
             )
 
+        if args.use_liger_kernel and args.xtoken_loss_type != "none":
+            raise ValueError(
+                "Liger kernel and X-Token loss cannot be enabled at the same time. "
+                "Set `use_liger_kernel=False` to use X-Token loss."
+            )
+
         # Initialise to None so _prepare_dataset (called by super().__init__) can safely read this attribute.
         self.xtoken_loss_fn = None
 
