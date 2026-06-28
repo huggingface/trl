@@ -42,6 +42,7 @@ from .vllm_client import VLLMClient
 
 if is_vllm_available():
     from vllm import LLM, RequestOutput, SamplingParams
+    from vllm.lora.request import LoRARequest
     from vllm.sampling_params import StructuredOutputsParams
 
 
@@ -293,6 +294,9 @@ class VLLMGeneration:
         self.lora_name = "trl_lora_adapter"
         self.lora_sync_output_dir = lora_sync_output_dir
         self._lora_sync_version = 0
+        # Colocate adapter sync references the currently-loaded adapter by `lora_request` at generation time; set by
+        # `sync_weights`. Unused in server mode (the server applies the loaded adapter by name automatically).
+        self._lora_request = None
 
         self._init_vllm()
 
@@ -386,6 +390,19 @@ class VLLMGeneration:
                     elif isinstance(module, bnb.nn.Linear8bitLt):
                         raise ValueError("vLLM does not support in-flight 8-bit quantization.")
 
+            # Adapter-only LoRA sync: in colocate mode the trainer owns the vLLM engine, so (unlike server mode) it
+            # enables LoRA itself and infers `max_lora_rank` from the adapter — no server capability to detect. The
+            # trainer validates the adapter is syncable as a plain LoRA adapter after `__init__` returns.
+            self.lora_sync = self.is_lora_model
+            lora_kwargs = {}
+            if self.lora_sync:
+                if not is_vllm_available(min_version="0.15.0"):
+                    raise ImportError("Adapter-only LoRA sync in colocate mode requires vLLM >= 0.15.0.")
+                active_peft_config = model.peft_config[model.active_adapters[0]]
+                # `rank_pattern` may raise individual modules above the base `r`; vLLM needs the max.
+                max_lora_rank = max([active_peft_config.r, *active_peft_config.rank_pattern.values()])
+                lora_kwargs = {"enable_lora": True, "max_lora_rank": max_lora_rank}
+
             # Build LLM initialization kwargs
             self.llm = LLM(
                 model=model.name_or_path,
@@ -403,6 +420,7 @@ class VLLMGeneration:
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
                 quantization=quantization,
+                **lora_kwargs,
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
@@ -538,13 +556,20 @@ class VLLMGeneration:
 
         if self.lora_sync:
             adapter_path = self._save_lora_adapter()
-            if accelerator.is_main_process:
-                # `load_inplace=True` reloads the adapter under the same name/id with the freshly trained weights. vLLM
-                # keys its prefix cache on `lora_name` only, so an in-place swap leaves stale KV blocks that would serve
-                # the previous policy's outputs (vLLM issue #42125). Resetting the prefix cache after every swap is
-                # required for correctness here — do not remove it.
-                self.vllm_client.load_lora_adapter(self.lora_name, adapter_path, load_inplace=True)
-                self.vllm_client.reset_prefix_cache()
+            # `load_inplace=True` reloads the adapter under the same name/id with the freshly trained weights. vLLM
+            # keys its prefix cache on `lora_name` only, so an in-place swap leaves stale KV blocks that would serve
+            # the previous policy's outputs (vLLM issue #42125). Resetting the prefix cache after every swap is
+            # required for correctness here — do not remove it.
+            if self.mode == "server":
+                if accelerator.is_main_process:
+                    self.vllm_client.load_lora_adapter(self.lora_name, adapter_path, load_inplace=True)
+                    self.vllm_client.reset_prefix_cache()
+            else:
+                # Colocate: each rank owns its engine, so each reloads the adapter (pinned `lora_int_id=1`, matching the
+                # server). `generate` then activates it by passing a plain `lora_request` referencing the same id.
+                self.llm.llm_engine.add_lora(LoRARequest(self.lora_name, 1, adapter_path, load_inplace=True))
+                self.llm.reset_prefix_cache()
+                self._lora_request = LoRARequest(self.lora_name, 1, adapter_path)
             accelerator.wait_for_everyone()
             return
 
@@ -768,7 +793,12 @@ class VLLMGeneration:
                 torch.distributed.barrier()
 
             with profiler:
-                all_outputs = self.llm.generate(vllm_prompts, sampling_params=sampling_params, use_tqdm=False)
+                all_outputs = self.llm.generate(
+                    vllm_prompts,
+                    sampling_params=sampling_params,
+                    lora_request=self._lora_request,  # `None` unless adapter-only LoRA sync is active
+                    use_tqdm=False,
+                )
 
             all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
             all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]

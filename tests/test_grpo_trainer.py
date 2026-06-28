@@ -364,6 +364,32 @@ class TestGRPOTrainer(TrlTestCase):
         vllm_generation.model.merge_adapter.assert_not_called()
         vllm_generation.model.unmerge_adapter.assert_not_called()
 
+    def test_vllm_lora_sync_colocate_loads_adapter_without_merging(self):
+        vllm_generation = object.__new__(VLLMGeneration)
+        vllm_generation.mode = "colocate"
+        vllm_generation.enable_sleep_mode = False
+        vllm_generation.lora_sync = True
+        vllm_generation.lora_name = "trl_lora_adapter"
+        vllm_generation._lora_request = None
+        vllm_generation.accelerator = SimpleNamespace(is_main_process=True, wait_for_everyone=MagicMock())
+        vllm_generation.llm = MagicMock()
+        vllm_generation.model = MagicMock()
+        vllm_generation.model.merge_adapter = MagicMock()
+        vllm_generation.model.unmerge_adapter = MagicMock()
+        vllm_generation._save_lora_adapter = MagicMock(return_value="/tmp/adapter")
+
+        vllm_generation.sync_weights()
+
+        vllm_generation._save_lora_adapter.assert_called_once()
+        # Each colocate rank reloads the adapter in-place into its own engine (the #42125 stale-prefix-cache guard).
+        vllm_generation.llm.llm_engine.add_lora.assert_called_once()
+        assert vllm_generation.llm.llm_engine.add_lora.call_args.args[0].load_inplace is True
+        vllm_generation.llm.reset_prefix_cache.assert_called_once()
+        # `generate` references the loaded adapter by `lora_request`.
+        assert vllm_generation._lora_request is not None
+        vllm_generation.model.merge_adapter.assert_not_called()
+        vllm_generation.model.unmerge_adapter.assert_not_called()
+
     @staticmethod
     def _run_server_autodetect(*, is_lora_model, server_enable_lora, server_max_lora_rank=None, model=None):
         # Drive the server-mode auto-detect block of `VLLMGeneration._init_vllm` with a fake client, so we can assert
