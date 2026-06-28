@@ -33,7 +33,7 @@ The dataset only requires a ``prompt`` column containing coding problem prompts.
 Example:
 
 ```bash
-python trl/experimental/ssd/ssd.py \
+python examples/scripts/ssd.py \
     --model_name_or_path Qwen/Qwen3-4B-Instruct-2507 \
     --dataset_name microsoft/rStar-Coder \
     --dataset_config seed_sft \
@@ -101,7 +101,6 @@ if __name__ == "__main__":
         dtype = getattr(torch, model_args.dtype)
     model_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=dtype,
     )
@@ -113,10 +112,7 @@ if __name__ == "__main__":
     training_args.model_init_kwargs = model_kwargs
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path,
-        revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
-        padding_side="left",
+        model_args.model_name_or_path, revision=model_args.model_revision, padding_side="left"
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token

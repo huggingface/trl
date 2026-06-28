@@ -34,6 +34,27 @@ class TestORPOTrainer(TrlTestCase):
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id, dtype="float32")
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+
+        with pytest.raises(ValueError, match="custom code"):
+            ORPOTrainer(
+                model=model_id,
+                args=ORPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                processing_class=tokenizer,
+                train_dataset=dataset,
+            )
+
+        trainer = ORPOTrainer(
+            model=model_id,
+            args=ORPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     @pytest.mark.parametrize(
         "name, config_name",
         [

@@ -83,11 +83,9 @@ if __name__ == "__main__":
         model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, use_fast=True)
     model = AutoModelForTokenClassification.from_pretrained(
-        model_args.model_name_or_path, num_labels=2, trust_remote_code=model_args.trust_remote_code, **model_kwargs
+        model_args.model_name_or_path, num_labels=2, **model_kwargs
     )
 
     if model_args.use_peft and model_args.lora_task_type != "TOKEN_CLS":

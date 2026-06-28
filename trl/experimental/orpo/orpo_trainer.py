@@ -27,7 +27,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState, logging
+from accelerate import PartialState
+from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset
 from packaging.version import Version
@@ -79,7 +80,7 @@ if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def log1mexp(x: torch.FloatTensor) -> torch.FloatTensor:
@@ -181,6 +182,8 @@ class ORPOTrainer(_BaseTrainer):
                     )
                 model_init_kwargs["dtype"] = dtype
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
+
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)

@@ -68,25 +68,25 @@ import argparse
 
 
 def main(script_args, training_args, model_args, dataset_args):
-    from accelerate import logging
+    from accelerate.logging import get_logger
     from datasets import load_dataset
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from trl import get_dataset, get_peft_config
     from trl.experimental.kto import KTOTrainer
 
-    logger = logging.get_logger(__name__)
+    logger = get_logger(__name__)
 
     # Load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+        model_args.model_name_or_path, trust_remote_code=training_args.trust_remote_code
     )
     ref_model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+        model_args.model_name_or_path, trust_remote_code=training_args.trust_remote_code
     )
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+        model_args.model_name_or_path, trust_remote_code=training_args.trust_remote_code
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token

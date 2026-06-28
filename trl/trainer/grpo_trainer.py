@@ -96,7 +96,9 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model
+    import peft
+    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
@@ -139,18 +141,18 @@ class GRPOTrainer(_BaseTrainer):
     Example:
 
     ```python
-    from trl import GRPOTrainer
-    from trl.rewards import accuracy_reward
-    from datasets import load_dataset
+    >>> from trl import GRPOTrainer
+    >>> from trl.rewards import accuracy_reward
+    >>> from datasets import load_dataset
 
-    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+    >>> dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-    trainer = GRPOTrainer(
-        model="Qwen/Qwen2.5-0.5B-Instruct",
-        reward_funcs=accuracy_reward,
-        train_dataset=dataset,
-    )
-    trainer.train()
+    >>> trainer = GRPOTrainer(
+    ...     model="Qwen/Qwen2.5-0.5B-Instruct",
+    ...     reward_funcs=accuracy_reward,
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
     ```
 
     Args:
@@ -295,6 +297,7 @@ class GRPOTrainer(_BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
@@ -302,6 +305,8 @@ class GRPOTrainer(_BaseTrainer):
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
+        _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
         # Inspect the forward method before we wrap the model with PEFT
@@ -314,7 +319,15 @@ class GRPOTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), truncation_side="left", padding_side="left"
+                get_config_model_id(model.config),
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
+            )
+
+        if args.use_transformers_continuous_batching and isinstance(processing_class, ProcessorMixin):
+            raise ValueError(
+                "`use_transformers_continuous_batching` does not support multimodal models. Use `use_vllm` instead."
             )
 
         # Handle pad token for processors or tokenizers
@@ -363,17 +376,49 @@ class GRPOTrainer(_BaseTrainer):
                     "with the new `peft_config` to the trainer."
                 )
             # Create PEFT model
-            model = get_peft_model(model, peft_config)
+            # ZeRO-3 + PEFT for non-quantized models:
+            # - PEFT's default autocast_adapter_dtype=True upcasts LoRA adapter params to fp32 even when the base model is bf16.
+            # - ZeRO-3's _allgather_params_coalesced allocates output buffers using the dtype of the first persistent parameter,
+            #   so mixed-dtype persistent_parameters (bf16 base + fp32 LoRA) cause a TypeError on the first optimizer step.
+            # - Passing autocast_adapter_dtype=False keeps adapter params in the base model dtype (bf16), fixing the mismatch.
+            # - This is safe: the fp32 upcast is a QLoRA-specific concern (low-bit quantized base models), not needed for
+            #   non-quantized bf16 training.
+            # - See:
+            #   - TRL issue: https://github.com/huggingface/trl/issues/6089
+            #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
+            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
+            get_peft_model_kwargs = {}
+            if (
+                args.deepspeed_plugin is not None
+                and args.deepspeed_plugin.zero_stage == 3
+                and not _is_quantized_model
+                and Version(peft.__version__) >= Version("0.12.0")
+            ):
+                get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         elif is_peft_model(model) and args.beta != 0.0:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
-            # of the "default" adapter, so that we can use it as the reference model during GRPO training.
-            model.add_adapter("ref", model.peft_config["default"])
-            for name, param in model.named_parameters():
-                if ".default." in name:
-                    ref_name = name.replace(".default.", ".ref.")
-                    ref_param = model.get_parameter(ref_name)
-                    ref_param.data.copy_(param.data)
+            # of the "default" adapter, so that we can use it as the reference model during GRPO training. PEFT only
+            # supports one adapter per model when the LoRA config uses `target_parameters` (see peft#3340), so in that
+            # case we skip the "ref" adapter and compute the reference log probs with adapters disabled, i.e. with the
+            # base model.
+            default_config = model.peft_config["default"]
+            if isinstance(default_config, LoraConfig) and default_config.target_parameters:
+                logger.warning(
+                    "PEFT can't add a frozen reference adapter alongside one that uses `target_parameters` "
+                    "(peft#3340), so the reference log probs are computed from the base model (adapters disabled). "
+                    "If you wrapped the model only to apply LoRA, pass a `peft_config` to the trainer instead; if you "
+                    "wrapped it deliberately (pretrained adapter or custom init), note that the base model matches "
+                    "your adapter only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
+                )
+            else:
+                model.add_adapter("ref", default_config)
+                for name, param in model.named_parameters():
+                    if ".default." in name:
+                        ref_name = name.replace(".default.", ".ref.")
+                        ref_param = model.get_parameter(ref_name)
+                        ref_param.data.copy_(param.data)
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
@@ -384,8 +429,7 @@ class GRPOTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
-        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
-        if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
+        if _is_quantized_model:
             for param in model.parameters():
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
@@ -400,6 +444,7 @@ class GRPOTrainer(_BaseTrainer):
                 # Distributed training requires device_map=None ("auto" fails)
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     model_init_kwargs["device_map"] = None
+                model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
@@ -436,7 +481,9 @@ class GRPOTrainer(_BaseTrainer):
         ):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(get_config_model_id(reward_func.config))
+                    reward_processing_class = AutoTokenizer.from_pretrained(
+                        get_config_model_id(reward_func.config), trust_remote_code=args.trust_remote_code
+                    )
                 if reward_processing_class.pad_token_id is None:
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
@@ -557,7 +604,22 @@ class GRPOTrainer(_BaseTrainer):
         self.top_k = args.top_k
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
-        self.use_transformers_paged = args.use_transformers_paged
+        self.use_transformers_continuous_batching = args.use_transformers_continuous_batching
+        if self.use_transformers_continuous_batching:
+            if not Version(transformers.__version__) >= Version("5.8.0"):
+                raise ImportError(
+                    "Using `use_transformers_continuous_batching` requires transformers>=5.8.0. "
+                    "Please upgrade with `pip install --upgrade transformers`."
+                )
+            from transformers.generation import ContinuousBatchingConfig
+
+            cb_kwargs = dict(args.transformers_continuous_batching_config or {})
+            # The transformers default (0.9) leaves almost no VRAM for the training backward pass;
+            # use a training-aware default unless the user has set it explicitly.
+            cb_kwargs.setdefault("max_memory_percent", 0.5)
+            self.continuous_batching_config = ContinuousBatchingConfig(**cb_kwargs)
+        else:
+            self.continuous_batching_config = None
         self.pad_to_multiple_of = args.pad_to_multiple_of
         self.use_vllm = args.use_vllm
         self.vllm_mode = args.vllm_mode
@@ -571,21 +633,29 @@ class GRPOTrainer(_BaseTrainer):
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
 
-        # MoE load-balancing auxiliary loss; `get_text_config()` reads from `text_config` on VLMs, the config itself otherwise
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
         text_config = model.config.get_text_config()
-        self.aux_loss_enabled = getattr(text_config, "output_router_logits", False)
-        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0)
-        if self.aux_loss_enabled and self.router_aux_loss_coef == 0.0:
-            warnings.warn(
-                "You set `output_router_logits=True` in the model config, but `router_aux_loss_coef` is `0.0`, so the "
-                "auxiliary loss has no effect. Set `router_aux_loss_coef > 0.0` to enable it.",
-                stacklevel=2,
-            )
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
+        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = args.router_aux_loss_coef
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.off_policy_mask_threshold = args.off_policy_mask_threshold
         if self.use_liger_kernel and self.off_policy_mask_threshold is not None:
             raise ValueError("Liger kernel does not support off-policy sequence masking yet.")
+        if self.use_liger_kernel and is_peft_model(model):
+            # The Liger fused GRPO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head is
+            # targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base weight
+            # and the trainable adapter parameters live in separate submodules that Liger never sees. The head adapter
+            # would silently receive no gradient, so the model trains as if `lm_head` were frozen. Fail loudly rather
+            # than train a silently-frozen head.
+            output_embeddings = model.get_output_embeddings()
+            if isinstance(output_embeddings, BaseTunerLayer):
+                raise ValueError(
+                    "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The Liger "
+                    "fused GRPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and never "
+                    "trained. Either remove `'lm_head'` from your `target_modules`, or set `use_liger_kernel=False`."
+                )
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
         if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
@@ -625,6 +695,14 @@ class GRPOTrainer(_BaseTrainer):
             logger.warning(
                 "VESPO computes sequence-level importance weights internally. `importance_sampling_level` should be "
                 "set to `'token'` (the default)."
+            )
+
+        if args.importance_sampling_level == "sequence" and args.loss_type in ["bnpo", "dr_grpo", "dapo", "cispo"]:
+            logger.warning(
+                f"When using `importance_sampling_level='sequence'`, the `'{args.loss_type}'` loss sums per-token "
+                "contributions, which effectively weights each sequence by its completion length instead of "
+                "optimizing the per-sequence objective. To reproduce the GSPO paper's setup, set `loss_type='grpo'` "
+                "(see https://huggingface.co/docs/trl/main/en/paper_index#group-sequence-policy-optimization)."
             )
 
         if self.loss_type == "vespo" and self.use_vllm and self.vllm_importance_sampling_correction:
@@ -684,6 +762,7 @@ class GRPOTrainer(_BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
         # Disable dropout in the models
@@ -933,8 +1012,10 @@ class GRPOTrainer(_BaseTrainer):
         # 2. repeats the batch multiple times to allow reusing generations across multiple updates. Refer to
         #    _prepare_inputs to see how the generations are stored and reused.
 
-        # In the following figure, the values are the prompt indices. The first row shows the first sampled batch, the
-        # second row shows the second sampled batch, and so on.
+        # In the following figure, the values are the prompt indices. Each row shows the per-step batch
+        # returned by `_prepare_inputs`; rows within a `steps_per_generation` block are slices of the same
+        # generated batch. When `num_iterations > 1`, that block is reused for multiple optimization passes
+        # before regenerating.
         #
         #                                      |   GPU 0  |   GPU 1  |
         #
@@ -978,6 +1059,7 @@ class GRPOTrainer(_BaseTrainer):
         pixel_values=None,
         image_grid_thw=None,
         pixel_attention_mask=None,
+        spatial_shapes=None,
         image_sizes=None,
         image_position_ids=None,
     ):
@@ -996,6 +1078,9 @@ class GRPOTrainer(_BaseTrainer):
         # For SmolVLM2
         if pixel_attention_mask is not None:
             model_inputs["pixel_attention_mask"] = pixel_attention_mask
+        # For LFM2-VL
+        if spatial_shapes is not None:
+            model_inputs["spatial_shapes"] = spatial_shapes
         # For LLaVa-Next
         if image_sizes is not None:
             model_inputs["image_sizes"] = image_sizes
@@ -1077,6 +1162,8 @@ class GRPOTrainer(_BaseTrainer):
         image_grid_thw=None,
         num_images=None,
         pixel_attention_mask=None,
+        spatial_shapes=None,
+        num_tiles=None,
         image_sizes=None,
         token_type_ids=None,
         mm_token_type_ids=None,
@@ -1108,9 +1195,16 @@ class GRPOTrainer(_BaseTrainer):
                 img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
                 model_inputs["pixel_values"] = pixel_values[img_start:img_end]
                 model_inputs["image_position_ids"] = image_position_ids[img_start:img_end]
+            elif spatial_shapes is not None and pixel_values is not None:
+                # LFM2-VL tensors are tile-indexed.
+                cum_tiles = torch.tensor([0] + num_tiles).cumsum(0)
+                tile_start, tile_end = cum_tiles[start], cum_tiles[start + batch_size]
+                model_inputs["pixel_values"] = pixel_values[tile_start:tile_end]
+                model_inputs["pixel_attention_mask"] = pixel_attention_mask[tile_start:tile_end]
+                model_inputs["spatial_shapes"] = spatial_shapes[tile_start:tile_end]
             elif pixel_values is not None:
                 model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
-            if pixel_attention_mask is not None:
+            if pixel_attention_mask is not None and spatial_shapes is None:
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
             if image_sizes is not None:
                 model_inputs["image_sizes"] = image_sizes[start : start + batch_size]
@@ -1126,7 +1220,8 @@ class GRPOTrainer(_BaseTrainer):
 
             model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
 
-            # MoE models: request router logits so the model returns `outputs.aux_loss`
+            # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
+            # as a forward kwarg (not from the model config), so it must be passed here.
             if compute_aux_loss:
                 model_inputs["output_router_logits"] = True
 
@@ -1390,7 +1485,7 @@ class GRPOTrainer(_BaseTrainer):
             # vLLM returns per-token top-k logprobs; keep only the top-1 (sampled token) logprob
             logprobs = [[lp[0] for lp in seq] for seq in logprobs]
 
-        elif self.use_transformers_paged:
+        elif self.use_transformers_continuous_batching:
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
@@ -1406,13 +1501,15 @@ class GRPOTrainer(_BaseTrainer):
                     unwrapped_model.to(torch.float16)
                 if self.args.cast_lm_head_to_fp32:
                     unwrapped_model.lm_head.to(torch.float32)
-                # Continuous batching API expects 'inputs' arg only
                 all_outputs = unwrapped_model.generate_batch(
-                    prompt_ids, generation_config=self.generation_config, progress_bar=False
+                    prompt_ids,
+                    generation_config=self.generation_config,
+                    continuous_batching_config=self.continuous_batching_config,
+                    progress_bar=False,
                 )
-                unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
+                unwrapped_model.train()
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
-            logprobs = None  # not used in this case
+            logprobs = None
 
         else:
             # Regular generation path: left-pad token IDs into tensors
@@ -1989,6 +2086,17 @@ class GRPOTrainer(_BaseTrainer):
         else:
             forward_kwargs = {}
 
+        # Recover LFM2-VL tile counts; the full processor drops row/column metadata.
+        num_tiles = None
+        if images is not None and "spatial_shapes" in forward_kwargs:
+            image_info = self.processing_class.image_processor(
+                images=images, return_tensors="pt", return_row_col_info=True
+            )
+            tiles_per_image = image_info["image_rows"] * image_info["image_cols"]
+            if self.processing_class.image_processor.use_thumbnail:
+                tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
+            num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
+
         # If token_type_ids are used, extend them with zeros for the completion part
         if "token_type_ids" in forward_kwargs:
             token_type_ids = forward_kwargs["token_type_ids"]
@@ -2086,7 +2194,8 @@ class GRPOTrainer(_BaseTrainer):
                     logits_to_keep,
                     batch_size,
                     num_images=num_images,
-                    **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
+                    num_tiles=num_tiles,
+                    **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, spatial_shapes, image_sizes, image_position_ids
                 )
             else:
                 old_per_token_logps = None
@@ -2148,7 +2257,8 @@ class GRPOTrainer(_BaseTrainer):
                         logits_to_keep,
                         batch_size=batch_size,
                         num_images=num_images,
-                        **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
+                        num_tiles=num_tiles,
+                        **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, spatial_shapes, image_sizes, image_position_ids
                     )
                 else:
                     # When training a PEFT adapter, how we obtain the reference depends on the setup:
@@ -2163,7 +2273,8 @@ class GRPOTrainer(_BaseTrainer):
                             logits_to_keep,
                             batch_size=batch_size,
                             num_images=num_images,
-                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
+                            num_tiles=num_tiles,
+                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, spatial_shapes, image_sizes, image_position_ids
                         )
             else:
                 ref_per_token_logps = None
@@ -2348,6 +2459,8 @@ class GRPOTrainer(_BaseTrainer):
             output["image_grid_thw"] = forward_kwargs["image_grid_thw"]
         if "pixel_attention_mask" in forward_kwargs:
             output["pixel_attention_mask"] = forward_kwargs["pixel_attention_mask"]
+        if "spatial_shapes" in forward_kwargs:
+            output["spatial_shapes"] = forward_kwargs["spatial_shapes"]
         if "image_sizes" in forward_kwargs:
             output["image_sizes"] = forward_kwargs["image_sizes"]
         if "token_type_ids" in forward_kwargs:
@@ -2358,6 +2471,8 @@ class GRPOTrainer(_BaseTrainer):
             output["image_position_ids"] = forward_kwargs["image_position_ids"]
         if images is not None:
             output["num_images"] = num_images
+            if num_tiles is not None:
+                output["num_tiles"] = num_tiles
         if tool_mask is not None:
             output["tool_mask"] = tool_mask
         return output
@@ -2379,6 +2494,7 @@ class GRPOTrainer(_BaseTrainer):
             inputs.get("pixel_values"),
             inputs.get("image_grid_thw"),
             inputs.get("pixel_attention_mask"),
+            inputs.get("spatial_shapes"),
             inputs.get("image_sizes"),
             inputs.get("image_position_ids"),
         )
@@ -2529,6 +2645,8 @@ class GRPOTrainer(_BaseTrainer):
             image_grid_thw=inputs.get("image_grid_thw"),
             num_images=inputs.get("num_images"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
+            spatial_shapes=inputs.get("spatial_shapes"),
+            num_tiles=inputs.get("num_tiles"),
             image_sizes=inputs.get("image_sizes"),
             token_type_ids=inputs.get("token_type_ids"),
             mm_token_type_ids=inputs.get("mm_token_type_ids"),

@@ -34,14 +34,14 @@ from accelerate.logging import get_logger
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
 
-from trl.chat_template_utils import (
+from ...chat_template_utils import (
     add_response_schema,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     parse_response,
 )
-from trl.import_utils import is_vllm_available
-from trl.trainer.utils import print_prompt_completions_sample
+from ...import_utils import is_vllm_available
+from ...trainer.utils import print_prompt_completions_sample
 
 
 logger = get_logger(__name__)
@@ -198,7 +198,7 @@ class _AsyncRolloutLoop:
         chat_template_kwargs: dict[str, Any] | None = None,
         max_tool_calling_iterations: int | None = None,
         log_completions: bool = False,
-        num_completions_to_print: int = 3,
+        num_completions_to_print: int | None = None,
     ):
         self.model_name = model_name
         self.dataset = dataset

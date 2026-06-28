@@ -15,7 +15,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from trl.trainer.base_config import _BaseConfig
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
@@ -33,8 +33,14 @@ class AsyncGRPOConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
-            model from a path. For MoE models, set `{"output_router_logits": True, "router_aux_loss_coef": <coef>}` here
-            to enable the load-balancing auxiliary loss.
+            model from a path.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
+        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
+            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
+            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
+            weight. Set to `0.0` to disable it.
 
         > Parameters that control generation
 
@@ -63,9 +69,10 @@ class AsyncGRPOConfig(_BaseConfig):
         > Parameters that control the training
 
         epsilon (`float`, *optional*, defaults to `0.2`):
-            Lower-bound epsilon value for clipping.
-        epsilon_high (`float`, *optional*, defaults to `0.2`):
-            Upper-bound epsilon value for clipping.
+            Epsilon value for clipping.
+        epsilon_high (`float`, *optional*):
+            Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
+            specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
 
         > Parameters that control the async rollout pipeline
 
@@ -89,12 +96,12 @@ class AsyncGRPOConfig(_BaseConfig):
 
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps.
-        num_completions_to_print (`int`, *optional*, defaults to `3`):
-            Number of completions to print when `log_completions=True`.
+        num_completions_to_print (`int`, *optional*):
+            Number of completions to print with `rich`. If `None`, all completions are logged.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
-    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `logging_steps`: Defaults to `1` instead of `500`.
     > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
@@ -107,8 +114,22 @@ class AsyncGRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when instantiating "
-            "the model from a path. For MoE models, set `output_router_logits` and `router_aux_loss_coef` here to "
-            "enable the load-balancing auxiliary loss."
+            "the model from a path."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoTokenizer.from_pretrained`."
+        },
+    )
+    router_aux_loss_coef: float = field(
+        default=0.001,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
+            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
+            "training loss with this weight. Set to `0.0` to disable it."
         },
     )
 
@@ -174,11 +195,14 @@ class AsyncGRPOConfig(_BaseConfig):
     # Parameters that control the training
     epsilon: float = field(
         default=0.2,
-        metadata={"help": "Lower-bound epsilon value for clipping."},
+        metadata={"help": "Epsilon value for clipping."},
     )
-    epsilon_high: float = field(
-        default=0.2,
-        metadata={"help": "Upper-bound epsilon value for clipping."},
+    epsilon_high: float | None = field(
+        default=None,
+        metadata={
+            "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
+            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
+        },
     )
 
     # Parameters that control the async rollout pipeline
@@ -223,9 +247,9 @@ class AsyncGRPOConfig(_BaseConfig):
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
-    num_completions_to_print: int = field(
-        default=3,
-        metadata={"help": "Number of completions to print when `log_completions=True`."},
+    num_completions_to_print: int | None = field(
+        default=None,
+        metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
 
     def __post_init__(self):
