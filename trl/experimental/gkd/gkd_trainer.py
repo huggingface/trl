@@ -43,11 +43,12 @@ from ..utils import DataCollatorForChatML, empty_cache
 from .gkd_config import GKDConfig
 
 
-if is_peft_available():
-    from peft import PeftConfig
-
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+
+
+if is_peft_available():
+    from peft import PeftConfig
 
 
 class GKDTrainer(SFTTrainer):

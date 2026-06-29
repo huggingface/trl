@@ -73,12 +73,12 @@ from .utils import (
 )
 
 
-_CHUNKED_LM_HEAD_CHUNK_SIZE = 256
-
-
 if is_peft_available():
     import peft
     from peft import PeftConfig, PeftModel, PeftType, get_peft_model
+
+
+_CHUNKED_LM_HEAD_CHUNK_SIZE = 256
 
 
 @dataclass
