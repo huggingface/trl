@@ -281,8 +281,8 @@ class GOLDConfig(SFTConfig):
         metadata={
             "help": (
                 'Strategy used to align answer logits and merge token probabilities in the ULD loss. With "observed", '
-                'the answer logits are sliced at the answer positions and split tokens (when use_extended_uld=True) '
-                'are merged by multiplying the marginal distribution at the first position by the scalar conditional '
+                "the answer logits are sliced at the answer positions and split tokens (when use_extended_uld=True) "
+                "are merged by multiplying the marginal distribution at the first position by the scalar conditional "
                 'probabilities of the actual later tokens. With "bayesian", the answer-logit slice is shifted one '
                 "position earlier so probs[k] predicts token_ids[k] (chain rule), and split tokens are merged using "
                 "the last position's full distribution, conditioned on the actual prefix tokens, multiplied by the "
