@@ -65,18 +65,22 @@ from ..utils import DPODataCollatorWithPadding, create_reference_model, pad_to_l
 from .bco_config import BCOConfig
 
 
+if is_joblib_available():
+    import joblib
+
+
 if is_peft_available():
     import peft
     from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
 
-if is_wandb_available():
-    import wandb
 
 if is_sklearn_available():
     from sklearn.linear_model import LogisticRegression
 
-if is_joblib_available():
-    import joblib
+
+if is_wandb_available():
+    import wandb
+
 
 logger = get_logger(__name__)
 

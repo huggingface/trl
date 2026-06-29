@@ -87,11 +87,12 @@ if is_peft_available():
     from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
 
 
-if is_wandb_available():
-    import wandb
-
 if is_trackio_available():
     import trackio
+
+
+if is_wandb_available():
+    import wandb
 
 
 logger = get_logger(__name__)
