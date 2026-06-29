@@ -27,6 +27,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object
 from datasets import Dataset
+from packaging.version import Version
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, TrainerCallback, is_trackio_available, is_wandb_available
 from transformers.data.data_collator import DataCollator
@@ -56,6 +57,7 @@ from .distillation_config import DistillationConfig
 
 
 if is_peft_available():
+    import peft
     from peft import PeftConfig, get_peft_model
 
 if is_liger_kernel_available():
@@ -443,7 +445,29 @@ class DistillationTrainer(_BaseTrainer):
                     f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
                     f"got {type(peft_config).__name__}."
                 )
-            model = get_peft_model(model, peft_config)
+            # ZeRO-3 + PEFT for non-quantized models:
+            # - PEFT's default autocast_adapter_dtype=True upcasts LoRA adapter params to fp32 even when the base model is bf16.
+            # - ZeRO-3's _allgather_params_coalesced allocates output buffers using the dtype of the first persistent parameter,
+            #   so mixed-dtype persistent_parameters (bf16 base + fp32 LoRA) cause a TypeError on the first optimizer step.
+            # - Passing autocast_adapter_dtype=False keeps adapter params in the base model dtype (bf16), fixing the mismatch.
+            # - This is safe: the fp32 upcast is a QLoRA-specific concern (low-bit quantized base models), not needed for
+            #   non-quantized bf16 training.
+            # - See:
+            #   - TRL issue: https://github.com/huggingface/trl/issues/6089
+            #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
+            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
+            _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(
+                model, "is_loaded_in_8bit", False
+            )
+            get_peft_model_kwargs = {}
+            if (
+                args.deepspeed_plugin is not None
+                and args.deepspeed_plugin.zero_stage == 3
+                and not _is_quantized_model
+                and Version(peft.__version__) >= Version("0.12.0")
+            ):
+                get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         # ── Data collator ──
         if data_collator is None:
