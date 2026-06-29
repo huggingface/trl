@@ -774,9 +774,6 @@ class TPOTrainer(_BaseTrainer):
 
         return (loss, outputs) if return_outputs else loss
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        return self._compute_loss(model, inputs, return_outputs)
-
     def evaluate(
         self,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
@@ -798,6 +795,9 @@ class TPOTrainer(_BaseTrainer):
         return super().evaluate(
             eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
         )
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        return self._compute_loss(model, inputs, return_outputs)
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
