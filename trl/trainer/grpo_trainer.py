@@ -712,6 +712,14 @@ class GRPOTrainer(_BaseTrainer):
                     f"'token_mask'. Got: {self.vllm_importance_sampling_mode}."
                 )
 
+        if self.loss_type == "stare" and args.use_liger_kernel:
+            raise ValueError(
+                "STARE loss is not yet supported with `use_liger_kernel=True`. The fused Liger GRPO loss does not "
+                "currently apply STARE's per-token reweighting, so enabling both would silently bypass the STARE "
+                "objective. Set `use_liger_kernel=False` (the default) to use `loss_type='stare'`, or open a "
+                "follow-up issue if Liger-fused STARE is needed."
+            )
+
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
         self.epsilon_low = args.epsilon
@@ -2624,6 +2632,106 @@ class GRPOTrainer(_BaseTrainer):
 
         return phi_seq  # (B, 1)
 
+    @staticmethod
+    @torch.no_grad()
+    def compute_stare_token_weights(
+        per_token_logps: torch.Tensor,
+        advantages: torch.Tensor,
+        entropies: torch.Tensor,
+        mask: torch.Tensor,
+        variant: str = "O1",
+        top_p_ratio: float = 0.1,
+        reweight_w: float = 1.1,
+        reweight_m: float = 0.9,
+        target_entropy: float = 0.3,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        """
+        Compute STARE per-token PG-loss reweighting factors (paper Sections 4.1-4.3).
+
+        Splits valid response tokens by trajectory-level advantage sign into T+ = {A > 0} and T- = {A < 0}. Within
+        each set, ranks tokens in descending order of surprisal ``s = -log pi_theta(o)`` and selects the top
+        ``top_p_ratio`` to form the entropy-critical sets L+ (and L- for variant C2). The returned weights ``omega``
+        multiply the per-token PG loss:
+
+            - Variant ``"O1"`` (default, one-sided amplification): omega = W on L+, else 1.
+            - Variant ``"C2"`` (dual-sided regulation):           omega = W on L+, M on L-, else 1.
+
+        Gated by the closed-loop target-entropy signal: when the batch-mean policy entropy is at or above
+        ``target_entropy``, the gate stays closed and all weights revert to 1 (STARE degrades to vanilla GRPO).
+
+        Args:
+            per_token_logps: ``(B, T)`` current-policy token log-probs. Surprisal is ``-per_token_logps``.
+            advantages: ``(B, T)`` per-token advantages (the shared trajectory-level GRPO advantage broadcast over
+                tokens).
+            entropies: ``(B, T)`` per-token entropy from the actor forward pass. Used to compute the batch-mean
+                entropy ``H_bar`` that drives the closed-loop gate.
+            mask: ``(B, T)`` response-token mask (1 for response tokens).
+            variant: ``"O1"`` (default) or ``"C2"`` per paper Section 4.2.
+            top_p_ratio: Fraction of entropy-critical tokens to reweight within each partition.
+            reweight_w: Multiplicative weight ``W > 1`` for L+ (positive-advantage critical tokens).
+            reweight_m: Multiplicative weight ``M < 1`` for L- (negative-advantage critical tokens; ``"C2"`` only).
+            target_entropy: Entropy floor for the closed-loop gate (paper Section 4.3).
+
+        Returns:
+            weights: ``(B, T)`` reweighting factors (default 1.0). Scales the per-token PG loss in-place.
+            stats: Scalar metrics describing the selection and the applied weights.
+        """
+        if variant not in {"O1", "C2"}:
+            raise ValueError(f"Unsupported STARE variant: {variant!r}. Expected 'O1' or 'C2'.")
+        if not 0.0 <= top_p_ratio <= 1.0:
+            raise ValueError(f"Invalid stare_top_p_ratio: {top_p_ratio}. Expected a value in [0, 1].")
+
+        weights = torch.ones_like(advantages)
+        valid = mask > 0
+        valid_count = valid.float().sum().clamp_min(1.0)
+
+        # Closed-loop gate: batch-mean policy entropy vs target (paper Section 4.3).
+        batch_mean_entropy = (entropies.detach().float() * valid.float()).sum() / valid_count
+        gate_on = bool(batch_mean_entropy.item() < target_entropy)
+
+        positive_candidates = valid & (advantages > 0)
+        negative_candidates = valid & (advantages < 0)
+
+        # Surprisal s = -log pi_theta(o); detached because it only drives token selection.
+        surprisal = -per_token_logps.detach()
+
+        def top_surprisal_mask(candidate_mask: torch.Tensor) -> torch.Tensor:
+            """Select the top-``top_p_ratio`` highest-surprisal tokens within ``candidate_mask``."""
+            candidate_count = int(candidate_mask.sum().item())
+            selected = torch.zeros_like(candidate_mask, dtype=torch.bool)
+            if candidate_count == 0 or top_p_ratio <= 0.0:
+                return selected
+            # ceil(candidate_count * top_p_ratio), at least 1 token.
+            k = max(1, math.ceil(candidate_count * top_p_ratio))
+            k = min(k, candidate_count)
+            candidate_values = surprisal[candidate_mask]
+            _, topk_local_idx = torch.topk(candidate_values, k=k, largest=True)
+            flat_candidate_idx = candidate_mask.reshape(-1).nonzero(as_tuple=False).squeeze(-1)
+            flat_selected_idx = flat_candidate_idx[topk_local_idx]
+            selected.reshape(-1)[flat_selected_idx] = True
+            return selected
+
+        l_plus = top_surprisal_mask(positive_candidates)
+        l_minus = (
+            top_surprisal_mask(negative_candidates) if variant == "C2" else torch.zeros_like(valid, dtype=torch.bool)
+        )
+
+        if gate_on:
+            weights = torch.where(l_plus, torch.full_like(weights, reweight_w), weights)
+            if variant == "C2":
+                weights = torch.where(l_minus, torch.full_like(weights, reweight_m), weights)
+
+        stats = {
+            "stare/gate_on": float(gate_on),
+            "stare/batch_entropy": float(batch_mean_entropy.item()),
+            "stare/positive_reweight_ratio": float((l_plus.float() * valid.float()).sum().item() / valid_count.item()),
+            "stare/negative_reweight_ratio": float(
+                (l_minus.float() * valid.float()).sum().item() / valid_count.item()
+            ),
+            "stare/mean_weight": float((weights * valid.float()).sum().item() / valid_count.item()),
+        }
+        return weights, stats
+
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -2741,6 +2849,28 @@ class GRPOTrainer(_BaseTrainer):
                 lambda_neg=self.args.vespo_lambda_neg,
             )
             per_token_loss = -phi_seq * advantages * per_token_logps
+        elif self.loss_type == "stare":
+            # Vanilla GRPO dual-clip surrogate (paper Section 4.2 / Algorithm 1 base).
+            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+            if self.args.delta is not None:
+                coef_1 = torch.clamp(coef_1, max=self.args.delta)
+            per_token_loss1 = coef_1 * advantages
+            per_token_loss2 = coef_2 * advantages
+            per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+
+            # STARE token-level PG-loss reweighting (paper Sections 4.1-4.3).
+            stare_weights, stare_stats = self.compute_stare_token_weights(
+                per_token_logps=per_token_logps,
+                advantages=advantages,
+                entropies=entropies,
+                mask=mask,
+                variant=self.args.stare_variant,
+                top_p_ratio=self.args.stare_top_p_ratio,
+                reweight_w=self.args.stare_reweight_w,
+                reweight_m=self.args.stare_reweight_m,
+                target_entropy=self.args.stare_target_entropy,
+            )
+            per_token_loss = per_token_loss * stare_weights
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
@@ -2761,7 +2891,7 @@ class GRPOTrainer(_BaseTrainer):
             loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
-        elif self.loss_type == "bnpo":
+        elif self.loss_type in ["bnpo", "stare"]:
             loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
@@ -2802,7 +2932,7 @@ class GRPOTrainer(_BaseTrainer):
         mean_entropy = masked_batch_mean(entropies)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
-        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
+        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo", "stare"]:
             # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
@@ -2828,6 +2958,10 @@ class GRPOTrainer(_BaseTrainer):
         elif self.loss_type == "vespo":
             gathered_phi_seq = self.accelerator.gather(phi_seq)
             self._metrics[mode]["vespo/phi_seq_mean"].append(gathered_phi_seq.nanmean().item())
+
+        if self.loss_type == "stare":
+            for stat_name, stat_value in stare_stats.items():
+                self._metrics[mode][stat_name].append(stat_value)
 
         return loss
 

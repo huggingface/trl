@@ -159,6 +159,150 @@ class TestGetHighEntropyMask(TrlTestCase):
         torch.testing.assert_close(entropy_mask, expected_mask)
 
 
+class TestComputeStareTokenWeights(TrlTestCase):
+    """Math properties of STARE per-token PG-loss reweighting (paper Sections 4.1-4.3)."""
+
+    def _logps(self, probs):
+        return torch.log(torch.tensor(probs, dtype=torch.float32))
+
+    def _low_entropy(self, shape):
+        # Far below the default target_entropy=0.3 → closed-loop gate opens.
+        return torch.full(shape, 0.01)
+
+    def _high_entropy(self, shape):
+        # Above target_entropy=0.3 → gate stays closed.
+        return torch.full(shape, 0.5)
+
+    def test_gate_closed_returns_unit_weights(self):
+        # When batch-mean entropy >= target, all weights revert to 1 and STARE degrades to vanilla GRPO.
+        logps = self._logps([[-0.1, -0.2, -3.0, -4.0]])
+        advantages = torch.tensor([[1.0, 1.0, 1.0, 1.0]])
+        mask = torch.ones_like(advantages)
+        weights, stats = GRPOTrainer.compute_stare_token_weights(
+            per_token_logps=logps,
+            advantages=advantages,
+            entropies=self._high_entropy(logps.shape),
+            mask=mask,
+            target_entropy=0.3,
+        )
+        torch.testing.assert_close(weights, torch.ones_like(weights))
+        assert stats["stare/gate_on"] == 0.0
+
+    def test_variant_o1_reweights_only_positive_critical_tokens(self):
+        # Two positive-advantage tokens; the higher-surprisal one is in L+ and gets reweight_w.
+        logps = self._logps([[-0.1, -3.0]])  # surprisal: [0.1, 3.0] → token 1 is critical
+        advantages = torch.tensor([[1.0, 1.0]])
+        mask = torch.ones_like(advantages)
+        weights, stats = GRPOTrainer.compute_stare_token_weights(
+            per_token_logps=logps,
+            advantages=advantages,
+            entropies=self._low_entropy(logps.shape),
+            mask=mask,
+            variant="O1",
+            top_p_ratio=0.5,  # 50% → ceil(2*0.5)=1 critical token per partition
+            reweight_w=1.5,
+            reweight_m=0.9,
+        )
+        torch.testing.assert_close(weights, torch.tensor([[1.0, 1.5]]))
+        assert stats["stare/gate_on"] == 1.0
+
+    def test_variant_o1_ignores_negative_advantage_tokens(self):
+        # O1 should leave negative-advantage tokens at weight 1 regardless of surprisal.
+        logps = self._logps([[-3.0, -3.0]])
+        advantages = torch.tensor([[1.0, -1.0]])  # one positive, one negative
+        mask = torch.ones_like(advantages)
+        weights, _ = GRPOTrainer.compute_stare_token_weights(
+            per_token_logps=logps,
+            advantages=advantages,
+            entropies=self._low_entropy(logps.shape),
+            mask=mask,
+            variant="O1",
+            top_p_ratio=1.0,
+            reweight_w=1.5,
+            reweight_m=0.5,
+        )
+        # Positive-advantage token reweighted by W; negative-advantage token untouched.
+        torch.testing.assert_close(weights, torch.tensor([[1.5, 1.0]]))
+
+    def test_variant_c2_reweights_both_partitions(self):
+        # C2 also damps negative-advantage critical tokens.
+        logps = self._logps([[-3.0, -3.0]])
+        advantages = torch.tensor([[1.0, -1.0]])
+        mask = torch.ones_like(advantages)
+        weights, _ = GRPOTrainer.compute_stare_token_weights(
+            per_token_logps=logps,
+            advantages=advantages,
+            entropies=self._low_entropy(logps.shape),
+            mask=mask,
+            variant="C2",
+            top_p_ratio=1.0,
+            reweight_w=1.5,
+            reweight_m=0.5,
+        )
+        torch.testing.assert_close(weights, torch.tensor([[1.5, 0.5]]))
+
+    def test_mask_excludes_padded_tokens(self):
+        # Padded positions must be excluded from candidate sets even when they have high surprisal.
+        logps = self._logps([[-0.1, -3.0, -5.0]])  # token 2 has highest surprisal but is padded
+        advantages = torch.tensor([[1.0, 1.0, 1.0]])
+        mask = torch.tensor([[1.0, 1.0, 0.0]])  # last token padded
+        weights, stats = GRPOTrainer.compute_stare_token_weights(
+            per_token_logps=logps,
+            advantages=advantages,
+            entropies=self._low_entropy(logps.shape) * mask,
+            mask=mask,
+            variant="O1",
+            top_p_ratio=0.5,  # ceil(2*0.5)=1 critical token out of 2 valid candidates
+            reweight_w=1.5,
+        )
+        # Token 1 (surprisal 3.0) is the highest-surprisal *valid* candidate.
+        torch.testing.assert_close(weights, torch.tensor([[1.0, 1.5, 1.0]]))
+        # Padded token contributes 0 to the reweight-ratio denominator.
+        assert stats["stare/positive_reweight_ratio"] == 0.5
+
+    def test_top_p_ratio_selects_correct_count(self):
+        # 4 positive-advantage tokens, top_p_ratio=0.5 → ceil(4*0.5)=2 critical tokens.
+        logps = self._logps([[-0.1, -0.2, -3.0, -4.0]])  # tokens 2, 3 have highest surprisal
+        advantages = torch.tensor([[1.0, 1.0, 1.0, 1.0]])
+        mask = torch.ones_like(advantages)
+        weights, _ = GRPOTrainer.compute_stare_token_weights(
+            per_token_logps=logps,
+            advantages=advantages,
+            entropies=self._low_entropy(logps.shape),
+            mask=mask,
+            variant="O1",
+            top_p_ratio=0.5,
+            reweight_w=1.5,
+        )
+        torch.testing.assert_close(weights, torch.tensor([[1.0, 1.0, 1.5, 1.5]]))
+
+    def test_rejects_invalid_variant(self):
+        logps = self._logps([[-0.5]])
+        advantages = torch.tensor([[1.0]])
+        mask = torch.ones_like(advantages)
+        with pytest.raises(ValueError, match="Unsupported STARE variant"):
+            GRPOTrainer.compute_stare_token_weights(
+                per_token_logps=logps,
+                advantages=advantages,
+                entropies=self._low_entropy(logps.shape),
+                mask=mask,
+                variant="X1",
+            )
+
+    def test_rejects_invalid_top_p_ratio(self):
+        logps = self._logps([[-0.5]])
+        advantages = torch.tensor([[1.0]])
+        mask = torch.ones_like(advantages)
+        with pytest.raises(ValueError, match="stare_top_p_ratio"):
+            GRPOTrainer.compute_stare_token_weights(
+                per_token_logps=logps,
+                advantages=advantages,
+                entropies=self._low_entropy(logps.shape),
+                mask=mask,
+                top_p_ratio=1.5,
+            )
+
+
 class TestGRPORolloutDispatch:
     def _make_trainer(self):
         trainer = object.__new__(GRPOTrainer)
@@ -393,8 +537,12 @@ class TestGRPOTrainer(TrlTestCase):
         assert type(trainer.model).__name__ == "RemoteForCausalLM"
 
     @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
-    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"])
+    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo", "stare"])
     def test_train_loss_types(self, loss_type, use_liger_kernel):
+        if loss_type == "stare" and use_liger_kernel:
+            pytest.skip(
+                "STARE is not yet supported with use_liger_kernel=True (validated by test_stare_rejects_liger_kernel)"
+            )
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -426,6 +574,24 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_stare_rejects_liger_kernel(self):
+        # STARE's per-token reweighting is not implemented in the fused Liger GRPO loss, so the combination must
+        # raise early rather than silently bypass the STARE objective.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with pytest.raises(ValueError, match="STARE loss is not yet supported with `use_liger_kernel=True`"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=GRPOConfig(
+                    output_dir=self.tmp_dir,
+                    loss_type="stare",
+                    use_liger_kernel=True,
+                    report_to="none",
+                ),
+                train_dataset=dataset,
+            )
 
     def test_train_with_eval(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")

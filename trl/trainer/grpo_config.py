@@ -212,6 +212,23 @@ class GRPOConfig(_BaseConfig):
             lambda parameter for negative advantages, it is the exponential decay factor in the VESPO loss. Controls
             how aggressively we down-weight samples with high importance weights (when the importance sampling ratio >
             1).
+        stare_variant (`str`, *optional*, defaults to `"O1"`):
+            STARE token-reweighting variant. `"O1"` (default, paper Section 4.2) amplifies positive-advantage
+            entropy-critical tokens only. `"C2"` additionally damps negative-advantage entropy-critical tokens.
+            Introduced in the [STARE paper](https://huggingface.co/papers/2606.19236).
+        stare_top_p_ratio (`float`, *optional*, defaults to `0.1`):
+            Fraction of highest-surprisal tokens (within each advantage-sign partition) treated as entropy-critical
+            and reweighted by STARE. Paper Section 4.1 default is `0.1`.
+        stare_reweight_w (`float`, *optional*, defaults to `1.1`):
+            Multiplicative weight `W > 1` applied to the per-token PG loss of positive-advantage entropy-critical
+            tokens (the set L+). Paper Section 4.2 default is `1.1`.
+        stare_reweight_m (`float`, *optional*, defaults to `0.9`):
+            Multiplicative weight `M < 1` applied to the per-token PG loss of negative-advantage entropy-critical
+            tokens (the set L-). Only active when `stare_variant="C2"`. Paper Section 4.2 default is `0.9`.
+        stare_target_entropy (`float`, *optional*, defaults to `0.3`):
+            Target policy entropy floor for STARE's closed-loop gate (paper Section 4.3). The gate opens
+            (reweighting is active) when the batch-mean policy entropy falls below this value; otherwise weights
+            revert to 1 and STARE degrades to vanilla GRPO. Paper default is `0.3`.
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
             Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
             keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
@@ -272,6 +289,10 @@ class GRPOConfig(_BaseConfig):
             - `"vespo"`: Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth,
               asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in
               the [VESPO paper](https://huggingface.co/papers/2602.10693).
+            - `"stare"`: Surprisal-Guided Token-Level Advantage Reweighting for Policy Entropy Stability. Wraps the
+              GRPO dual-clip surrogate and reweights the per-token PG loss of entropy-critical tokens (the
+              highest-surprisal tokens within each advantage-sign partition), gated by a closed-loop target-entropy
+              signal. Introduced in the [STARE paper](https://huggingface.co/papers/2606.19236).
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -716,6 +737,44 @@ class GRPOConfig(_BaseConfig):
             "sampling ratio > 1)."
         },
     )
+    stare_variant: str = field(
+        default="O1",
+        metadata={
+            "help": "STARE token-reweighting variant. `'O1'` (default, paper Section 4.2) amplifies positive-advantage "
+            "entropy-critical tokens only. `'C2'` additionally damps negative-advantage entropy-critical tokens. "
+            "Introduced in the [STARE paper](https://huggingface.co/papers/2606.19236)."
+        },
+    )
+    stare_top_p_ratio: float = field(
+        default=0.1,
+        metadata={
+            "help": "Fraction of highest-surprisal tokens (within each advantage-sign partition) treated as "
+            "entropy-critical and reweighted by STARE. Paper Section 4.1 default is `0.1`."
+        },
+    )
+    stare_reweight_w: float = field(
+        default=1.1,
+        metadata={
+            "help": "Multiplicative weight `W > 1` applied to the per-token PG loss of positive-advantage "
+            "entropy-critical tokens (the set L+). Paper Section 4.2 default is `1.1`."
+        },
+    )
+    stare_reweight_m: float = field(
+        default=0.9,
+        metadata={
+            "help": "Multiplicative weight `M < 1` applied to the per-token PG loss of negative-advantage "
+            "entropy-critical tokens (the set L-). Only active when `stare_variant='C2'`. Paper Section 4.2 default "
+            "is `0.9`."
+        },
+    )
+    stare_target_entropy: float = field(
+        default=0.3,
+        metadata={
+            "help": "Target policy entropy floor for STARE's closed-loop gate (paper Section 4.3). The gate opens "
+            "(reweighting is active) when the batch-mean policy entropy falls below this value; otherwise weights "
+            "revert to 1 and STARE degrades to vanilla GRPO. Paper default is `0.3`."
+        },
+    )
     importance_sampling_level: str = field(
         default="token",
         metadata={
@@ -790,6 +849,10 @@ class GRPOConfig(_BaseConfig):
             "'vespo': Variational Sequence-Level Soft Policy Optimization. Replaces hard clipping with a smooth, "
             "asymmetric Gamma weighting function applied directly to sequence-level importance weights. Introduced in "
             "the [VESPO paper](https://huggingface.co/papers/2602.10693)."
+            "'stare': Surprisal-Guided Token-Level Advantage Reweighting for Policy Entropy Stability. Wraps the "
+            "GRPO dual-clip surrogate and reweights the per-token PG loss of entropy-critical tokens (the "
+            "highest-surprisal tokens within each advantage-sign partition), gated by a closed-loop target-entropy "
+            "signal. Introduced in the [STARE paper](https://huggingface.co/papers/2606.19236)."
         },
     )
     mask_truncated_completions: bool = field(
