@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from functools import partial
 import itertools
+import operator
 import queue
 
 import numpy as np
@@ -23,13 +25,47 @@ from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
+from trl.experimental.async_grpo.async_rollout_worker import RolloutSample, _get_callable_name
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer
 
 
 def dummy_reward_func(completions, **kwargs):
     return [float(hash(c[0]["content"]) % 100) / 100.0 for c in completions]
+
+
+def _partial_compatible_reward(completions, **kwargs):
+    return [1.0] * len(completions)
+
+
+_named_partial_reward = partial(_partial_compatible_reward)
+_named_partial_reward.__name__ = "named_partial_reward"
+
+
+class _CallableReward:
+    def __call__(self, completions, **kwargs):
+        return [1.0] * len(completions)
+
+
+class _NamedCallableReward:
+    __name__ = "named_callable_reward"
+
+    def __call__(self, completions, **kwargs):
+        return [1.0] * len(completions)
+
+
+@pytest.mark.parametrize(
+    ("reward_func", "expected_name"),
+    [
+        (partial(_partial_compatible_reward), "_partial_compatible_reward"),
+        (_named_partial_reward, "named_partial_reward"),
+        (_CallableReward(), "_CallableReward"),
+        (_NamedCallableReward(), "named_callable_reward"),
+        (operator.add, "add"),
+    ],
+)
+def test_get_callable_name_supports_picklable_reward_callables(reward_func, expected_name):
+    assert _get_callable_name(reward_func) == expected_name
 
 
 class _StubRolloutWorker:
