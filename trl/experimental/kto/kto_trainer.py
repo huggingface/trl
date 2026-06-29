@@ -83,16 +83,6 @@ def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
     return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
-def _get_kl_completion_ids(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
-    """
-    Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of
-    completions. For best results, the mismatched outputs y' used to estimate the KL term for a batch should be the
-    same set as the matched outputs y used to estimate the rewards in that batch, just paired with different x.
-    """
-    batch["completion_ids"] = [batch["completion_ids"][-1]] + batch["completion_ids"][:-1]
-    return batch
-
-
 @dataclass
 class DataCollatorForUnpairedPreference(DataCollatorMixin):
     """
@@ -310,7 +300,7 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
 
         if self.calculate_kl:
             # Cycle completions by +1 within the batch to create mismatched KL pairs — same strategy as
-            # _get_kl_completion_ids in the text-only path, but done here to keep the VLM dataset fully raw.
+            # get_kl_completion_ids in the text-only path, but done here to keep the VLM dataset fully raw.
             kl_completions = completions[-1:] + completions[:-1]
             processed_kl = self.processor(
                 text=kl_completions,
@@ -857,12 +847,21 @@ class KTOTrainer(_BaseTrainer):
         Returns:
             `Dataset` or `IterableDataset` with a single `KL_completion_ids` column.
         """
+
+        def get_kl_completion_ids(examples):
+            # Create mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order
+            # of completions. For best results, the mismatched outputs y' used to estimate the KL term for a batch
+            # should be the same set as the matched outputs y used to estimate the rewards in that batch, just paired
+            # with different x.
+            examples["completion_ids"] = [examples["completion_ids"][-1]] + examples["completion_ids"][:-1]
+            return examples
+
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc or desc
             map_kwargs["num_proc"] = args.dataset_num_proc
             map_kwargs["desc"] = f"Extracting KL {dataset_name} dataset"
         kl_dataset = dataset.map(
-            _get_kl_completion_ids, batched=True, batch_size=args.per_device_train_batch_size, **map_kwargs
+            get_kl_completion_ids, batched=True, batch_size=args.per_device_train_batch_size, **map_kwargs
         )
 
         def rename_kl_fn(example):

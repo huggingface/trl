@@ -16,17 +16,13 @@ import multiprocess
 import pytest
 import torch
 import transformers
-from datasets import Dataset, load_dataset
+from datasets import load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
 
 from trl.experimental.kto import KTOConfig, KTOTrainer
-from trl.experimental.kto.kto_trainer import (
-    DataCollatorForUnpairedPreference,
-    DataCollatorForVisionUnpairedPreference,
-    _get_kl_completion_ids,
-)
+from trl.experimental.kto.kto_trainer import DataCollatorForUnpairedPreference, DataCollatorForVisionUnpairedPreference
 
 from ..testing_utils import TrlTestCase, require_bitsandbytes, require_liger_kernel, require_peft, require_vision
 
@@ -461,24 +457,6 @@ class TestKTOTrainer(TrlTestCase):
         first_completion = next(i for i, m in enumerate(completion_mask) if m == 1)
         assert first_completion > 0  # at least the prompt is masked
         assert all(m == 0 for m in completion_mask[:first_completion])
-
-        # Test corruption of (prompt, completion) pairs for KL dataset.
-        # _get_kl_completion_ids shifts completion_ids by one within each batch; prompt_ids are unchanged.
-        synthetic = Dataset.from_dict(
-            {
-                "prompt_ids": [[1, 2], [3, 4], [5, 6]],
-                "completion_ids": [[10, 11], [20, 21], [30, 31]],
-                "label": [True, False, True],
-            }
-        )
-        for batch_size in [2, 3]:
-            rotated = synthetic.map(_get_kl_completion_ids, batched=True, batch_size=batch_size)
-
-            # Verify that completion_ids have been rotated (differ from original). When the dataset length
-            # modulo batch_size equals 1, the last batch is unaltered: exclude it from the check.
-            for i in range(len(rotated) - 1):
-                assert synthetic["prompt_ids"][i] == rotated["prompt_ids"][i]
-                assert synthetic["completion_ids"][i] != rotated["completion_ids"][i]
 
     def test_train_without_providing_ref_model(self):
         training_args = KTOConfig(
