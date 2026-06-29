@@ -60,6 +60,9 @@ class DatasetConfig:
             Which split of the data to load.
         columns (`list[str]`, *optional*):
             List of column names to select from the dataset. If `None`, all columns are selected.
+        fraction (`float`, *optional*, defaults to `1.0`):
+            Fraction of the dataset to keep. The first `int(fraction * len(dataset))` rows are selected before the
+            mixture is concatenated. Not supported for streaming datasets.
     """
 
     path: str
@@ -68,6 +71,7 @@ class DatasetConfig:
     data_files: str | list[str] | dict[str, str] | None = None
     split: str = "train"
     columns: list[str] | None = None
+    fraction: float = 1.0
 
 
 @dataclass
@@ -99,6 +103,7 @@ class DatasetMixtureConfig:
             data_files: ...
             split: ...
             columns: ...
+            fraction: ...
           - path: ...
             name: ...
             data_dir: ...
@@ -445,6 +450,10 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
         )
         if dataset_config.columns is not None:
             dataset = dataset.select_columns(dataset_config.columns)
+        if dataset_config.fraction < 1.0:
+            if mixture_config.streaming:
+                raise ValueError("Using a dataset fraction < 1.0 is not supported with streaming datasets.")
+            dataset = dataset.select(range(int(dataset_config.fraction * len(dataset))))
         datasets_list.append(dataset)
 
     if datasets_list:

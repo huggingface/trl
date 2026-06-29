@@ -333,6 +333,22 @@ class TestGetDataset:
         )
         assert prompts[len(prompts) // 2 :] == expected_second_half["prompt"]
 
+    def test_dataset_with_fraction(self):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.5)]
+        )
+        result = get_dataset(mixture_config)
+        expected = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        assert result["train"][:] == expected.select(range(len(expected) // 2))[:]
+
+    def test_dataset_fraction_streaming_raises_error(self):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.5)],
+            streaming=True,
+        )
+        with pytest.raises(ValueError, match="not supported with streaming datasets"):
+            get_dataset(mixture_config)
+
     def test_dataset_mixture_with_test_split(self):
         mixture_config = DatasetMixtureConfig(
             datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling")],
