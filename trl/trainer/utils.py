@@ -15,6 +15,7 @@
 import asyncio
 import hashlib
 import importlib.resources as pkg_resources
+import json
 import os
 import random
 import socket
@@ -518,6 +519,26 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
     return entropies.reshape(original_shape)
 
 
+def _strip_images_from_messages(messages):
+    """
+    Return messages with PIL Image objects removed from VLM content blocks.
+
+    Replaces ``{"type": "image", "image": <PIL.Image>}`` with ``{"type": "image"}`` so that the message structure is
+    preserved but the non-serializable PIL object is dropped. Non-multimodal messages (string content) are returned
+    unchanged.
+    """
+    if not isinstance(messages, list):
+        return messages
+    result = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            content = [{"type": block["type"]} if block.get("type") == "image" else block for block in content]
+            msg = {**msg, "content": content}
+        result.append(msg)
+    return result
+
+
 def print_prompt_completions_sample(
     prompts: list,
     completions: list,
@@ -596,22 +617,32 @@ def print_prompt_completions_sample(
         if isinstance(entry, list) and all(isinstance(m, dict) for m in entry):
             for j, msg in enumerate(entry):
                 role = msg.get("role", "")
-                if "content" in msg or "reasoning_content" in msg or "thinking" in msg:
+                t.append(f"{role.upper()}\n", style="bold red")
+                if "reasoning_content" in msg or "thinking" in msg:
                     # Chat message
-                    t.append(f"{role.upper()}\n", style="bold red")
                     reasoning = msg.get("reasoning_content") or msg.get("thinking")
                     if reasoning:
                         t.append(reasoning, style="italic dim white")
                         t.append("\n")
-                    if "content" in msg:
-                        t.append(msg["content"])
-                elif "name" in msg and "args" in msg:
-                    # Tool call
-                    t.append(f"{role.upper()}\n", style="bold red")
-                    t.append(f"{msg['name']}({msg['args']})")
-                else:
-                    # Fallback
-                    t.append(str(msg))
+                if "content" in msg:
+                    content = msg["content"]
+                    if isinstance(content, list):
+                        # VLM format: content is a list of typed blocks, e.g.
+                        # [{"type": "image", ...}, {"type": "text", "text": "..."}]
+                        for block in content:
+                            if block.get("type") == "text":
+                                t.append(block["text"])
+                            elif block.get("type") == "image":
+                                t.append("[IMAGE]", style="bold cyan")
+                    elif isinstance(content, str):
+                        t.append(content)
+                if "tool_calls" in msg:
+                    for tc in msg["tool_calls"]:
+                        fn = tc.get("function", {})
+                        raw = fn.get("arguments", {})
+                        args = raw if isinstance(raw, dict) else json.loads(raw)
+                        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+                        t.append(f"{fn.get('name', '?')}({args_str})")
                 if j < len(entry) - 1:
                     t.append("\n\n")
         else:

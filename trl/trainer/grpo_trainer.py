@@ -74,6 +74,7 @@ from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     RepeatSampler,
+    _strip_images_from_messages,
     create_model_from_path,
     disable_dropout_in_model,
     entropy_from_logits,
@@ -2281,10 +2282,6 @@ class GRPOTrainer(_BaseTrainer):
             else:
                 ref_per_token_logps = None
 
-        # Decode
-        prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
-        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-
         # Merge extra_fields from rollout_func into inputs for reward functions
         if extra_fields:
             for i, inp in enumerate(inputs):
@@ -2376,9 +2373,9 @@ class GRPOTrainer(_BaseTrainer):
         self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
-        # Log prompt and completion texts
-        self._logs["prompt"].extend(gather_object(prompts_text))
-        self._logs["completion"].extend(gather_object(completions_text))
+        # Log prompts and completions
+        self._logs["prompt"].extend(gather_object(prompts))
+        self._logs["completion"].extend(gather_object(completions))
         for i, name in enumerate(self.reward_func_names):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
@@ -2884,8 +2881,8 @@ class GRPOTrainer(_BaseTrainer):
 
             table = {
                 "step": [self.state.global_step] * len(self._logs["prompt"]),
-                "prompt": self._logs["prompt"],
-                "completion": self._logs["completion"],
+                "prompt": [_strip_images_from_messages(messages) for messages in self._logs["prompt"]],
+                "completion": [_strip_images_from_messages(messages) for messages in self._logs["completion"]],
                 **self._logs["rewards"],
                 **self._logs["extra"],
                 "advantage": self._logs["advantages"],
@@ -2906,15 +2903,8 @@ class GRPOTrainer(_BaseTrainer):
                 if images_raw:
                     images = []
                     for image_list in self._logs["images"]:
-                        if image_list:
-                            images.append([logging_backend.Image(image) for image in image_list])
-                        else:
-                            images.append([])
-                    df = pd.concat(
-                        [df_base, pd.Series(images, name="image")],
-                        axis=1,
-                        copy=False,
-                    )
+                        images.append([logging_backend.Image(image) for image in image_list])
+                    df = pd.concat([df_base, pd.Series(images, name="image")], axis=1, copy=False)
                 else:
                     df = df_base
 
