@@ -1497,7 +1497,9 @@ class SFTTrainer(_BaseTrainer):
                 # map function unhashable, forcing a random fingerprint that silently disables dataset caching.
                 tokenize = self._tokenize
 
-                def tokenize_fn(example, processing_class, dataset_text_field, assistant_only_loss, is_vlm, chat_template):
+                def tokenize_fn(
+                    example, processing_class, dataset_text_field, assistant_only_loss, is_vlm, chat_template
+                ):
                     tools = example.get("tools")
                     tools = json.loads(tools) if isinstance(tools, str) else tools
                     if "prompt" in example:  # prompt-completion case
