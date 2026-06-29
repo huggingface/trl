@@ -174,9 +174,8 @@ class ScriptArguments:
         tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Number of tensor parallel workers to use.
         data_parallel_size (`int`, *optional*, defaults to `1`):
-            Number of data parallel workers to use. For dense models, keep this at 1. Starting from vLLM `0.14.0`,
-            setting this above `1` for dense models is no longer supported/useful and will error out (see vLLM PR
-            #30739).
+            Number of data parallel workers to use. For dense models, keep this at 1. Setting this above `1` for
+            dense models is not supported/useful and will error out (see vLLM PR #30739).
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host address to run the server on.
         port (`int`, *optional*, defaults to `8000`):
