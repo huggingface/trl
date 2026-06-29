@@ -41,7 +41,7 @@ Usage:
 Full training:
 
 ```bash
-python trl/experimental/tpo/tpo.py \
+python examples/scripts/tpo.py \
     --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
@@ -57,7 +57,7 @@ python trl/experimental/tpo/tpo.py \
 TPO-L (length-normalized variant with target reward margin):
 
 ```bash
-python trl/experimental/tpo/tpo.py \
+python examples/scripts/tpo.py \
     --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \
@@ -75,7 +75,7 @@ python trl/experimental/tpo/tpo.py \
 LoRA:
 
 ```bash
-python trl/experimental/tpo/tpo.py \
+python examples/scripts/tpo.py \
     --dataset_name tpo-alignment/triple-preference-ultrafeedback-40K \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --per_device_train_batch_size 2 \

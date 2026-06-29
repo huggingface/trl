@@ -257,9 +257,9 @@ class LogCompletionsCallback(TrainerCallback):
 
     Usage:
     ```python
-    trainer = DPOTrainer(...)
-    completions_callback = LogCompletionsCallback(trainer=trainer)
-    trainer.add_callback(completions_callback)
+    >>> trainer = DPOTrainer(...)
+    >>> completions_callback = LogCompletionsCallback(trainer=trainer)
+    >>> trainer.add_callback(completions_callback)
     ```
 
     Args:
@@ -628,9 +628,9 @@ class BEMACallback(TrainerCallback):
     Example:
 
     ```python
-    from trl import BEMACallback
+    >>> from trl import BEMACallback
 
-    trainer = Trainer(..., callbacks=[BEMACallback()])
+    >>> trainer = Trainer(..., callbacks=[BEMACallback()])
     ```
     """
 
