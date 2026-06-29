@@ -165,7 +165,7 @@ class DPOConfig(_BaseConfig):
         metadata={
             "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
             "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
-            },
+        },
     )
     router_aux_loss_coef: float = field(
         default=0.001,
