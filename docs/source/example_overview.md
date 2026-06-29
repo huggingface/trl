@@ -95,6 +95,7 @@ Scripts are maintained in the [`trl/scripts`](https://github.com/huggingface/trl
 | [`examples/scripts/ssd.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/ssd.py) | This script shows how to use the [`experimental.ssd.SSDTrainer`] for Simple Self-Distillation (SSD) on code generation. |
 | [`examples/scripts/ssd_eval.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/ssd_eval.py) | This script evaluates SSD-trained checkpoints on LiveCodeBench with vLLM and the official `codegen_metrics` (pass@k). |
 | [`examples/scripts/tpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/tpo.py) | This script shows how to use the [`experimental.tpo.TPOTrainer`] for Triple Preference Optimization (TPO) using the [tpo-alignment/triple-preference-ultrafeedback-40K](https://huggingface.co/datasets/tpo-alignment/triple-preference-ultrafeedback-40K) dataset. |
+| [`examples/scripts/vimpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/vimpo.py) | This script shows how to use the [`experimental.vimpo.VIMPOTrainer`] to fine-tune a model with verifiable math rewards using the [AI-MO/NuminaMath-TIR](https://huggingface.co/datasets/AI-MO/NuminaMath-TIR) dataset. |
 | [`examples/scripts/xpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/xpo.py) | This script shows how to use the [`experimental.xpo.XPOTrainer`] to fine-tune a model. |
 
 ### OpenEnv Scripts
