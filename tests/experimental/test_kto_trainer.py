@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
+
 import multiprocess
 import pytest
 import torch
@@ -288,6 +290,10 @@ class TestKTOTrainer(TrlTestCase):
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def teardown_method(self):
+        if hasattr(self, "_liger_module"):
+            importlib.reload(importlib.import_module(self._liger_module))
 
     @pytest.mark.parametrize(
         "config_name, loss_type, pre_compute, eval_dataset",
@@ -773,6 +779,7 @@ class TestKTOTrainer(TrlTestCase):
         trainer = KTOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
+        self._liger_module = trainer.model.__module__
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -796,6 +803,7 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
+        self._liger_module = "transformers.models.qwen2.modeling_qwen2"
         with pytest.raises(ValueError, match="You cannot use `use_liger_kernel=True` with Peft models"):
             KTOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1042,6 +1050,10 @@ class TestKTOTrainer(TrlTestCase):
 
 @require_vision
 class TestKTOTrainerVLM(TrlTestCase):
+    def teardown_method(self):
+        if hasattr(self, "_liger_module"):
+            importlib.reload(importlib.import_module(self._liger_module))
+
     @pytest.mark.parametrize(
         "model_id",
         [
@@ -1258,6 +1270,7 @@ class TestKTOTrainerVLM(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+        self._liger_module = trainer.model.__module__
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
