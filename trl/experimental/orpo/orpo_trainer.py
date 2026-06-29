@@ -68,12 +68,12 @@ if is_peft_available():
     from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
 
 
-if is_wandb_available():
-    import wandb
-
-
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
+
+
+if is_wandb_available():
+    import wandb
 
 
 logger = get_logger(__name__)
