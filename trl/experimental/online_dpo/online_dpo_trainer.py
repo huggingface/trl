@@ -25,7 +25,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
 import transformers
-from accelerate import logging
+from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset
 from packaging.version import Version
@@ -83,7 +83,7 @@ if is_vllm_available():
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 # A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
 # a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional

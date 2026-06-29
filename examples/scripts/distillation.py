@@ -25,7 +25,7 @@
 """
 # Full training (off-policy only, lmbda=0):
 ```
-python trl/experimental/distillation/distillation.py \
+python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -39,7 +39,7 @@ python trl/experimental/distillation/distillation.py \
 
 # Mixed on/off-policy (lmbda=0.5):
 ```
-python trl/experimental/distillation/distillation.py \
+python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \
@@ -54,7 +54,7 @@ python trl/experimental/distillation/distillation.py \
 
 # LoRA:
 ```
-python trl/experimental/distillation/distillation.py \
+python examples/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
     --dataset_name trl-lib/chatbot_arena_completions \

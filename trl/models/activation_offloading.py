@@ -23,7 +23,7 @@ import sys
 
 import psutil
 import torch
-from accelerate import logging
+from accelerate.logging import get_logger
 from accelerate.utils.versions import is_torch_version
 from torch import nn
 from torch.autograd.graph import saved_tensors_hooks
@@ -45,7 +45,7 @@ if torch.distributed.is_available():
     except (ImportError, AttributeError):
         DTensor = None
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def _get_unique_tensor_key(tensor: torch.Tensor) -> tuple:

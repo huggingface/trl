@@ -27,7 +27,7 @@
 Usage:
 
 ```bash
-python trl/experimental/sdpo/sdpo.py \
+python examples/scripts/sdpo.py \
     --model_name_or_path Qwen/Qwen2.5-Math-1.5B-Instruct \
     --dataset_name openai/gsm8k \
     --dataset_config main \
