@@ -62,7 +62,7 @@ from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
 
-from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
+from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser
 
 
 def download_video(url: str, cache_dir: str) -> str:
@@ -195,7 +195,6 @@ if __name__ == "__main__":
     model_kwargs = dict(
         revision=model_args.model_revision,
         dtype=dtype,
-        device_map=get_kbit_device_map(),
         quantization_config=bnb_config,
     )
 
