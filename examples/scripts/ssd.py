@@ -33,7 +33,7 @@ The dataset only requires a ``prompt`` column containing coding problem prompts.
 Example:
 
 ```bash
-python trl/experimental/ssd/ssd.py \
+python examples/scripts/ssd.py \
     --model_name_or_path Qwen/Qwen3-4B-Instruct-2507 \
     --dataset_name microsoft/rStar-Coder \
     --dataset_config seed_sft \

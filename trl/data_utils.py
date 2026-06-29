@@ -417,6 +417,9 @@ def _unpair_row(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     }
     if "prompt" in batch:
         new_batch["prompt"] = batch["prompt"] + batch["prompt"]
+    for k in batch:
+        if k not in ("chosen", "rejected", "prompt"):
+            new_batch[k] = batch[k] + batch[k]
     return new_batch
 
 
@@ -427,7 +430,8 @@ def unpair_preference_dataset(
     """
     Unpair a preference dataset.
 
-    The output contains only `"prompt"`, `"completion"`, and `"label"`; all other columns are dropped.
+    The output contains `"prompt"`, `"completion"`, and `"label"` plus any extra columns, which are duplicated for
+    each chosen and rejected row.
 
     Args:
         dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]):

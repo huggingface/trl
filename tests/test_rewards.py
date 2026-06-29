@@ -19,6 +19,7 @@ import pytest
 
 from trl.rewards import (
     accuracy_reward,
+    get_cosine_scaled_reward,
     get_repetition_penalty_reward,
     get_soft_overlong_punishment,
     reasoning_accuracy_reward,
@@ -301,3 +302,98 @@ class TestReasoningAccuracyReward:
         ]
         rewards = reasoning_accuracy_reward(completions, solutions)
         assert rewards[0] is None
+
+
+class TestCosineScaledReward:
+    @require_math_latex
+    def test_correct_shorter_rewarded_more(self):
+        """For correct completions, a shorter one gets a higher reward."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}], [{"content": r"\boxed{\frac{1}{3}}"}]]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[1] * 25, [1] * 75]
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards[0] > rewards[1]
+        assert rewards == [pytest.approx(0.92678, abs=1e-4), pytest.approx(0.57322, abs=1e-4)]
+
+    @require_math_latex
+    def test_wrong_longer_penalized_less(self):
+        """For wrong completions, a longer one is penalized less (closer to zero)."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{\frac{1}{2}}"}], [{"content": r"\boxed{\frac{1}{2}}"}]]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[1] * 25, [1] * 75]
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards[1] > rewards[0]
+        assert rewards == [pytest.approx(-0.92678, abs=1e-4), pytest.approx(-0.57322, abs=1e-4)]
+
+    @require_math_latex
+    def test_midpoint_values(self):
+        """At half of max_len (cosine = 0), correct -> 0.75 and wrong -> -0.75 with default bounds."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}], [{"content": r"\boxed{\frac{1}{2}}"}]]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[1] * 50, [1] * 50]
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards == [pytest.approx(0.75), pytest.approx(-0.75)]
+
+    @require_math_latex
+    def test_correct_boundary_values(self):
+        """Correct: shortest -> max_value_correct (1.0), longest -> min_value_correct (0.5)."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}], [{"content": r"\boxed{\frac{1}{3}}"}]]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[], [1] * 100]
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards == [pytest.approx(1.0), pytest.approx(0.5)]
+
+    @require_math_latex
+    def test_wrong_boundary_values(self):
+        """Wrong: shortest -> min_value_wrong (-1.0), longest -> max_value_wrong (-0.5)."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{\frac{1}{2}}"}], [{"content": r"\boxed{\frac{1}{2}}"}]]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[], [1] * 100]
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards == [pytest.approx(-1.0), pytest.approx(-0.5)]
+
+    @require_math_latex
+    def test_length_exceeding_max_len_is_clamped(self):
+        """Completions longer than max_len stay at the long-length bound (no climb back up past max_len)."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}], [{"content": r"\boxed{\frac{1}{2}}"}]]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[1] * 200, [1] * 200]  # both 2x max_len
+        rewards = reward_fn(completions, solution, completion_ids)
+        # correct -> min_value_correct (0.5), wrong -> max_value_wrong (-0.5); same as at exactly max_len
+        assert rewards == [pytest.approx(0.5), pytest.approx(-0.5)]
+
+    @require_math_latex
+    def test_unparsable_gold_yields_none(self):
+        """An unparseable gold solution is skipped, as in accuracy_reward."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [[{"content": r"\boxed{42}"}]]
+        solution = ["forty two"]
+        completion_ids = [[1] * 50]
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards == [None]
+
+    @require_math_latex
+    def test_custom_value_bounds(self):
+        reward_fn = get_cosine_scaled_reward(max_len=100, min_value_correct=0.0, max_value_correct=2.0)
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}]]
+        solution = [r"\frac{1}{3}"]
+        completion_ids = [[1] * 50]  # progress 0.5, cosine 0 -> 0.0 + 0.5 * (2.0 - 0.0) * 1 = 1.0
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards == [pytest.approx(1.0)]
+
+    @require_math_latex
+    def test_reward_is_picklable(self):
+        """The reward must survive pickling for the async GRPO rollout worker."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        unpickled = pickle.loads(pickle.dumps(reward_fn))
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}]]
+        solution = [r"\frac{1}{3}"]
+        completion_ids = [[1] * 50]
+        assert unpickled(completions, solution, completion_ids) == [pytest.approx(0.75)]
+        assert unpickled.__name__ == "cosine_scaled_reward"
