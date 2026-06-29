@@ -333,13 +333,31 @@ class TestGetDataset:
         )
         assert prompts[len(prompts) // 2 :] == expected_second_half["prompt"]
 
-    def test_dataset_with_fraction(self):
+    def test_dataset_fraction(self):
+        # `fraction` sets each source's target share of the final mixture: normalized to sum to one and capped so no
+        # source is oversampled. With weights 0.75/0.25 on two equally-sized sources, the 0.75 source is the binding
+        # constraint (kept in full) and the 0.25 source contributes a third of its rows.
         mixture_config = DatasetMixtureConfig(
-            datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.5)]
+            datasets=[
+                DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.75),
+                DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.25),
+            ]
         )
         result = get_dataset(mixture_config)
-        expected = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-        assert result["train"][:] == expected.select(range(len(expected) // 2))[:]
+        full = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        n_second = round(len(full) / 3)  # 0.25 * (len(full) / 0.75)
+        expected = list(full) + list(full.select(range(n_second)))
+        assert list(result["train"]) == expected
+
+    def test_dataset_fraction_partial_raises_error(self):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[
+                DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.5),
+                DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling"),
+            ]
+        )
+        with pytest.raises(ValueError, match="must be set for either all datasets"):
+            get_dataset(mixture_config)
 
     def test_dataset_fraction_streaming_raises_error(self):
         mixture_config = DatasetMixtureConfig(
