@@ -233,9 +233,8 @@ class ScriptArguments:
     data_parallel_size: int = field(
         default=1,
         metadata={
-            "help": "Number of data parallel workers to use. For dense models, keep this at 1. Starting from vLLM "
-            "`0.14.0`, setting this above `1` for dense models is no longer supported/useful and will error out (see "
-            "vLLM PR #30739)."
+            "help": "Number of data parallel workers to use. For dense models, keep this at 1. Setting this above "
+            "`1` for dense models is not supported/useful and will error out (see vLLM PR #30739)."
         },
     )
     host: str = field(
