@@ -465,8 +465,13 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
         if mixture_config.streaming:
             raise ValueError("Using a dataset `fraction` is not supported with streaming datasets.")
         weights = [fraction / sum(fractions) for fraction in fractions]
-        total = min(len(dataset) / weight for dataset, weight in zip(datasets_list, weights) if weight > 0)
-        datasets_list = [dataset.select(range(round(weight * total))) for dataset, weight in zip(datasets_list, weights)]
+        total = min(
+            len(dataset) / weight for dataset, weight in zip(datasets_list, weights, strict=False) if weight > 0
+        )
+        datasets_list = [
+            dataset.select(range(round(weight * total)))
+            for dataset, weight in zip(datasets_list, weights, strict=False)
+        ]
 
     if datasets_list:
         combined_dataset = datasets.concatenate_datasets(datasets_list)
