@@ -13,23 +13,34 @@
 # limitations under the License.
 
 import itertools
+import multiprocessing as mp
 import queue
+from functools import partial
 
 import numpy as np
 import pytest
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
+from trl.experimental.async_grpo.async_rollout_worker import RolloutSample, _AsyncRolloutLoop
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer
 
 
 def dummy_reward_func(completions, **kwargs):
     return [float(hash(c[0]["content"]) % 100) / 100.0 for c in completions]
+
+
+def offset_reward_func(completions, offset=0.0, **kwargs):
+    return [offset] * len(completions)
+
+
+class CallableRewardFunc:
+    def __call__(self, completions, **kwargs):
+        return [0.0] * len(completions)
 
 
 class _StubRolloutWorker:
@@ -85,6 +96,41 @@ class _StubRolloutWorker:
 
     def check_health(self, stale_after_s):
         pass
+
+
+def _make_rollout_loop(reward_funcs):
+    ctx = mp.get_context("spawn")
+    tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+    dataset = Dataset.from_list([{"prompt": [{"role": "user", "content": "Hello"}]}])
+    return _AsyncRolloutLoop(
+        model_name="dummy-model",
+        dataset=dataset,
+        reward_funcs=reward_funcs,
+        processing_class=tokenizer,
+        rollout_buffer=ctx.Queue(),
+        model_version_value=ctx.Value("i", 0),
+        heartbeat_value=ctx.Value("d", 0.0),
+        failed_event=ctx.Event(),
+        exception_info_queue=ctx.Queue(maxsize=1),
+        num_generations=1,
+        max_inflight_tasks=1,
+    )
+
+
+def test_async_rollout_loop_names_partial_reward_func():
+    rollout_loop = _make_rollout_loop([partial(offset_reward_func, offset=1.0)])
+    try:
+        assert rollout_loop.reward_func_names == ["offset_reward_func"]
+    finally:
+        rollout_loop._loop.close()
+
+
+def test_async_rollout_loop_names_callable_instance_reward_func():
+    rollout_loop = _make_rollout_loop([CallableRewardFunc()])
+    try:
+        assert rollout_loop.reward_func_names == ["CallableRewardFunc"]
+    finally:
+        rollout_loop._loop.close()
 
 
 @pytest.mark.skipif(
