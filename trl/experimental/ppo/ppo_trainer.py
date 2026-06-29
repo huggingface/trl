@@ -38,6 +38,7 @@ from transformers import (
     DataCollatorWithPadding,
     FeatureExtractionMixin,
     GenerationConfig,
+    PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
@@ -314,15 +315,15 @@ class PPOTrainer(_BaseTrainer):
             Training arguments.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`]):
             Class to process the data.
-        model (`torch.nn.Module`):
+        model ([`~transformers.PreTrainedModel`]):
             Model to be trained. This is the policy model.
-        ref_model (`torch.nn.Module`, *optional*):
+        ref_model ([`~transformers.PreTrainedModel`], *optional*):
             Reference model used to compute the KL divergence. If `None`, a copy of the policy model is created.
-        reward_model (`torch.nn.Module`):
+        reward_model ([`~transformers.PreTrainedModel`]):
             Reward model used to compute the rewards.
         train_dataset ([`~datasets.Dataset`]):
             Dataset for training.
-        value_model (`torch.nn.Module`):
+        value_model ([`~transformers.PreTrainedModel`]):
             Value model used to predict the value of a state.
         data_collator ([`~transformers.DataCollatorWithPadding`], *optional*):
             Data collator to batch and pad samples from the dataset. If `None`, a default data collator is created
@@ -359,11 +360,11 @@ class PPOTrainer(_BaseTrainer):
         self,
         args: PPOConfig,
         processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
-        model: nn.Module,
-        ref_model: nn.Module | None,
-        reward_model: nn.Module,
+        model: PreTrainedModel,
+        ref_model: PreTrainedModel | None,
+        reward_model: PreTrainedModel,
         train_dataset: Dataset,
-        value_model: nn.Module,
+        value_model: PreTrainedModel,
         data_collator: DataCollatorWithPadding | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
         # less commonly used
