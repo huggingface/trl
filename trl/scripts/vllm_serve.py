@@ -405,6 +405,81 @@ def chunk_list(lst: list, n: int) -> list[list]:
     return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
 
 
+def _to_vllm_serve_args(script_args: ScriptArguments) -> list[str]:
+    """
+    Translate `trl vllm-serve` arguments into the equivalent `vllm serve` CLI arguments.
+
+    Returns the argument list following the `vllm` executable (i.e., starting with `"serve"`).
+    """
+    args = ["serve", script_args.model]
+    if script_args.revision is not None:
+        args += ["--revision", script_args.revision]
+    args += ["--tensor-parallel-size", str(script_args.tensor_parallel_size)]
+    args += ["--data-parallel-size", str(script_args.data_parallel_size)]
+    args += ["--host", script_args.host]
+    args += ["--port", str(script_args.port)]
+    args += ["--gpu-memory-utilization", str(script_args.gpu_memory_utilization)]
+    args += ["--dtype", script_args.dtype]
+    args += ["--kv-cache-dtype", script_args.kv_cache_dtype]
+    args += ["--model-impl", script_args.vllm_model_impl]
+    args += ["--uvicorn-log-level", script_args.log_level]
+    # Required for TRL's weight synchronization (`VLLMClient`): a single API frontend keeps the dev-mode
+    # weight-transfer endpoints reliably reachable (with multiple frontends only some carry the dev router), and the
+    # NCCL weight-transfer engine must be enabled explicitly.
+    args += ["--api-server-count", "1"]
+    args += ["--weight-transfer-config", '{"backend": "nccl"}']
+    if script_args.max_model_len is not None:
+        args += ["--max-model-len", str(script_args.max_model_len)]
+    if script_args.enable_prefix_caching is not None:
+        args.append("--enable-prefix-caching" if script_args.enable_prefix_caching else "--no-enable-prefix-caching")
+    if script_args.enforce_eager:
+        args.append("--enforce-eager")
+    if script_args.trust_remote_code:
+        args.append("--trust-remote-code")
+    if script_args.distributed_executor_backend is not None:
+        args += ["--distributed-executor-backend", script_args.distributed_executor_backend]
+    if script_args.speculative_config is not None:
+        args += ["--speculative-config", script_args.speculative_config]
+    return args
+
+
+def _relaunch_with_native_vllm_serve(script_args: ScriptArguments) -> None:
+    """
+    Replace the current process with vLLM's native `vllm serve` server.
+
+    Starting with vLLM 0.22.0, vLLM ships native weight-syncing APIs that supersede TRL's custom vLLM server. Once TRL
+    drops support for vLLM < 0.22.0, `trl vllm-serve` will be removed in favor of `vllm serve`. During the transition,
+    when a recent enough vLLM is installed, we warn and hand off to `vllm serve`, translating the `trl vllm-serve`
+    arguments to their `vllm serve` equivalents. This function does not return: it replaces the current process.
+    """
+    import shutil
+    import warnings
+
+    args = _to_vllm_serve_args(script_args)
+
+    vllm_bin = shutil.which("vllm")
+    if vllm_bin is None:
+        raise RuntimeError(
+            "Could not find the `vllm` executable on PATH. Install vLLM with `pip install vllm` to use `vllm serve`."
+        )
+
+    # The native weight-transfer endpoints (`/init_weight_transfer_engine`, `/update_weights`, ...) that TRL's
+    # `VLLMClient` drives for weight synchronization are only registered when vLLM runs in dev mode.
+    os.environ["VLLM_SERVER_DEV_MODE"] = "1"
+
+    command = "vllm " + " ".join(args)
+    warnings.warn(
+        "Starting from vLLM 0.22.0, vLLM provides native weight-syncing APIs that replace TRL's custom vLLM server. "
+        "`trl vllm-serve` is deprecated when running with vLLM >= 0.22.0 and will be removed once TRL drops support "
+        "for vLLM < 0.22.0. Use `vllm serve` directly instead. Launching the equivalent command now:\n\n"
+        f"    {command}\n",
+        FutureWarning,
+        stacklevel=2,
+    )
+
+    os.execv(vllm_bin, [vllm_bin, *args])
+
+
 def main(script_args: ScriptArguments):
     import asyncio
 
@@ -417,6 +492,11 @@ def main(script_args: ScriptArguments):
         is_uvicorn_available,
         is_vllm_available,
     )
+
+    # Transition path: with vLLM >= 0.22.0, native weight-syncing APIs replace TRL's custom server, so we hand off to
+    # `vllm serve`. This call replaces the current process and does not return.
+    if is_vllm_available(min_version="0.22.0"):
+        _relaunch_with_native_vllm_serve(script_args)
 
     if not is_fastapi_available():
         raise ImportError(
