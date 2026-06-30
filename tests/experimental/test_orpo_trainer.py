@@ -106,6 +106,27 @@ class TestORPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
+    def test_orpo_trainer_processing_class_autoloaded(self):
+        # processing_class is documented as optional: when omitted it should be
+        # auto-loaded from the model, consistent with DPOTrainer / RewardTrainer.
+        training_args = ORPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            beta=0.1,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        trainer = ORPOTrainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=dataset["train"],
+        )
+        assert trainer.processing_class is not None
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
     @pytest.mark.parametrize(
         "config_name",
         [

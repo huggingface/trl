@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import collections
 import copy
 import gc
 import json
@@ -25,7 +26,6 @@ import transformers
 from accelerate.utils.memory import release_memory
 from datasets import Dataset, load_dataset
 from packaging.version import Version
-from packaging.version import parse as parse_version
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -733,7 +733,7 @@ class TestSFTTrainer(TrlTestCase):
                 tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             )
         elif peft_type == "prefix_tuning":
-            if parse_version(peft.__version__) <= Version("0.17.1"):
+            if Version(peft.__version__) <= Version("0.17.1"):
                 pytest.xfail(
                     "Prefix tuning with device_map='auto' is broken in peft 0.17.1 and below. See "
                     "https://github.com/huggingface/peft/issues/2821"
@@ -951,7 +951,7 @@ class TestSFTTrainer(TrlTestCase):
             captured["skip_logits"] = inputs.get("skip_logits")
             dummy_loss = torch.tensor(1.0, requires_grad=True)
             dummy_outputs = MagicMock()
-            dummy_outputs.token_accuracy = None
+            dummy_outputs.token_accuracy = torch.tensor(0.5)
             dummy_outputs.logits = torch.randn(1, 5, trainer.model.config.vocab_size)
             return (dummy_loss, dummy_outputs)
 
@@ -995,7 +995,12 @@ class TestSFTTrainer(TrlTestCase):
         def mock_super_compute_loss(model, inputs, return_outputs=False, num_items_in_batch=None):
             captured["skip_logits"] = inputs.get("skip_logits")
             dummy_loss = torch.tensor(1.0, requires_grad=True)
-            dummy_outputs = (dummy_loss, torch.randn(1, 5, trainer.model.config.vocab_size))
+            DummyOutput = collections.namedtuple("DummyOutput", ["loss", "logits", "token_accuracy"])
+            dummy_outputs = DummyOutput(
+                loss=dummy_loss,
+                logits=torch.randn(1, 5, trainer.model.config.vocab_size),
+                token_accuracy=torch.tensor(0.5),
+            )
             return (dummy_loss, dummy_outputs)
 
         with patch("transformers.Trainer.compute_loss", side_effect=mock_super_compute_loss):
@@ -1881,7 +1886,7 @@ class TestSFTTrainer(TrlTestCase):
         ],
     )
     @pytest.mark.xfail(
-        parse_version(transformers.__version__) < parse_version("4.57.0"),
+        Version(transformers.__version__) < Version("4.57.0"),
         reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
         strict=False,
     )
