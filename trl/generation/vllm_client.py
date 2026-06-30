@@ -44,6 +44,7 @@ if is_vllm_available():
     if is_vllm_ascend_available():
         from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
 
+
 if is_vllm_available(min_version="0.22.0"):
     # Native weight-transfer engine, used when talking to native `vllm serve` (see `_relaunch_with_native_vllm_serve`).
     from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
@@ -60,13 +61,12 @@ def pil_to_base64(image):
     return base64.b64encode(img_bytes).decode("utf-8")
 
 
-class VLLMClientServer:
+class _VLLMClient:
     """
     A client class to interact with TRL's custom vLLM server, started with `trl vllm-serve` (vLLM < 0.22.0).
 
     This class provides methods to generate completions, initialize and manage weight update groups, and update model
-    weights in a distributed setting. Before using it, start the vLLM server with `trl vllm-serve`. It is the
-    implementation behind `VLLMClient` when the installed vLLM version is older than 0.22.0.
+    weights in a distributed setting. Before using it, start the vLLM server with `trl vllm-serve`.
 
     Args:
         base_url (`str`, *optional*):
@@ -169,7 +169,6 @@ class VLLMClientServer:
             self.server_port = server_port
             self.base_url = f"http://{self.host}:{self.server_port}"
         self.group_port = group_port
-
         self.check_server(connection_timeout)  # check server and fail after timeout
 
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
@@ -518,6 +517,28 @@ class VLLMClientServer:
             self.communicator.broadcast(weights, src=self.rank)
             self.communicator.group.barrier()
 
+    def update_weights(self, names, dtype_names, shapes, weights):
+        """
+        Streams a batch of model weights to the server, one parameter at a time.
+
+        This per-parameter server transfers each weight on its own, so it simply forwards every `(name, tensor)` pair
+        from the lazy `weights` iterator to `update_named_param`. The up-front metadata (`names`, `dtype_names`,
+        `shapes`) is unused here (each push carries its own dtype/shape); it is part of the shared interface with
+        [`VLLMClientNativeServer.update_weights`], which sends all metadata before streaming over NCCL.
+
+        Args:
+            names (`list[str]`):
+                Ordered parameter names.
+            dtype_names (`list[str]`):
+                Short dtype name per parameter (e.g. `"bfloat16"`), aligned with `names`.
+            shapes (`list[list[int]]`):
+                Full (unsharded) shape per parameter, aligned with `names`.
+            weights (`Iterable[tuple[str, torch.Tensor]]`):
+                Iterable yielding `(name, full_tensor)` pairs in the same order as `names`.
+        """
+        for name, weight in weights:
+            self.update_named_param(name, weight)
+
     def update_model_params(self, model: nn.Module):
         """
         Updates all parameters of the given model by calling `update_named_param` for each parameter in the model.
@@ -706,7 +727,7 @@ class VLLMClientServer:
         all_actual_lps = []
         all_actual_ids = []
         for resp in responses:
-            decoded = VLLMClientServer._decode_binary_logprobs(resp)
+            decoded = _VLLMClient._decode_binary_logprobs(resp)
             all_logprobs.extend(decoded["logprobs"])
             all_token_ids.extend(decoded["logprob_token_ids"])
             if "actual_logprobs" in decoded:
@@ -752,7 +773,7 @@ class VLLMClientServer:
             self.communicator = None
 
 
-class VLLMClientNativeServer:
+class _VLLMClientNative:
     """
     A client class to interact with native `vllm serve` (vLLM >= 0.22.0).
 
@@ -1181,9 +1202,9 @@ class VLLMClientNativeServer:
 # `_relaunch_with_native_vllm_serve`), which exposes vLLM's native OpenAI + weight-transfer APIs instead of TRL's
 # custom endpoints. Select the matching client protocol from the installed vLLM version.
 if is_vllm_available(min_version="0.22.0"):
-    VLLMClient = VLLMClientNativeServer
+    VLLMClient = _VLLMClientNative
 else:
-    VLLMClient = VLLMClientServer
+    VLLMClient = _VLLMClient
 
 
 # Example usage
