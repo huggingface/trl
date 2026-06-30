@@ -796,7 +796,8 @@ class KTOTrainer(_BaseTrainer):
                 )
             if is_peft_model(self.model):
                 raise ValueError(
-                    "You cannot use `use_liger_kernel=True` with Peft models. Please set `use_liger_kernel=False`."
+                    "`use_liger_kernel=True` is not supported with PEFT models. Set `use_liger_kernel=False` to train "
+                    "a PEFT model."
                 )
             self.liger_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
