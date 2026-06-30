@@ -437,16 +437,14 @@ class VLLMGeneration:
             self._sync_fsdp2_params_to_vllm(model)
 
     def _sync_weights_bulk(self):
-        """Stream weights to the vLLM server one gathered parameter at a time (no full-model buffer).
+        """Stream weights to the vLLM server one gathered parameter at a time.
 
-        Parameter metadata (names, dtypes, shapes) is collected without gathering, then full tensors are produced
-        lazily so that, under ZeRO-3, only a single parameter is materialized at a time. All ranks iterate so they
-        participate in the collective gathers; only the main process sends to vLLM. The actual transfer is delegated to
-        the client's `update_weights`, so the same call site works for both the per-parameter server (`trl vllm-serve`)
-        and the native `vllm serve` bulk NCCL engine.
+        Parameter metadata (names, dtypes, shapes) is collected without gathering; full tensors are then produced
+        lazily so that, under ZeRO-3, only one parameter is materialized at a time. All ranks iterate to participate in
+        the collective gathers; only the main process sends to vLLM. The transfer is delegated to the client's
+        `update_weights`, so the same call site serves both the per-parameter server (`trl vllm-serve`) and the native
+        `vllm serve` bulk NCCL engine.
         """
-        from torch.distributed.tensor import DTensor
-
         model = self.model
 
         def named_params():
@@ -454,7 +452,7 @@ class VLLMGeneration:
                 yield self._fix_param_name_to_vllm(name), param
 
         # Metadata, collected without gathering: full (unsharded) shapes are available from `ds_shape` under ZeRO-3 and
-        # directly otherwise (DTensor exposes the logical full shape).
+        # directly otherwise.
         names, dtype_names, shapes = [], [], []
         for name, param in named_params():
             names.append(name)
@@ -465,8 +463,7 @@ class VLLMGeneration:
             for name, param in named_params():
                 # Gather one parameter at a time (ZeRO-3 all-gather; no-op otherwise), freed as the generator advances.
                 with self._dist.gather_params([param]):
-                    full = param.full_tensor() if isinstance(param, DTensor) else param.data
-                    yield name, full.detach()
+                    yield name, param.data
 
         if self.accelerator.is_main_process:
             self.vllm_client.update_weights(names, dtype_names, shapes, weights())
