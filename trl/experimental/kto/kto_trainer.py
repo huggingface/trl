@@ -965,25 +965,27 @@ class KTOTrainer(_BaseTrainer):
             # function unhashable, forcing a random fingerprint that silently disables dataset caching.
             tokenize = self._tokenize
 
-            def tokenize_fn(example, processing_class):
+            def tokenize_fn(example, processing_class, is_vlm):
                 if is_conversational(example):
                     chat_template_kwargs = example.get("chat_template_kwargs", {})
                     prompt_ids = tokenize(
                         processing_class,
                         example["prompt"],
+                        is_vlm,
                         add_generation_prompt=True,
                         **chat_template_kwargs,
                     )["input_ids"]
                     prompt_completion_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["completion"],
+                        is_vlm,
                         **chat_template_kwargs,
                     )["input_ids"]
                 else:
-                    prompt_ids = tokenize(processing_class, example["prompt"])["input_ids"]
-                    prompt_completion_ids = tokenize(processing_class, example["prompt"] + example["completion"])[
-                        "input_ids"
-                    ]
+                    prompt_ids = tokenize(processing_class, example["prompt"], is_vlm)["input_ids"]
+                    prompt_completion_ids = tokenize(
+                        processing_class, example["prompt"] + example["completion"], is_vlm
+                    )["input_ids"]
 
                 if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
                     logger.warning(
@@ -997,7 +999,9 @@ class KTOTrainer(_BaseTrainer):
                     "completion_ids": prompt_completion_ids[len(prompt_ids) :],
                 }
 
-            dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
+            dataset = dataset.map(
+                tokenize_fn, fn_kwargs={"processing_class": processing_class, "is_vlm": self._is_vlm}, **map_kwargs
+            )
 
             # Get KL datasets if needed
             if self.calculate_KL:
