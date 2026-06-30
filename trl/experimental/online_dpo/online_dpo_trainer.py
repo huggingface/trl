@@ -651,8 +651,6 @@ class OnlineDPOTrainer(_BaseTrainer):
             all_images = gather_object(images)
 
         if self.accelerator.is_main_process:
-            # Online DPO generates `num_generations` (2) completions per prompt. Unlike GRPO, the prompts are
-            # not duplicated in the batch, so we generate directly for every prompt.
             if has_images:
                 images_per_prompt = [[img] if img is not None else None for img in all_images]
             else:
@@ -678,8 +676,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Broadcast completions to all processes
         completion_ids = broadcast_object_list(completion_ids, from_process=0)
 
-        # Each process takes the slice of completions for its local prompts. The server returns the 2 completions
-        # of each prompt consecutively ([p0c0, p0c1, p1c0, p1c1, ...]).
+        # Slice to keep only the local part of the data
         process_slice = slice(
             self.accelerator.process_index * len(prompts) * 2,
             (self.accelerator.process_index + 1) * len(prompts) * 2,
