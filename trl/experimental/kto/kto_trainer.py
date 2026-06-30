@@ -675,6 +675,28 @@ class KTOTrainer(_BaseTrainer):
                 "loss.",
             )
 
+        self.use_liger_kernel = args.use_liger_kernel
+        if self.use_liger_kernel:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
+                    "Please install liger-kernel first: `pip install liger-kernel`"
+                )
+            if self.loss_type in ["apo_zero_unpaired"]:
+                raise ValueError(
+                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
+                    "Only KTO loss is supported with liger-kernel."
+                )
+            if self.precompute_ref_logps:
+                raise ValueError(
+                    "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
+                    "`precompute_ref_log_probs=False`."
+                )
+            if is_peft_model(model):
+                raise ValueError(
+                    "You cannot use `use_liger_kernel=True` with Peft models. Please set `use_liger_kernel=False`."
+                )
+
         # Dataset
         # Skip dataset preparation for VLMs: tokenization and image processing happen on-the-fly in the collator.
         if not self._is_vision_dataset:
@@ -776,28 +798,8 @@ class KTOTrainer(_BaseTrainer):
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
-        self.use_liger_kernel = args.use_liger_kernel
-        # Import Liger kernel if enabled
+        # The Liger loss is built here, because it needs `self.ref_model`
         if self.use_liger_kernel:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
-                    "Please install liger-kernel first: `pip install liger-kernel`"
-                )
-            if self.loss_type in ["apo_zero_unpaired"]:
-                raise ValueError(
-                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
-                    "Only KTO loss is supported with liger-kernel."
-                )
-            if self.precompute_ref_logps:
-                raise ValueError(
-                    "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
-                    "`precompute_ref_log_probs=False`."
-                )
-            if is_peft_model(self.model):
-                raise ValueError(
-                    "You cannot use `use_liger_kernel=True` with Peft models. Please set `use_liger_kernel=False`."
-                )
             self.liger_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
         if self.precompute_ref_logps:
