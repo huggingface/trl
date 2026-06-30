@@ -51,20 +51,13 @@ from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
 from ...models.utils import prepare_deepspeed, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import (
-    disable_dropout_in_model,
-    log_table_to_comet_experiment,
-    pad,
-    selective_log_softmax,
-)
-from ..utils import (
-    create_reference_model,
-    empty_cache,
-    first_true_indices,
-    get_reward,
-    peft_module_casting_to_bf16,
-)
+from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, pad, selective_log_softmax
+from ..utils import create_reference_model, empty_cache, first_true_indices, get_reward, peft_module_casting_to_bf16
 from .ppo_config import PPOConfig
+
+
+if is_peft_available():
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 
 if is_rich_available():
@@ -72,13 +65,10 @@ if is_rich_available():
     from rich.table import Table
 
 
-logger = get_logger(__name__)
-
-if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model
-
-
 INVALID_LOGPROB = 1.0
+
+
+logger = get_logger(__name__)
 
 
 def generate(

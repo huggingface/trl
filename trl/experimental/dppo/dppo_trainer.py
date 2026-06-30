@@ -38,27 +38,18 @@ from transformers import (
 from transformers.utils import is_peft_available
 
 from ...chat_template_utils import parse_response
-from ...data_utils import (
-    apply_chat_template,
-    is_conversational,
-    prepare_multimodal_messages,
-)
+from ...data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ...extras.profiling import profiling_context, profiling_decorator
 from ...models import unwrap_model_for_generation
 from ...models.utils import disable_gradient_checkpointing
 from ...trainer.grpo_trainer import EnvironmentFactory, GRPOTrainer, RewardFunc, RolloutFunc
-from ...trainer.utils import (
-    entropy_from_logits,
-    nanstd,
-    pad,
-    selective_log_softmax,
-    use_adapter,
-)
+from ...trainer.utils import entropy_from_logits, nanstd, pad, selective_log_softmax, use_adapter
 from .dppo_config import DPPOConfig
 
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel
+
 
 SAFETY_CLAMP_MAX = 20
 
