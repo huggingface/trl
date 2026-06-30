@@ -975,6 +975,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 with open(rollout_state_file) as f:
                     prompt_index = json.load(f)["prompt_index"]
                 self.rollout_worker._loop_kwargs["dataset_start_index"] = prompt_index
+            elif not os.path.isfile(rollout_state_file):
+                logger.warning(
+                    "rollout_state.json not found in the checkpoint; the rollout worker will restart from prompt 0."
+                )
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
