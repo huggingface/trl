@@ -48,38 +48,28 @@ from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
-from ...trainer.utils import (
-    RepeatSampler,
-    create_model_from_path,
-    disable_dropout_in_model,
-    pad,
-    split_tensor_dict,
-)
-from ..utils import (
-    DataCollatorForChatML,
-    empty_cache,
-    encode_with_byte_offsets,
-    pad_byte_offsets,
-    piece_byte_len,
-)
+from ...trainer.utils import RepeatSampler, create_model_from_path, disable_dropout_in_model, pad, split_tensor_dict
+from ..utils import DataCollatorForChatML, empty_cache, encode_with_byte_offsets, pad_byte_offsets, piece_byte_len
 from .gold_config import GOLDConfig
+
+
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
     from peft import PeftConfig
 
-if is_wandb_available():
-    import wandb
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 if is_rich_available():
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
+
+
+if is_wandb_available():
+    import wandb
 
 
 def print_prompt_completions_sample_uld(
