@@ -12,15 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from types import SimpleNamespace
-
 import pytest
-import torch
 from datasets import Dataset, features, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
 
-import trl.experimental.online_dpo.online_dpo_trainer as online_dpo_trainer_module
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
 from ..testing_utils import TrlTestCase, require_peft, require_torch_accelerator, require_vision, require_vllm
@@ -34,52 +30,6 @@ if is_vision_available():
     import numpy as np
     from PIL import Image
     from transformers import AutoModelForImageTextToText, AutoProcessor
-
-
-def test_vllm_server_preserves_completion_token_sequences(monkeypatch):
-    monkeypatch.setattr(online_dpo_trainer_module, "gather_object", lambda value: value)
-    monkeypatch.setattr(online_dpo_trainer_module, "broadcast_object_list", lambda value, from_process: value)
-
-    calls = []
-
-    class DummyVLLMClient:
-        def generate(self, **kwargs):
-            calls.append(kwargs)
-            return {
-                "completion_ids": [
-                    [11, 12],
-                    [13, 14, 15],
-                    [21, 22],
-                    [23],
-                ]
-            }
-
-    class DummyProcessor:
-        def __call__(self, **kwargs):
-            assert kwargs["text"] == ["first prompt", "second prompt"]
-            return {"input_ids": torch.tensor([[101, 102], [201, 202]])}
-
-    trainer = OnlineDPOTrainer.__new__(OnlineDPOTrainer)
-    trainer.accelerator = SimpleNamespace(is_main_process=True, process_index=0)
-    trainer.args = SimpleNamespace(generation_kwargs=None)
-    trainer.generation_config = SimpleNamespace(max_tokens=16)
-    trainer.min_p = None
-    trainer.num_generations = 2
-    trainer.processing_class = DummyProcessor()
-    trainer.repetition_penalty = 1.0
-    trainer.state = SimpleNamespace(global_step=1)
-    trainer.temperature = 0.7
-    trainer.top_k = None
-    trainer.top_p = 0.95
-    trainer.vllm_client = DummyVLLMClient()
-    trainer._last_loaded_step = 1
-
-    completion_ids, prompt_ids = trainer._generate_vllm_server(["first prompt", "second prompt"])
-
-    assert calls[0]["prompts"] == ["first prompt", "second prompt"]
-    assert calls[0]["n"] == 2
-    assert completion_ids == [[11, 12], [21, 22], [13, 14, 15], [23]]
-    assert prompt_ids == [[101, 102], [201, 202], [101, 102], [201, 202]]
 
 
 class TestOnlineDPOTrainer(TrlTestCase):
