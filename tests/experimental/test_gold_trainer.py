@@ -245,6 +245,7 @@ def build_config(**overrides):
         uld_skip_student_eos=False,
         uld_skip_teacher_eos=False,
         use_extended_uld=True,
+        uld_token_merge_strategy="observed",
         uld_use_hybrid_loss=False,
         uld_hybrid_matched_weight=None,
         uld_hybrid_unmatched_weight=None,
@@ -878,11 +879,11 @@ def test_on_policy_completion_byte_offsets_match_encode_offsets(smollm_tokenizer
     assert [tuple(offset) for offset in updated_slice["byte_offsets"][0, 1:].tolist()] == expected_offsets
 
 
-def test_merge_probabilities_multiplies_split_tokens():
-    config = build_config()
+def test_merge_probabilities_multiplies_split_tokens_observed():
+    config = build_config(uld_token_merge_strategy="observed")
     # Use simple 3-token vocabulary to validate merging behaviour
-    # probs[0] = P(token | context) at position 0 for all vocab tokens
-    # probs[1] = P(token | context) at position 1 for all vocab tokens
+    # probs[0] = marginal P(token | context) at position 0 for all vocab tokens
+    # probs[1] = P(token | context, token_0) at position 1 for all vocab tokens
     probs = torch.tensor([[0.6, 0.3, 0.1], [0.2, 0.5, 0.3]])
     loss = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
 
@@ -892,12 +893,148 @@ def test_merge_probabilities_multiplies_split_tokens():
 
     merged = loss._merge_probabilities_with_alignment_groups(probs, [[0, 1]], token_ids=token_ids)
 
-    # Expected: P_merged(y) = P(y | context_0) × P(token_1=1 | context_1)
-    # For each vocab token y, multiply marginal prob at pos 0 by scalar conditional prob of actual token at pos 1
+    # Expected: first position's marginal distribution × scalar conditional prob of actual token at later position
+    # P_merged(y) = probs[0](y) × probs[1, token_ids[1]] = probs[0] × probs[1, 1]
     expected = probs[0] * probs[1, 1]  # probs[1, 1] = 0.5
-    # Expected unnormalized: [0.6 * 0.5, 0.3 * 0.5, 0.1 * 0.5] = [0.3, 0.15, 0.05]
+    # Expected unnormalized: [0.6 * 0.5, 0.3 * 0.5, 0.1 * 0.5] = [0.30, 0.15, 0.05]
 
     torch.testing.assert_close(merged[0], expected)
+
+
+def test_merge_probabilities_multiplies_split_tokens_bayesian():
+    config = build_config(uld_token_merge_strategy="bayesian")
+    # Use simple 3-token vocabulary to validate merging behaviour
+    # probs[0] = P(token | context) at position 0 for all vocab tokens
+    # probs[1] = P(token | context, token_0) at position 1 for all vocab tokens
+    probs = torch.tensor([[0.6, 0.3, 0.1], [0.2, 0.5, 0.3]])
+    loss = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+
+    # token_ids[0] = 0 means the actual token at position 0 is token ID 0
+    token_ids = [0, 1]  # Actual generated tokens
+
+    merged = loss._merge_probabilities_with_alignment_groups(probs, [[0, 1]], token_ids=token_ids)
+
+    # Expected: last position's full distribution × scalar prob of actual token at earlier position
+    # P_merged(y) = probs[1](y) × probs[0, token_ids[0]] = probs[1] × probs[0, 0]
+    expected = probs[1] * probs[0, 0]  # probs[0, 0] = 0.6
+    # Expected unnormalized: [0.2 * 0.6, 0.5 * 0.6, 0.3 * 0.6] = [0.12, 0.30, 0.18]
+
+    torch.testing.assert_close(merged[0], expected)
+
+
+def test_compute_distillation_loss_bayesian_shifts_answer_logits():
+    # The "bayesian" strategy shifts the answer-logit slice one position earlier (probs[k] predicts token_ids[k]).
+    # This also applies on the positional path (use_extended_uld=False), so check the loss uses the shifted slice.
+    config = build_config(use_extended_uld=False, uld_token_merge_strategy="bayesian")
+    loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+
+    torch.manual_seed(0)
+    student_logits = torch.randn(1, 3, 4)
+    teacher_logits = torch.randn(1, 3, 4)
+    # Answer span starts at position 1 (size 2), leaving position 0 as the context the shift relies on.
+    student_labels = torch.tensor([[-100, 1, 2]])
+    teacher_labels = torch.tensor([[-100, 1, 2]])
+    student_input_ids = torch.tensor([[0, 1, 2]])
+    teacher_input_ids = torch.tensor([[0, 1, 2]])
+
+    result = loss_fn._compute_distillation_loss(
+        student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+    )
+
+    # Expected: probabilities come from the shifted positions [0, 1], not the answer positions [1, 2].
+    student_probs = torch.softmax(student_logits[0, 0:2], dim=-1)
+    teacher_probs = torch.softmax(teacher_logits[0, 0:2], dim=-1)
+    student_sorted = student_probs.sort(dim=-1, descending=True).values
+    teacher_sorted = teacher_probs.sort(dim=-1, descending=True).values
+    expected = (student_sorted - teacher_sorted).abs().sum() / student_probs.size(0)
+
+    torch.testing.assert_close(result, expected)
+
+    # The "observed" strategy uses the unshifted answer positions [1, 2], so it gives a different loss.
+    observed_fn = ULDLoss(build_config(use_extended_uld=False), student_tokenizer=None, teacher_tokenizer=None)
+    observed = observed_fn._compute_distillation_loss(
+        student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+    )
+    assert not torch.allclose(observed, expected)
+
+
+def test_compute_distillation_loss_bayesian_skips_zero_start_span_positional():
+    # Front-truncation can drop the whole prompt, leaving an answer span that starts at index 0. The first token has
+    # no preceding predictor logit for the shift, so it must be skipped (start += 1, size -= 1) rather than wrapping
+    # around with negative indexing.
+    config = build_config(use_extended_uld=False, uld_token_merge_strategy="bayesian")
+    loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+
+    torch.manual_seed(0)
+    student_logits = torch.randn(1, 3, 4)
+    teacher_logits = torch.randn(1, 3, 4)
+    # No -100 prefix: the answer span starts at index 0 with size 3.
+    student_labels = torch.tensor([[1, 2, 3]])
+    teacher_labels = torch.tensor([[1, 2, 3]])
+    student_input_ids = torch.tensor([[1, 2, 3]])
+    teacher_input_ids = torch.tensor([[1, 2, 3]])
+
+    result = loss_fn._compute_distillation_loss(
+        student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+    )
+
+    # After skipping the leading token: start=1, size=2 -> the shifted slice covers positions [0, 1].
+    student_probs = torch.softmax(student_logits[0, 0:2], dim=-1)
+    teacher_probs = torch.softmax(teacher_logits[0, 0:2], dim=-1)
+    student_sorted = student_probs.sort(dim=-1, descending=True).values
+    teacher_sorted = teacher_probs.sort(dim=-1, descending=True).values
+    expected = (student_sorted - teacher_sorted).abs().sum() / student_probs.size(0)
+
+    torch.testing.assert_close(result, expected)
+
+
+def test_compute_distillation_loss_bayesian_zero_loss_when_only_token_dropped():
+    # If the answer span is a single token at index 0, skipping it leaves nothing to score -> zero loss, no crash.
+    config = build_config(use_extended_uld=False, uld_token_merge_strategy="bayesian")
+    loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+
+    student_logits = torch.randn(1, 2, 4)
+    teacher_logits = torch.randn(1, 2, 4)
+    student_labels = torch.tensor([[5, -100]])  # start 0, size 1
+    teacher_labels = torch.tensor([[5, -100]])
+    student_input_ids = torch.tensor([[5, 0]])
+    teacher_input_ids = torch.tensor([[5, 0]])
+
+    result = loss_fn._compute_distillation_loss(
+        student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+    )
+
+    torch.testing.assert_close(result, torch.zeros_like(result))
+
+
+def test_compute_distillation_loss_bayesian_skips_zero_start_span_extended():
+    # Same zero-start scenario on the extended (byte-offset) path: the first aligned group pair is dropped instead of
+    # wrapping around, so the loss is finite.
+    config = build_config(use_extended_uld=True, uld_token_merge_strategy="bayesian")
+    loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
+
+    torch.manual_seed(0)
+    student_logits = torch.randn(1, 3, 4)
+    teacher_logits = torch.randn(1, 3, 4)
+    student_labels = torch.tensor([[1, 2, 3]])  # start 0, size 3
+    teacher_labels = torch.tensor([[1, 2, 3]])
+    student_input_ids = torch.tensor([[1, 2, 3]])
+    teacher_input_ids = torch.tensor([[1, 2, 3]])
+    # 1:1 byte alignment over the completion: each token spans one byte.
+    byte_offsets = torch.tensor([[[0, 1], [1, 2], [2, 3]]])
+
+    result = loss_fn._compute_distillation_loss(
+        student_logits,
+        teacher_logits,
+        student_labels,
+        teacher_labels,
+        student_input_ids,
+        teacher_input_ids,
+        student_byte_offsets=byte_offsets,
+        teacher_byte_offsets=byte_offsets,
+    )
+
+    assert torch.isfinite(result)
 
 
 def test_uldloss_positional_mode_does_not_require_byte_offsets():
