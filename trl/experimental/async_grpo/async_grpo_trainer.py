@@ -668,7 +668,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 max_staleness=self.args.max_staleness,
             )
+            # Default the token budget to the vLLM server's max_model_len (the cap on prompt + completion), so no
+            # rollout sample can exceed it. Only the built-in worker manages a vLLM server (weight_transfer is set);
+            # with a custom rollout_worker there may be none to query, so require an explicit budget instead.
             if self.args.token_budget is None:
+                if self.weight_transfer is None:
+                    raise ValueError(
+                        "Set `token_budget` explicitly when passing a custom `rollout_worker`: the default is the "
+                        "vLLM server's max_model_len, which is only queried for the built-in rollout worker."
+                    )
                 self.args.token_budget = _get_vllm_max_model_len(
                     self.args.vllm_server_base_url, self.args.vllm_server_timeout
                 )
