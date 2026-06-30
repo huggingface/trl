@@ -17,7 +17,6 @@ import torch
 import transformers
 from datasets import load_dataset
 from packaging.version import Version
-from packaging.version import parse as parse_version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
@@ -1175,7 +1174,7 @@ class TestDPOTrainerVLM(TrlTestCase):
         ],
     )
     @pytest.mark.xfail(
-        parse_version(transformers.__version__) < parse_version("4.57.0"),
+        Version(transformers.__version__) < Version("4.57.0"),
         reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
         strict=False,
     )

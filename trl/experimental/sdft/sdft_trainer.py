@@ -67,11 +67,12 @@ from .sdft_config import SDFTConfig
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
 
 
-if is_peft_available():
-    from peft import PeftConfig
-
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+
+
+if is_peft_available():
+    from peft import PeftConfig
 
 
 logger = get_logger(__name__)

@@ -81,21 +81,23 @@ from ..utils import (
 from .gold_config import GOLDConfig
 
 
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+
+
 if is_peft_available():
     from peft import PeftConfig
 
-if is_wandb_available():
-    import wandb
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 if is_rich_available():
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
+
+
+if is_wandb_available():
+    import wandb
 
 
 def print_prompt_completions_sample_uld(
