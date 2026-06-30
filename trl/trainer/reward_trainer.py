@@ -56,6 +56,7 @@ from .utils import create_model_from_path, disable_dropout_in_model, get_config_
 
 
 if is_peft_available():
+    import peft
     from peft import PeftConfig, PeftModel, get_peft_model
 
 
@@ -235,16 +236,16 @@ class RewardTrainer(_BaseTrainer):
     Example:
 
     ```python
-    from trl import RewardTrainer
-    from datasets import load_dataset
+    >>> from trl import RewardTrainer
+    >>> from datasets import load_dataset
 
-    dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+    >>> dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-    trainer = RewardTrainer(
-        model="Qwen/Qwen2.5-0.5B-Instruct",
-        train_dataset=dataset,
-    )
-    trainer.train()
+    >>> trainer = RewardTrainer(
+    ...     model="Qwen/Qwen2.5-0.5B-Instruct",
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
     ```
 
     Args:
@@ -255,7 +256,9 @@ class RewardTrainer(_BaseTrainer):
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               using `AutoModelForSequenceClassification.from_pretrained` with the keyword arguments in
-              `args.model_init_kwargs`.
+              `args.model_init_kwargs`. If `dtype` is not specified in `args.model_init_kwargs`, it defaults to
+              `float32`. This differs from [`~transformers.PreTrainedModel.from_pretrained`], where (since Transformers
+              v5) the dtype is inferred from the model config.
             - A sequence classification [`~transformers.PreTrainedModel`] object.
             - A sequence classification [`~peft.PeftModel`] object.
         args ([`RewardConfig`], *optional*):
@@ -362,6 +365,7 @@ class RewardTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs["num_labels"] = 1  # the only output of the model is the reward score
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             with suppress_seqcls_warning():
                 model = create_model_from_path(model, AutoModelForSequenceClassification, **model_init_kwargs)
         else:
@@ -377,10 +381,14 @@ class RewardTrainer(_BaseTrainer):
                     "to output a single scalar reward per sequence. Please instantiate your model with `num_labels=1` "
                     "or pass a model name as a string to have it configured automatically."
                 )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
+        _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(get_config_model_id(model.config))
+            processing_class = AutoTokenizer.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            )
 
         # Handle pad token for processors or tokenizers
         if args.eos_token is not None:
@@ -444,7 +452,26 @@ class RewardTrainer(_BaseTrainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
             # Create PEFT model
-            model = get_peft_model(model, peft_config)
+            # ZeRO-3 + PEFT for non-quantized models:
+            # - PEFT's default autocast_adapter_dtype=True upcasts LoRA adapter params to fp32 even when the base model is bf16.
+            # - ZeRO-3's _allgather_params_coalesced allocates output buffers using the dtype of the first persistent parameter,
+            #   so mixed-dtype persistent_parameters (bf16 base + fp32 LoRA) cause a TypeError on the first optimizer step.
+            # - Passing autocast_adapter_dtype=False keeps adapter params in the base model dtype (bf16), fixing the mismatch.
+            # - This is safe: the fp32 upcast is a QLoRA-specific concern (low-bit quantized base models), not needed for
+            #   non-quantized bf16 training.
+            # - See:
+            #   - TRL issue: https://github.com/huggingface/trl/issues/6089
+            #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
+            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
+            get_peft_model_kwargs = {}
+            if (
+                args.deepspeed_plugin is not None
+                and args.deepspeed_plugin.zero_stage == 3
+                and not _is_quantized_model
+                and Version(peft.__version__) >= Version("0.12.0")
+            ):
+                get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
@@ -455,8 +482,7 @@ class RewardTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
-        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
-        if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
+        if _is_quantized_model:
             for param in model.parameters():
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
@@ -476,6 +502,8 @@ class RewardTrainer(_BaseTrainer):
                 "in the vocabulary before using it as a padding token."
             )
         processing_class.pad_token = pad_token
+        # SequenceClassification models need `config.pad_token_id` to locate the last non-pad token.
+        model.config.pad_token_id = processing_class.pad_token_id
 
         # Data collator
         if data_collator is None:
@@ -527,8 +555,6 @@ class RewardTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
@@ -540,6 +566,34 @@ class RewardTrainer(_BaseTrainer):
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
+
+    @staticmethod
+    def _tokenize(
+        processing_class: PreTrainedTokenizerBase,
+        input: str | list,
+        **kwargs,
+    ) -> dict[str, list]:
+        """Tokenize a single example for dataset preprocessing.
+
+        Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
+        non-conversational input (str).
+
+        Args:
+            processing_class ([`~transformers.PreTrainedTokenizerBase`]):
+                The tokenizer to use.
+            input (`str` or `list`):
+                A string for non-conversational input, or a list of message dicts for conversational input.
+            **kwargs:
+                Forwarded to `apply_chat_template` (e.g. `tools`).
+
+        Returns:
+            `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
+        """
+        if isinstance(input, list):  # conversational: list of message dicts
+            result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
+        else:  # non-conversational: plain text string
+            result = processing_class(text=input)
+        return result
 
     def _prepare_dataset(
         self,
@@ -593,6 +647,11 @@ class RewardTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
+                # Bind `_tokenize` to a local so `tokenize_fn` doesn't capture `self`: a closure over `self` makes the
+                # map function unhashable, forcing a random fingerprint that silently disables dataset caching.
+                # `_tokenize` is a static method, so `self._tokenize` is a plain function (no bound `self`).
+                tokenize = self._tokenize
+
                 def tokenize_fn(example, processing_class):
                     tools = example.get("tools")
                     tools = json.loads(tools) if isinstance(tools, str) else tools
@@ -601,23 +660,23 @@ class RewardTrainer(_BaseTrainer):
                         example["rejected"] = example["prompt"] + example["rejected"]
 
                     if is_conversational(example):
-                        chosen_ids = processing_class.apply_chat_template(
+                        chosen_ids = tokenize(
+                            processing_class,
                             example["chosen"],
                             tools=tools,
-                            return_dict=True,
                             **example.get("chat_template_kwargs", {}),
                         )["input_ids"]
-                        rejected_ids = processing_class.apply_chat_template(
+                        rejected_ids = tokenize(
+                            processing_class,
                             example["rejected"],
                             tools=tools,
-                            return_dict=True,
                             **example.get("chat_template_kwargs", {}),
                         )["input_ids"]
                         output = {"chosen_ids": chosen_ids, "rejected_ids": rejected_ids}
                     else:
                         output = {
-                            "chosen_ids": processing_class(text=example["chosen"])["input_ids"],
-                            "rejected_ids": processing_class(text=example["rejected"])["input_ids"],
+                            "chosen_ids": tokenize(processing_class, example["chosen"])["input_ids"],
+                            "rejected_ids": tokenize(processing_class, example["rejected"])["input_ids"],
                         }
                     return output
 
@@ -641,6 +700,28 @@ class RewardTrainer(_BaseTrainer):
         # and "attention_mask").
         if self._signature_columns is None:
             self._signature_columns = ["chosen_ids", "rejected_ids", "margin"]
+
+    def evaluate(
+        self,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        ignore_keys: list[str] | None = None,
+        metric_key_prefix: str = "eval",
+    ) -> dict[str, float]:
+        # When a dataset is passed directly to `evaluate` (e.g. a held-out test set), preprocess it the same way
+        # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer. `_prepare_dataset` is
+        # idempotent: it skips datasets that are already tokenized. A `str` selects a dataset that was already prepared
+        # at init time, so it's left untouched.
+        if eval_dataset is not None and not isinstance(eval_dataset, str):
+            if isinstance(eval_dataset, dict):
+                eval_dataset = {
+                    key: self._prepare_dataset(dataset, self.processing_class, self.args, key)
+                    for key, dataset in eval_dataset.items()
+                }
+            else:
+                eval_dataset = self._prepare_dataset(eval_dataset, self.processing_class, self.args, "eval")
+        return super().evaluate(
+            eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
+        )
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"

@@ -22,6 +22,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 
 from trl import clone_chat_template
 from trl.chat_template_utils import (
+    _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
@@ -192,11 +193,15 @@ class TestAddResponseSchema:
         ],
     )
     def test_add_response_schema_vlm(self, processor_name):
-        # For VLM processors, `add_response_schema` must set the schema on the inner tokenizer, since
-        # `parse_response` is a tokenizer method that reads `self.response_schema` from the tokenizer instance.
+        # For VLM processors, `add_response_schema` must set the template/schema on the inner tokenizer, since
+        # `parse_response` is a tokenizer method that reads `self.response_template` / `self.response_schema` from the
+        # tokenizer instance. Which attribute is set depends on the installed transformers version.
         processor = AutoProcessor.from_pretrained(processor_name)
         processor = add_response_schema(processor)
-        assert processor.tokenizer.response_schema is not None
+        if _SUPPORTS_RESPONSE_TEMPLATE:
+            assert processor.tokenizer.response_template is not None
+        else:
+            assert processor.tokenizer.response_schema is not None
         messages = [
             {"role": "user", "content": [{"type": "text", "text": "What is 3*4?"}]},
             {
@@ -579,6 +584,9 @@ class TestIsChatTemplateStopTokenTrained:
             ),
         ),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
+        pytest.param(
+            "trl-internal-testing/tiny-Idefics3ForConditionalGeneration", id="idefics3", marks=require_vision
+        ),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
         pytest.param(
@@ -735,7 +743,13 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # GLM's native template doesn't terminate an assistant turn with an end-of-turn token; the turn is ended
+            # by the following message's role marker. The training template appends that terminator to the final
+            # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
+            assert after == before + "<|user|>"
+        else:
+            assert before == after
 
     def test_behavior_unchanged_final_assistant_with_reasoning_content(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
@@ -753,7 +767,13 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # GLM's native template doesn't terminate an assistant turn with an end-of-turn token; the turn is ended
+            # by the following message's role marker. The training template appends that terminator to the final
+            # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
+            assert after == before + "<|user|>"
+        else:
+            assert before == after
 
     def test_behavior_unchanged_final_assistant_with_existing_think_tags(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
@@ -770,7 +790,13 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # GLM's native template doesn't terminate an assistant turn with an end-of-turn token; the turn is ended
+            # by the following message's role marker. The training template appends that terminator to the final
+            # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
+            assert after == before + "<|user|>"
+        else:
+            assert before == after
 
     def test_behavior_unchanged_assistant_with_tool_calls(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
@@ -791,7 +817,13 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages_before, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # GLM's native template doesn't terminate an assistant turn with an end-of-turn token; the turn is ended
+            # by the following message's role marker. The training template appends that terminator to the final
+            # assistant turn so the stop token is trained — here `<|observation|>`, which closes a tool call.
+            assert after == before + "<|observation|>"
+        else:
+            assert before == after
 
     def test_behavior_unchanged_with_tools_with_and_without_system_message(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
@@ -1022,13 +1054,12 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_with_reasoning_content(self, model_name):
         if model_name in (
             "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-            "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1036,11 +1067,20 @@ class TestParseResponse:
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
         ):
             pytest.skip("This tokenizer doesn't support inline reasoning_content.")
+        if model_name == "trl-internal-testing/tiny-GptOssForCausalLM" and not _SUPPORTS_RESPONSE_TEMPLATE:
+            # gpt-oss surfaces the analysis channel as `thinking` (separate from `content`) only with the new-style
+            # `response_template` parser. The legacy `gptoss_schema` folds the analysis channel into `content`.
+            pytest.skip("gpt-oss thinking/content separation requires the response_template parser (>= 5.13).")
 
         processing_class = self._load(model_name)
+        # gpt-oss uses the `thinking` field name (matching its harmony chat template) rather
+        # than the `reasoning_content` convention used by other models.
+        reasoning_field = (
+            "thinking" if model_name == "trl-internal-testing/tiny-GptOssForCausalLM" else "reasoning_content"
+        )
         messages = [
             {"role": "user", "content": "What is 3*4?"},
-            {"role": "assistant", "reasoning_content": "Hmmm.", "content": "12"},
+            {"role": "assistant", reasoning_field: "Hmmm.", "content": "12"},
         ]
         expected = messages[-1]
         messages = prepare_multimodal_messages(messages) if self.is_vlm else messages
@@ -1055,7 +1095,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_tool_call(self, model_name):
@@ -1088,7 +1128,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_tool_call_with_content(self, model_name):
@@ -1097,16 +1137,19 @@ class TestParseResponse:
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         ):
             pytest.skip("Llama 3.1 / 3.2 templates only allow a single tool call per assistant turn, with no content.")
-        if model_name in ("trl-internal-testing/tiny-GptOssForCausalLM",) and Version(
-            transformers.__version__
-        ) < Version("5.5.0"):
-            pytest.skip("Upstream bug in response parsing (see #5753; fixed in transformers#45166)")
+        if model_name == "trl-internal-testing/tiny-GptOssForCausalLM" and not _SUPPORTS_RESPONSE_TEMPLATE:
+            # gpt-oss surfaces the content-before-tool-call (analysis channel) as `thinking` only with the new-style
+            # `response_template` parser. The legacy `gptoss_schema` folds the analysis channel into `content`.
+            pytest.skip("gpt-oss thinking-before-tool-call requires the response_template parser (>= 5.13).")
         processing_class = self._load(model_name)
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
-        messages = [
-            {"role": "user", "content": "What is 3*4?"},
-            {"role": "assistant", "content": "Let's call the tool.", "tool_calls": tool_calls},
-        ]
+        assistant = {"role": "assistant", "tool_calls": tool_calls}
+        if model_name == "trl-internal-testing/tiny-GptOssForCausalLM":
+            assistant["thinking"] = "Let's call the tool."
+            assistant["content"] = ""
+        else:
+            assistant["content"] = "Let's call the tool."
+        messages = [{"role": "user", "content": "What is 3*4?"}, assistant]
         expected = messages[-1]
         messages = prepare_multimodal_messages(messages) if self.is_vlm else messages
         prefix = processing_class.apply_chat_template(
@@ -1118,7 +1161,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_tool_call_without_arguments(self, model_name):
@@ -1149,7 +1192,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_multiple_tool_calls(self, model_name):
@@ -1185,7 +1228,7 @@ class TestParseResponse:
             text = text[0]
         response = text[len(prefix) :]
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
-        parsed = parse_response(tokenizer, response)
+        parsed = parse_response(tokenizer, response, prefix=prefix)
         assert parsed == expected
 
     def test_parse_response_malformed_tool_call(self, model_name):

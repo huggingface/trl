@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
+
 import pytest
 import torch
 from datasets import Dataset
@@ -61,6 +63,10 @@ class RecordingTeacherClient:
 
 
 class TestSDFTTrainer(TrlTestCase):
+    def teardown_method(self):
+        if hasattr(self, "_liger_module"):
+            importlib.reload(importlib.import_module(self._liger_module))
+
     @staticmethod
     def _trainable_param_snapshot(model):
         return {name: param.detach().clone() for name, param in model.named_parameters() if param.requires_grad}
@@ -71,6 +77,29 @@ class TestSDFTTrainer(TrlTestCase):
             not torch.allclose(previous_param, model.get_parameter(name), rtol=1e-12, atol=1e-12)
             for name, previous_param in previous_trainable_params.items()
         )
+
+    def test_trust_remote_code(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            SDFTTrainer(
+                model=model_id,
+                args=SDFTConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = SDFTTrainer(
+            model=model_id,
+            args=SDFTConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
 
     def test_train(self):
         dataset = Dataset.from_dict(
@@ -130,6 +159,7 @@ class TestSDFTTrainer(TrlTestCase):
             args=SDFTConfig(use_liger_kernel=True, **common),
             train_dataset=dataset,
         )
+        self._liger_module = liger_trainer.model.__module__
 
         liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
         torch.manual_seed(0)

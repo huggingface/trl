@@ -48,38 +48,28 @@ from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
-from ...trainer.utils import (
-    RepeatSampler,
-    create_model_from_path,
-    disable_dropout_in_model,
-    pad,
-    split_tensor_dict,
-)
-from ..utils import (
-    DataCollatorForChatML,
-    empty_cache,
-    encode_with_byte_offsets,
-    pad_byte_offsets,
-    piece_byte_len,
-)
+from ...trainer.utils import RepeatSampler, create_model_from_path, disable_dropout_in_model, pad, split_tensor_dict
+from ..utils import DataCollatorForChatML, empty_cache, encode_with_byte_offsets, pad_byte_offsets, piece_byte_len
 from .gold_config import GOLDConfig
+
+
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
     from peft import PeftConfig
 
-if is_wandb_available():
-    import wandb
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 if is_rich_available():
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
+
+
+if is_wandb_available():
+    import wandb
 
 
 def print_prompt_completions_sample_uld(
@@ -251,6 +241,7 @@ class ULDLoss(nn.Module):
         self.skip_student_eos = config.uld_skip_student_eos
         self.skip_teacher_eos = config.uld_skip_teacher_eos
         self.use_extended_uld = config.use_extended_uld
+        self.token_merge_strategy = config.uld_token_merge_strategy
         self.ignore_index = -100
 
         # Add tokenizers for enhanced alignment
@@ -404,9 +395,37 @@ class ULDLoss(nn.Module):
                 distillation_losses.append(loss_i)
                 continue
 
-            # Extract answer logits
-            student_answer_logits = student_logits[i, student_start : student_start + student_size]
-            teacher_answer_logits = teacher_logits[i, teacher_start : teacher_start + teacher_size]
+            # The "bayesian" shift has no predictor logit for an answer span starting at index 0 (front-truncation can
+            # drop the whole prompt). Skip that unscorable leading span on both sides to keep them on a shared span.
+            if self.token_merge_strategy == "bayesian" and (student_start == 0 or teacher_start == 0):
+                if self.use_extended_uld:
+                    if student_byte_offsets is None or teacher_byte_offsets is None:
+                        raise ValueError("Byte offsets are required when `use_extended_uld=True`.")
+                    s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
+                    t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
+                    student_groups, teacher_groups = self._align_by_byte_offsets(s_answer, t_answer)
+                    if not student_groups or not teacher_groups:
+                        distillation_losses.append(student_logits[i].sum() * 0.0)
+                        continue
+                    # Drop the first aligned group pair (advance by the tokens it covered).
+                    student_drop, teacher_drop = len(student_groups[0]), len(teacher_groups[0])
+                else:
+                    # Drop the first positional target from both sides.
+                    student_drop = teacher_drop = 1
+
+                student_start, student_size = student_start + student_drop, student_size - student_drop
+                teacher_start, teacher_size = teacher_start + teacher_drop, teacher_size - teacher_drop
+                if student_size <= 0 or teacher_size <= 0:
+                    distillation_losses.append(student_logits[i].sum() * 0.0)
+                    continue
+
+            # Extract answer logits. "bayesian" starts one position earlier so probs[k] predicts token_ids[k].
+            if self.token_merge_strategy == "bayesian":
+                student_answer_logits = student_logits[i, student_start - 1 : student_start + student_size - 1]
+                teacher_answer_logits = teacher_logits[i, teacher_start - 1 : teacher_start + teacher_size - 1]
+            else:
+                student_answer_logits = student_logits[i, student_start : student_start + student_size]
+                teacher_answer_logits = teacher_logits[i, teacher_start : teacher_start + teacher_size]
 
             # Convert to probabilities
             student_probs = F.softmax(student_answer_logits / self.student_temperature, dim=-1)
@@ -496,20 +515,16 @@ class ULDLoss(nn.Module):
 
     def _merge_probabilities_with_alignment_groups(self, probs, alignment_groups, token_ids=None):
         """
-        Merge probabilities based on alignment groups with corrected conditional probability handling.
+        Merge probabilities based on alignment groups, using either the "observed" or "bayesian" strategy
+        (`self.token_merge_strategy`).
 
-        For a group merging tokens at positions [i, i+1, ..., i+k], we compute:
-            P_merged(y | x) = P(y | x) × P(token_{i+1} | token_i, x) × ... × P(token_{i+k} | ..., x)
+        For a group merging tokens at positions [i, ..., i+k]:
+        - "observed": multiply the marginal distribution at the FIRST position by the scalar conditional probabilities
+          of the actual later tokens.
+        - "bayesian": multiply the full distribution at the LAST position (conditioned on the actual prefix tokens) by
+          the scalar probabilities of the actual earlier tokens, following the chain rule.
 
-        Where:
-        - P(y | x) is the marginal probability distribution over all vocabulary tokens at position i
-        - token_{i+1}, ..., token_{i+k} are the ACTUAL tokens that were generated
-        - The conditional probabilities P(token_j | ..., x) are extracted as SCALARS
-        - y ranges over all vocabulary tokens at position i
-
-        This ensures the probability of the actual generated sequence is correct (by the chain rule), while introducing
-        a known bias for counterfactual tokens (since we don't have P(token_{i+k} | y, x) for y != token_i). The merged
-        distribution is unnormalized but preserves correct relative probabilities.
+        Both produce an unnormalized distribution that preserves correct relative probabilities.
 
         Args:
             probs: Probability tensor [seq_len, vocab_size]
@@ -536,31 +551,28 @@ class ULDLoss(nn.Module):
         for group_idx, group in enumerate(alignment_groups):
             # Handle probability merging
             if len(group) > 1:
-                # Multiple tokens map to this group - merge using corrected conditional probability approach
+                # Multiple tokens map to this group - merge by multiplying in the scalar probabilities of the tokens
                 if token_ids is None:
                     raise ValueError(
                         "token_ids must be provided when merging multi-token groups. "
-                        "This is required for mathematically correct probability merging."
+                        "They are needed to extract the scalar probabilities of the actually generated tokens."
                     )
 
-                # Start with the marginal distribution at the first position
-                first_pos = group[0]
-                marginal_probs = probs[first_pos]  # P(y | x₀) for all y
+                if self.token_merge_strategy == "bayesian":
+                    base_probs = probs[group[-1]]  # last position's full distribution
+                    scalar_positions = group[:-1]
+                else:
+                    base_probs = probs[group[0]]  # first position's marginal distribution
+                    scalar_positions = group[1:]
 
-                # For each subsequent token in the group, extract the SCALAR conditional probability
-                # of the actual token that was generated, and multiply
+                # Multiply base_probs by the scalar probabilities of the actual tokens at scalar_positions
                 conditional_prob_product = 1.0
-                for idx in group[1:]:
-                    # Get the actual token ID that was generated at this position
+                for idx in scalar_positions:
                     actual_token_id = token_ids[idx]
-                    # Extract its probability (scalar)
                     token_prob = probs[idx, actual_token_id].clamp_min(eps)
                     conditional_prob_product *= token_prob
 
-                # Merge: multiply the scalar conditional prob product with the entire marginal distribution
-                # This gives: P(y | x_0) × P(token_1 | token_0, x) × ... × P(token_k | ..., x)
-                # Note: This is unnormalized, but preserves the correct joint probability for the actual sequence
-                merged_probs = marginal_probs * conditional_prob_product
+                merged_probs = base_probs * conditional_prob_product
                 aligned_probs[group_idx] = merged_probs
 
             elif len(group) == 1:
@@ -795,11 +807,14 @@ class GOLDTrainer(SFTTrainer):
             init_kwargs = dict(teacher_model_init_kwargs)
             if args.teacher_model_revision is not None:
                 init_kwargs.setdefault("revision", args.teacher_model_revision)
+            init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             teacher_model = create_model_from_path(teacher_model, **init_kwargs)
         self.use_uld_loss = args.use_uld_loss
         self.teacher_tokenizer = None
         if args.use_uld_loss and args.teacher_tokenizer_name_or_path is not None:
-            self.teacher_tokenizer = AutoTokenizer.from_pretrained(args.teacher_tokenizer_name_or_path)
+            self.teacher_tokenizer = AutoTokenizer.from_pretrained(
+                args.teacher_tokenizer_name_or_path, trust_remote_code=args.trust_remote_code
+            )
             if not hasattr(self.teacher_tokenizer, "pad_token") or self.teacher_tokenizer.pad_token is None:
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
 
@@ -1139,7 +1154,7 @@ class GOLDTrainer(SFTTrainer):
 
         prompts_text = self.processing_class.batch_decode(
             prompt_ids_list,
-            skip_special_tokens=True,
+            skip_special_tokens=False,
         )
 
         if not self.use_vllm:
@@ -1576,6 +1591,7 @@ class GOLDTrainer(SFTTrainer):
         temperature=1.0,
         reduction="batchmean",
         logits_are_probs=False,
+        num_items_in_batch=None,
     ):
         """
         Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div. See Eq. (1)
@@ -1638,6 +1654,12 @@ class GOLDTrainer(SFTTrainer):
             jsd = jsd[mask]
 
         # Apply reduction
+        if num_items_in_batch is not None:
+            # Normalize by the global number of valid tokens for gradient-accumulation-correct loss (see issue #4719).
+            jsd_sum = jsd.sum()
+            if isinstance(num_items_in_batch, torch.Tensor):
+                num_items_in_batch = num_items_in_batch.to(jsd_sum.device)
+            return jsd_sum / num_items_in_batch
         if reduction == "batchmean":
             # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
             # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
@@ -1718,7 +1740,7 @@ class GOLDTrainer(SFTTrainer):
                 masked_input_ids = torch.where(
                     labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100)
                 )
-                true_labels = masked_input_ids[:, 1:].contiguous().reshape(-1)
+                true_labels = masked_input_ids[:, 1:].reshape(-1)
 
                 student_head = unwrapped_student.get_output_embeddings()
                 teacher_head = unwrapped_teacher.get_output_embeddings()
@@ -1732,6 +1754,14 @@ class GOLDTrainer(SFTTrainer):
                     student_bias=getattr(student_head, "bias", None),
                     teacher_bias=getattr(teacher_head, "bias", None),
                 )
+
+                # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we
+                # want the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
+                if num_items_in_batch is not None:
+                    num_valid_local = (true_labels != -100).sum().clamp_min(1)
+                    if isinstance(num_items_in_batch, torch.Tensor):
+                        num_items_in_batch = num_items_in_batch.to(loss.device)
+                    loss = loss * num_valid_local / num_items_in_batch
 
                 del student_hidden, teacher_hidden, true_labels
             else:
@@ -1747,16 +1777,21 @@ class GOLDTrainer(SFTTrainer):
                         attention_mask=inputs["attention_mask"],
                     )
 
-                prompt_lengths = inputs["prompts"].shape[1]
-                shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
-                shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1 : -1, :]
-                shifted_labels = inputs["labels"][:, prompt_lengths:]
+                # Standard causal shift: logits at position i predict the token at i + 1. The `labels != -100` mask
+                # inside `generalized_jsd_loss` already excludes prompt (and padding) positions, so we do not slice by
+                # prompt length. Slicing by `inputs["prompts"].shape[1]` (the batch-max prompt width) would drop real
+                # completion tokens for samples whose prompt is shorter than the batch maximum, since `labels` is
+                # padded to the full-sequence width independently of `prompts`.
+                shifted_student_logits = outputs_student.logits[:, :-1, :]
+                shifted_teacher_logits = outputs_teacher.logits[:, :-1, :]
+                shifted_labels = inputs["labels"][:, 1:]
                 loss = self.generalized_jsd_loss(
                     student_logits=shifted_student_logits,
                     teacher_logits=shifted_teacher_logits,
                     labels=shifted_labels,
                     beta=self.beta,
                     temperature=self.temperature,
+                    num_items_in_batch=num_items_in_batch,
                 )
 
         if self.use_uld_loss and self.teacher_tokenizer is not None:

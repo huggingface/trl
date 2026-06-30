@@ -25,7 +25,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
 import transformers
-from accelerate import logging
+from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset
 from packaging.version import Version
@@ -59,6 +59,14 @@ from ..utils import DPODataCollatorWithPadding, create_reference_model, empty_ca
 from .online_dpo_config import OnlineDPOConfig
 
 
+if Version(transformers.__version__) >= Version("5.2.0"):
+    from transformers.trainer_pt_utils import nested_gather
+
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
+
+
 if is_peft_available():
     from peft import PeftConfig
 
@@ -72,18 +80,13 @@ else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
 
-if Version(transformers.__version__) >= Version("5.2.0"):
-    from transformers.trainer_pt_utils import nested_gather
-
-
 if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
 
-if is_bitsandbytes_available():
-    import bitsandbytes as bnb
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
+
 
 # A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
 # a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
@@ -204,6 +207,7 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         # Process reward functions (convert strings to models, collect names)
         model_init_kwargs = args.model_init_kwargs or {}
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 # Load model from string path
@@ -229,7 +233,9 @@ class OnlineDPOTrainer(_BaseTrainer):
         for reward_processing_class_i, reward_func in zip(reward_processing_classes, reward_funcs, strict=True):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class_i is None:
-                    reward_processing_class_i = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
+                    reward_processing_class_i = AutoTokenizer.from_pretrained(
+                        reward_func.config._name_or_path, trust_remote_code=args.trust_remote_code
+                    )
                 if reward_processing_class_i.pad_token_id is None:
                     reward_processing_class_i.pad_token = reward_processing_class_i.eos_token
                 # Set pad token ID on reward model config
@@ -271,6 +277,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                     f"representing a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
 
             model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         else:

@@ -38,27 +38,18 @@ from transformers import (
 from transformers.utils import is_peft_available
 
 from ...chat_template_utils import parse_response
-from ...data_utils import (
-    apply_chat_template,
-    is_conversational,
-    prepare_multimodal_messages,
-)
+from ...data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ...extras.profiling import profiling_context, profiling_decorator
 from ...models import unwrap_model_for_generation
 from ...models.utils import disable_gradient_checkpointing
 from ...trainer.grpo_trainer import EnvironmentFactory, GRPOTrainer, RewardFunc, RolloutFunc
-from ...trainer.utils import (
-    entropy_from_logits,
-    nanstd,
-    pad,
-    selective_log_softmax,
-    use_adapter,
-)
+from ...trainer.utils import entropy_from_logits, nanstd, pad, selective_log_softmax, use_adapter
 from .dppo_config import DPPOConfig
 
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel
+
 
 SAFETY_CLAMP_MAX = 20
 
@@ -601,7 +592,10 @@ class DPPOTrainer(GRPOTrainer):
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
             # Decode post-tool completions
-            post_tool_completions = [parse_response(self._tokenizer, ids) if ids else {} for ids in post_tool_ids]
+            post_tool_completions = [
+                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx]) if ids else {}
+                for idx, ids in enumerate(post_tool_ids)
+            ]
 
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
@@ -675,12 +669,14 @@ class DPPOTrainer(GRPOTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
-            if (
-                Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
-                and hasattr(self._tokenizer, "response_schema")  # attribute not set by default for now
-                and self._tokenizer.response_schema is not None  # only works if the tokenizer has a schema
+            if Version(transformers.__version__) >= Version("5.0.0") and (  # parse_response added in v5
+                getattr(self._tokenizer, "response_template", None) is not None  # new-style
+                or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
             ):
-                completions = [[parse_response(self._tokenizer, ids)] for ids in completion_ids]
+                completions = [
+                    [parse_response(self._tokenizer, ids, prefix=prompt_ids[i])]
+                    for i, ids in enumerate(completion_ids)
+                ]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
@@ -1021,7 +1017,7 @@ class DPPOTrainer(GRPOTrainer):
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:
-                    ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                         self.ref_model,
                         prompt_completion_ids,
                         attention_mask,
@@ -1036,7 +1032,7 @@ class DPPOTrainer(GRPOTrainer):
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
                     model = self.accelerator.unwrap_model(self.model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                        ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                             self.model,
                             prompt_completion_ids,
                             attention_mask,
@@ -1306,7 +1302,7 @@ class DPPOTrainer(GRPOTrainer):
                 **forward_kwargs,
             )
         else:
-            per_token_logps, entropies = self._get_per_token_logps_and_entropies(
+            per_token_logps, entropies, _ = self._get_per_token_logps_and_entropies(
                 model,
                 input_ids,
                 attention_mask,
