@@ -34,9 +34,10 @@ jobs:
         id: app_token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.APP_ID_HUB_SKILLS_REPO }}
+          client-id: ${{ secrets.APP_ID_HUB_SKILLS_REPO }}
           private-key: ${{ secrets.APP_SECRET_PREM_HUB_SKILLS_REPO }}
-          repositories: skills
+          owner: huggingface
+          repositories: huggingface/skills
 
       - name: Checkout huggingface/skills repo
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
