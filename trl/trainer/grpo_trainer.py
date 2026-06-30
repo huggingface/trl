@@ -96,20 +96,22 @@ from .utils import (
 )
 
 
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
+
+
 if is_peft_available():
     import peft
     from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
+
+if is_trackio_available():
+    import trackio
 
 
 if is_wandb_available():
     import wandb
-
-if is_trackio_available():
-    import trackio
 
 
 logger = get_logger(__name__)

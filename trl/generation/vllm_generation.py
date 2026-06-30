@@ -665,10 +665,11 @@ class VLLMGeneration:
             # NCCL operations complete very quickly. On non-NVLink hardware (e.g. A40/A100), vLLM's
             # TP NCCL collective can race with NCCL's internal P2P/SHM channel cleanup from that
             # all-reduce, causing llm.generate() to hang. A barrier on the default process group
-            # forces NCCL to fully drain before vLLM's TP communication starts.
+            # forces NCCL to fully drain before vLLM's TP communication starts. We pass device_ids
+            # so NCCL uses this rank's device rather than guessing, which itself risks a hang.
             # See https://github.com/huggingface/trl/issues/3671
             if is_peft_model(self.model) and self.tensor_parallel_size > 1:
-                torch.distributed.barrier()
+                torch.distributed.barrier(device_ids=[accelerator.local_process_index])
 
             with profiler:
                 all_outputs = self.llm.generate(vllm_prompts, sampling_params=sampling_params, use_tqdm=False)
