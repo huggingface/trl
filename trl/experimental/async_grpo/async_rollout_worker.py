@@ -313,8 +313,34 @@ class _AsyncRolloutLoop:
                 self._heartbeat_value.value = time.time()
                 while free_slots and not stop_event.is_set():
                     group_id, row = next(work_iter)
+                    slot = free_slots.pop()
+                    # Reset the env BEFORE building the prompt and capture its initial observation (e.g. a
+                    # task instruction). The reset() return was previously discarded, so an
+                    # environment_factory whose task lives in the observation (not the dataset prompt) was
+                    # generated against the bare prompt. Mirror GRPOTrainer: fold the observation into the
+                    # last prompt message. It is task-level (identical across the group's generations), so
+                    # inject it once, when the group is first created.
+                    observation = self.environments[slot].reset(**row) if self.environments is not None else None
+
                     if group_id not in pending_groups:
                         prompt = row["prompt"]
+                        if observation is not None:
+                            last = prompt[-1]
+                            if isinstance(last["content"], str) and isinstance(observation, str):
+                                content = last["content"] + observation
+                            else:
+                                obs = (
+                                    observation
+                                    if isinstance(observation, list)
+                                    else [{"type": "text", "text": observation}]
+                                )
+                                base = (
+                                    last["content"]
+                                    if isinstance(last["content"], list)
+                                    else [{"type": "text", "text": last["content"]}]
+                                )
+                                content = base + obs
+                            prompt = prompt[:-1] + [{**last, "content": content}]
                         prompt_ids = self.tokenizer.apply_chat_template(
                             prompt,
                             return_dict=False,
@@ -341,10 +367,6 @@ class _AsyncRolloutLoop:
                             model_version=self.model_version,
                         )
                         pending_completed[group_id] = 0
-
-                    slot = free_slots.pop()
-                    if self.environments is not None:
-                        self.environments[slot].reset(**row)
 
                     task = asyncio.create_task(
                         self._generate_one(pending_groups[group_id].prompt, tool_dict=self._sync_tool_dicts[slot])
