@@ -39,6 +39,7 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.import_utils import is_liger_kernel_available
+from trl.trainer.grpo_trainer import _prepare_sampling_per_token_logps
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
@@ -275,6 +276,20 @@ class TestTransformersContinuousBatchingContract:
 
 
 class TestGRPOTrainer(TrlTestCase):
+    def test_prepare_sampling_per_token_logps_accepts_none_values(self):
+        sampling_per_token_logps, sampling_per_token_logps_mask = _prepare_sampling_per_token_logps(
+            [[-0.1, None, -0.3], [None]], pad_to_multiple_of=4
+        )
+
+        torch.testing.assert_close(
+            sampling_per_token_logps,
+            torch.tensor([[-0.1, 0.0, -0.3, 0.0], [0.0, 0.0, 0.0, 0.0]]),
+        )
+        torch.testing.assert_close(
+            sampling_per_token_logps_mask,
+            torch.tensor([[True, False, True, False], [False, False, False, False]]),
+        )
+
     def test_init_minimal(self):
         # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

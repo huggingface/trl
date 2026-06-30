@@ -127,6 +127,31 @@ RewardFunc = str | PreTrainedModel | Callable[..., list[float | None]]
 RolloutFunc = Callable[[list[str], "GRPOTrainer"], dict[str, Any]]
 
 
+def _prepare_sampling_per_token_logps(
+    sampling_per_token_logps_list: list[list[float | None]], pad_to_multiple_of: int | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    sampling_per_token_logps = [
+        torch.tensor([0.0 if logp is None else logp for logp in logps]) for logps in sampling_per_token_logps_list
+    ]
+    sampling_per_token_logps_mask = [
+        torch.tensor([logp is not None for logp in logps], dtype=torch.bool) for logps in sampling_per_token_logps_list
+    ]
+    return (
+        pad(
+            sampling_per_token_logps,
+            padding_value=0.0,
+            padding_side="right",
+            pad_to_multiple_of=pad_to_multiple_of,
+        ),
+        pad(
+            sampling_per_token_logps_mask,
+            padding_value=0,
+            padding_side="right",
+            pad_to_multiple_of=pad_to_multiple_of,
+        ),
+    )
+
+
 class _SupportsReset(Protocol):
     def reset(self, **kwargs) -> str | None: ...
 
@@ -2030,15 +2055,14 @@ class GRPOTrainer(_BaseTrainer):
             completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
         if sampling_per_token_logps_list is not None:
-            sampling_per_token_logps = [torch.tensor(logps) for logps in sampling_per_token_logps_list]
-            sampling_per_token_logps = pad(
-                sampling_per_token_logps,
-                padding_value=0.0,
-                padding_side="right",
-                pad_to_multiple_of=self.pad_to_multiple_of,
-            ).to(device=device)
+            sampling_per_token_logps, sampling_per_token_logps_mask = _prepare_sampling_per_token_logps(
+                sampling_per_token_logps_list, pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            sampling_per_token_logps = sampling_per_token_logps.to(device=device)
+            sampling_per_token_logps_mask = sampling_per_token_logps_mask.to(device=device)
         else:
             sampling_per_token_logps = None
+            sampling_per_token_logps_mask = None
         if tool_mask_list is not None:
             tool_mask = [torch.tensor(mask) for mask in tool_mask_list]
             tool_mask = pad(
@@ -2205,6 +2229,9 @@ class GRPOTrainer(_BaseTrainer):
             # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 mask = completion_mask if tool_mask is None else completion_mask * tool_mask
+                sampling_per_token_logps = torch.where(
+                    sampling_per_token_logps_mask, sampling_per_token_logps, old_per_token_logps.detach()
+                )
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
 
                 sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
@@ -2406,6 +2433,7 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
             mask = completion_mask.bool() if tool_mask is None else (completion_mask * tool_mask).bool()
+            mask = mask & sampling_per_token_logps_mask
             delta = delta[mask]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
