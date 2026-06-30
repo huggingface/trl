@@ -13,14 +13,17 @@
 # limitations under the License.
 
 import itertools
+import json
+import multiprocessing as mp
 import os
 import queue
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 import torch
 from accelerate import PartialState
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
 
@@ -30,8 +33,9 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     FixedCountBatcher,
     TokenBudgetBatcher,
     _balance_by_squared_length,
+    _SaveRolloutStateCallback,
 )
-from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
+from trl.experimental.async_grpo.async_rollout_worker import AsyncRolloutWorker, RolloutSample, _AsyncRolloutLoop
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer
 
@@ -195,6 +199,116 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         assert trainer2.args.ignore_data_skip is True
         trainer2.train(resume_from_checkpoint=checkpoint_dir)
+
+
+class TestRolloutStateCheckpoint(TrlTestCase):
+    """Prompt-index checkpoint/resume logic — no GPU or vLLM required."""
+
+    def _make_rollout_loop(self, dataset, dataset_start_index=0, num_generations=2, prompt_index_value=None):
+        ctx = mp.get_context("spawn")
+        kwargs = dict(
+            model_name="test",
+            dataset=dataset,
+            reward_funcs=[],
+            processing_class=MagicMock(),
+            rollout_buffer=ctx.Queue(),
+            model_version_value=ctx.Value("i", 0),
+            heartbeat_value=ctx.Value("d", 0.0),
+            failed_event=ctx.Event(),
+            exception_info_queue=ctx.Queue(),
+            num_generations=num_generations,
+            dataset_start_index=dataset_start_index,
+            prompt_index_value=prompt_index_value,
+        )
+        with patch("trl.experimental.async_grpo.async_rollout_worker.add_response_schema", side_effect=lambda x: x):
+            return _AsyncRolloutLoop(**kwargs)
+
+    def test_save_rollout_state_callback_writes_json(self):
+        class _MockWorker(AsyncRolloutWorker):
+            # isinstance check requires AsyncRolloutWorker. skip __init__ (needs vLLM)
+            def __init__(self, index):
+                self._index = index
+
+            @property
+            def prompt_index(self):
+                return self._index
+
+        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-5")
+        os.makedirs(checkpoint_dir)
+
+        trainer = MagicMock()
+        trainer.accelerator.is_main_process = True
+        trainer.rollout_worker = _MockWorker(42)
+
+        args = MagicMock()
+        args.output_dir = self.tmp_dir
+        state = MagicMock()
+        state.global_step = 5
+
+        _SaveRolloutStateCallback(trainer).on_save(args, state, None)
+
+        with open(os.path.join(checkpoint_dir, "rollout_state.json")) as f:
+            data = json.load(f)
+        assert data["prompt_index"] == 42
+
+    def test_rollout_loop_skips_to_start_index(self):
+        dataset = Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]})
+        ctx = mp.get_context("spawn")
+        prompt_index_value = ctx.Value("i", 0)
+
+        loop = self._make_rollout_loop(dataset, dataset_start_index=3, prompt_index_value=prompt_index_value)
+
+        assert prompt_index_value.value == 3
+
+        it = loop._repeat_iterator()
+        _group_id, row = next(it)
+        assert row["prompt"] == "row_3"
+
+    def test_rollout_loop_tracks_prompt_index_value(self):
+        dataset = Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]})
+        ctx = mp.get_context("spawn")
+        prompt_index_value = ctx.Value("i", 0)
+
+        loop = self._make_rollout_loop(
+            dataset, dataset_start_index=0, num_generations=2, prompt_index_value=prompt_index_value
+        )
+
+        it = loop._repeat_iterator()
+
+        # row_0 is yielded twice (num_generations=2) but the counter only ticks once per row
+        next(it)
+        assert prompt_index_value.value == 1
+        next(it)
+        assert prompt_index_value.value == 1
+
+        # row_1 is now pulled
+        next(it)
+        assert prompt_index_value.value == 2
+
+    def test_inner_training_loop_sets_dataset_start_index_from_file(self):
+        class _MockWorker(AsyncRolloutWorker):
+            # isinstance check requires AsyncRolloutWorker. skip __init__ (needs vLLM)
+            def __init__(self):
+                self._loop_kwargs = {}
+
+        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
+        os.makedirs(checkpoint_dir)
+        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+            json.dump({"prompt_index": 77}, f)
+
+        # __new__ skips __init__ (requires GPU + model)
+        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
+        trainer.rollout_worker = _MockWorker()
+        trainer.train_dataset = Dataset.from_dict({"prompt": list(range(100))})
+        trainer.accelerator = MagicMock()
+        trainer.accelerator.is_main_process = False  # skip finally-block teardown
+
+        from trl.trainer.base_trainer import _BaseTrainer
+
+        with patch.object(_BaseTrainer, "_inner_training_loop", return_value=None):
+            trainer._inner_training_loop(resume_from_checkpoint=checkpoint_dir)
+
+        assert trainer.rollout_worker._loop_kwargs["dataset_start_index"] == 77
 
 
 def _rollout_sample(length: int, advantage: float = 0.0, reward: float = 0.0) -> dict:

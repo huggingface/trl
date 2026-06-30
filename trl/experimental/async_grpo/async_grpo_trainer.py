@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import json
 import math
 import os
 import queue
@@ -28,7 +29,7 @@ from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback, TrainerState
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
 
 from ...trainer.base_trainer import _BaseTrainer
@@ -127,6 +128,19 @@ class _StartRolloutWorkerCallback(TrainerCallback):
         self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker is not None:
             self._trainer.rollout_worker.start()
+
+
+class _SaveRolloutStateCallback(TrainerCallback):
+    """Saves the current prompt index to rollout_state.json on each checkpoint."""
+
+    def __init__(self, trainer: "AsyncGRPOTrainer"):
+        self._trainer = trainer
+
+    def on_save(self, args, state, _control, **_kwargs):
+        if self._trainer.accelerator.is_main_process and isinstance(self._trainer.rollout_worker, AsyncRolloutWorker):
+            checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+                json.dump({"prompt_index": self._trainer.rollout_worker.prompt_index}, f)
 
 
 class RolloutQueueDataset(torch.utils.data.IterableDataset):
@@ -659,6 +673,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.add_callback(_InitialWeightSyncCallback(self))
         self.add_callback(_StartRolloutWorkerCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
+        self.add_callback(_SaveRolloutStateCallback(self))
 
     def get_train_dataloader(self) -> DataLoader:
         num_processes = self.accelerator.num_processes
@@ -951,23 +966,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
         logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
 
     def _inner_training_loop(self, *args, **kwargs):
-        # When resuming, advance the worker's dataset iterator to the correct prompt position so
-        # rollouts after resume start from where they left off rather than from prompt 0.
-        # We set dataset_start_index on _loop_kwargs before start() is called by the callback.
+        # When resuming, pass the saved prompt position to the worker before _StartRolloutWorkerCallback fires.
+        # Skipped for IterableDataset since len() isn't available on streaming datasets.
         resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
         if resume_from_checkpoint is not None and isinstance(self.rollout_worker, AsyncRolloutWorker):
-            state_file = os.path.join(resume_from_checkpoint, "trainer_state.json")
-            if os.path.isfile(state_file):
-                global_step = TrainerState.load_from_json(state_file).global_step
-                if global_step > 0:
-                    batch_size = self.args.per_device_train_batch_size * self.accelerator.num_processes
-                    samples_seen = global_step * self.args.gradient_accumulation_steps * batch_size
-                    prompts_sent = samples_seen // self.args.num_generations
-                    if isinstance(self.train_dataset, Dataset):
-                        # IterableDataset has no len(), so prompt-position tracking is skipped for streaming data.
-                        self.rollout_worker._loop_kwargs["dataset_start_index"] = prompts_sent % len(
-                            self.train_dataset
-                        )
+            rollout_state_file = os.path.join(resume_from_checkpoint, "rollout_state.json")
+            if os.path.isfile(rollout_state_file) and isinstance(self.train_dataset, Dataset):
+                with open(rollout_state_file) as f:
+                    prompt_index = json.load(f)["prompt_index"]
+                self.rollout_worker._loop_kwargs["dataset_start_index"] = prompt_index
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
