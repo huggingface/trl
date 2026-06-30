@@ -117,7 +117,7 @@ class DistillationConfig(_BaseConfig):
             Mode for student vLLM integration. Either `"server"` or `"colocate"`.
         vllm_server_base_url (`str` or `None`, *optional*):
             Base URL for the student vLLM server. If provided, `vllm_server_host` and `vllm_server_port` are ignored.
-        vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+        vllm_server_host (`str`, *optional*, defaults to `"127.0.0.1"`):
             Host of the student vLLM server.
         vllm_server_port (`int`, *optional*, defaults to `8001`):
             Port of the student vLLM server.
@@ -312,7 +312,7 @@ class DistillationConfig(_BaseConfig):
         metadata={"help": "Base URL for the student vLLM server."},
     )
     vllm_server_host: str = field(
-        default="0.0.0.0",
+        default="127.0.0.1",
         metadata={"help": "Host of the student vLLM server."},
     )
     vllm_server_port: int = field(

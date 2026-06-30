@@ -211,7 +211,7 @@ $ trl vllm-serve --help
 usage: trl vllm-serve [-h] --model MODEL [--revision REVISION] [--tensor_parallel_size TENSOR_PARALLEL_SIZE] [--data_parallel_size DATA_PARALLEL_SIZE] [--host HOST]
                       [--port PORT] [--gpu_memory_utilization GPU_MEMORY_UTILIZATION] [--dtype DTYPE] [--max_model_len MAX_MODEL_LEN]
                       [--enable_prefix_caching ENABLE_PREFIX_CACHING] [--enforce_eager [ENFORCE_EAGER]] [--kv_cache_dtype KV_CACHE_DTYPE]
-                      [--trust_remote_code [TRUST_REMOTE_CODE]] [--log_level LOG_LEVEL] [--vllm_model_impl VLLM_MODEL_IMPL]
+                      [--trust_remote_code [TRUST_REMOTE_CODE]] [--log_level LOG_LEVEL] [--api_key API_KEY] [--vllm_model_impl VLLM_MODEL_IMPL]
 
 options:
   -h, --help            show this help message and exit
@@ -223,7 +223,7 @@ options:
                         Number of data parallel workers to use. For dense models, keep this at 1. Starting from vLLM `0.14.0`, setting
                         this above `1` for dense models is no longer supported/useful and will error out (see vLLM PR #30739).
                         (default: 1)
-  --host HOST           Host address to run the server on. (default: 0.0.0.0)
+  --host HOST           Host address to run the server on. (default: 127.0.0.1)
   --port PORT           Port to run the server on. (default: 8000)
   --gpu_memory_utilization GPU_MEMORY_UTILIZATION, --gpu-memory-utilization GPU_MEMORY_UTILIZATION
                         Ratio (between 0 and 1) of GPU memory to reserve for the model weights, activations, and KV cache on the device dedicated to generation
@@ -231,6 +231,9 @@ options:
                         it may cause out-of-memory (OOM) errors during initialization. (default: 0.9)
   --dtype DTYPE         Data type to use for vLLM generation. If set to 'auto', the data type will be automatically determined based on the model configuration.
                         Find the supported values in the vLLM documentation. (default: auto)
+  --api_key API_KEY, --api-key API_KEY
+                        API key required for HTTP requests to the vLLM server. Can also be set with TRL_VLLM_SERVER_API_KEY.
+                        Required when binding to a non-loopback host. (default: None)
   --max_model_len MAX_MODEL_LEN, --max-model-len MAX_MODEL_LEN
                         If set, the `max_model_len` to use for vLLM. This can be useful when running with reduced `vllm_gpu_memory_utilization`, leading to a
                         reduced KV cache size. If not set, vLLM will use the model context size, which might be much larger than the KV cache, leading to

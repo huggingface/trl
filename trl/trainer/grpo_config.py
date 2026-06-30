@@ -138,7 +138,7 @@ class GRPOConfig(_BaseConfig):
         vllm_server_base_url (`str`, *optional*):
             Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `vllm_server_host` and
             `vllm_server_port` are ignored.
-        vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+        vllm_server_host (`str`, *optional*, defaults to `"127.0.0.1"`):
             Host of the vLLM server to connect to. Ignored if `vllm_server_base_url` is provided.
         vllm_server_port (`int`, *optional*, defaults to `8000`):
             Port of the vLLM server to connect to. Ignored if `vllm_server_base_url` is provided.
@@ -589,7 +589,7 @@ class GRPOConfig(_BaseConfig):
         },
     )
     vllm_server_host: str = field(
-        default="0.0.0.0",
+        default="127.0.0.1",
         metadata={"help": "Host of the vLLM server to connect to. Ignored if vllm_server_base_url is provided."},
     )
     vllm_server_port: int = field(

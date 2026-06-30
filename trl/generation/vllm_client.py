@@ -16,6 +16,7 @@ import atexit
 import base64
 import copy
 import logging
+import os
 import socket
 import time
 from io import BytesIO
@@ -66,10 +67,13 @@ class VLLMClient:
         base_url (`str`, *optional*):
             Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `host` and `server_port` are
             ignored.
-        host (`str`, *optional*, defaults to `"0.0.0.0"`):
+        host (`str`, *optional*, defaults to `"127.0.0.1"`):
             IP address of the vLLM server. Ignored if `base_url` is provided.
         server_port (`int`, *optional*, defaults to `8000`):
             Port number of the vLLM server. Ignored if `base_url` is provided.
+        api_key (`str`, *optional*):
+            API key used to authenticate with the vLLM server. If not provided, the client reads
+            `TRL_VLLM_SERVER_API_KEY` from the environment.
         group_port (`int`, *optional*, defaults to `51216`):
             Port number for the weight update group.
         connection_timeout (`float`, *optional*, defaults to `0.0`):
@@ -83,7 +87,7 @@ class VLLMClient:
         $ trl vllm-serve --model Qwen/Qwen2.5-7B
         ...
         INFO:     Application startup complete.
-        INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+        INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
         ```
 
         Use the client to generate completions and update model weights:
@@ -122,8 +126,9 @@ class VLLMClient:
     def __init__(
         self,
         base_url: str | None = None,
-        host: str = "0.0.0.0",
+        host: str = "127.0.0.1",
         server_port: int = 8000,
+        api_key: str | None = None,
         group_port: int = 51216,
         connection_timeout: float = 0.0,
     ):
@@ -133,6 +138,9 @@ class VLLMClient:
             raise ImportError("vLLM is not installed. Please install it with `pip install trl[vllm]`.")
 
         self.session = requests.Session()
+        self.api_key = api_key or os.environ.get("TRL_VLLM_SERVER_API_KEY")
+        if self.api_key is not None:
+            self.session.headers.update({"Authorization": f"Bearer {self.api_key}"})
 
         # Configure retries for HTTP requests made through this session.
         # This is not strictly required for correctness, but it helps make training more robust to rare, transient
@@ -181,7 +189,7 @@ class VLLMClient:
 
         while True:
             try:
-                response = requests.get(url)
+                response = self.session.get(url)
             except requests.exceptions.RequestException as exc:
                 # Check if the total timeout duration has passed
                 elapsed_time = time.time() - start_time
@@ -196,6 +204,18 @@ class VLLMClient:
                         self.host = response.headers["X-Forwarded-For"]
                     logger.info("Server is up!")
                     return None
+
+                elapsed_time = time.time() - start_time
+                if response.status_code == 401:
+                    raise ConnectionError(
+                        f"The vLLM server at {self.base_url} rejected the health check with HTTP 401. "
+                        "Set the correct TRL_VLLM_SERVER_API_KEY or pass api_key to VLLMClient."
+                    )
+                if elapsed_time >= total_timeout:
+                    raise ConnectionError(
+                        f"The vLLM server at {self.base_url} returned HTTP {response.status_code} after "
+                        f"{total_timeout} seconds."
+                    )
 
             # Retry logic: wait before trying again
             logger.info(f"Server is not up yet. Retrying in {retry_interval} seconds...")
@@ -424,7 +444,7 @@ class VLLMClient:
         """
         # Get the world size from the server
         url = f"{self.base_url}/get_world_size/"
-        response = requests.get(url)
+        response = self.session.get(url)
         if response.status_code == 200:
             vllm_world_size = response.json()["world_size"]
         else:

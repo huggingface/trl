@@ -140,7 +140,7 @@ class VLLMGeneration:
         server_base_url (`str`, *optional*):
             Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `server_host` and
             `server_port` are ignored.
-        server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+        server_host (`str`, *optional*, defaults to `"127.0.0.1"`):
             Host of the vLLM server to connect to. Ignored if `server_base_url` is provided.
         server_port (`int`, *optional*, defaults to `8000`):
             Port of the vLLM server to connect to. Ignored if `server_base_url` is provided.
@@ -229,7 +229,7 @@ class VLLMGeneration:
         structured_outputs_regex: str | None = None,
         # Server mode configuration
         server_base_url: str | None = None,
-        server_host: str = "0.0.0.0",
+        server_host: str = "127.0.0.1",
         server_port: int = 8000,
         server_timeout: float = 240.0,
         group_port: int = 51216,
