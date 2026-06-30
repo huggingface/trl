@@ -14,6 +14,7 @@
 
 
 import math
+import os
 import queue
 import textwrap
 import time
@@ -27,7 +28,7 @@ from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback, TrainerState
 from transformers.data.data_collator import DataCollatorMixin
 
 from ...trainer.base_trainer import _BaseTrainer
@@ -584,6 +585,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
             )
 
+        # The base Trainer's data-skip replay loop doesn't apply to AsyncGRPO's live rollout queue;
+        # force it off regardless of what the user passed.
+        if not self.args.ignore_data_skip:
+            logger.warning(
+                "`ignore_data_skip` is forced to `True` for AsyncGRPO because the base Trainer's skip-and-replay "
+                "loop does not apply to a live rollout queue."
+            )
+        self.args.ignore_data_skip = True
+
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._train_tokens_start_time = None
@@ -941,6 +951,23 @@ class AsyncGRPOTrainer(_BaseTrainer):
         logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
 
     def _inner_training_loop(self, *args, **kwargs):
+        # When resuming, advance the worker's dataset iterator to the correct prompt position so
+        # rollouts after resume start from where they left off rather than from prompt 0.
+        # We set dataset_start_index on _loop_kwargs before start() is called by the callback.
+        resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
+        if resume_from_checkpoint is not None and isinstance(self.rollout_worker, AsyncRolloutWorker):
+            state_file = os.path.join(resume_from_checkpoint, "trainer_state.json")
+            if os.path.isfile(state_file):
+                global_step = TrainerState.load_from_json(state_file).global_step
+                if global_step > 0:
+                    batch_size = self.args.per_device_train_batch_size * self.accelerator.num_processes
+                    samples_seen = global_step * self.args.gradient_accumulation_steps * batch_size
+                    prompts_sent = samples_seen // self.args.num_generations
+                    if isinstance(self.train_dataset, Dataset):
+                        # IterableDataset has no len(), so prompt-position tracking is skipped for streaming data.
+                        self.rollout_worker._loop_kwargs["dataset_start_index"] = prompts_sent % len(
+                            self.train_dataset
+                        )
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:
