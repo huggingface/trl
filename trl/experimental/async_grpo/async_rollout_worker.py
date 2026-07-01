@@ -261,6 +261,9 @@ class _AsyncRolloutLoop:
             # contract even when rollouts mix environments.
             self._env_tools = {}  # {environment name: tools exposed when this environment is selected}
             self._environment_pool = {}  # {environment name: list of reusable instances}
+            # `self.tools` is the union of every environment's tools, accumulated below as each environment is probed.
+            # Used only to decide whether a training chat template is needed.
+            self.tools = list(tools)
             for name, factory in self.environment_factories.items():
                 instance = factory()
                 has_reset = False
@@ -276,10 +279,7 @@ class _AsyncRolloutLoop:
                     )
                 self._env_tools[name] = tools + methods
                 self._environment_pool[name] = [instance]
-            # Union of every environment's tools, used only to decide whether a training chat template is needed.
-            self.tools = list(tools)
-            for env_tools in self._env_tools.values():
-                self.tools += [tool for tool in env_tools if tool not in self.tools]
+                self.tools += [method for method in methods if method not in self.tools]
         else:
             self.tools = tools
 
@@ -354,7 +354,7 @@ class _AsyncRolloutLoop:
                     group_id, row = next(work_iter)
                     # The environment is the same for all generations of a group; only its tools are exposed in the
                     # example's prompt. When there are no environments, every example shares the standalone tools.
-                    name = row["environment"] if self._multi_environment else None
+                    name = row.get("environment") if self._multi_environment else None
                     if self._multi_environment and name not in self.environment_factories:
                         raise ValueError(
                             f"Example has `environment={name!r}`, which is not among the environments passed to "

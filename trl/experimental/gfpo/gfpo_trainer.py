@@ -77,7 +77,7 @@ class GFPOTrainer(_GRPOTrainer):
         # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
         # records each example's environment so `_tokenize_prompts` can render the matching tool schema.
         if self.environment_factories is not None:
-            self._batch_environments = [x["environment"] if self._multi_environment else None for x in inputs]
+            self._batch_environments = [x.get("environment") if self._multi_environment else None for x in inputs]
             if self._multi_environment:
                 for name in set(self._batch_environments):
                     if name not in self.environment_factories:
@@ -96,7 +96,7 @@ class GFPOTrainer(_GRPOTrainer):
                 self.environments.append(pool[index])
 
         # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
-        # its environment. Done here (not at init) because the environment instances are drawn at batch time.
+        # its environment. Done here (not at init) because each example's environment, hence its tools, is data-dependent.
         if self.tools:
             self._sync_tool_dicts = []
             self._async_tool_dicts = []
@@ -215,8 +215,15 @@ class GFPOTrainer(_GRPOTrainer):
 
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
+            if self.environment_factories is not None:
+                per_prompt_tools = [self._env_tools[name] for name in self._batch_environments]
+            else:
+                per_prompt_tools = [self.tools] * len(prompts)
             prompts_text = [
-                apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
+                apply_chat_template(
+                    {"prompt": prompt}, self.processing_class, tools=tools, **self.chat_template_kwargs
+                )["prompt"]
+                for prompt, tools in zip(prompts, per_prompt_tools, strict=True)
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
             prompt_inputs = super()._prepare_inputs(prompt_inputs)

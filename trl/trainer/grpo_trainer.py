@@ -572,6 +572,10 @@ class GRPOTrainer(_BaseTrainer):
             # contract even when batches mix environments.
             self._env_tools = {}  # {environment name: tools exposed when this environment is selected}
             self._environment_pool = {}  # {environment name: list of reusable instances}
+            # `self.tools` is the union of every environment's tools, accumulated below as each environment is probed.
+            # Used where only the presence of a tool matters (chat template validation, async loop setup, tool metrics);
+            # the per-example schema is rendered in `_tokenize_prompts`.
+            self.tools = list(tools)
             for name, factory in self.environment_factories.items():
                 instance = factory()
                 has_reset = False
@@ -587,11 +591,7 @@ class GRPOTrainer(_BaseTrainer):
                     )
                 self._env_tools[name] = tools + methods
                 self._environment_pool[name] = [instance]
-            # Union of every environment's tools. Used where only the presence of a tool matters (chat template
-            # validation, async loop setup, tool metrics); the per-example schema is rendered in `_tokenize_prompts`.
-            self.tools = list(tools)
-            for env_tools in self._env_tools.values():
-                self.tools += [tool for tool in env_tools if tool not in self.tools]
+                self.tools += [method for method in methods if method not in self.tools]
         else:
             self.tools = tools
 
@@ -2030,7 +2030,7 @@ class GRPOTrainer(_BaseTrainer):
         # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
         # records each example's environment so `_tokenize_prompts` can render the matching tool schema.
         if self.environment_factories is not None:
-            self._batch_environments = [x["environment"] if self._multi_environment else None for x in inputs]
+            self._batch_environments = [x.get("environment") if self._multi_environment else None for x in inputs]
             if self._multi_environment:
                 for name in set(self._batch_environments):
                     if name not in self.environment_factories:

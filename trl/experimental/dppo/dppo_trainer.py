@@ -855,7 +855,7 @@ class DPPOTrainer(GRPOTrainer):
         # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
         # records each example's environment so `_tokenize_prompts` can render the matching tool schema.
         if self.environment_factories is not None:
-            self._batch_environments = [x["environment"] if self._multi_environment else None for x in inputs]
+            self._batch_environments = [x.get("environment") if self._multi_environment else None for x in inputs]
             if self._multi_environment:
                 for name in set(self._batch_environments):
                     if name not in self.environment_factories:
