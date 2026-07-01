@@ -1080,9 +1080,13 @@ class BCOTrainer(_BaseTrainer):
         """
         if eval_dataset is None and self.eval_dataset is None:
             raise ValueError("Trainer: evaluation requires an eval_dataset.")
+        # When a dataset is passed directly (e.g. via `evaluate(eval_dataset=...)`) instead of defaulting to
+        # `self.eval_dataset`, precompute its reference log-probs fresh and do not cache them back onto
+        # `self.eval_dataset` or the precompute flag (which track only the trainer's own eval dataset).
+        is_default_eval_dataset = eval_dataset is None
         eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
 
-        if self.precompute_ref_log_probs and not self._precomputed_eval_ref_log_probs:
+        if self.precompute_ref_log_probs and not (is_default_eval_dataset and self._precomputed_eval_ref_log_probs):
             dataloader_params = {
                 "batch_size": self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                 "collate_fn": self.data_collator,
@@ -1106,10 +1110,10 @@ class BCOTrainer(_BaseTrainer):
                 name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
             )
 
-            # Save calculated reference_chosen_logps and reference_rejected_logps to the eval_dataset for subsequent runs
-            if self.eval_dataset is not None:
+            if is_default_eval_dataset:
+                # Save calculated reference log-probs on self.eval_dataset for subsequent runs
                 self.eval_dataset = eval_dataset
-            self._precomputed_eval_ref_log_probs = True
+                self._precomputed_eval_ref_log_probs = True
 
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
 

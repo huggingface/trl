@@ -219,6 +219,34 @@ class TestBCOTrainer(TrlTestCase):
         assert metrics["eval_loss"] is not None
 
     @require_sklearn
+    def test_evaluate_with_raw_dataset_keeps_init_eval_dataset(self):
+        # evaluate(eval_dataset=<foreign>) must not overwrite the trainer's own eval_dataset, even with
+        # precompute_ref_log_probs (get_eval_dataloader caches precomputed logps only for the init eval set).
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        training_args = BCOConfig(
+            output_dir=self.tmp_dir,
+            remove_unused_columns=False,
+            precompute_ref_log_probs=True,
+            report_to="none",
+        )
+        trainer = BCOTrainer(
+            model=model,
+            ref_model=ref_model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+        trainer.train()
+        init_eval_dataset = trainer.eval_dataset
+        trainer.evaluate(eval_dataset=dataset["train"])  # a different, raw dataset passed directly
+        assert trainer.eval_dataset is init_eval_dataset
+
+    @require_sklearn
     def test_init_with_ref_model_is_model(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
