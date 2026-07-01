@@ -114,7 +114,8 @@ class CarlaVLMEnv:
 
     def __init__(self):
         self.url = next(CarlaVLMEnv._env_url_iter)
-        self.client = CarlaEnv(base_url=self.url, connect_timeout_s=30, message_timeout_s=120)
+        # OpenEnv's client API is async-first; .sync() exposes blocking reset()/step().
+        self.client = CarlaEnv(base_url=self.url, connect_timeout_s=30, message_timeout_s=120).sync()
         self.reward = 0.0
 
     @staticmethod
@@ -166,7 +167,7 @@ class CarlaVLMEnv:
                 if attempt == 2:
                     raise
                 print(f"[WARN] reset failed (attempt {attempt + 1}/3): {e}. Reconnecting...")
-                self.client = CarlaEnv(base_url=self.url, connect_timeout_s=30, message_timeout_s=120)
+                self.client = CarlaEnv(base_url=self.url, connect_timeout_s=30, message_timeout_s=120).sync()
 
     def observe(self) -> list:
         """

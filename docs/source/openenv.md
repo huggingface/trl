@@ -70,7 +70,7 @@ ENV_URL = "https://openenv-echo-env.hf.space"
 
 class EchoToolEnv:
     def __init__(self):
-        self.env = EchoEnv(base_url=ENV_URL)
+        self.env = EchoEnv(base_url=ENV_URL).sync()
         self.reward = 0.0
 
     def reset(self, **kwargs) -> str | None:
@@ -248,7 +248,7 @@ from textarena_env import TextArenaAction, TextArenaEnv
 
 class WordleEnv:
     def __init__(self):
-        self.client = TextArenaEnv(base_url="https://openenv-wordle.hf.space")
+        self.client = TextArenaEnv(base_url="https://openenv-wordle.hf.space").sync()
 
     def reset(self, **kwargs) -> str | None:
         result = self.client.reset()
@@ -401,7 +401,7 @@ class MultiEnv:
                     self._wordle_client.close()
                 except Exception:
                     pass
-            self._wordle_client = TextArenaEnv(base_url=WORDLE_URL)
+            self._wordle_client = TextArenaEnv(base_url=WORDLE_URL).sync()
             result = self._wordle_client.reset()
             self._last_full_feedback = result.observation.messages[0].content
             self.reward = 0.0
@@ -412,7 +412,7 @@ class MultiEnv:
                     self._catch_client.close()
                 except Exception:
                     pass
-            self._catch_client = OpenSpielEnv(base_url=CATCH_URL)
+            self._catch_client = OpenSpielEnv(base_url=CATCH_URL).sync()
             result = self._catch_client.reset()
             self.done = result.observation.done
             return _format_catch_obs(result.observation.info_state)
@@ -492,6 +492,9 @@ python examples/scripts/openenv/multi_env.py \
 
 When using `environment_factory`, the trainer connects to the environment server automatically. You just need the server to be running. There are three ways to run an OpenEnv environment server:
 
+> [!NOTE]
+> OpenEnv's client API is async-first: calling `reset()` or `step()` directly returns a coroutine. Appending `.sync()` (as in the examples below) returns a blocking client, which is what the synchronous `environment_factory` and `rollout_func` code expects. The classmethod constructors such as `from_docker_image()` are coroutines too (`await` them). See the OpenEnv [async/sync guide](https://github.com/huggingface/OpenEnv/blob/main/docs/source/guides/async-sync.md).
+
 <hfoptions id="env_mode">
 
 <hfoption id="space">
@@ -501,7 +504,7 @@ When using `environment_factory`, the trainer connects to the environment server
 Most example scripts default to a hosted Space (no setup needed):
 
 ```python
-env = EchoEnv(base_url="https://openenv-echo-env.hf.space")
+env = EchoEnv(base_url="https://openenv-echo-env.hf.space").sync()
 ```
 
 > [!WARNING]
@@ -520,7 +523,7 @@ docker run -d -p 8001:8000 --platform linux/amd64 registry.hf.space/openenv-echo
 Then connect:
 
 ```python
-env = EchoEnv(base_url="http://0.0.0.0:8001")
+env = EchoEnv(base_url="http://0.0.0.0:8001").sync()
 ```
 
 We map port 8001 to 8000 to leave port 8000 available for a vLLM server.
@@ -550,7 +553,7 @@ python -m uvicorn echo_env.src.envs.echo_env.server.app:app --host 0.0.0.0 --por
 Then connect:
 
 ```python
-env = EchoEnv(base_url="http://0.0.0.0:8001")
+env = EchoEnv(base_url="http://0.0.0.0:8001").sync()
 ```
 
 For more details, see the [OpenEnv catalog](https://huggingface.co/docs/openenv/environments).
@@ -636,7 +639,7 @@ trainer = GRPOTrainer(..., rollout_func=rollout_func)
 ```python
 class EchoToolEnv:
     def __init__(self):
-        self.env = EchoEnv(base_url=url)
+        self.env = EchoEnv(base_url=url).sync()
         self.reward = 0.0
 
     def reset(self, **kwargs) -> str | None:

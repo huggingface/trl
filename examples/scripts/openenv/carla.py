@@ -110,7 +110,8 @@ class CarlaGRPOEnv:
 
     def __init__(self):
         url = next(CarlaGRPOEnv._env_url_iter)
-        self.client = CarlaEnv(base_url=url, connect_timeout_s=30, message_timeout_s=120)
+        # OpenEnv's client API is async-first; .sync() exposes blocking reset()/step().
+        self.client = CarlaEnv(base_url=url, connect_timeout_s=30, message_timeout_s=120).sync()
 
     @staticmethod
     def _describe(obs) -> str:

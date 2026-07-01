@@ -237,7 +237,8 @@ def main():
         COLS = 5
 
         def __init__(self):
-            self.client = OpenSpielEnv(base_url=env_url)
+            # OpenEnv's client API is async-first; .sync() exposes blocking reset()/step().
+            self.client = OpenSpielEnv(base_url=env_url).sync()
             self.reward = 0.0
             self.done = False
 

@@ -285,7 +285,8 @@ def main() -> None:
 
     class BrowserGymLLMEnv:
         def __init__(self):
-            self.client = BrowserGymEnv(base_url=space_url)
+            # OpenEnv's client API is async-first; .sync() exposes blocking reset()/step().
+            self.client = BrowserGymEnv(base_url=space_url).sync()
             self.reward = 0.0
             self._done = False
             self._step_count = 0
