@@ -67,6 +67,18 @@ class BCOConfig(_BaseConfig):
             Minimum value of the density ratio. The estimated density ratio is clamped to this value.
         max_density_ratio (`float`, *optional*, defaults to `10.0`):
             Maximum value of the density ratio. The estimated density ratio is clamped to this value.
+        sync_ref_model (`bool`, *optional*, defaults to `False`):
+            Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
+            the `ref_model_mixup_alpha` parameter. This synchronization originates from the
+            [TR-DPO](https://huggingface.co/papers/2404.09656) paper. `sync_ref_model=True` is not yet compatible with
+            PEFT or `precompute_ref_log_probs=True`.
+        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
+            α parameter from the TR-DPO paper, which controls the mix between the current policy and the previous
+            reference policy during updates. The reference policy is updated according to the equation: `π_ref = α *
+            π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`.
+        ref_model_sync_steps (`int`, *optional*, defaults to `512`):
+            τ parameter from the TR-DPO paper, which determines how frequently the current policy is synchronized with
+            the reference policy. To use this parameter, you must set `sync_ref_model=True`.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -161,4 +173,28 @@ class BCOConfig(_BaseConfig):
     max_density_ratio: float = field(
         default=10.0,
         metadata={"help": "Maximum value of the density ratio. The estimated density ratio is clamped to this value."},
+    )
+    sync_ref_model: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to synchronize the reference model with the active model every `ref_model_sync_steps` "
+            "steps, using the `ref_model_mixup_alpha` parameter. This synchronization originates from the "
+            "[TR-DPO](https://huggingface.co/papers/2404.09656) paper. `sync_ref_model=True` is not yet compatible "
+            "with PEFT or `precompute_ref_log_probs=True`."
+        },
+    )
+    ref_model_mixup_alpha: float = field(
+        default=0.6,
+        metadata={
+            "help": "α parameter from the TR-DPO paper, which controls the mix between the current policy and the "
+            "previous reference policy during updates. The reference policy is updated according to the equation: "
+            "`π_ref = α * π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`."
+        },
+    )
+    ref_model_sync_steps: int = field(
+        default=512,
+        metadata={
+            "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
+            "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
+        },
     )
