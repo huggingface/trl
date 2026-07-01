@@ -798,7 +798,7 @@ class TestDPOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        with pytest.raises(NotImplementedError, match="Liger DPO loss is not implemented for PEFT models."):
+        with pytest.raises(ValueError, match="`use_liger_kernel=True` is not supported with PEFT models."):
             DPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
