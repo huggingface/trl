@@ -67,7 +67,7 @@ from ..data_utils import apply_chat_template, is_conversational, prepare_multimo
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
-from ..import_utils import is_jmespath_available, is_liger_kernel_available
+from ..import_utils import is_jmespath_available, is_liger_kernel_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -903,8 +903,25 @@ class GRPOTrainer(_BaseTrainer):
                 max_completion_length=self.max_completion_length,
                 logprobs=0,  # we only need the generated token logprobs for the importance sampling correction
                 generation_kwargs=args.generation_kwargs,
+                is_lora_model=is_peft_model(model),
+                lora_sync_output_dir=args.output_dir,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
+
+            # Adapter-only LoRA sync is auto-detected in the generation backend (LoRA model + server launched with
+            # `--enable-lora`). When it's active, the active adapter must be syncable as a plain LoRA adapter.
+            if self.vllm_generation.lora_sync:
+                if len(model.active_adapters) != 1:
+                    raise ValueError("Adapter-only LoRA sync currently supports exactly one active adapter.")
+                active_peft_config = model.peft_config[model.active_adapters[0]]
+                if not isinstance(active_peft_config, LoraConfig):
+                    raise ValueError("Adapter-only LoRA sync currently supports only PEFT LoRA adapters.")
+                if active_peft_config.modules_to_save:
+                    raise ValueError("Adapter-only LoRA sync does not support LoRA configs with `modules_to_save`.")
+                if active_peft_config.use_dora:
+                    raise ValueError("Adapter-only LoRA sync does not support DoRA adapters.")
+                if active_peft_config.bias != "none":
+                    raise ValueError("Adapter-only LoRA sync does not support LoRA adapters with bias.")
         else:
             generation_kwargs = {
                 "max_new_tokens": self.max_completion_length,
