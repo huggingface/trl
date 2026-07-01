@@ -756,7 +756,10 @@ class DPOTrainer(_BaseTrainer):
                     "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
                 )
             if is_peft_model(model):
-                raise NotImplementedError("Liger DPO loss is not implemented for PEFT models.")
+                raise ValueError(
+                    "`use_liger_kernel=True` is not supported with PEFT models. Set `use_liger_kernel=False` to train "
+                    "a PEFT model."
+                )
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
