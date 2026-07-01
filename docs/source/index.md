@@ -1,11 +1,61 @@
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png">
+<picture>
+    <source media="(prefers-color-scheme: light)" srcset="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_light.png">
+    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png">
+</picture>
 </div>
 
-# TRL - Transformer Reinforcement Learning
+# TRL - Transformers Reinforcement Learning
 
 TRL is a full stack library where we provide a set of tools to train transformer language models with methods like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO), Direct Preference Optimization (DPO), Reward Modeling, and more.
 The library is integrated with 🤗 [transformers](https://github.com/huggingface/transformers).
+
+## 🎉 What's New
+
+**TRL v1:** We released TRL v1 — a major milestone that marks a real shift in what TRL is. Read the [blog post](https://huggingface.co/blog/trl-v1) to learn more.
+
+**🚢 Harbor:** We now support [Harbor](harbor) — train agents against sandboxed task suites (instruction + sandbox image + in-sandbox verifier) via [`GRPOTrainer`]'s `environment_factory`.
+
+## Taxonomy
+
+Below is the current list of TRL trainers, organized by method type (⚡️ = vLLM support; 🧪 = experimental).
+
+<div style="display: flex; justify-content: space-between; width: 100%; gap: 2rem;">
+<div style="flex: 1; min-width: 0;">
+
+### Online methods
+
+- [`GRPOTrainer`](grpo_trainer) ⚡️
+- [`RLOOTrainer`](rloo_trainer) ⚡️
+- [`OnlineDPOTrainer`](online_dpo_trainer) 🧪 ⚡️
+- [`NashMDTrainer`](nash_md_trainer) 🧪 ⚡️
+- [`PPOTrainer`](ppo_trainer) 🧪
+- [`XPOTrainer`](xpo_trainer) 🧪 ⚡️
+
+### Reward modeling
+
+- [`RewardTrainer`](reward_trainer)
+- [`PRMTrainer`](prm_trainer) 🧪
+
+</div>
+<div style="flex: 1; min-width: 0;">
+
+### Offline methods
+
+- [`SFTTrainer`](sft_trainer)
+- [`DPOTrainer`](dpo_trainer)
+- [`BCOTrainer`](bco_trainer) 🧪
+- [`CPOTrainer`](cpo_trainer) 🧪
+- [`KTOTrainer`](kto_trainer) 🧪
+- [`ORPOTrainer`](orpo_trainer) 🧪
+
+### Knowledge distillation
+
+- [`GKDTrainer`](gkd_trainer) 🧪
+- [`MiniLLMTrainer`](minillm_trainer) 🧪
+
+</div>
+</div>
 
 You can also explore TRL-related models, datasets, and demos in the [TRL Hugging Face organization](https://huggingface.co/trl-lib).
 
@@ -28,6 +78,31 @@ The documentation is organized into the following sections:
 
 <div class="mt-10">
   <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-v1">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl-v1/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published March 27, 2026</p>
+      <p class="text-gray-700">TRL v1: Post-Training Library That Holds When the Field Invalidates Its Own Assumptions</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/openenv">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/openenv/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published October 23, 2025</p>
+      <p class="text-gray-700">Building the Open Agent Ecosystem Together: Introducing OpenEnv</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-vlm-alignment">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl_vlm/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on August 7, 2025</p>
+      <p class="text-gray-700">Vision Language Model Alignment in TRL ⚡️</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/vllm-colocate">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/vllm-colocate/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on June 3, 2025</p>
+      <p class="text-gray-700">NO GPU left behind: Unlocking Efficiency with Co-located vLLM in TRL</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/liger-grpo">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/liger-grpo/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on May 25, 2025</p>
+      <p class="text-gray-700">🐯 Liger GRPO meets TRL</p>
+    </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/open-r1">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/open-r1/thumbnails.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">Published on January 28, 2025</p>
@@ -67,6 +142,18 @@ The documentation is organized into the following sections:
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/120_rlhf/thumbnail.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">Published on December 9, 2022</p>
       <p class="text-gray-700">Illustrating Reinforcement Learning from Human Feedback</p>
+    </a>
+  </div>
+</div>
+
+## Talks
+
+<div class="mt-10">
+  <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/Fine%20tuning%20with%20TRL%20(Oct%2025).pdf">
+      <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/Fine%20tuning%20with%20TRL%20(Oct%2025).png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Talk given on October 30, 2025</p>
+      <p class="text-gray-700">Fine tuning with TRL</p>
     </a>
   </div>
 </div>

@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,54 +12,119 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import textwrap
-import unittest
 from io import StringIO
 from unittest.mock import patch
 
-import numpy as np
+import pytest
 import torch
-from datasets import load_dataset
-from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
-from transformers.testing_utils import require_peft
+import torch.nn as nn
+import torch.nn.functional as F
+import transformers
+from packaging.version import Version
+from transformers import AutoConfig, AutoModelForCausalLM
+from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import ModelConfig
-from trl.trainer import compute_accuracy
 from trl.trainer.utils import (
-    DataCollatorForChatML,
-    batch_generation,
-    decode_and_strip_padding,
+    RepeatSampler,
+    _ChunkedLogProbFunction,
+    adjusted_mfu,
+    compute_flops_per_token,
+    compute_mfu,
+    entropy_from_logits,
     flush_left,
     generate_model_card,
     get_peft_config,
+    hash_module,
+    nanstd,
     pad,
+    patch_chunked_lm_head,
     print_prompt_completions_sample,
     selective_log_softmax,
+    shuffle_sequence_dict,
+    split_pixel_values_by_grid,
+    split_tensor_dict,
+    unsplit_pixel_values_by_grid,
+    use_adapter,
 )
 
-from .testing_utils import require_rich
+from .testing_utils import TrlTestCase, require_peft, require_rich, require_torch_accelerator
 
 
 if is_peft_available():
-    from peft import LoraConfig
+    from peft import AutoPeftModelForCausalLM, LoraConfig
 
 
-class TestPad(unittest.TestCase):
+@require_peft
+class TestUseAdapter(TrlTestCase):
+    def test_disables_on_none(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
+        )
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        with model.disable_adapter():
+            expected = model(input_ids).logits
+
+        with use_adapter(model, None):
+            output = model(input_ids).logits
+
+        assert torch.equal(output, expected)
+
+    def test_restores_previous_adapter(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
+        )
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        expected = model(input_ids).logits
+        with use_adapter(model, "my_adapter"):
+            pass
+        output = model(input_ids).logits
+        assert torch.equal(output, expected)
+
+        with use_adapter(model, None):
+            pass
+        output = model(input_ids).logits
+        assert torch.equal(output, expected)
+
+    def test_with_multiple_adapters(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter_1"
+        )
+        model.load_adapter("trl-internal-testing/tiny-PeftModel-2", "my_adapter_2")
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+
+        model.set_adapter("my_adapter_1")  # should be a no-op, but let's keep it for clarity
+        expected_1 = model(input_ids).logits
+        model.set_adapter("my_adapter_2")
+        expected_2 = model(input_ids).logits
+
+        with use_adapter(model, "my_adapter_1"):
+            output_1 = model(input_ids).logits
+
+        with use_adapter(model, "my_adapter_2"):
+            output_2 = model(input_ids).logits
+
+        assert torch.equal(output_1, expected_1)
+        assert torch.equal(output_2, expected_2)
+
+
+class TestPad(TrlTestCase):
     def test_pad_1_dim_left(self):
         x = torch.tensor([1, 2, 3])
         y = torch.tensor([4, 5])
         output = pad((x, y), padding_value=0, padding_side="left")
         expected = torch.tensor([[1, 2, 3], [0, 4, 5]])
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_1_dim_right(self):
         x = torch.tensor([1, 2, 3])
         y = torch.tensor([4, 5])
         output = pad((x, y), padding_value=0, padding_side="right")
         expected = torch.tensor([[1, 2, 3], [4, 5, 0]])
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_2_dim_left(self):
         x = torch.tensor([[1, 2], [3, 4]])
@@ -71,7 +136,7 @@ class TestPad(unittest.TestCase):
                 [[0, 0], [5, 6]],
             ]
         )
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_2_dim_right(self):
         x = torch.tensor([[1, 2], [3, 4]])
@@ -83,7 +148,7 @@ class TestPad(unittest.TestCase):
                 [[5, 6], [0, 0]],
             ]
         )
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_2_dim_right_multidim(self):
         x = torch.tensor([[1, 2], [3, 4]])
@@ -95,7 +160,7 @@ class TestPad(unittest.TestCase):
                 [[5, 0], [0, 0]],
             ]
         )
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_to_multiple_of_1(self):
         x = torch.tensor([1, 2, 3])
@@ -103,7 +168,7 @@ class TestPad(unittest.TestCase):
         # Max length is 3, pad to multiple of 4
         output = pad((x, y), padding_value=0, padding_side="right", pad_to_multiple_of=4)
         expected = torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]])
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_to_multiple_of_2(self):
         x = torch.tensor([1, 2, 3, 4, 5])
@@ -111,7 +176,7 @@ class TestPad(unittest.TestCase):
         # Max length is 3, pad to multiple of 4
         output = pad((x, y), padding_value=0, padding_side="right", pad_to_multiple_of=4)
         expected = torch.tensor([[1, 2, 3, 4, 5, 0, 0, 0], [6, 7, 8, 0, 0, 0, 0, 0]])
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_to_multiple_of_side_left(self):
         x = torch.tensor([1, 2, 3, 4, 5])
@@ -119,7 +184,7 @@ class TestPad(unittest.TestCase):
         # Max length is 3, pad to multiple of 4
         output = pad((x, y), padding_value=0, padding_side="left", pad_to_multiple_of=4)
         expected = torch.tensor([[0, 0, 0, 1, 2, 3, 4, 5], [0, 0, 0, 0, 0, 6, 7, 8]])
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_to_multiple_of_no_extra_padding(self):
         x = torch.tensor([1, 2, 3, 4])
@@ -127,16 +192,66 @@ class TestPad(unittest.TestCase):
         # Already multiple of 4
         output = pad((x, y), padding_value=0, padding_side="left", pad_to_multiple_of=4)
         expected = torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]])
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
+
+
+class TestHashModule(TrlTestCase):
+    def test_hash_module_deterministic_across_order(self):
+        class ModAB(torch.nn.Module):
+            def __init__(self, a: torch.Tensor, b: torch.Tensor):
+                super().__init__()
+                self.a = torch.nn.Parameter(a)
+                self.b = torch.nn.Parameter(b)
+
+        class ModBA(torch.nn.Module):
+            def __init__(self, a: torch.Tensor, b: torch.Tensor):
+                super().__init__()
+                self.b = torch.nn.Parameter(b)
+                self.a = torch.nn.Parameter(a)
+
+        a = torch.tensor([[1.0, 2.0]])
+        b = torch.tensor([3.0])
+        assert hash_module(ModAB(a, b)) == hash_module(ModBA(a, b))
+
+    def test_hash_module_changes_with_value(self):
+        class Mod(torch.nn.Module):
+            def __init__(self, value: float):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([value, 2.0]))
+
+        assert hash_module(Mod(1.0)) != hash_module(Mod(1.5))
+
+    def test_hash_module_includes_dtype(self):
+        class Mod(torch.nn.Module):
+            def __init__(self, dtype: torch.dtype):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([1.0, 2.0], dtype=dtype))
+
+        assert hash_module(Mod(torch.float32)) != hash_module(Mod(torch.float16))
+
+    def test_hash_module_tiny_model_twice(self):
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model_a = AutoModelForCausalLM.from_pretrained(model_id)
+        model_b = AutoModelForCausalLM.from_pretrained(model_id)
+        assert hash_module(model_a) == hash_module(model_b)
+
+    def test_hash_module_tiny_model_change_layer(self):
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        h1 = hash_module(model)
+        with torch.no_grad():
+            model.lm_head.weight.add_(0.01)
+        h2 = hash_module(model)
+        assert h1 != h2
 
 
 @require_peft
-class TestGetPEFTConfig(unittest.TestCase):
+class TestGetPEFTConfig(TrlTestCase):
     def test_create_peft_config_use_peft_false(self):
         """Test that when use_peft is False, the function returns None."""
         model_args = ModelConfig(use_peft=False)
         peft_config = get_peft_config(model_args)
-        self.assertIsNone(peft_config)
+        assert peft_config is None
 
     def test_create_peft_config_use_peft_true(self):
         """Test that when use_peft is True, the function returns a LoraConfig object."""
@@ -152,7 +267,7 @@ class TestGetPEFTConfig(unittest.TestCase):
         }
         model_args = ModelConfig(use_peft=True, **peft_kwargs)
         peft_config = get_peft_config(model_args)
-        self.assertTrue(isinstance(peft_config, LoraConfig))
+        assert isinstance(peft_config, LoraConfig)
         for arg, value in peft_kwargs.items():
             # Test that lists of modules are converted to sets
             if arg == "lora_target_modules":
@@ -161,25 +276,28 @@ class TestGetPEFTConfig(unittest.TestCase):
             if arg in ["lora_r", "lora_task_type", "lora_target_modules", "lora_modules_to_save"]:
                 arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
-            self.assertEqual(getattr(peft_config, arg), value)
+            assert getattr(peft_config, arg) == value
 
 
-class TestDecodeAndStripPadding(unittest.TestCase):
-    def setUp(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+class TestNanStd(TrlTestCase):
+    def test_nanstd_ignores_nans(self):
+        x = torch.tensor([1.0, 2.0, 3.0, float("nan")])
+        result = nanstd(x)
+        torch.testing.assert_close(result, torch.tensor(1.0))
 
-    def test_example_with_padding(self):
-        inputs = self.tokenizer(["Hello world", "Hello"], padding=True, return_tensors="pt")
-        decoded = decode_and_strip_padding(inputs["input_ids"], self.tokenizer)
-        self.assertEqual(decoded, ["Hello world", "Hello"])
+    def test_nanstd_dim_and_keepdim(self):
+        x = torch.tensor([[1.0, float("nan")], [3.0, 5.0]])
+        result = nanstd(x, dim=1, keepdim=True)
+        assert torch.isnan(result[0, 0])
+        torch.testing.assert_close(result[1, 0], torch.tensor(1.4142135), rtol=1e-5, atol=1e-6)
 
-    def test_example_without_padding(self):
-        inputs = self.tokenizer(["Hello", "Hello"], padding=False, return_tensors="pt")
-        decoded = decode_and_strip_padding(inputs["input_ids"], self.tokenizer)
-        self.assertEqual(decoded, ["Hello", "Hello"])
+    def test_nanstd_all_nan(self):
+        x = torch.tensor([float("nan"), float("nan")])
+        result = nanstd(x)
+        assert torch.isnan(result)
 
 
-class TestGenerateModelCard(unittest.TestCase):
+class TestGenerateModelCard(TrlTestCase):
     def test_full(self):
         model_card = generate_model_card(
             base_model="username/my_base_model",
@@ -188,6 +306,7 @@ class TestGenerateModelCard(unittest.TestCase):
             dataset_name="username/my_dataset",
             tags=["trl", "trainer-tag"],
             wandb_url="https://wandb.ai/username/project_id/runs/abcd1234",
+            trackio_url="https://huggingface.co/spaces/username/space_id",
             comet_url="https://www.comet.com/username/project_id/experiment_id",
             trainer_name="My Trainer",
             trainer_citation="@article{my_trainer, ...}",
@@ -195,15 +314,16 @@ class TestGenerateModelCard(unittest.TestCase):
             paper_id="1234.56789",
         )
         card_text = str(model_card)
-        self.assertIn("[username/my_base_model](https://huggingface.co/username/my_base_model)", card_text)
-        self.assertIn("my_model", card_text)
-        self.assertIn('pipeline("text-generation", model="username/my_hub_model", device="cuda")', card_text)
-        self.assertIn("datasets: username/my_dataset", card_text)
-        self.assertIn("](https://wandb.ai/username/project_id/runs/abcd1234)", card_text)
-        self.assertIn("](https://www.comet.com/username/project_id/experiment_id", card_text)
-        self.assertIn("My Trainer", card_text)
-        self.assertIn("```bibtex\n@article{my_trainer, ...}\n```", card_text)
-        self.assertIn("[My Paper](https://huggingface.co/papers/1234.56789)", card_text)
+        assert "[username/my_base_model](https://huggingface.co/username/my_base_model)" in card_text
+        assert "my_model" in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert "datasets: username/my_dataset" in card_text
+        assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
+        assert "](https://huggingface.co/spaces/username/space_id)" in card_text
+        assert "](https://www.comet.com/username/project_id/experiment_id" in card_text
+        assert "My Trainer" in card_text
+        assert "```bibtex\n@article{my_trainer, ...}\n```" in card_text
+        assert "[My Paper](https://huggingface.co/papers/1234.56789)" in card_text
 
     def test_val_none(self):
         model_card = generate_model_card(
@@ -213,6 +333,7 @@ class TestGenerateModelCard(unittest.TestCase):
             dataset_name=None,
             tags=[],
             wandb_url=None,
+            trackio_url=None,
             comet_url=None,
             trainer_name="My Trainer",
             trainer_citation=None,
@@ -220,234 +341,12 @@ class TestGenerateModelCard(unittest.TestCase):
             paper_id=None,
         )
         card_text = str(model_card)
-        self.assertIn("my_model", card_text)
-        self.assertIn('pipeline("text-generation", model="username/my_hub_model", device="cuda")', card_text)
-        self.assertIn("My Trainer", card_text)
+        assert "my_model" in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert "My Trainer" in card_text
 
 
-class TestDataCollatorForChatML(unittest.TestCase):
-    def setUp(self):
-        # Initialize the tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        # Define token IDs
-        self.bos_token_id = self.tokenizer.bos_token_id if self.tokenizer.bos_token_id is not None else 1
-        self.eos_token_id = self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else 2
-        # Token ID for "true", the last assistant's response in the example:
-        self.ignore_index = -100
-        self.max_length = 1024
-        self.messages_key = "messages"
-
-        # Example input
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-        self.examples = dataset.to_list()
-
-        # Initialize the data collator
-        self.collator = DataCollatorForChatML(
-            tokenizer=self.tokenizer,
-            max_length=self.max_length,
-            ignore_index=self.ignore_index,
-        )
-
-    def test_data_collator_for_chatml(self):
-        # Process the data
-        data = self.collator(self.examples)
-
-        # Verify basic shapes and types
-        self.assertIn("input_ids", data)
-        self.assertIn("attention_mask", data)
-        self.assertIn("labels", data)
-        self.assertIn("prompts", data)
-        self.assertIn("prompt_attention_mask", data)
-
-        # Decode input_ids and labels for verification
-        input_ids = data["input_ids"][0].tolist()
-        labels = data["labels"][0].tolist()
-        prompt_only = data["prompts"][0].tolist()
-
-        # Get the last assistant's response for comparison
-        last_message = self.examples[0][self.messages_key][-1]
-        self.assertEqual(last_message["role"], "assistant", "Last message should be from assistant")
-        last_assistant_response = last_message["content"]
-
-        # Verify that input_ids contain both prompt and response
-        decoded_input = self.tokenizer.decode(input_ids)
-        self.assertIn(last_assistant_response, decoded_input, "Input should contain assistant's response")
-
-        # Verify that prompts only contain the conversation up to the last response
-        decoded_prompt = self.tokenizer.decode(prompt_only)
-        self.assertNotIn(last_assistant_response, decoded_prompt, "Prompt should not contain assistant's response")
-
-        # Verify labels are -100 for non-assistant parts
-        prompt_length = len(prompt_only)
-        self.assertTrue(
-            all(label == self.ignore_index for label in labels[:prompt_length]),
-            "Labels should be ignore_index for prompt tokens",
-        )
-
-        # Verify labels match assistant response after prompt
-        # Add a filter to remove any trailing tokens after the first <|im_end|>
-        last_assistant_response_with_end = last_assistant_response + self.tokenizer.eos_token
-        last_assistant_response_tokens = self.tokenizer.encode(
-            last_assistant_response_with_end, add_special_tokens=False
-        )
-
-        response_labels = []
-        for label in labels[prompt_length:]:
-            if label == self.ignore_index:
-                continue
-            response_labels.append(label)
-            if label == self.tokenizer.convert_tokens_to_ids("<|im_end|>"):
-                break
-        self.assertEqual(
-            response_labels,
-            last_assistant_response_tokens,
-            "Labels should match assistant response tokens",
-        )
-
-        # Verify there isn't a generation prompt at the end
-        generation_prompt = "<|im_start|>assistant"
-        self.assertFalse(
-            decoded_input.strip().endswith(generation_prompt),
-            f"Input should not end with generation prompt '{generation_prompt}'",
-        )
-
-        self.assertEqual(
-            response_labels,
-            last_assistant_response_tokens,
-            "Labels should match assistant response tokens",
-        )
-
-
-class TestBatchGeneration(unittest.TestCase):
-    def setUp(self):
-        # Initialize the tokenizer
-        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-
-        self.generation_config = GenerationConfig(
-            max_new_tokens=128,
-            temperature=0.5,
-            do_sample=True,
-            top_k=0,
-            pad_token_id=self.tokenizer.pad_token_id,
-        )
-
-        # Example input
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-        self.examples = dataset["messages"]
-        self.mini_batch_size = 3
-
-    def test_mini_batch_generation(self):
-        batch = [
-            self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
-            for example in self.examples
-        ]
-        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"]
-        bs, context_length = queries.shape
-
-        query_responses, logits = batch_generation(
-            self.model, queries, self.mini_batch_size, self.tokenizer.pad_token_id, self.generation_config
-        )
-
-        max_length_query = query_responses.shape[1]
-        max_length_logits = max_length_query - context_length
-
-        self.assertGreater(max_length_query, context_length)
-        self.assertEqual(query_responses.shape, (bs, max_length_query))
-        self.assertEqual(logits.shape, (bs, max_length_logits, self.model.config.vocab_size))
-
-    def test_single_batch_generation(self):
-        batch = [
-            self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
-            for example in self.examples
-        ]
-        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"]
-        bs, context_length = queries.shape
-
-        query_responses, logits = batch_generation(
-            self.model, queries, bs, self.tokenizer.pad_token_id, self.generation_config
-        )
-
-        max_length_query = query_responses.shape[1]
-        max_length_logits = max_length_query - context_length
-
-        self.assertGreater(max_length_query, context_length)
-        self.assertEqual(query_responses.shape, (bs, max_length_query))
-        self.assertEqual(logits.shape, (bs, max_length_logits, self.model.config.vocab_size))
-
-
-class TestComputeAccuracy(unittest.TestCase):
-    def test_token_classification_task(self):
-        eval_pred = (
-            np.array(
-                [
-                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
-                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
-                ]
-            ),
-            np.array([[0, 1], [1, 0]]),
-        )
-        expected_accuracy = 0.5  # 2 matches, 2 mismatches
-        result = compute_accuracy(eval_pred)
-        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
-
-    def test_token_classification_task_with_ignored_tokens_0(self):
-        eval_pred = (
-            np.array(
-                [
-                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
-                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
-                ]
-            ),
-            np.array([[1, 0], [1, -100]]),
-        )
-        expected_accuracy = 1.0  # All non-ignored tokens match
-        result = compute_accuracy(eval_pred)
-        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
-
-    def test_token_classification_task_with_ignored_tokens_1(self):
-        eval_pred = (
-            np.array(
-                [
-                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
-                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
-                ]
-            ),
-            np.array([[1, 1], [0, -100]]),
-        )
-        expected_accuracy = 1 / 3  # 1 match, 2 mismatch, 1 ignored
-        result = compute_accuracy(eval_pred)
-        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
-
-    def test_rewards_comparison_task(self):
-        eval_pred = (
-            np.array(
-                [
-                    [0.9, 0.1],  # Batch 1
-                    [0.6, 0.4],  # Batch 2
-                    [0.5, 0.5],  # Batch 3 (equal)
-                ]
-            ),
-            np.array([0, 1, 1]),
-        )
-        expected_accuracy = 0.5  # 1 match, 1 mismatch, 1 equal (ignored)
-
-        with self.assertWarns(UserWarning) as cm:
-            result = compute_accuracy(eval_pred)
-
-        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
-        expected_warning = (
-            "There are 1 out of 3 instances where the predictions for both options are equal. "
-            "These instances are ignored in the accuracy computation."
-        )
-        self.assertEqual(str(cm.warning), expected_warning)
-
-
-class TestFlushLeft(unittest.TestCase):
+class TestFlushLeft(TrlTestCase):
     def test_basic_case(self):
         mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
         tensor1 = torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 0, 0]])
@@ -458,9 +357,9 @@ class TestFlushLeft(unittest.TestCase):
         expected_tensor1 = torch.tensor([[2, 3, 4], [5, 6, 0]])
         expected_tensor2 = torch.tensor([[7, 8, 9], [10, 11, 0]])
 
-        self.assertTrue(torch.equal(new_mask, expected_mask))
-        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
-        self.assertTrue(torch.equal(new_tensor2, expected_tensor2))
+        assert torch.equal(new_mask, expected_mask)
+        assert torch.equal(new_tensor1, expected_tensor1)
+        assert torch.equal(new_tensor2, expected_tensor2)
 
     def test_single_row(self):
         mask = torch.tensor([[0, 0, 1, 1]])
@@ -470,31 +369,392 @@ class TestFlushLeft(unittest.TestCase):
         expected_mask = torch.tensor([[1, 1]])
         expected_tensor1 = torch.tensor([[2, 3]])
 
-        self.assertTrue(torch.equal(new_mask, expected_mask))
-        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+        assert torch.equal(new_mask, expected_mask)
+        assert torch.equal(new_tensor1, expected_tensor1)
 
     def test_no_shift_needed(self):
-        mask = torch.tensor([[1, 1, 0, 0], [1, 1, 0, 0]])
-        tensor1 = torch.tensor([[5, 6, 0, 0], [7, 8, 0, 0]])
+        mask = torch.tensor([[1, 1, 0, 0], [1, 0, 0, 0]])
+        tensor1 = torch.tensor([[5, 6, 0, 0], [7, 0, 0, 0]])
         new_mask, new_tensor1 = flush_left(mask, tensor1)
 
-        expected_mask = torch.tensor([[1, 1], [1, 1]])
-        expected_tensor1 = torch.tensor([[5, 6], [7, 8]])
+        expected_mask = torch.tensor([[1, 1], [1, 0]])
+        expected_tensor1 = torch.tensor([[5, 6], [7, 0]])
 
-        self.assertTrue(torch.equal(new_mask, expected_mask))
-        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+        assert torch.equal(new_mask, expected_mask)
+        assert torch.equal(new_tensor1, expected_tensor1)
 
     def test_no_tensors(self):
         mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
         new_mask = flush_left(mask)
-
         expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+        assert torch.equal(new_mask, expected_mask)
 
-        self.assertTrue(torch.equal(new_mask, expected_mask))
+
+class TestRepeatRandomSampler(TrlTestCase):
+    def test_sampler(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=2)
+        # Should output something like [4, 4, 3, 3, 0, 0, 1, 1, 2, 2, 6, 6, 5, 5]
+        sampled = list(sampler)
+        # Check that the length is doubled
+        assert len(sampled) == 2 * len(dataset)
+        # Check that all indexes are present
+        assert set(sampled) == set(range(len(dataset)))
+        # Check that each element is repeated twice
+        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+
+    def test_sampler_no_shuffle(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, shuffle=False)
+        sampled = list(sampler)
+        expected = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]
+        assert sampled == expected
+
+    def test_sampler_no_repeat(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=1)
+        # Should output something like [4, 3, 0, 1, 2, 6, 5]
+        sampled = list(sampler)
+        # Check that the length is the same
+        assert len(sampled) == len(dataset)
+        # Check that all indexes are present
+        assert set(sampled) == set(range(len(dataset)))
+
+    def test_sampler_with_batch_size(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g", "h"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
+        # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6, 5, 7, 5, 7]
+        sampled = list(sampler)
+        # Check that the length is doubled
+        assert len(sampled) == 2 * len(dataset)
+        # Check that all indexes are present
+        assert set(sampled) == set(range(len(dataset)))
+        # Check that each element is repeated as expected
+        assert all(sampled[i : i + 1] == sampled[i + 2 : i + 3] for i in range(0, len(sampled), 4))
+
+    def test_sampler_with_batch_size_and_drop(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
+        # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6]
+        sampled = list(sampler)
+        # Check that the length is doubled
+        assert len(sampled) == 2 * (
+            len(dataset) - 1
+        )  # one element is dropped, because it's not enough to form a batch
+        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
+        # Check that the sampled indexes are a subset of the dataset indexes
+        assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
+        assert all(sampled[i : i + 1] == sampled[i + 2 : i + 3] for i in range(0, len(sampled), 4))
+
+    def test_sampler_with_mini_repeat_count_and_batch_size_1(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=3, repeat_count=2)
+        # Should output something like [4, 4, 3, 3, 0, 0, 4, 4, 3, 3, 0, 0,
+        #                               1, 1, 2, 2, 6, 6, 1, 1, 2, 2, 6, 6]
+        sampled = list(sampler)
+        # Check that the length is quadrupled
+        assert len(sampled) == 4 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
+        # Check that the sampled indexes are a subset of the dataset indexes
+        assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
+        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+        # Check that the batch is repeated as expected
+        assert sampled[0:6] == sampled[6:12]
+        assert sampled[12:18] == sampled[18:24]
+
+    def test_sampler_with_mini_repeat_count_and_batch_size_2(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=3, batch_size=2, repeat_count=2)
+        # Should output something like [4, 4, 4, 3, 3, 3, 4, 4, 4, 3, 3, 3,
+        #                               0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1,
+        #                               2, 2, 2, 6, 6, 6, 2, 2, 2, 6, 6, 6]
+        sampled = list(sampler)
+        # Check that the length is sextupled
+        assert len(sampled) == 6 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
+        # Check that the sampled indexes are a subset of the dataset indexes
+        assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
+        assert all(sampled[i] == sampled[i + 1] == sampled[i + 2] for i in range(0, len(sampled), 3))
+        # Check that the batch is repeated as expected
+        assert sampled[0:6] == sampled[6:12]
+        assert sampled[12:18] == sampled[18:24]
+        assert sampled[24:30] == sampled[30:36]
+
+    def test_sampler_with_mini_repeat_count_and_batch_size_3(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=2, repeat_count=3)
+        # Should output something like [4, 4, 3, 3, 4, 4, 3, 3, 4, 4, 3, 3,
+        #                               0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1,
+        #                               2, 2, 6, 6, 2, 2, 6, 6, 2, 2, 6, 6]
+        sampled = list(sampler)
+        # Check that the length is sextupled
+        assert len(sampled) == 6 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        # Check that the sampled indexes are a subset of the dataset indexes
+        assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
+        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+        # Check that the batch is repeated as expected
+        assert sampled[0:4] == sampled[4:8] == sampled[8:12]
+        assert sampled[12:16] == sampled[16:20] == sampled[20:24]
+        assert sampled[24:28] == sampled[28:32] == sampled[32:36]
 
 
-class TestSelectiveLogSoftmax(unittest.TestCase):
-    @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
+class TestEntropyFromLogits(TrlTestCase):
+    @pytest.mark.parametrize("shape", [(768,), (32, 768), (8, 16, 768), (2, 4, 8, 768)])
+    @pytest.mark.parametrize("chunk_size", [1, 16])
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
+    def test_entropy_from_logits_2_dims(self, dtype, chunk_size, shape):
+        logits = torch.randn(*shape, dtype=dtype)
+        if dtype in (torch.float64, torch.float32):
+            p = logits.softmax(-1)
+            entropy = -torch.sum(p * p.log(), dim=-1)
+        else:
+            logps = logits.log_softmax(dim=-1)
+            entropy = -(torch.exp(logps) * logps).sum(-1)
+        predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
+        torch.testing.assert_close(predicted_entropy, entropy, rtol=1e-5, atol=1e-5)
+
+
+@require_rich
+class TestPrintPromptCompletionsSample(TrlTestCase):
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_output(self, mock_stdout):
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭──────────────────────────── Step 42 ─────────────────────────────╮
+        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
+        │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
+        │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
+        │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_extra_columns(self, mock_stdout):
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        extra = {"source": ["dataset_A", "dataset_B"]}
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step, extra=extra)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ source    ┃ │
+        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ dataset_A │ │
+        │ ├────────────┼──────────────┼─────────────┼────────┼───────────┼───────────┤ │
+        │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ dataset_B │ │
+        │ └────────────┴──────────────┴─────────────┴────────┴───────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_num_samples(self, mock_stdout):
+        prompts = ["A", "B"]
+        completions = ["1", "2"]
+        rewards = {"Score": [0.1, 0.2]}
+        advantages = [0.3, 0.4]
+        step = 10
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step, num_samples=1)
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        possible_outputs = [
+            textwrap.dedent("""\
+            ╭────────────────── Step 10 ──────────────────╮
+            │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+            │ ┃ Prompt ┃ Completion ┃ Score ┃ Advantage ┃ │
+            │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+            │ │ A      │ 1          │  0.10 │      0.30 │ │
+            │ └────────┴────────────┴───────┴───────────┘ │
+            ╰─────────────────────────────────────────────╯
+                """),
+            # docstyle-ignore
+            textwrap.dedent("""\
+            ╭────────────────── Step 10 ──────────────────╮
+            │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+            │ ┃ Prompt ┃ Completion ┃ Score ┃ Advantage ┃ │
+            │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+            │ │ B      │ 2          │  0.20 │      0.40 │ │
+            │ └────────┴────────────┴───────┴───────────┘ │
+            ╰─────────────────────────────────────────────╯
+                """),
+        ]
+        assert output in possible_outputs
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages(self, mock_stdout):
+        prompts = [
+            [
+                {"role": "system", "content": "You are an helpful assistant."},
+                {"role": "user", "content": "What color is the sky?"},
+            ],
+            [
+                {"role": "system", "content": "You are an helpful assistant."},
+                {"role": "user", "content": "Where is the sun?"},
+            ],
+        ]
+        completions = [
+            [{"role": "assistant", "content": "It is blue."}],
+            [{"role": "assistant", "content": "In the sky."}],
+        ]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt                  ┃ Completion  ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ SYSTEM                  │ ASSISTANT   │        0.12 │   0.79 │      0.99 │ │
+        │ │ You are an helpful      │ It is blue. │             │        │           │ │
+        │ │ assistant.              │             │             │        │           │ │
+        │ │                         │             │             │        │           │ │
+        │ │ USER                    │             │             │        │           │ │
+        │ │ What color is the sky?  │             │             │        │           │ │
+        │ ├─────────────────────────┼─────────────┼─────────────┼────────┼───────────┤ │
+        │ │ SYSTEM                  │ ASSISTANT   │        0.46 │   0.10 │      0.65 │ │
+        │ │ You are an helpful      │ In the sky. │             │        │           │ │
+        │ │ assistant.              │             │             │        │           │ │
+        │ │                         │             │             │        │           │ │
+        │ │ USER                    │             │             │        │           │ │
+        │ │ Where is the sun?       │             │             │        │           │ │
+        │ └─────────────────────────┴─────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages_with_tools(self, mock_stdout):
+        prompts = [
+            [{"role": "user", "content": "What is the temperature in Paris?"}],
+            [{"role": "user", "content": "What is the weather in London?"}],
+        ]
+        completions = [
+            [{"role": "tool", "name": "get_temperature", "args": {"location": "Paris"}}],
+            [{"role": "tool", "name": "get_weather", "args": {"location": "London"}}],
+        ]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt            ┃ Completion        ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ USER              │ TOOL              │        0.12 │   0.79 │      0.99 │ │
+        │ │ What is the       │ get_temperature(… │             │        │           │ │
+        │ │ temperature in    │ 'Paris'})         │             │        │           │ │
+        │ │ Paris?            │                   │             │        │           │ │
+        │ ├───────────────────┼───────────────────┼─────────────┼────────┼───────────┤ │
+        │ │ USER              │ TOOL              │        0.46 │   0.10 │      0.65 │ │
+        │ │ What is the       │ get_weather({'lo… │             │        │           │ │
+        │ │ weather in        │ 'London'})        │             │        │           │ │
+        │ │ London?           │                   │             │        │           │ │
+        │ └───────────────────┴───────────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages_with_reasoning_content(self, mock_stdout):
+        prompts = [[{"role": "user", "content": "What color is the sky?"}]]
+        completions = [[{"role": "assistant", "reasoning_content": "I think it is blue.", "content": "It is blue."}]]
+        rewards = {"Score": [0.5]}
+        advantages = [0.9]
+        step = 1
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭─────────────────────────────── Step 1 ───────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt                 ┃ Completion          ┃ Score ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ USER                   │ ASSISTANT           │  0.50 │      0.90 │ │
+        │ │ What color is the sky? │ I think it is blue. │       │           │ │
+        │ │                        │ It is blue.         │       │           │ │
+        │ └────────────────────────┴─────────────────────┴───────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages_with_thinking(self, mock_stdout):
+        prompts = [[{"role": "user", "content": "What color is the sky?"}]]
+        completions = [[{"role": "assistant", "thinking": "I think it is blue.", "content": "It is blue."}]]
+        rewards = {"Score": [0.5]}
+        advantages = [0.9]
+        step = 1
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭─────────────────────────────── Step 1 ───────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt                 ┃ Completion          ┃ Score ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ USER                   │ ASSISTANT           │  0.50 │      0.90 │ │
+        │ │ What color is the sky? │ I think it is blue. │       │           │ │
+        │ │                        │ It is blue.         │       │           │ │
+        │ └────────────────────────┴─────────────────────┴───────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+
+class TestSelectiveLogSoftmax(TrlTestCase):
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
     def test_selective_log_softmax(self, dtype):
         """Test selective_log_softmax with logits of different dtypes"""
         vocab_size = 1024
@@ -509,65 +769,649 @@ class TestSelectiveLogSoftmax(unittest.TestCase):
 
         if dtype in [torch.float16, torch.bfloat16]:
             # half-precision dtypes fall back to an exact method
-            self.assertTrue(torch.equal(actual_output, expected_output))
+            assert torch.equal(actual_output, expected_output)
+        else:
+            torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
+
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
+    @pytest.mark.parametrize("k", [1, 8])
+    def test_selective_log_softmax_multi_index(self, dtype, k):
+        """Test selective_log_softmax with logits of different dtypes and index widths"""
+        vocab_size = 1024
+        batch_size = 4
+        seq_len = 32
+
+        index = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len, k))
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+
+        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=index)
+        actual_output = selective_log_softmax(logits, index)
+
+        assert actual_output.shape == (batch_size, seq_len, k)
+        if dtype in [torch.float16, torch.bfloat16]:
+            # half-precision dtypes fall back to an exact method
+            assert torch.equal(actual_output, expected_output)
         else:
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
 
 
-@require_rich
-class TestPrintPromptCompletionsSample(unittest.TestCase):
-    @patch("sys.stdout", new_callable=StringIO)
-    def test_print_output(self, mock_stdout):
-        prompts = ["The sky is", "The sun is"]
-        completions = [" blue.", " in the sky."]
-        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
-        step = 42
+class TestShuffleSequenceDict(TrlTestCase):
+    def test_shuffle_preserves_shape(self):
+        x = torch.arange(6).reshape(3, 2)
+        y = torch.arange(3).reshape(3, 1)
+        tensor_dict = {"x": x.clone(), "y": y.clone()}
 
-        print_prompt_completions_sample(prompts, completions, rewards, step)
+        shuffled = shuffle_sequence_dict(tensor_dict)
 
-        output = mock_stdout.getvalue()
+        assert shuffled["x"].shape == x.shape
+        assert shuffled["y"].shape == y.shape
 
-        expected_output = textwrap.dedent("""\
-        ╭────────────────────── Step 42 ───────────────────────╮
-        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┓ │
-        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ │
-        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━┩ │
-        │ │ The sky is │  blue.       │        0.12 │   0.79 │ │
-        │ ├────────────┼──────────────┼─────────────┼────────┤ │
-        │ │ The sun is │  in the sky. │        0.46 │   0.10 │ │
-        │ └────────────┴──────────────┴─────────────┴────────┘ │
-        ╰──────────────────────────────────────────────────────╯
-        """)
-        self.assertEqual(output, expected_output)
+    def test_shuffle_consistent_across_tensors(self):
+        # Use known patterns to check alignment
+        x = torch.tensor([[10, 11], [20, 21], [30, 31]])
+        y = torch.tensor([[1], [2], [3]])
+        tensor_dict = {"x": x.clone(), "y": y.clone()}
 
-    @patch("sys.stdout", new_callable=StringIO)
-    def test_num_samples(self, mock_stdout):
-        prompts = ["A", "B"]
-        completions = ["1", "2"]
-        rewards = {"Score": [0.1, 0.2]}
-        step = 10
+        shuffled = shuffle_sequence_dict(tensor_dict)
 
-        print_prompt_completions_sample(prompts, completions, rewards, step, num_samples=1)
-        output = mock_stdout.getvalue()
+        # Build a reverse map from shuffled x rows to y values
+        for i in range(3):
+            x_row = shuffled["x"][i]
+            y_val = shuffled["y"][i].item()
 
-        possible_outputs = [
-            textwrap.dedent("""\
-                ╭──────────── Step 10 ────────────╮
-                │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓ │
-                │ ┃ Prompt ┃ Completion ┃ Score ┃ │
-                │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩ │
-                │ │ A      │ 1          │  0.10 │ │
-                │ └────────┴────────────┴───────┘ │
-                ╰─────────────────────────────────╯
-                """),
-            textwrap.dedent("""\
-                ╭──────────── Step 10 ────────────╮
-                │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓ │
-                │ ┃ Prompt ┃ Completion ┃ Score ┃ │
-                │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩ │
-                │ │ B      │ 2          │  0.20 │ │
-                │ └────────┴────────────┴───────┘ │
-                ╰─────────────────────────────────╯
-                """),
-        ]
-        self.assertIn(output, possible_outputs)
+            if torch.equal(x_row, torch.tensor([10, 11])):
+                assert y_val == 1
+            elif torch.equal(x_row, torch.tensor([20, 21])):
+                assert y_val == 2
+            elif torch.equal(x_row, torch.tensor([30, 31])):
+                assert y_val == 3
+            else:
+                pytest.fail("Unexpected x row in shuffled output.")
+
+    def test_none_tensor_remains_none(self):
+        x = torch.arange(6).reshape(3, 2)
+        tensor_dict = {"x": x.clone(), "y": None}
+
+        shuffled = shuffle_sequence_dict(tensor_dict)
+
+        assert shuffled["y"] is None
+        assert shuffled["x"].shape == x.shape
+
+    def test_shuffle_with_list(self):
+        x = torch.tensor([[10, 11], [20, 21], [30, 31]])
+        y = ["a", "b", "c"]
+
+        sequence_dict = {"x": x.clone(), "y": y}
+
+        shuffled = shuffle_sequence_dict(sequence_dict)
+
+        # Check that the list y is shuffled in the same order as x
+        for i in range(3):
+            x_row = shuffled["x"][i]
+            y_val = shuffled["y"][i]
+
+            if torch.equal(x_row, torch.tensor([10, 11])):
+                assert y_val == "a"
+            elif torch.equal(x_row, torch.tensor([20, 21])):
+                assert y_val == "b"
+            elif torch.equal(x_row, torch.tensor([30, 31])):
+                assert y_val == "c"
+            else:
+                pytest.fail("Unexpected x row in shuffled output.")
+
+
+class TestSplitTensorDict(TrlTestCase):
+    def test_split_equal_chunks(self):
+        x = torch.arange(12).reshape(6, 2)
+        y = torch.arange(6).reshape(6, 1)
+        tensor_dict = {"x": x, "y": y}
+
+        result = split_tensor_dict(tensor_dict, 3)
+
+        expected_x_chunks = torch.chunk(x, 3, dim=0)
+        expected_y_chunks = torch.chunk(y, 3, dim=0)
+        assert len(result) == 3
+        for i in range(3):
+            assert torch.equal(result[i]["x"], expected_x_chunks[i])
+            assert torch.equal(result[i]["y"], expected_y_chunks[i])
+
+    def test_with_none_tensor(self):
+        x = torch.arange(12).reshape(6, 2)
+        tensor_dict = {"x": x, "y": None}
+
+        result = split_tensor_dict(tensor_dict, 2)
+
+        expected_x_chunks = torch.chunk(x, 2, dim=0)
+        assert len(result) == 2
+        for i in range(2):
+            assert torch.equal(result[i]["x"], expected_x_chunks[i])
+            assert result[i]["y"] is None
+
+    def test_with_scalar(self):
+        x = torch.arange(12).reshape(6, 2)
+        tensor_dict = {"x": x, "y": torch.tensor(1)}
+
+        result = split_tensor_dict(tensor_dict, 2)
+
+        expected_x_chunks = torch.chunk(x, 2, dim=0)
+        assert len(result) == 2
+        for i in range(2):
+            assert torch.equal(result[i]["x"], expected_x_chunks[i])
+            assert torch.equal(result[i]["y"], torch.tensor(1))
+
+
+class TestSplitPixelValuesByGrid(TrlTestCase):
+    def test_split_correctly_0(self):
+        batch = {
+            "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 2]]),
+            "num_images": [1, 1],
+            "pixel_values": torch.arange(8 * 3).reshape(8, 3),  # Shape: [8, 3]
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:4])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][4:])
+        assert isinstance(result["image_grid_thw"], list)
+        assert len(result["image_grid_thw"]) == 2
+        assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 2, 2]]))
+        assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2]]))
+
+    def test_split_correctly_1(self):
+        batch = {
+            "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 4]]),
+            "num_images": [1, 1],
+            "pixel_values": torch.arange(12 * 3).reshape(12, 3),  # Shape: [12, 3]
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:4])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][4:12])
+        assert isinstance(result["image_grid_thw"], list)
+        assert len(result["image_grid_thw"]) == 2
+        assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 2, 2]]))
+        assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 4]]))
+
+    def test_missing_keys(self):
+        batch = {"pixel_values": torch.tensor([1.0])}
+        result = split_pixel_values_by_grid(batch)
+        assert result == batch
+
+    def test_mismatched_length(self):
+        batch = {
+            "image_grid_thw": torch.tensor([[1, 1, 2], [1, 2, 1]]),  # Total = 8
+            "num_images": [1, 1],
+            "pixel_values": torch.randn(3, 5),  # Only 3 rows
+        }
+        with pytest.raises(ValueError):
+            split_pixel_values_by_grid(batch)
+
+    def test_multi_images(self):
+        batch = {
+            "image_grid_thw": torch.tensor([[1, 1, 2], [1, 2, 2], [1, 2, 1]]),  # Total = 8
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(8 * 3).reshape(8, 3),  # Shape: [8, 3]
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:2])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][2:])
+        assert isinstance(result["image_grid_thw"], list)
+        assert len(result["image_grid_thw"]) == 2
+        assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 1, 2]]))
+        assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2], [1, 2, 1]]))
+
+    def test_split_by_image_position_ids(self):
+        # Gemma-style: no image_grid_thw, split by num_images using image_position_ids
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(3 * 4).reshape(3, 4),
+            "image_position_ids": torch.tensor([[0, 1], [2, 3], [4, 5]]),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:1])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][1:])
+        assert isinstance(result["image_position_ids"], list)
+        assert len(result["image_position_ids"]) == 2
+        assert torch.equal(result["image_position_ids"][0], batch["image_position_ids"][:1])
+        assert torch.equal(result["image_position_ids"][1], batch["image_position_ids"][1:])
+
+    def test_split_by_spatial_shapes(self):
+        batch = {
+            "num_images": [2, 1],
+            "num_tiles": [3, 2],
+            "pixel_values": torch.arange(5 * 4).reshape(5, 4),
+            "pixel_attention_mask": torch.arange(5 * 6).reshape(5, 6),
+            "spatial_shapes": torch.arange(5 * 2).reshape(5, 2),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:3])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][3:])
+        assert isinstance(result["pixel_attention_mask"], list)
+        assert torch.equal(result["pixel_attention_mask"][0], batch["pixel_attention_mask"][:3])
+        assert torch.equal(result["pixel_attention_mask"][1], batch["pixel_attention_mask"][3:])
+        assert isinstance(result["spatial_shapes"], list)
+        assert torch.equal(result["spatial_shapes"][0], batch["spatial_shapes"][:3])
+        assert torch.equal(result["spatial_shapes"][1], batch["spatial_shapes"][3:])
+
+
+class TestUnsplitPixelValuesByGrid(TrlTestCase):
+    def test_unsplit_correctly(self):
+        pixel_values = [torch.randn(4, 5), torch.randn(2, 5)]
+        pixel_values_merged = torch.cat(pixel_values, dim=0)
+        image_grid_thw = [torch.tensor([[1, 2, 2]]), torch.tensor([[1, 2, 1]])]
+        image_grid_thw_merged = torch.cat(image_grid_thw, dim=0)
+        batch = {"pixel_values": pixel_values, "image_grid_thw": image_grid_thw, "other_key": torch.tensor([1])}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_values"], pixel_values_merged)
+        assert isinstance(result["image_grid_thw"], torch.Tensor)
+        assert torch.equal(result["image_grid_thw"], image_grid_thw_merged)
+        assert "other_key" in result
+
+    def test_unsplit_image_position_ids(self):
+        image_position_ids = [torch.tensor([[0, 1]]), torch.tensor([[2, 3], [4, 5]])]
+        image_position_ids_merged = torch.cat(image_position_ids, dim=0)
+        pixel_values = [torch.randn(1, 4), torch.randn(2, 4)]
+        batch = {"pixel_values": pixel_values, "image_position_ids": image_position_ids}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["image_position_ids"], torch.Tensor)
+        assert torch.equal(result["image_position_ids"], image_position_ids_merged)
+
+    def test_unsplit_spatial_shapes(self):
+        pixel_values = [torch.randn(3, 4), torch.randn(2, 4)]
+        pixel_attention_mask = [torch.randn(3, 6), torch.randn(2, 6)]
+        spatial_shapes = [torch.tensor([[1, 2], [3, 4], [5, 6]]), torch.tensor([[7, 8], [9, 10]])]
+        batch = {
+            "pixel_values": pixel_values,
+            "pixel_attention_mask": pixel_attention_mask,
+            "spatial_shapes": spatial_shapes,
+        }
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_values"], torch.cat(pixel_values, dim=0))
+        assert isinstance(result["pixel_attention_mask"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_attention_mask"], torch.cat(pixel_attention_mask, dim=0))
+        assert isinstance(result["spatial_shapes"], torch.Tensor)
+        assert torch.equal(result["spatial_shapes"], torch.cat(spatial_shapes, dim=0))
+
+    def test_no_op_if_not_list(self):
+        original = torch.randn(5, 3)
+        batch = {"pixel_values": original}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert torch.equal(result["pixel_values"], original)
+
+
+class TestChunkedLogProbFunction:
+    N, H, V = 64, 32, 128
+    CHUNK_SIZE = 32
+
+    def _reference_logprobs_and_entropy(self, hidden, weight, labels, temperature):
+        logits = (hidden @ weight.t()).to(torch.float32) / temperature  # [N, V]
+        log_p = F.log_softmax(logits, dim=-1)
+        logprobs = log_p.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
+        p = torch.softmax(logits, dim=-1)
+        entropy = -(p * log_p).sum(dim=-1)
+        return logprobs, entropy
+
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_forward(self, temperature):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H)
+        weight = torch.randn(self.V, self.H)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
+            hidden, weight, labels, temperature, self.CHUNK_SIZE
+        )
+        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
+
+        torch.testing.assert_close(logprobs_chunked, logprobs_ref, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(entropy_chunked, entropy_ref, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_backward(self, temperature):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=True)
+        weight = torch.randn(self.V, self.H, requires_grad=True)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        # Chunked backward
+        logprobs_chunked, _ = _ChunkedLogProbFunction.apply(hidden, weight, labels, temperature, self.CHUNK_SIZE)
+        logprobs_chunked.sum().backward()
+        grad_hidden_chunked = hidden.grad.clone()
+        grad_weight_chunked = weight.grad.clone()
+
+        hidden.grad = None
+        weight.grad = None
+
+        # Reference backward
+        logprobs_ref, _ = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
+        logprobs_ref.sum().backward()
+
+        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_backward_bfloat16(self, temperature):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, dtype=torch.bfloat16, requires_grad=True)
+        weight = torch.randn(self.V, self.H, dtype=torch.bfloat16, requires_grad=True)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        # Chunked backward
+        logprobs_chunked, _ = _ChunkedLogProbFunction.apply(hidden, weight, labels, temperature, self.CHUNK_SIZE)
+        logprobs_chunked.sum().backward()
+        grad_hidden_chunked = hidden.grad.clone()
+        grad_weight_chunked = weight.grad.clone()
+
+        hidden.grad = None
+        weight.grad = None
+
+        # Reference backward
+        logprobs_ref, _ = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
+        logprobs_ref.sum().backward()
+
+        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-2, rtol=1e-2)
+
+
+class _FakeTransformerModel(nn.Module):
+    """Minimal stand-in for a transformer body: returns random hidden states of the right shape."""
+
+    def __init__(self, hidden_size):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self._hidden = None
+
+    def forward(self, input_ids, attention_mask=None, use_cache=False, **kwargs):
+        b, s = input_ids.shape
+        if self._hidden is None or self._hidden.shape[:2] != (b, s):
+            torch.manual_seed(123)
+            self._hidden = torch.randn(b, s, self.hidden_size, requires_grad=True)
+        return type("Out", (), {"last_hidden_state": self._hidden})()
+
+
+class _FakeCausalLM(nn.Module):
+    """Minimal CausalLM with .model and .lm_head, enough for patch_chunked_lm_head."""
+
+    def __init__(self, hidden_size, vocab_size):
+        super().__init__()
+        self.config = type("Config", (), {})()
+        self.model = _FakeTransformerModel(hidden_size)
+        self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
+
+    def forward(self, input_ids, attention_mask=None, labels=None, **kwargs):
+        raise NotImplementedError("should be monkey-patched")
+
+
+_CHUNKED_LM_HEAD_MODEL_IDS = [
+    "trl-internal-testing/tiny-CohereForCausalLM",
+    "trl-internal-testing/tiny-Cohere2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Gemma2ForCausalLM",
+    "trl-internal-testing/tiny-GemmaForCausalLM",
+    "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+    "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.1",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    pytest.param(
+        "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.3.0"),
+            reason="Nemotron 3 was introduced in transformers>=5.3.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Olmo3ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("4.57.0"),
+            reason="Olmo 3 was introduced in transformers>=4.57.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3",
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
+    "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
+]
+
+
+@require_torch_accelerator
+class TestPatchChunkedLMHead:
+    B, S = 4, 16  # batch size, sequence length (including prompt + completion)
+    H, V = 32, 128
+    CHUNK_SIZE = 32
+
+    def _build_model_and_inputs(self, temperature=1.0):
+        torch.manual_seed(42)
+        model = _FakeCausalLM(self.H, self.V)
+        patch_chunked_lm_head(model, self.CHUNK_SIZE, temperature)
+
+        input_ids = torch.randint(0, self.V, (self.B, self.S))
+        attention_mask = torch.ones(self.B, self.S, dtype=torch.long)
+        # First half of each sequence is prompt (0), second half is completion (1)
+        completion_mask = torch.zeros(self.B, self.S, dtype=torch.float32)
+        completion_mask[:, self.S // 2 :] = 1.0
+        return model, input_ids, attention_mask, completion_mask
+
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_dummy_model_chunked_forward_with_completion_mask(self, temperature):
+        """Masked forward matches unmasked forward at completion positions and is zero at prompt positions."""
+        model, input_ids, attention_mask, completion_mask = self._build_model_and_inputs(temperature)
+
+        # Run WITHOUT completion_mask (baseline — computes all positions)
+        out_full = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
+
+        # Reset hidden state cache so both runs use the same hidden states
+        model.model._hidden = None
+
+        # Run WITH completion_mask
+        out_masked = model(
+            input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, completion_mask=completion_mask
+        )
+
+        # shifted completion_mask (matching the shift in _chunked_forward)
+        shifted_mask = completion_mask[:, 1:].bool()
+
+        # At completion positions, values should match
+        torch.testing.assert_close(
+            out_masked["log_probs"][shifted_mask],
+            out_full["log_probs"][shifted_mask],
+            atol=1e-5,
+            rtol=1e-5,
+        )
+        torch.testing.assert_close(
+            out_masked["entropy"][shifted_mask],
+            out_full["entropy"][shifted_mask],
+            atol=1e-5,
+            rtol=1e-5,
+        )
+
+        # At prompt positions, values should be zero
+        prompt_mask = ~shifted_mask
+        assert (out_masked["log_probs"][prompt_mask] == 0).all()
+        assert (out_masked["entropy"][prompt_mask] == 0).all()
+
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_dummy_model_chunked_forward_completion_mask_backward(self, temperature):
+        model, input_ids, attention_mask, completion_mask = self._build_model_and_inputs(temperature)
+
+        # Full forward + backward (mask applied after, as the trainer does)
+        out_full = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
+        shifted_mask = completion_mask[:, 1:]
+        loss_full = (out_full["log_probs"] * shifted_mask).sum()
+        loss_full.backward()
+        grad_weight_full = model.lm_head.weight.grad.clone()
+
+        model.lm_head.weight.grad = None
+        model.model._hidden = None
+
+        # Masked forward + backward
+        out_masked = model(
+            input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, completion_mask=completion_mask
+        )
+        loss_masked = (out_masked["log_probs"] * shifted_mask).sum()
+        loss_masked.backward()
+        grad_weight_masked = model.lm_head.weight.grad.clone()
+
+        torch.testing.assert_close(grad_weight_masked, grad_weight_full, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_forward(self, model_id, temperature):
+        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
+        model.eval()
+
+        B, S, chunk_size = 2, 8, 32
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+
+        # Reference: standard forward → shifted logits → logprobs & entropy
+        with torch.no_grad():
+            ref_logits = model(input_ids=input_ids).logits[:, :-1, :].float() / temperature
+        shifted_labels = labels[:, 1:]
+        ref_log_p = F.log_softmax(ref_logits, dim=-1)
+        ref_logprobs = ref_log_p.gather(-1, shifted_labels.unsqueeze(-1)).squeeze(-1)
+        ref_p = ref_logits.softmax(dim=-1)
+        ref_entropy = -(ref_p * ref_log_p).sum(dim=-1)
+
+        # Chunked forward
+        patch_chunked_lm_head(model, chunk_size, temperature)
+        with torch.no_grad():
+            out = model(input_ids=input_ids, labels=labels)
+
+        torch.testing.assert_close(out["log_probs"], ref_logprobs, atol=5e-3, rtol=5e-3)
+        torch.testing.assert_close(out["entropy"], ref_entropy, atol=5e-3, rtol=5e-3)
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_backward(self, model_id, temperature):
+        model_ref = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
+        model_chunked = copy.deepcopy(model_ref)
+
+        B, S, chunk_size = 2, 8, 32
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, model_ref.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        shifted_labels = labels[:, 1:]
+
+        # Reference backward: standard logits → logprobs → backward
+        ref_logits = model_ref(input_ids=input_ids).logits[:, :-1, :].float() / temperature
+        ref_log_p = F.log_softmax(ref_logits, dim=-1)
+        ref_logprobs = ref_log_p.gather(-1, shifted_labels.unsqueeze(-1)).squeeze(-1)
+        ref_logprobs.sum().backward()
+        ref_grad = model_ref.lm_head.weight.grad.clone()
+
+        # Chunked backward
+        patch_chunked_lm_head(model_chunked, chunk_size, temperature)
+        out = model_chunked(input_ids=input_ids, labels=labels)
+        out["log_probs"].sum().backward()
+        chunked_grad = model_chunked.lm_head.weight.grad.clone()
+
+        torch.testing.assert_close(chunked_grad, ref_grad, atol=5e-2, rtol=5e-2)
+
+
+class TestComputeFlopsPerToken(TrlTestCase):
+    DENSE_MODEL_ID = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+    MOE_MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+
+    def test_seq_scaling_linear(self):
+        # Attention-score FLOPs per token scale linearly with seq_len; everything else
+        # is seq-len-independent. Doubling seq_len should double the seq-dependent delta,
+        # which differences cancel out from. `F(32k) - F(16k) == 2 * (F(16k) - F(8k))`.
+        cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
+        f_8k = compute_flops_per_token(cfg, 8192)
+        f_16k = compute_flops_per_token(cfg, 16384)
+        f_32k = compute_flops_per_token(cfg, 32768)
+        assert f_32k - f_16k == 2 * (f_16k - f_8k)
+
+    def test_tied_vs_untied_lm_head(self):
+        # Untied lm_head adds `2 * V * h` forward FLOPs, ×3 for fwd+bwd.
+        cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
+        cfg.tie_word_embeddings = True
+        f_tied = compute_flops_per_token(cfg, 16384)
+        cfg.tie_word_embeddings = False
+        f_untied = compute_flops_per_token(cfg, 16384)
+        expected_delta = 3 * 2 * cfg.vocab_size * cfg.hidden_size
+        assert f_untied - f_tied == expected_delta
+
+    def test_moe_active_vs_total_experts(self):
+        # Doubling `num_experts_per_tok` (active experts) changes FLOPs by exactly the
+        # routed-experts contribution: `num_experts_per_tok × 3 matmuls × 2 × h × moe_intermediate`
+        # per MoE layer, ×3 for fwd+bwd. Holding `num_local_experts` constant pins the
+        # router term so the delta is purely the active-expert math.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        cfg.num_experts_per_tok = 1
+        f_lo = compute_flops_per_token(cfg, 16384)
+        cfg.num_experts_per_tok = 2
+        f_hi = compute_flops_per_token(cfg, 16384)
+        moe_layers = sum(1 for i in range(cfg.num_hidden_layers) if i % cfg.decoder_sparse_step == 0)
+        per_expert_per_layer = 2 * 3 * cfg.hidden_size * cfg.moe_intermediate_size
+        expected_delta = 3 * moe_layers * (2 - 1) * per_expert_per_layer
+        assert f_hi - f_lo == expected_delta
+
+
+class TestComputeMfu(TrlTestCase):
+    def test_perfect_utilization(self):
+        # If aggregate TPS is exactly `peak * world_size / flops_per_token`, MFU is 100%.
+        flops = 100e9
+        peak = 989.5e12
+        world_size = 8
+        tps = peak * world_size / flops
+        assert compute_mfu(flops, tps, world_size, peak_flops_per_device=peak) == pytest.approx(100.0)
+
+
+class TestAdjustedMfu(TrlTestCase):
+    MOE_MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+
+    def test_consistent_with_formula(self):
+        # `adjusted_mfu(mfu, cfg, seq_len) == mfu * (full - half_attn) / full`, with
+        # `full = compute_flops_per_token(cfg, seq_len)` and
+        # `half_attn = L * 3 * 2 * n_heads * head_dim * seq_len`. Cross-check the two helpers.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        seq_len = 16384
+        flops_full = compute_flops_per_token(cfg, seq_len)
+        half_attn = cfg.num_hidden_layers * 3 * 2 * cfg.num_attention_heads * cfg.head_dim * seq_len
+        expected = 100.0 * (flops_full - half_attn) / flops_full
+        assert adjusted_mfu(100.0, cfg, seq_len) == pytest.approx(expected)
+
+    def test_proportional_to_input(self):
+        # The correction is purely multiplicative in `mfu`. `adjusted_mfu(2*x, ...)` should
+        # equal `2 * adjusted_mfu(x, ...)`.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        a = adjusted_mfu(50.0, cfg, 16384)
+        b = adjusted_mfu(100.0, cfg, 16384)
+        assert b == pytest.approx(2 * a)
+
+    def test_decreases_with_seq_len(self):
+        # Longer sequences → attention takes a larger share of total compute → causal
+        # correction subtracts a larger absolute amount → factor strictly decreases.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        f_short = adjusted_mfu(100.0, cfg, 4096)
+        f_med = adjusted_mfu(100.0, cfg, 16384)
+        f_long = adjusted_mfu(100.0, cfg, 65536)
+        assert f_short > f_med > f_long

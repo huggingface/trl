@@ -1,7 +1,10 @@
-# TRL - Transformer Reinforcement Learning
+# TRL - Transformers Reinforcement Learning
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png" alt="TRL Banner">
+    <picture>
+        <source media="(prefers-color-scheme: light)" srcset="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_light.png">
+        <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png" alt="TRL Banner">
+    </picture>
 </div>
 
 <hr> <br>
@@ -14,21 +17,27 @@
     <a href="https://github.com/huggingface/trl/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/huggingface/trl.svg?color=blue"></a>
     <a href="https://huggingface.co/docs/trl/index"><img alt="Documentation" src="https://img.shields.io/website?label=documentation&url=https%3A%2F%2Fhuggingface.co%2Fdocs%2Ftrl%2Findex&down_color=red&down_message=offline&up_color=blue&up_message=online"></a>
     <a href="https://github.com/huggingface/trl/releases"><img alt="GitHub release" src="https://img.shields.io/github/release/huggingface/trl.svg"></a>
-    <a href="https://huggingface.co/trl-lib"><img alt="Hugging Face Hub" src="https://img.shields.io/badge/🤗%20Hub-trl--lib-yellow"></a> 
+    <a href="https://huggingface.co/trl-lib"><img alt="Hugging Face Hub" src="https://img.shields.io/badge/🤗%20Hub-trl--lib-yellow"></a>
 </p>
+
+## 🎉 What's New
+
+**TRL v1:** We released TRL v1 — a major milestone that marks a real shift in what TRL is. Read the [blog post](https://huggingface.co/blog/trl-v1) to learn more.
+
+**🚢 Harbor:** We now support [Harbor](https://huggingface.co/docs/trl/harbor) — train agents against sandboxed task suites (instruction + sandbox image + in-sandbox verifier) via [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer)'s `environment_factory`.
 
 ## Overview
 
-TRL is a cutting-edge library designed for post-training foundation models using advanced techniques like Supervised Fine-Tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO). Built on top of the [🤗 Transformers](https://github.com/huggingface/transformers) ecosystem, TRL supports a variety of model architectures and modalities, and can be scaled-up across various hardware setups.
+TRL is a cutting-edge library designed for post-training foundation models using advanced techniques like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO), and Direct Preference Optimization (DPO). Built on top of the [🤗 Transformers](https://github.com/huggingface/transformers) ecosystem, TRL supports a variety of model architectures and modalities, and can be scaled-up across various hardware setups.
 
 ## Highlights
 
 - **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer) and more.
 
-- **Efficient and scalable**: 
-    - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like [DDP](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html) and [DeepSpeed](https://github.com/deepspeedai/DeepSpeed).
-    - Full integration with [🤗 PEFT](https://github.com/huggingface/peft) enables training on large models with modest hardware via quantization and LoRA/QLoRA.
-    - Integrates [🦥 Unsloth](https://github.com/unslothai/unsloth) for accelerating training using optimized kernels.
+- **Efficient and scalable**:
+  - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like [DDP](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html) and [DeepSpeed](https://github.com/deepspeedai/DeepSpeed).
+  - Full integration with [🤗 PEFT](https://github.com/huggingface/peft) enables training on large models with modest hardware via quantization and LoRA/QLoRA.
+  - Integrates [🦥 Unsloth](https://github.com/unslothai/unsloth) for accelerating training using optimized kernels.
 
 - **Command Line Interface (CLI)**: A simple interface lets you fine-tune with models without needing to write code.
 
@@ -60,7 +69,6 @@ git clone https://github.com/huggingface/trl.git
 
 ## Quick Start
 
-
 For more flexibility and control over training, TRL provides dedicated trainer classes to post-train language models or PEFT adapters on a custom dataset. Each trainer in TRL is a light wrapper around the 🤗 Transformers trainer and natively supports distributed training methods like DDP, DeepSpeed ZeRO, and FSDP.
 
 ### `SFTTrainer`
@@ -87,20 +95,20 @@ trainer.train()
 ```python
 from datasets import load_dataset
 from trl import GRPOTrainer
+from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-# Dummy reward function: count the number of unique characters in the completions
-def reward_num_unique_chars(completions, **kwargs):
-    return [len(set(c)) for c in completions]
+dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = GRPOTrainer(
-    model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs=reward_num_unique_chars,
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
 trainer.train()
 ```
+
+> [!NOTE]
+> For reasoning models, use the `reasoning_accuracy_reward()` function for better results.
 
 ### `DPOTrainer`
 
@@ -108,18 +116,13 @@ trainer.train()
 
 ```python
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import DPOConfig, DPOTrainer
+from trl import DPOTrainer
 
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
-training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
+
 trainer = DPOTrainer(
-    model=model,
-    args=training_args,
+    model="Qwen/Qwen3-0.6B",
     train_dataset=dataset,
-    processing_class=tokenizer
 )
 trainer.train()
 ```
@@ -129,23 +132,13 @@ trainer.train()
 Here is a basic example of how to use the [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer):
 
 ```python
-from trl import RewardConfig, RewardTrainer
+from trl import RewardTrainer
 from datasets import load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-model = AutoModelForSequenceClassification.from_pretrained(
-    "Qwen/Qwen2.5-0.5B-Instruct", num_labels=1
-)
-model.config.pad_token_id = tokenizer.pad_token_id
 
 dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-training_args = RewardConfig(output_dir="Qwen2.5-0.5B-Reward", per_device_train_batch_size=2)
 trainer = RewardTrainer(
-    args=training_args,
-    model=model,
-    processing_class=tokenizer,
+    model="Qwen/Qwen2.5-0.5B-Instruct",
     train_dataset=dataset,
 )
 trainer.train()
@@ -171,7 +164,7 @@ trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --output_dir Qwen2.5-0.5B-DPO 
 ```
 
-Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/main/en/clis) or use `--help` for more details.
+Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/clis) or use `--help` for more details.
 
 ## Development
 
@@ -183,16 +176,27 @@ cd trl/
 pip install -e .[dev]
 ```
 
+## Experimental
+
+A minimal incubation area is available under `trl.experimental` for unstable / fast-evolving features. Anything there may change or be removed in any release without notice.
+
+Example:
+
+```python
+from trl.experimental.new_trainer import NewTrainer
+```
+
+Read more in the [Experimental docs](https://huggingface.co/docs/trl/experimental_overview).
+
 ## Citation
 
 ```bibtex
-@misc{vonwerra2022trl,
-  author = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang and Kashif Rasul and Quentin Gallouédec},
-  title = {TRL: Transformer Reinforcement Learning},
-  year = {2020},
-  publisher = {GitHub},
-  journal = {GitHub repository},
-  howpublished = {\url{https://github.com/huggingface/trl}}
+@software{vonwerra2020trl,
+  title   = {{TRL: Transformers Reinforcement Learning}},
+  author  = {von Werra, Leandro and Belkada, Younes and Tunstall, Lewis and Beeching, Edward and Thrush, Tristan and Lambert, Nathan and Huang, Shengyi and Rasul, Kashif and Gallouédec, Quentin},
+  license = {Apache-2.0},
+  url     = {https://github.com/huggingface/trl},
+  year    = {2020}
 }
 ```
 

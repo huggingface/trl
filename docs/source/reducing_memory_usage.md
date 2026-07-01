@@ -1,54 +1,45 @@
 # Reducing Memory Usage
 
-<Tip warning={true}>
+Training workflows can often be optimized to **reduce memory consumption**, and TRL provides several built-in features to help achieve this.
 
-Section under construction. Feel free to contribute!
+Below, we outline these techniques and recommend experimenting with different combinations to figure out which configuration works best for your specific setup.
 
-</Tip>
+Each method includes examples for the supported trainers. If you're unsure whether a technique is compatible with your trainer, please take a look at the corresponding trainer documentation.
+
+For additional strategies, such as **gradient checkpointing**, which is supported across all trainers, see the [`transformers` performance guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).
 
 ## Truncation
 
 Sequence lengths in the dataset can vary widely. When data is batched, sequences are padded to match the longest one in the batch, which can cause high memory usage, even if most sequences are relatively short.
 
-<div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/why_you_should_truncate.png" alt="Truncation prompt completion" width="600"/>
-</div>
+![Truncation prompt-completion](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/why_you_should_truncate.png)
 
 To reduce memory usage, it's important to truncate sequences to a reasonable length. While TRL trainers truncate sequences by default, you may want to adjust the default truncation length to better align with your specific use case.
 
-<hfoptions id="dpo">
+<hfoptions id="truncation">
 <hfoption id="DPO">
 
-DPO truncation is applied first to the prompt and to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is then used to truncate the resulting sequence.
+DPO truncation is controlled via `max_length`, which truncates the combined prompt+completion sequence.
 
-<div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png" alt="Truncation prompt completion" width="600"/>
-</div>
+![DPO truncation](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png)
 
-To set the truncation parameters, use the following code snippet:
+To set the truncation parameter, use the following code snippet:
 
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., max_prompt_length=..., max_length=...)
+training_args = DPOConfig(..., max_length=...)
 ```
 
-You can also use the `max_completion_length` parameter to truncate the completion, though this is less common since the goal is typically to preserve the completion's full length whenever possible.
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(..., max_completion_length=...)
-```
+> [!WARNING]
+> The legacy `max_prompt_length` and `max_completion_length` parameters are now removed; instead, filter or pre-truncate overlong prompts/completions in your dataset before training.
 
 </hfoption>
 <hfoption id="SFT">
 
 SFT truncation is applied to the input sequence via the `max_length` parameter.
 
-<div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_input_ids.png" alt="Truncation input ids" width="600"/>
-</div>
+![Truncation input ids](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_input_ids.png)
 
 To set the truncation parameter, use the following code snippet:
 
@@ -61,52 +52,158 @@ training_args = SFTConfig(..., max_length=...)
 </hfoption>
 </hfoptions>
 
+### How to choose the `max_length` value?
+
+If `max_length` is too small, a significant portion of your tokens will be discarded and won't contribute to training. If it's too large, memory usage can spike, potentially leading to out-of-memory (OOM) errors. Without packing or padding-free, a large `max_length` may also result in inefficient training, as many tokens will be padding.
+
+To help you choose an appropriate value, we provide a utility to visualize the sequence length distribution in your dataset.
+
+<iframe src="https://trl-lib-dataset-length-profiler.hf.space" frameborder="0" width="100%" height="1000"></iframe>
+
 ## Packing
 
-<Tip>
-
-This technique applies only to SFT.
-
-</Tip>
-
+> [!TIP]
+> This technique is available only for **SFT** training and setups that use **FlashAttention** (or its variants).
 
 [Truncation](#truncation) has several drawbacks:
-1. **Loss of information**: Key data at the end of a sequence may be discarded.
-2. **Choosing truncation length**: Too short loses data; too long undermines efficiency.
 
-Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.10683), addresses these issues by grouping sequences instead of truncating. It concatenates and splits dataset sequences into the desired lengths.
+1. **Loss of information**: Important tokens at the end of sequences may be discarded.
+2. **Choosing truncation length**: Too short loses data; too long reduces efficiency.
 
-<div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing.png" alt="Packing" width="600"/>
-</div>
+Packing mitigates these issues by grouping multiple sequences into the same training row, filling each row up to `max_length`.
 
-Packing eliminates padding, preserves all sequence information, and allows for flexible sequence lengths, making it a more efficient alternative to truncation. To enable packing, use `packing=True` in the [`SFTConfig`]:
+![Packing](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_3.png)
+
+TRL implements packing using **Best-Fit Decreasing (BFD)** bin packing, which groups sequences efficiently while minimizing padding. When a sequence exceeds `max_length`, different strategies determine how the overflow tokens are handled.
+
+TRL supports three strategies:
+
+* `"bfd"` (default): Uses **Best-Fit Decreasing packing**. If a sequence exceeds `max_length`, the overflow tokens are discarded.
+
+* `"bfd_split"`: Uses **Best-Fit Decreasing packing**, but long sequences are split into chunks ≤ `max_length` before packing. This preserves all tokens and follows the approach proposed in [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830).
+
+* `"wrapped"`: All tokens are concatenated into a stream and split into fixed-length blocks. This minimizes padding but may mix unrelated examples. This strategy corresponds to the *concatenate-then-split* preprocessing described in the literature (e.g., [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830)). It has the downside of breaking sequence continuity for a large fraction of the dataset, which hurts performance, as discussed in the [Qwen3-Coder-Next Technical Report](https://huggingface.co/papers/2603.00729).
+
+> [!NOTE]
+> If all sequences are shorter than `max_length`, **`bfd` and `bfd_split` behave identically**, since no truncation or splitting is required.
 
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., packing=True, max_length=512)
+training_args = SFTConfig(
+    ...,
+    packing=True,
+    packing_strategy="bfd",
+    max_length=512,
+)
 ```
 
-<Tip warning={true}>
+## PEFT for parameter-efficient fine-tuning
 
-Packing may cause batch contamination, where adjacent sequences influence one another. This can be problematic for some applications. For more details, see [#1230](https://github.com/huggingface/trl/issues/1230).
+Parameter-Efficient Fine-Tuning (PEFT) methods like LoRA are among the most effective techniques for reducing memory usage during training. Instead of training all model parameters, PEFT methods train only a small number of adapter parameters, significantly reducing memory requirements and enabling fine-tuning of larger models on limited hardware.
 
-</Tip>
+For comprehensive details on using PEFT with TRL, including various adapter methods, quantization options, and advanced configurations, see [PEFT Integration](peft_integration).
+
+To use PEFT for reducing memory usage:
+
+```python
+from datasets import load_dataset
+from peft import LoraConfig
+from trl import SFTTrainer
+
+dataset = load_dataset("trl-lib/Capybara", split="train")
+
+peft_config = LoraConfig()
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-0.5B",
+    train_dataset=dataset,
+    peft_config=peft_config,
+)
+```
+
+PEFT can be combined with other memory reduction techniques such as quantization (4-bit or 8-bit) for even greater memory savings. See [PEFT Integration](peft_integration) for quantization examples.
+
+## Liger for reducing peak memory usage
+
+[Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduce memory usage by 60%.
+
+For more information, see [Liger Kernel Integration](liger_kernel_integration).
+
+To use Liger for reducing peak memory usage, use the following code snippet:
+
+<hfoptions id="liger">
+<hfoption id="SFT">
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="DPO">
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```python
+from trl.experimental.kto import KTOConfig
+
+training_args = KTOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="GKD">
+
+```python
+from trl.experimental.gkd import GKDConfig
+
+training_args = GKDConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+</hfoptions>
+
+## Chunked cross-entropy for reducing peak memory usage
+
+At large vocabulary sizes, the `[batch × seq_len × vocab]` logits tensor produced by the LM head is one of the dominant activations held in memory across forward and backward. `loss_type="chunked_nll"` in [`SFTTrainer`] avoids materializing it all at once: positions with `labels == -100` are dropped *before* the `lm_head` matmul, and the cross-entropy is computed in chunks of tokens using gradient checkpointing, so peak activation memory scales with `chunk_size × vocab_size` instead of `(batch × seq_len) × vocab_size`.
+
+Same math as the standard `"nll"` loss — this is a memory optimization, not a new loss. It is the **default** in [`SFTTrainer`]; to opt out, set `loss_type="nll"`:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., loss_type="nll")  # opt out of the default chunked path
+```
+
+Expect **typically ~30 % less peak VRAM, up to ~50 %** on large-vocab models (measured on `Qwen3-1.7B`, vocab ≈ 151k — ~30 % on single-GPU, up to ~50 % under FSDP2 × 4 GPUs) with wall time typically neutral or slightly faster. See the [PR #5575](https://github.com/huggingface/trl/pull/5575) for the full benchmark across single-GPU, DDP, FSDP2, packing, long-context, and fp32 configurations.
+
+Not compatible with `use_liger_kernel=True`, PEFT, or VLM.
 
 ## Padding-free
 
 Padding-free batching is an alternative approach for reducing memory usage. In this method, a batch is first sampled and then flattened into a single sequence, avoiding padding. Unlike packing, which can result in incomplete sequences by combining parts of different samples, padding-free batching ensures that all sequences remain complete and intact.
 
-<div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/padding-free.png" alt="Padding-free batching" width="600"/>
-</div>
+![Padding-free](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/padding-free.png)
 
-<Tip warning={true}>
-
-It's highly recommended to use padding-free batching with **Flash Attention 2**. Otherwise, you may encounter batch contamination issues.
-
-</Tip>
+> [!WARNING]
+> It's highly recommended to use padding-free batching with **FlashAttention 2** or **FlashAttention 3**. Otherwise, you may encounter batch contamination issues.
 
 <hfoptions id="padding-free">
 <hfoption id="DPO">
@@ -114,7 +211,7 @@ It's highly recommended to use padding-free batching with **Flash Attention 2**.
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention_2"})
+training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"})
 ```
 
 </hfoption>
@@ -123,7 +220,7 @@ training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_imple
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention_2"})
+training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"})
 ```
 
 </hfoption>
@@ -135,39 +232,46 @@ Activation offloading is a memory efficiency technique that reduces GPU VRAM usa
 
 To enable activation offloading in your SFT training configuration:
 
-</hfoption>
-<hfoption id="SFT">
-
 ```python
 from trl import SFTConfig
 
 training_args = SFTConfig(..., activation_offloading=True)
 ```
 
+Under the hood, activation offloading implements PyTorch's [`saved_tensors_hooks`](https://pytorch.org/tutorials/intermediate/autograd_saved_tensors_hooks_tutorial.html#hooks-for-autograd-saved-tensors) to intercept activations during the forward pass. It intelligently manages which tensors to offload based on size and context, avoiding offloading output tensors that would be inefficient. For performance optimization, it can, via a flag (which is true by default), use CUDA streams to overlap computation with CPU-GPU transfers.
+
+## Padding Sequences to a Multiple
+
+> [!TIP]
+> This technique is supported for **SFT** and **Reward** trainers currently.
+
+When enabled, this option ensures that all sequences are **padded to a multiple** of the specified value.  
+This can improve computational efficiency on some hardware by aligning sequence lengths to memory-friendly boundaries.
+
+<hfoptions id="pad_to_multiple_of">
+<hfoption id="SFT">
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., pad_to_multiple_of=2048)
+```
+
+</hfoption>
+<hfoption id="Reward">
+
+```python
+from trl import RewardConfig
+
+training_args = RewardConfig(..., pad_to_multiple_of=2048)
+```
+
 </hfoption>
 </hfoptions>
 
-<Tip warning={true}>
-
-When using activation offloading with models that use Liger kernels, you must disable Liger cross entropy due to compatibility issues. The issue occurs specifically with `use_liger_kernel=True` because Liger cross entropy performs in-place operations which conflict with activation offloading. The default setting (`use_liger_kernel=False`) works:
-
-```python
-# When using activation offloading with a model that uses Liger kernels:
-from trl import SFTConfig
-
-training_args = SFTConfig(
-    activation_offloading=True,
-    use_liger_kernel=False,  # Disable Liger cross entropy
-    # Other parameters...
-)
-```
-</Tip>
-
-Under the hood, activation offloading implements PyTorch's [`saved_tensors_hooks`](https://pytorch.org/tutorials/intermediate/autograd_saved_tensors_hooks_tutorial.html#hooks-for-autograd-saved-tensors) to intercept activations during the forward pass. It intelligently manages which tensors to offload based on size and context, avoiding offloading output tensors which would be inefficient. For performance optimization, it can optionally use CUDA streams to overlap computation with CPU-GPU transfers.
-
 ## Disabling model gathering for generation in online methods
 
-When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Online methods involve generating completions from the model as part of the training process. During this step, the model weights are temporarily gathered on a single GPU for generation. For very large models, this gathering can lead to out-of-memory (OOM) errors, as described in this issue: [#2250](https://github.com/huggingface/trl/issues/2250#issue-2598304204).
+When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Online methods involve generating completions from the model as part of the training process. During this step, the model weights are temporarily gathered on a single GPU for generation. For very large models, this gathering can lead to OOM errors, as described in this issue: [#2250](https://github.com/huggingface/trl/issues/2250#issue-2598304204).
 
 If you encounter this issue, you can disable the gathering of model weights for generation by setting the following parameter:
 
@@ -184,7 +288,7 @@ training_args = GRPOConfig(..., ds3_gather_for_generation=False)
 <hfoption id="Online DPO">
 
 ```python
-from trl import OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(..., ds3_gather_for_generation=False)
 ```
@@ -193,7 +297,7 @@ training_args = OnlineDPOConfig(..., ds3_gather_for_generation=False)
 <hfoption id="PPO">
 
 ```python
-from trl import PPOConfig
+from trl.experimental.ppo import PPOConfig
 
 training_args = PPOConfig(..., ds3_gather_for_generation=False)
 ```
@@ -211,3 +315,45 @@ training_args = RLOOConfig(..., ds3_gather_for_generation=False)
 </hfoptions>
 
 This adjustment prevents model weights from being gathered, avoiding OOM errors, but it may result in slower generation speeds.
+
+## vLLM sleep mode
+
+When using **vLLM** as the generation backend for online training methods, you can enable _sleep mode_ to offload vLLM parameters and cache to CPU RAM during the optimization step and reload them back to GPU VRAM when needed for weight synchronization and generation.
+
+<hfoptions id="vllm_sleep">
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., vllm_enable_sleep_mode=True)
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(..., vllm_enable_sleep_mode=True)
+```
+
+</hfoption>
+</hfoptions>
+
+Offloading the vLLM weights and cache helps keep GPU memory usage low, which can be particularly beneficial when training large models or using limited GPU resources. However, waking the vLLM engine from sleep mode introduces some host–device transfer latency, which may slightly impact training speed.
+
+## Gradient checkpointing
+
+Gradient checkpointing trades compute for memory by not storing all intermediate activations during the forward pass, recomputing them during the backward pass instead.
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., gradient_checkpointing=True)
+```
+
+> [!NOTE]
+> Gradient checkpointing is enabled by default in all trainers to optimize memory usage. You can disable it by setting `gradient_checkpointing=False` if needed.
+
+For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).

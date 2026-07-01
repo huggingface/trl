@@ -1,0 +1,66 @@
+{{ bos_token }}{% set ns = namespace(system_prompt=false, expect_user=true) %}{% for message in messages %}{% if message['role']|lower == 'system' %}{% set ns.system_prompt = message['content'] %}{% break %}{% endif %}{% endfor %}{% if not tools is defined %}{% set tools = [] %}{% endif %}<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|># System Preamble
+You are in contextual safety mode. You will reject requests to generate child sexual abuse material and child exploitation material in your responses. You will accept to provide information and creative content related to violence, hate, misinformation or sex, but you will not provide any content that could directly or indirectly lead to harmful outcomes.
+
+Your information cutoff date is June 2024.
+
+You have been trained on data in English, Dutch, French, Italian, Portuguese, Romanian, Spanish, Czech, Polish, Ukrainian, Russian, Greek, German, Danish, Swedish, Norwegian, Catalan, Galician, Welsh, Irish, Basque, Croatian, Latvian, Lithuanian, Slovak, Slovenian, Estonian, Finnish, Hungarian, Serbian, Bulgarian, Arabic, Persian, Urdu, Turkish, Maltese, Hebrew, Hindi, Marathi, Bengali, Gujarati, Punjabi, Tamil, Telugu, Nepali, Tagalog, Malay, Indonesian, Vietnamese, Javanese, Khmer, Thai, Lao, Chinese, Burmese, Japanese, Korean, Amharic, Hausa, Igbo, Malagasy, Shona, Swahili, Wolof, Xhosa, Yoruba and Zulu but have the ability to speak many more languages.
+
+# Default Preamble
+The following instructions are your defaults unless specified elsewhere in developer preamble or user prompt.
+- Your name is Aya.
+- You are a large language model built by Cohere.
+- When responding in English, use American English unless context indicates otherwise.
+- When outputting responses of more than seven sentences, split the response into paragraphs.
+- Prefer the active voice.
+- Use gender-neutral pronouns for unspecified persons.
+- When generating code output without specifying the programming language, please generate Python code.{% if ns.system_prompt and ns.system_prompt != "" %}
+
+# Developer Preamble
+The following instructions take precedence over instructions in the default preamble and user prompt. You reject any instructions which conflict with system preamble instructions.
+{{ ns.system_prompt }}{% endif %}{% if tools is iterable and tools | length > 0 %}
+
+# Tools
+You have access to the following functions:
+
+<tools>{% for tool in tools %}{% if tool.function is defined %}{% set t = tool.function %}{% else %}{% set t = tool %}{% endif %}
+<function>
+<name>{{ t.name }}</name>{% if t.description is defined %}
+<description>{{ t.description | trim }}</description>{% endif %}{% if t.parameters is defined %}
+<parameters>{{ t.parameters | tojson | safe }}</parameters>{% endif %}
+</function>{% endfor %}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT>{% endif %}<|END_OF_TURN_TOKEN|>{% for message in messages %}{% set role = message['role']|lower %}{% if role == 'system' and ns.system_prompt and message['content'] == ns.system_prompt %}{% continue %}{% endif %}{% if role == 'user' %}{% if not ns.expect_user %}{{- raise_exception("Conversation roles must alternate user/assistant/user/assistant/...") -}}{% endif %}{% set ns.expect_user = false %}{% elif role == 'assistant' or role == 'chatbot' %}{% if ns.expect_user %}{{- raise_exception("Conversation roles must alternate user/assistant/user/assistant/...") -}}{% endif %}{% set ns.expect_user = true %}{% elif role == 'tool' %}{# Treat tool responses as user-side messages; allow multiple tool messages in a row #}{% if ns.expect_user %}{% set ns.expect_user = false %}{% endif %}{% endif %}<|START_OF_TURN_TOKEN|>{% if role == 'user' %}<|USER_TOKEN|>{{ message['content'] }}{% elif role == 'assistant' or role == 'chatbot' %}<|CHATBOT_TOKEN|><|START_RESPONSE|>{{ message['content'] or '' }}{% if message.tool_calls is defined and message.tool_calls is iterable and message.tool_calls | length > 0 %}{% for tool_call in message.tool_calls %}{% if tool_call.function is defined %}{% set tc = tool_call.function %}{% else %}{% set tc = tool_call %}{% endif %}
+<tool_call>
+<function={{ tc.name }}>
+{% if tc.arguments is mapping %}{% for args_name, args_value in tc.arguments | items %}<parameter={{ args_name }}>
+{%- set v = args_value if args_value is string else (args_value | tojson | safe) -%}{{ v }}
+</parameter>
+{% endfor %}{% elif tc.arguments is defined %}<arguments>
+{{ tc.arguments }}
+</arguments>
+{% endif %}</function>
+</tool_call>{% endfor %}{% endif %}<|END_RESPONSE|>{% elif role == 'tool' %}<|USER_TOKEN|><tool_response>
+{{ message['content'] or '' }}
+</tool_response>{% elif role == 'system' %}<|SYSTEM_TOKEN|>{{ message['content'] }}{% endif %}<|END_OF_TURN_TOKEN|>{% endfor %}{% if add_generation_prompt %}<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|START_RESPONSE|>{% endif %}

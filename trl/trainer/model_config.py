@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -26,11 +25,11 @@ class ModelConfig:
     command line.
 
     Parameters:
-        model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
+        model_name_or_path (`str`, *optional*):
             Model checkpoint for weights initialization.
         model_revision (`str`, *optional*, defaults to `"main"`):
             Specific model version to use. It can be a branch name, a tag name, or a commit id.
-        torch_dtype (`Literal["auto", "bfloat16", "float16", "float32"]` or `None`, *optional*, defaults to `None`):
+        dtype (`Literal["auto", "bfloat16", "float16", "float32"]`, *optional*, defaults to `"float32"`):
             Override the default `torch.dtype` and load the model under this dtype. Possible values are
 
                 - `"bfloat16"`: `torch.bfloat16`
@@ -38,13 +37,9 @@ class ModelConfig:
                 - `"float32"`: `torch.float32`
                 - `"auto"`: Automatically derive the dtype from the model's weights.
 
-        trust_remote_code (`bool`, *optional*, defaults to `False`):
-            Whether to allow for custom models defined on the Hub in their own modeling files. This option should only
-            be set to `True` for repositories you trust and in which you have read the code, as it will execute code
-            present on the Hub on your local machine.
-        attn_implementation (`str` or `None`, *optional*, defaults to `None`):
-            Which attention implementation to use. You can run `--attn_implementation=flash_attention_2`, in which case
-            you must install this manually by running `pip install flash-attn --no-build-isolation`.
+        attn_implementation (`str`, *optional*):
+            Which attention implementation to use. More information in the [Kernels Hub Integrations
+            Guide](kernels_hub).
         use_peft (`bool`, *optional*, defaults to `False`):
             Whether to use PEFT for training.
         lora_r (`int`, *optional*, defaults to `16`):
@@ -53,9 +48,11 @@ class ModelConfig:
             LoRA alpha.
         lora_dropout (`float`, *optional*, defaults to `0.05`):
             LoRA dropout.
-        lora_target_modules (`Union[str, list[str]]` or `None`, *optional*, defaults to `None`):
+        lora_target_modules (`str | list[str]`, *optional*):
             LoRA target modules.
-        lora_modules_to_save (`list[str]` or `None`, *optional*, defaults to `None`):
+        lora_target_parameters (`str | list[str]`, *optional*):
+            List of target parameters for LoRA.
+        lora_modules_to_save (`list[str]`, *optional*):
             Model layers to unfreeze & train.
         lora_task_type (`str`, *optional*, defaults to `"CAUSAL_LM"`):
             Task type to pass for LoRA (use `"SEQ_CLS"` for reward modeling).
@@ -77,9 +74,11 @@ class ModelConfig:
             Quantization type (`"fp4"` or `"nf4"`).
         use_bnb_nested_quant (`bool`, *optional*, defaults to `False`):
             Whether to use nested quantization.
+        bnb_4bit_quant_storage (`str`, *optional*):
+            Quantization storage dtype.
     """
 
-    model_name_or_path: Optional[str] = field(
+    model_name_or_path: str | None = field(
         default=None,
         metadata={"help": "Model checkpoint for weights initialization."},
     )
@@ -87,22 +86,14 @@ class ModelConfig:
         default="main",
         metadata={"help": "Specific model version to use. It can be a branch name, a tag name, or a commit id."},
     )
-    torch_dtype: Optional[str] = field(
-        default=None,
+    dtype: str | None = field(
+        default="float32",
         metadata={
-            "help": "Override the default `torch.dtype` and load the model under this dtype.",
+            "help": "Override the default `torch.dtype` and load the model under this dtype. It defaults to `'float32'`.",
             "choices": ["auto", "bfloat16", "float16", "float32"],
         },
     )
-    trust_remote_code: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to allow for custom models defined on the Hub in their own modeling files. This option "
-            "should only be set to `True` for repositories you trust and in which you have read the code, as it will "
-            "execute code present on the Hub on your local machine."
-        },
-    )
-    attn_implementation: Optional[str] = field(
+    attn_implementation: str | None = field(
         default=None,
         metadata={
             "help": "Which attention implementation to use. You can run `--attn_implementation=flash_attention_2`, in "
@@ -125,11 +116,15 @@ class ModelConfig:
         default=0.05,
         metadata={"help": "LoRA dropout."},
     )
-    lora_target_modules: Optional[list[str]] = field(
+    lora_target_modules: list[str] | None = field(
         default=None,
         metadata={"help": "LoRA target modules."},
     )
-    lora_modules_to_save: Optional[list[str]] = field(
+    lora_target_parameters: list[str] | None = field(
+        default=None,
+        metadata={"help": "List of target parameters for LoRA."},
+    )
+    lora_modules_to_save: list[str] | None = field(
         default=None,
         metadata={"help": "Model layers to unfreeze & train."},
     )
@@ -169,6 +164,10 @@ class ModelConfig:
     use_bnb_nested_quant: bool = field(
         default=False,
         metadata={"help": "Whether to use nested quantization."},
+    )
+    bnb_4bit_quant_storage: str | None = field(
+        default=None,
+        metadata={"help": "Quantization storage dtype"},
     )
 
     def __post_init__(self):

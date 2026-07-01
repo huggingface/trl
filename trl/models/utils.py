@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,123 +13,35 @@
 # limitations under the License.
 
 import itertools
+import warnings
+from collections.abc import Callable
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any
 
+import accelerate
 import torch.nn as nn
-from packaging import version
-from transformers import PreTrainedModel, PreTrainedTokenizer
+import transformers
+from accelerate import Accelerator
+from packaging.version import Version
+from torch.distributed.fsdp import FSDPModule
+from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
+from transformers import GenerationConfig, PreTrainedModel
 
-from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
+from ..import_utils import suppress_experimental_warning
 
 
-SUPPORTED_ARCHITECTURES = (
-    AutoModelForCausalLMWithValueHead,
-    AutoModelForSeq2SeqLMWithValueHead,
-)
+with suppress_experimental_warning():
+    from ..experimental.utils import create_reference_model as _create_reference_model
+
+
+if Version(accelerate.__version__) >= Version("1.11.0"):
+    from accelerate.utils.fsdp_utils import get_parameters_from_modules
 
 if TYPE_CHECKING:
-    from accelerate import Accelerator
     from deepspeed.runtime.engine import DeepSpeedEngine
     from torch.nn import Module
     from torch.nn.parallel.distributed import DistributedDataParallel
-
-
-# TODO: Add Abstract Base Class if more formats are added
-@dataclass
-class ChatMlSpecialTokens:
-    """Dataclass for special tokens used in ChatML, including system, user, assistant, bos, eos, and pad tokens."""
-
-    bos_token: str = "<|im_start|>"
-    eos_token: str = "<|im_end|>"
-    pad_token: str = "<|im_end|>"
-
-    @property
-    def system(self):
-        return f"{self.bos_token}system"
-
-    @property
-    def user(self):
-        return f"{self.bos_token}user"
-
-    @property
-    def assistant(self):
-        return f"{self.bos_token}assistant"
-
-    @property
-    def chat_template(self):
-        return (
-            "{% for message in messages %}"
-            f"{{{{'{self.bos_token}' + message['role'] + '\n' + message['content'] + '{self.eos_token}' + '\n'}}}}"
-            "{% endfor %}"
-            "{% if add_generation_prompt %}"
-            f"{{{{ '{self.assistant}\n' }}}}"
-            "{% endif %}"
-        )
-
-
-FORMAT_MAPPING = {"chatml": ChatMlSpecialTokens}
-
-
-def setup_chat_format(
-    model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizer,
-    format: Optional[Literal["chatml"]] = "chatml",
-    resize_to_multiple_of: Optional[int] = None,
-) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
-    """
-    Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
-
-    If the model already has a chat template, this will throw an error. If you want to overwrite it, please set `tokenizer.chat_template` to `None`.
-
-    Args:
-        model (`~transformers.PreTrainedModel`): The model to be modified.
-        tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
-        format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
-        resize_to_multiple_of (`int` or `None`): Number to resize the embedding layer to. Defaults to None.
-
-    Returns:
-        model (`~transformers.PreTrainedModel`): The modified model.
-        tokenizer (`~transformers.PreTrainedTokenizer`): The modified tokenizer.
-    """
-    # check if model already had a chat template
-    if tokenizer.chat_template is not None:
-        raise ValueError(
-            "Chat template is already added to the tokenizer. If you want to overwrite it, please set it to None"
-        )
-
-    # check if format available and retrieve
-    if format not in FORMAT_MAPPING:
-        raise ValueError(f"Format {format} not available. Please use one of {FORMAT_MAPPING.keys()}")
-
-    chat_format = FORMAT_MAPPING[format]()
-
-    # set special tokens and them
-    tokenizer.eos_token = chat_format.eos_token
-    tokenizer.pad_token = chat_format.pad_token
-    tokenizer.bos_token = chat_format.bos_token
-    tokenizer.add_special_tokens({"additional_special_tokens": [chat_format.bos_token, chat_format.eos_token]})
-    # set chat format for tokenizer
-    tokenizer.chat_template = chat_format.chat_template
-
-    # resize embedding layer to a multiple of 64, https://x.com/karpathy/status/1621578354024677377
-    model.resize_token_embeddings(
-        len(tokenizer), pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None
-    )
-    # Update the model config to use the new eos & bos tokens
-    if getattr(model, "config", None) is not None:
-        model.config.pad_token_id = tokenizer.pad_token_id
-        model.config.bos_token_id = tokenizer.bos_token_id
-        model.config.eos_token_id = tokenizer.eos_token_id
-    # Update the generation config to use the new eos & bos token
-    if getattr(model, "generation_config", None) is not None:
-        model.generation_config.bos_token_id = tokenizer.bos_token_id
-        model.generation_config.eos_token_id = tokenizer.eos_token_id
-        model.generation_config.pad_token_id = tokenizer.pad_token_id
-
-    return model, tokenizer
 
 
 def remove_hooks(model: "DeepSpeedEngine") -> None:
@@ -175,7 +87,16 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
         optimizer_offload = model.optimizer
     else:
         raise RuntimeError("The model optimizer is None, which is not yet supported.")
-    if version.parse(deepspeed.__version__) >= version.parse("0.16.4"):
+
+    # Invalidate parameter coordinator trace to prevent stale state
+    # after generation forward passes (fixes ZeRO-3 + GKD compatibility)
+    if hasattr(optimizer_offload, "param_coordinator"):  # param_coordinator only exists in ZeRO stage 3
+        coordinator = optimizer_offload.param_coordinator
+        # Only invalidate if trace is not already invalid
+        if not coordinator.is_invalid_trace():
+            coordinator._invalidate_trace()
+
+    if Version(deepspeed.__version__) >= Version("0.16.4"):
         # Account for renaming in https://github.com/deepspeedai/DeepSpeed/pull/6847
         optimizer_offload._register_deepspeed_module(optimizer_offload.module)
     else:
@@ -183,8 +104,8 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
 
 
 @contextmanager
-def unwrap_model_for_generation(
-    model: Union["DistributedDataParallel", "DeepSpeedEngine"],
+def _unwrap_model_for_generation(
+    model: "DistributedDataParallel | DeepSpeedEngine",
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
 ):
@@ -192,9 +113,9 @@ def unwrap_model_for_generation(
     Context manager to unwrap distributed or accelerated models for generation tasks.
 
     Args:
-        model (`Union[DistributedDataParallel, DeepSpeedEngine]`):
+        model (`DistributedDataParallel | DeepSpeedEngine`):
             Model to be unwrapped.
-        accelerator (`~accelerate.Accelerator`):
+        accelerator ([`~accelerate.Accelerator`]):
             Accelerator instance managing the model.
         gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
             Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
@@ -205,12 +126,17 @@ def unwrap_model_for_generation(
 
     Example:
     ```python
-    with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
-        generated_outputs = unwrapped_model.generate(input_ids)
+    >>> with _unwrap_model_for_generation(model, accelerator) as unwrapped_model:
+    ...     generated_outputs = unwrapped_model.generate(input_ids)
     ```
     """
     unwrapped_model = accelerator.unwrap_model(model)
-    if accelerator.state.deepspeed_plugin is not None and accelerator.state.deepspeed_plugin.zero_stage == 3:
+    is_gradient_checkpointing = unwrapped_model.is_gradient_checkpointing
+    if is_gradient_checkpointing:
+        unwrapped_model.gradient_checkpointing_disable()
+    from ..distributed import DistributedBackend
+
+    if DistributedBackend(accelerator).is_zero3:
         if not gather_deepspeed3_params:
             yield accelerator.unwrap_model(model)
         else:
@@ -222,12 +148,96 @@ def unwrap_model_for_generation(
                 add_hooks(model)
     else:
         yield unwrapped_model
+    if is_gradient_checkpointing:
+        unwrapped_model.gradient_checkpointing_enable()
+
+
+@contextmanager
+def _override_model_generation_config(model, generation_kwargs=None):
+    """
+    Context manager to temporarily override a model's generation_config with training config.
+
+    This works around transformers' config merging logic that would otherwise overwrite values matching global defaults
+    with model-specific values (see upstream issue transformers#42762; fixed in transformers v5 by PR
+    `transformers#42702`).
+
+    By temporarily setting the model's generation_config to match the passed generation_config, we avoid the conflict.
+
+    The model's original generation_config is preserved outside this context, ensuring that saved/pushed models retain
+    their intended inference behavior.
+
+    Args:
+        model: The model (typically unwrapped_model) whose generation_config to temporarily override.
+        generation_kwargs (dict): Generation kwargs to be used to override model's generation config.
+    """
+    if (
+        # Issue fixed in transformers v5 by PR transformers#42702
+        Version(transformers.__version__) >= Version("5.0.0")
+        or generation_kwargs is None
+        or not hasattr(model, "generation_config")
+    ):
+        yield model
+        return
+    # If it is a PEFT model, override the underlying base model
+    if hasattr(model, "get_base_model"):
+        model = model.get_base_model()
+    # Keep original model generation_config
+    original_config = model.generation_config
+    # Create training-specific generation config from the model's original generation config
+    # Then overwrite it with the training-specific generation kwargs
+    generation_config = GenerationConfig.from_dict(model.generation_config.to_dict())
+    generation_config.update(**generation_kwargs)
+    model.generation_config = generation_config
+    try:
+        yield
+    finally:
+        model.generation_config = original_config
+
+
+@contextmanager
+def unwrap_model_for_generation(
+    model: "DistributedDataParallel | DeepSpeedEngine",
+    accelerator: "Accelerator",
+    gather_deepspeed3_params: bool = True,
+    generation_kwargs: dict | None = None,
+):
+    """
+    Context manager to unwrap distributed or accelerated models for generation tasks.
+
+    This function unwraps distributed models (FSDP, DeepSpeed) and optionally overrides the model's generation_config
+    temporarily during generation. This is useful for applying training-specific generation parameters without
+    permanently modifying the model's original generation_config.
+
+    Args:
+        model (`DistributedDataParallel | DeepSpeedEngine`):
+            Model to be unwrapped.
+        accelerator ([`~accelerate.Accelerator`]):
+            Accelerator instance managing the model.
+        gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
+            Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
+            can be more memory-efficient but may lead to slower generation times.
+        generation_kwargs (dict, *optional*):
+            If provided, temporarily overrides the model's generation_config during generation. The original config is
+            automatically restored when exiting the context. This is useful for using different generation parameters
+            during training vs. inference.
+
+    Yields:
+        Unwrapped model with optionally overridden generation_config.
+    """
+    with (
+        _unwrap_model_for_generation(
+            model, accelerator, gather_deepspeed3_params=gather_deepspeed3_params
+        ) as unwrapped_model,
+        _override_model_generation_config(unwrapped_model, generation_kwargs=generation_kwargs),
+    ):
+        yield unwrapped_model
 
 
 def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
     """Prepares the model for DeepSpeed inference or evaluation by initializing it with the appropriate configuration.
 
-    Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
+    Adapted from accelerate:
+    https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
     """
     import deepspeed  # local import (instead of top-level) to avoid DS init interfering with other backends (like vllm): https://github.com/deepspeedai/DeepSpeed/issues/7252
 
@@ -263,30 +273,50 @@ def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
     return model
 
 
-def prepare_fsdp(model, accelerator):
-    # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1421
-    from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
-
-    # Check if the model is already a FSDP model due to `Manual Wrapping` and if so,
-    # don't wrap it again
-    if not isinstance(model, FSDP):
-        accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
+def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
+    # Check if the model is already a FSDP model due to `Manual Wrapping` and if so, don't wrap it again
+    if not isinstance(model, (FSDP, FSDPModule)):
         fsdp_plugin = accelerator.state.fsdp_plugin
-        kwargs = {
-            "sharding_strategy": fsdp_plugin.sharding_strategy or fsdp_plugin.reshard_after_forward,
-            "cpu_offload": fsdp_plugin.cpu_offload,
-            "auto_wrap_policy": fsdp_plugin.auto_wrap_policy,
-            "mixed_precision": fsdp_plugin.mixed_precision_policy,
-            "sync_module_states": fsdp_plugin.sync_module_states,
-            "backward_prefetch": fsdp_plugin.backward_prefetch,
-            "forward_prefetch": fsdp_plugin.forward_prefetch,
-            "use_orig_params": fsdp_plugin.use_orig_params,
-            "param_init_fn": fsdp_plugin.param_init_fn,
-            "ignored_modules": fsdp_plugin.ignored_modules,
-            "limit_all_gathers": fsdp_plugin.limit_all_gathers,
-            "device_id": accelerator.device,
-        }
-        model = FSDP(model, **kwargs)
+        if fsdp_plugin.fsdp_version == 1:
+            accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
+            kwargs = {
+                "sharding_strategy": fsdp_plugin.sharding_strategy or fsdp_plugin.reshard_after_forward,
+                "cpu_offload": fsdp_plugin.cpu_offload,
+                "auto_wrap_policy": fsdp_plugin.auto_wrap_policy,
+                "mixed_precision": fsdp_plugin.mixed_precision_policy,
+                "sync_module_states": fsdp_plugin.sync_module_states,
+                "backward_prefetch": fsdp_plugin.backward_prefetch,
+                "forward_prefetch": fsdp_plugin.forward_prefetch,
+                "use_orig_params": fsdp_plugin.use_orig_params,
+                "param_init_fn": fsdp_plugin.param_init_fn,
+                "ignored_modules": fsdp_plugin.ignored_modules,
+                "limit_all_gathers": fsdp_plugin.limit_all_gathers,
+                "device_id": accelerator.device,
+            }
+            model = FSDP(model, **kwargs)
+        elif fsdp_plugin.fsdp_version == 2:
+            from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+
+            mesh = getattr(accelerator, "torch_device_mesh", None)
+            if Version(accelerate.__version__) >= Version("1.11.0"):
+                ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
+            else:
+                warnings.warn(
+                    "FSDP version 2 is being used with accelerate version < 1.11.0, which may lead to incorrect "
+                    "handling of ignored modules. Please upgrade accelerate to v1.11.0 or later for proper support."
+                )
+                ignored_params = None
+            fully_shard(
+                model,
+                reshard_after_forward=fsdp_plugin.reshard_after_forward,
+                offload_policy=fsdp_plugin.cpu_offload,
+                # `fully_shard` doesn't accept `None` in case of `MixedPrecisionPolicy`
+                mp_policy=fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
+                mesh=mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)] if mesh is not None else None,
+                ignored_params=ignored_params,
+            )
+        else:
+            raise ValueError(f"FSDP version {fsdp_plugin.fsdp_version} is not supported.")
     model.eval()
     return model
 
@@ -294,25 +324,26 @@ def prepare_fsdp(model, accelerator):
 class _ForwardRedirection:
     """Implements the `forward-redirection`.
 
-    Taken from Pytorch-lightning: https://github.com/Lightning-AI/pytorch-lightning/blob/02311d03fb982560246eead7c08104481fac9579/src/lightning/pytorch/strategies/strategy.py#L602
+    Taken from Pytorch-lightning:
+    https://github.com/Lightning-AI/pytorch-lightning/blob/02311d03fb982560246eead7c08104481fac9579/src/lightning/pytorch/strategies/strategy.py#L602
 
     A method call to a wrapped module gets rerouted through the wrapper's `forward` method instead.
 
     """
 
     def __call__(
-        self, wrapper_module: nn.Module, original_module: nn.Module, method: callable, *args: Any, **kwargs: Any
+        self, wrapper_module: nn.Module, original_module: nn.Module, method: Callable, *args: Any, **kwargs: Any
     ):
         """Reroutes a method call through the `wrapper_module`'s `forward` method.
 
         Args:
             wrapper_module: The module that has `original_module` wrapped.
             original_module: The module that was wrapped inside `wrapper_module`.
-            method_name: The name of the method that should be called on the `original_module` after inputs get
+            method: The method that should be called on the `original_module` after inputs get
                 redirected through the `wrapper_module`'s `forward` method.
-            *args: The positional arguments to the method `method_name`. They will get passed to a patched
+            *args: The positional arguments to the `method`. They will get passed to a patched
                 `forward` method instead.
-            **kwargs: The keyword arguments to the method `method_name`. They will get passed to a patched
+            **kwargs: The keyword arguments to the `method`. They will get passed to a patched
                 `forward` method instead.
 
         """
@@ -339,3 +370,37 @@ class _ForwardRedirection:
 
     def on_after_outer_forward(self, wrapper_module: nn.Module, original_module: nn.Module) -> None:
         pass
+
+
+@contextmanager
+def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointing_kwargs: dict | None = None):
+    """
+    Temporarily disable gradient checkpointing, restoring the previous state afterward.
+
+    Args:
+        model (`PreTrainedModel`):
+            Model for which to temporarily disable gradient checkpointing.
+        gradient_checkpointing_kwargs (`dict` or `None`, *optional*):
+            Additional kwargs for gradient checkpointing enabling.
+    """
+    was_enabled = model.is_gradient_checkpointing
+    if was_enabled:
+        model.gradient_checkpointing_disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
+
+
+def create_reference_model(
+    model: nn.Module, num_shared_layers: int | None = None, pattern: str | None = None
+) -> nn.Module:
+    warnings.warn(
+        "The `create_reference_model` function is now located in `trl.experimental.utils`. Please update your "
+        "imports to `from trl.experimental.utils import create_reference_model`. This import path will be removed in "
+        "TRL 1.0.0.",
+        FutureWarning,
+        stacklevel=2,
+    )
+    return _create_reference_model(model, num_shared_layers=num_shared_layers, pattern=pattern)

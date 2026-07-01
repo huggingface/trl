@@ -1,0 +1,71 @@
+name: Tests (experimental)
+
+on:
+  pull_request:
+    paths:
+      # Run only when relevant files are modified
+      - "trl/experimental/**"
+      - "tests/experimental/**"
+
+env:
+  TQDM_DISABLE: 1
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  PYTORCH_ALLOC_CONF: "expandable_segments:True"
+  TRL_EXPERIMENTAL_SILENCE: 1
+
+jobs:
+  check_code_quality:
+    name: Check code quality
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: Set up Python 3.13
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: 3.13
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd  # v3.0.1
+        with:
+          extra_args: --all-files
+
+  tests:
+    name: Tests (experimental)
+    runs-on:
+      group: aws-g4dn-2xlarge
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: 3.13
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install ".[dev]"
+
+      - name: Test with pytest
+        run: |
+          source .venv/bin/activate
+          make test_experimental
