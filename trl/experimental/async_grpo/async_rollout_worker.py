@@ -239,30 +239,36 @@ class _AsyncRolloutLoop:
         self.num_completions_to_print = num_completions_to_print
         self.vllm_server_url = vllm_server_url.rstrip("/")
 
-        self.environments = None
-        environment_methods = [[] for _ in range(max_inflight_tasks)]
-        if environment_factory is not None:
-            self.environments = [environment_factory() for _ in range(max_inflight_tasks)]
-            for i, environment in enumerate(self.environments):
-                has_reset = False
-                for name, member in inspect.getmembers(environment, predicate=inspect.ismethod):
-                    if name == "reset":
-                        has_reset = True
-                    elif not name.startswith("_"):
-                        environment_methods[i].append(member)
-                if not has_reset:
-                    raise ValueError(
-                        "Each environment instance returned by `environment_factory` must define `reset`."
-                    )
+        tools = tools or []
+        self._standalone_tools = tools  # tools that are not bound to the environment
+        self.environment_factory = environment_factory
 
-        base_tools = tools or []
-        self._sync_tool_dicts = [{} for _ in range(max_inflight_tasks)]
-        for i in range(max_inflight_tasks):
-            for tool in base_tools + (environment_methods[i] if self.environments is not None else []):
-                if inspect.iscoroutinefunction(tool):
-                    raise ValueError("Asynchronous tools are not supported yet.")
-                self._sync_tool_dicts[i][tool.__name__] = tool
-        self.tools = base_tools + (environment_methods[0] if self.environments is not None else [])
+        if environment_factory is not None:
+            # Probe one instance to validate its `reset` method and extract its tool methods, used to render the tool
+            # schema in the prompt. Instances are pooled and reused (reset) across rollouts; the probe seeds the pool so
+            # it is not wasted. The pool grows only when more concurrent instances are needed than have been created so
+            # far, preserving the "construct once, reset often" contract.
+            instance = environment_factory()
+            has_reset = False
+            methods = []
+            for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                if member_name == "reset":
+                    has_reset = True
+                elif not member_name.startswith("_"):
+                    methods.append(member)
+            if not has_reset:
+                raise ValueError(
+                    "Each environment instance returned by `environment_factory` must define a callable `reset`."
+                )
+            self._environment_pool = [instance]  # reusable environment instances
+            self.tools = tools + methods
+        else:
+            self.tools = tools
+
+        # The async worker can't await tools in its tool loop, so asynchronous tools are not supported.
+        for tool in self.tools:
+            if inspect.iscoroutinefunction(tool):
+                raise ValueError("Asynchronous tools are not supported yet.")
 
         # The chat template must be prefix-preserving in multi-turn training; if the tokenizer's
         # template isn't, swap in a training-safe one.
@@ -317,7 +323,7 @@ class _AsyncRolloutLoop:
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         pending_groups: dict[int, RolloutGroup] = {}
         pending_completed: dict[int, int] = {}
-        inflight_tasks: dict[asyncio.Task, tuple[int, int]] = {}
+        inflight_tasks: dict[asyncio.Task, tuple[int, int, object]] = {}
         free_slots = set(range(self.max_inflight_tasks))
         work_iter = self._repeat_iterator()
 
@@ -358,13 +364,28 @@ class _AsyncRolloutLoop:
                         pending_completed[group_id] = 0
 
                     slot = free_slots.pop()
-                    if self.environments is not None:
-                        self.environments[slot].reset(**row)
+                    # Draw a reusable environment instance for this rollout (creating one only if the pool is exhausted)
+                    # and reset it; it is returned to the pool when the task completes.
+                    environment = None
+                    if self.environment_factory is not None:
+                        environment = (
+                            self._environment_pool.pop() if self._environment_pool else self.environment_factory()
+                        )
+                        environment.reset(**row)
+                    # Build this rollout's tool dict: the standalone tools plus the methods of its environment.
+                    methods = []
+                    if environment is not None:
+                        methods = [
+                            member
+                            for member_name, member in inspect.getmembers(environment, predicate=inspect.ismethod)
+                            if member_name != "reset" and not member_name.startswith("_")
+                        ]
+                    tool_dict = {tool.__name__: tool for tool in self._standalone_tools + methods}
 
                     task = asyncio.create_task(
-                        self._generate_one(pending_groups[group_id].prompt, tool_dict=self._sync_tool_dicts[slot])
+                        self._generate_one(pending_groups[group_id].prompt, tool_dict=tool_dict)
                     )
-                    inflight_tasks[task] = (group_id, slot)
+                    inflight_tasks[task] = (group_id, slot, environment)
 
                 if not inflight_tasks:
                     if stop_event.is_set():
@@ -377,8 +398,10 @@ class _AsyncRolloutLoop:
                     continue
 
                 for task in done:
-                    group_id, slot = inflight_tasks.pop(task)
+                    group_id, slot, environment = inflight_tasks.pop(task)
                     free_slots.add(slot)
+                    if environment is not None:
+                        self._environment_pool.append(environment)
                     if task.exception() is not None:
                         raise task.exception()
 
