@@ -33,6 +33,7 @@ from transformers import is_torch_npu_available
 if is_torch_npu_available():
     import torch_npu  # noqa: F401
 
+
 # Import DTensor for FSDP v2 support with version-aware import path
 DTensor = None
 if torch.distributed.is_available():
@@ -44,6 +45,7 @@ if torch.distributed.is_available():
             from torch.distributed._tensor import DTensor
     except (ImportError, AttributeError):
         DTensor = None
+
 
 logger = get_logger(__name__)
 

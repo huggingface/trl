@@ -71,6 +71,7 @@ from .kto_config import KTOConfig
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearKTOLoss
 
+
 if is_peft_available():
     import peft
     from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
@@ -787,6 +788,11 @@ class KTOTrainer(_BaseTrainer):
                 raise ValueError(
                     "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
                     "Only KTO loss is supported with liger-kernel."
+                )
+            if compute_metrics is not None:
+                raise ValueError(
+                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
+                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
                 )
             if self.precompute_ref_logps:
                 raise ValueError(
