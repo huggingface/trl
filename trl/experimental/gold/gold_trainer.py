@@ -241,6 +241,7 @@ class ULDLoss(nn.Module):
         self.skip_student_eos = config.uld_skip_student_eos
         self.skip_teacher_eos = config.uld_skip_teacher_eos
         self.use_extended_uld = config.use_extended_uld
+        self.token_merge_strategy = config.uld_token_merge_strategy
         self.ignore_index = -100
 
         # Add tokenizers for enhanced alignment
@@ -394,9 +395,37 @@ class ULDLoss(nn.Module):
                 distillation_losses.append(loss_i)
                 continue
 
-            # Extract answer logits
-            student_answer_logits = student_logits[i, student_start : student_start + student_size]
-            teacher_answer_logits = teacher_logits[i, teacher_start : teacher_start + teacher_size]
+            # The "bayesian" shift has no predictor logit for an answer span starting at index 0 (front-truncation can
+            # drop the whole prompt). Skip that unscorable leading span on both sides to keep them on a shared span.
+            if self.token_merge_strategy == "bayesian" and (student_start == 0 or teacher_start == 0):
+                if self.use_extended_uld:
+                    if student_byte_offsets is None or teacher_byte_offsets is None:
+                        raise ValueError("Byte offsets are required when `use_extended_uld=True`.")
+                    s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
+                    t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
+                    student_groups, teacher_groups = self._align_by_byte_offsets(s_answer, t_answer)
+                    if not student_groups or not teacher_groups:
+                        distillation_losses.append(student_logits[i].sum() * 0.0)
+                        continue
+                    # Drop the first aligned group pair (advance by the tokens it covered).
+                    student_drop, teacher_drop = len(student_groups[0]), len(teacher_groups[0])
+                else:
+                    # Drop the first positional target from both sides.
+                    student_drop = teacher_drop = 1
+
+                student_start, student_size = student_start + student_drop, student_size - student_drop
+                teacher_start, teacher_size = teacher_start + teacher_drop, teacher_size - teacher_drop
+                if student_size <= 0 or teacher_size <= 0:
+                    distillation_losses.append(student_logits[i].sum() * 0.0)
+                    continue
+
+            # Extract answer logits. "bayesian" starts one position earlier so probs[k] predicts token_ids[k].
+            if self.token_merge_strategy == "bayesian":
+                student_answer_logits = student_logits[i, student_start - 1 : student_start + student_size - 1]
+                teacher_answer_logits = teacher_logits[i, teacher_start - 1 : teacher_start + teacher_size - 1]
+            else:
+                student_answer_logits = student_logits[i, student_start : student_start + student_size]
+                teacher_answer_logits = teacher_logits[i, teacher_start : teacher_start + teacher_size]
 
             # Convert to probabilities
             student_probs = F.softmax(student_answer_logits / self.student_temperature, dim=-1)
@@ -486,20 +515,16 @@ class ULDLoss(nn.Module):
 
     def _merge_probabilities_with_alignment_groups(self, probs, alignment_groups, token_ids=None):
         """
-        Merge probabilities based on alignment groups with corrected conditional probability handling.
+        Merge probabilities based on alignment groups, using either the "observed" or "bayesian" strategy
+        (`self.token_merge_strategy`).
 
-        For a group merging tokens at positions [i, i+1, ..., i+k], we compute:
-            P_merged(y | x) = P(y | x) × P(token_{i+1} | token_i, x) × ... × P(token_{i+k} | ..., x)
+        For a group merging tokens at positions [i, ..., i+k]:
+        - "observed": multiply the marginal distribution at the FIRST position by the scalar conditional probabilities
+          of the actual later tokens.
+        - "bayesian": multiply the full distribution at the LAST position (conditioned on the actual prefix tokens) by
+          the scalar probabilities of the actual earlier tokens, following the chain rule.
 
-        Where:
-        - P(y | x) is the marginal probability distribution over all vocabulary tokens at position i
-        - token_{i+1}, ..., token_{i+k} are the ACTUAL tokens that were generated
-        - The conditional probabilities P(token_j | ..., x) are extracted as SCALARS
-        - y ranges over all vocabulary tokens at position i
-
-        This ensures the probability of the actual generated sequence is correct (by the chain rule), while introducing
-        a known bias for counterfactual tokens (since we don't have P(token_{i+k} | y, x) for y != token_i). The merged
-        distribution is unnormalized but preserves correct relative probabilities.
+        Both produce an unnormalized distribution that preserves correct relative probabilities.
 
         Args:
             probs: Probability tensor [seq_len, vocab_size]
@@ -526,31 +551,28 @@ class ULDLoss(nn.Module):
         for group_idx, group in enumerate(alignment_groups):
             # Handle probability merging
             if len(group) > 1:
-                # Multiple tokens map to this group - merge using corrected conditional probability approach
+                # Multiple tokens map to this group - merge by multiplying in the scalar probabilities of the tokens
                 if token_ids is None:
                     raise ValueError(
                         "token_ids must be provided when merging multi-token groups. "
-                        "This is required for mathematically correct probability merging."
+                        "They are needed to extract the scalar probabilities of the actually generated tokens."
                     )
 
-                # Start with the marginal distribution at the first position
-                first_pos = group[0]
-                marginal_probs = probs[first_pos]  # P(y | x₀) for all y
+                if self.token_merge_strategy == "bayesian":
+                    base_probs = probs[group[-1]]  # last position's full distribution
+                    scalar_positions = group[:-1]
+                else:
+                    base_probs = probs[group[0]]  # first position's marginal distribution
+                    scalar_positions = group[1:]
 
-                # For each subsequent token in the group, extract the SCALAR conditional probability
-                # of the actual token that was generated, and multiply
+                # Multiply base_probs by the scalar probabilities of the actual tokens at scalar_positions
                 conditional_prob_product = 1.0
-                for idx in group[1:]:
-                    # Get the actual token ID that was generated at this position
+                for idx in scalar_positions:
                     actual_token_id = token_ids[idx]
-                    # Extract its probability (scalar)
                     token_prob = probs[idx, actual_token_id].clamp_min(eps)
                     conditional_prob_product *= token_prob
 
-                # Merge: multiply the scalar conditional prob product with the entire marginal distribution
-                # This gives: P(y | x_0) × P(token_1 | token_0, x) × ... × P(token_k | ..., x)
-                # Note: This is unnormalized, but preserves the correct joint probability for the actual sequence
-                merged_probs = marginal_probs * conditional_prob_product
+                merged_probs = base_probs * conditional_prob_product
                 aligned_probs[group_idx] = merged_probs
 
             elif len(group) == 1:

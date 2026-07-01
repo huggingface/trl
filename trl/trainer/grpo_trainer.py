@@ -57,6 +57,7 @@ from transformers import (
 from transformers.utils import is_peft_available, is_rich_available
 
 from ..chat_template_utils import (
+    _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
@@ -166,7 +167,10 @@ class GRPOTrainer(_BaseTrainer):
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
-              config) with the keyword arguments in `args.model_init_kwargs`.
+              config) with the keyword arguments in `args.model_init_kwargs`. If `dtype` is not specified in
+              `args.model_init_kwargs`, it defaults to `float32`. This differs from
+              [`~transformers.PreTrainedModel.from_pretrained`], where (since Transformers v5) the dtype is inferred
+              from the model config.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
         reward_funcs (`RewardFunc | list[RewardFunc]`):
@@ -599,12 +603,20 @@ class GRPOTrainer(_BaseTrainer):
             self.async_loop_ready_event.wait()
             atexit.register(shutdown_event_loop_in_daemon, self.async_loop_thread, self.async_loop)
 
-        # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
-        # While waiting for broader adoption, we provide this utility function to manually set the response schema for
-        # known chat templates. `response_schema` lives on the (inner) tokenizer, since `parse_response` is a tokenizer
-        # method that reads `self.response_schema`.
-        if self.tools and getattr(self._tokenizer, "response_schema", None) is None:
-            processing_class = add_response_schema(processing_class)
+        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
+        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
+        if self.tools:
+            has_template = getattr(self._tokenizer, "response_template", None) is not None
+            has_schema = getattr(self._tokenizer, "response_schema", None) is not None
+            if not has_template and not has_schema:
+                processing_class = add_response_schema(processing_class)
+            elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
+                warnings.warn(
+                    "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
+                    "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
+                    "support will eventually be removed. See the Transformers response-parsing docs.",
+                    FutureWarning,
+                )
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
         if self.tools and not is_chat_template_prefix_preserving(processing_class):
@@ -1822,8 +1834,11 @@ class GRPOTrainer(_BaseTrainer):
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
-            # Decode post-tool completions.
-            post_tool_completions = [parse_response(self._tokenizer, ids) if ids else {} for ids in post_tool_ids]
+            # Decode post-tool completions
+            post_tool_completions = [
+                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx]) if ids else {}
+                for idx, ids in enumerate(post_tool_ids)
+            ]
 
             # Add post-tool completions to the existing completions
             for idx in range(len(idxs_with_tool)):
@@ -1873,12 +1888,14 @@ class GRPOTrainer(_BaseTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
-            if (
-                Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
-                and hasattr(self._tokenizer, "response_schema")  # attribute not set by default for now
-                and self._tokenizer.response_schema is not None  # only works if the tokenizer has a schema
+            if Version(transformers.__version__) >= Version("5.0.0") and (  # parse_response added in v5
+                getattr(self._tokenizer, "response_template", None) is not None  # new-style
+                or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
             ):
-                completions = [[parse_response(self._tokenizer, ids)] for ids in completion_ids]
+                completions = [
+                    [parse_response(self._tokenizer, ids, prefix=prompt_ids[i])]
+                    for i, ids in enumerate(completion_ids)
+                ]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
