@@ -352,9 +352,15 @@ class _AsyncRolloutLoop:
                     prompt = row["prompt"]
                     if observation is not None:
                         # Rebuild the last message instead of mutating in place (as GRPOTrainer does): the
-                        # same row is reused across the group's generations and across epochs.
+                        # same row is reused across the group's generations and across epochs. Normalize str vs
+                        # list (multimodal) content the same way GRPOTrainer does before concatenating.
                         last = prompt[-1]
-                        prompt = prompt[:-1] + [{**last, "content": last["content"] + observation}]
+                        content = last["content"]
+                        if isinstance(observation, list) and isinstance(content, str):
+                            content = [{"type": "text", "text": content}]
+                        if isinstance(observation, str) and isinstance(content, list):
+                            observation = [{"type": "text", "text": observation}]
+                        prompt = prompt[:-1] + [{**last, "content": content + observation}]
 
                     # Build this rollout's tool dict: the standalone tools plus the methods of its environment.
                     methods = []
@@ -544,7 +550,7 @@ class _AsyncRolloutLoop:
         running_ids = prompt_ids
         while True:
             turn_ids, turn_logprobs = await self._generate_one_turn(running_ids)
-            assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
+            assistant_message = parse_response(self.tokenizer, turn_ids, prefix=running_ids)
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
             completion_logprobs.extend(turn_logprobs)
