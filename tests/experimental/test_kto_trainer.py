@@ -774,7 +774,7 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        with pytest.raises(ValueError, match="You cannot use `use_liger_kernel=True` with Peft models"):
+        with pytest.raises(ValueError, match="`use_liger_kernel=True` is not supported with PEFT models."):
             KTOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
