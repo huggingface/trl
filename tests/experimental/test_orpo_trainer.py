@@ -217,3 +217,97 @@ class TestORPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-2]["eval_test"] == 0.0
+
+    def test_train_model_dtype(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = ORPOConfig(
+            output_dir=self.tmp_dir,
+            model_init_kwargs={"dtype": torch.float16},
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = ORPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed and are the correct dtype
+        for n, param in previous_trainable_params.items():
+            if "layernorm" in n:  # can be unchanged in CI; ignore (matches DPO's test)
+                continue
+            new_param = trainer.model.get_parameter(n)
+            assert new_param.dtype == torch.float16
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_with_eval(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        training_args = ORPOConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
+        trainer = ORPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[0]["eval_loss"] is not None
+
+    def test_train_with_gradient_checkpointing(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = ORPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            gradient_checkpointing=True,
+            report_to="none",
+        )
+        trainer = ORPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_tag_added(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        trainer = ORPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=ORPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+        )
+
+        for tag in ["orpo", "trl"]:
+            assert tag in trainer.model.model_tags
+
+    @require_peft
+    def test_tag_added_peft(self):
+        from peft import LoraConfig
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        trainer = ORPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=ORPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        for tag in ["orpo", "trl"]:
+            assert tag in trainer.model.model_tags
