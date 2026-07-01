@@ -658,6 +658,9 @@ class GRPOTrainer(_BaseTrainer):
         self.router_aux_loss_coef = args.router_aux_loss_coef
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
+        self.mgpo_reward_base = args.mgpo_reward_base
+        self.mgpo_lambda = args.mgpo_lambda
+        self.mgpo_target_success_rate = args.mgpo_target_success_rate
         self.off_policy_mask_threshold = args.off_policy_mask_threshold
         if self.use_liger_kernel and self.off_policy_mask_threshold is not None:
             raise ValueError("Liger kernel does not support off-policy sequence masking yet.")
@@ -1127,6 +1130,25 @@ class GRPOTrainer(_BaseTrainer):
         # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
         last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
+
+    @staticmethod
+    def _compute_mgpo_weights(
+        rewards: torch.Tensor,
+        num_generations: int,
+        mgpo_reward_base: float,
+        mgpo_lambda: float,
+        mgpo_target_success_rate: float,
+    ) -> torch.Tensor:
+        """
+        Compute MGPO advantage reweighting signlas relative to group success rates.
+
+        See section 3.4 of https://huggingface.co/papers/2511.06221.
+        """
+        grouped_rewards = rewards.detach().view(-1, num_generations)
+        pc = (grouped_rewards >= mgpo_reward_base).float().mean(dim=1)
+        p0 = mgpo_target_success_rate
+        d_me = pc * torch.log(pc / p0 + 1e-8) + (1 - pc) * torch.log((1 - pc) / (1 - p0) + 1e-8)
+        return torch.exp(-mgpo_lambda * d_me).repeat_interleave(num_generations)
 
     def get_high_entropy_mask(self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
         """
@@ -2407,6 +2429,16 @@ class GRPOTrainer(_BaseTrainer):
         # Unscorable completions (every reward func returned None) carry no learning signal: their reward is NaN here,
         # so zero their advantage to keep them from moving the policy.
         advantages = torch.nan_to_num(advantages, nan=0.0)
+
+        if self.mgpo_reward_base is not None:
+            w_me = self._compute_mgpo_weights(
+                rewards,
+                num_generations,
+                self.mgpo_reward_base,
+                self.mgpo_lambda,
+                self.mgpo_target_success_rate,
+            )
+            advantages = advantages * w_me
 
         # Slice to keep only the local part of the data
         process_slice = slice(
