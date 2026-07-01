@@ -131,8 +131,6 @@
     title: Online DPO
   - local: orpo_trainer
     title: ORPO
-  - local: papo_trainer
-    title: PAPO
   - local: ppo_trainer
     title: PPO
   - local: prm_trainer

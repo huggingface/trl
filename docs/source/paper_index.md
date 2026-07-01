@@ -460,31 +460,6 @@ TRL exposes the Importance Sampling granularity level through the `vllm_importan
 
 See [Experimental - GFPO](gfpo).
 
-### Perception-Aware Policy Optimization for Multimodal Reasoning
-
-**📜 Paper**: https://huggingface.co/papers/2507.06448
-
-A novel policy gradient algorithm that encourages VLMs to learn to perceive while learning to reason. This is a TRL adaptation. The TRL implementation is not the official one provided by the authors.
-This is a TRL adaptation of PAPO. Note that this is not the official implementation. The official code can be found in [MikeWangWZHL/PAPO](https://github.com/MikeWangWZHL/PAPO).
-
-```python
-from trl.experimental.papo import PAPOConfig, PAPOTrainer
-
-training_args = PAPOConfig(
-    # PAPO-specific params
-    perception_loss_weight=0.01,  # Weight for perception loss
-    mask_ratio=0.6,  # 40% of image will be masked
-    mask_type="random",  # Use patch masking (recommended)
-    der_loss_weight1=0.02,
-    der_loss_weight2=0.02,
-    # ...other GRPO params...
-)
-trainer = PAPOTrainer(
-    args=training_args,
-    ...
-)
-```
-
 ### The Art of Scaling Reinforcement Learning
 
 **📜 Paper**: https://huggingface.co/papers/2510.13786
