@@ -3402,7 +3402,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
             use_vllm=True,  # Enable vLLM
             vllm_mode="colocate",  # Use colocate mode to avoid server dependency
             vllm_gpu_memory_utilization=0.05,  # Use minimal GPU memory (5%)
-            bf16=True,  # Use bfloat16 to reduce memory
+            bf16=False,  # bf16=True raises on devices without bf16 support; this test never calls train(), so it is unused
             report_to="none",
             logging_strategy="no",
         )
