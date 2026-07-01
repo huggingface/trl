@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import os
 
 import pytest
@@ -241,6 +242,10 @@ class TestGKDTrainer(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
+    def teardown_method(self):
+        if hasattr(self, "_liger_module"):
+            importlib.reload(importlib.import_module(self._liger_module))
+
     def test_gkd_trainer(self):
         training_args = GKDConfig(
             output_dir=self.tmp_dir,
@@ -288,6 +293,7 @@ class TestGKDTrainer(TrlTestCase):
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
+        self._liger_module = trainer.model.__module__
 
         # Ensure liger fused JSD path is enabled; if not, skip (runtime may lack system libs)
         if not getattr(trainer, "use_liger_gkd_loss", False):
@@ -340,6 +346,7 @@ class TestGKDTrainer(TrlTestCase):
             eval_dataset=dummy_dataset["test"],
             processing_class=self.tokenizer,
         )
+        self._liger_module = trainer.model.__module__
 
         # evaluate() calls compute_loss with return_outputs=True; must not raise UnboundLocalError
         eval_results = trainer.evaluate()
@@ -370,6 +377,7 @@ class TestGKDTrainer(TrlTestCase):
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
+        self._liger_module = liger_trainer.model.__module__
 
         # Force student/teacher weights identical between trainers, then diverge teacher
         # so JSD is well above fp noise.
@@ -515,6 +523,7 @@ class TestGKDTrainer(TrlTestCase):
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
+        self._liger_module = trainer.model.__module__
         if not getattr(trainer, "use_liger_gkd_loss", False):
             pytest.skip("Liger fused JSD not enabled at runtime; skipping fused-loss assertion")
 
