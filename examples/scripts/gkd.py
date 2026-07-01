@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[peft]",
+#     "trackio",
+#     "kernels",
+# ]
+# ///
+
 """
 # Full training:
 python examples/scripts/gkd.py \
@@ -22,10 +30,8 @@ python examples/scripts/gkd.py \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
     --output_dir gkd-model \
-    --logging_steps 10 \
     --num_train_epochs 1 \
-    --push_to_hub \
-    --gradient_checkpointing
+    --push_to_hub
 
 # LoRA:
 python examples/scripts/gkd.py \
@@ -36,22 +42,17 @@ python examples/scripts/gkd.py \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
     --output_dir gkd-model \
-    --logging_steps 10 \
     --num_train_epochs 1 \
     --push_to_hub \
-    --gradient_checkpointing \
     --use_peft \
     --lora_r 64 \
     --lora_alpha 16
 """
 
-from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
 
 from trl import (
-    GKDConfig,
-    GKDTrainer,
     LogCompletionsCallback,
     ModelConfig,
     ScriptArguments,
@@ -60,6 +61,7 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+from trl.experimental.gkd import GKDConfig, GKDTrainer
 
 
 if __name__ == "__main__":
@@ -69,33 +71,36 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=model_args.torch_dtype,
+        dtype=model_args.dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
     )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+
     training_args.model_init_kwargs = model_kwargs
 
     teacher_model_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=model_args.torch_dtype,
+        dtype=model_args.dtype,
         use_cache=True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
     )
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+
     training_args.teacher_model_init_kwargs = teacher_model_kwargs
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         padding_side="left",
     )
     if tokenizer.pad_token is None:
@@ -105,14 +110,6 @@ if __name__ == "__main__":
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
-
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(
-            lambda x: {
-                "prompt": tokenizer.apply_chat_template(x["prompt"], tokenize=False, add_generation_prompt=True)
-            },
-            num_proc=training_args.dataset_num_proc,
-        )
 
     ################
     # Training

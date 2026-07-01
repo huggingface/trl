@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,63 +12,172 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any
 
-from transformers import TrainingArguments
+from .base_config import _BaseConfig
 
 
 @dataclass
-class RewardConfig(TrainingArguments):
+class RewardConfig(_BaseConfig):
+    # docstyle-ignore
     r"""
     Configuration class for the [`RewardTrainer`].
+
+    This class includes only the parameters that are specific to Reward training. For a full list of training
+    arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this
+    class may differ from those in [`~transformers.TrainingArguments`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
     Parameters:
-        max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the sequences (prompt + completion) in the batch, filters out entries that exceed the
-            limit. This argument is required if you want to use the default data collator.
+        > Parameters that control the model
+
+        model_init_kwargs (`dict[str, Any]`, *optional*):
+            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
+            argument of the [`RewardTrainer`] is provided as a string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForSequenceClassification.from_pretrained`] and
+            [`~transformers.AutoTokenizer.from_pretrained`].
+        chat_template_path (`str`, *optional*):
+            If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
+            or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
+            ensure that any special tokens referenced in the template are added to the tokenizer and that the model's
+            embedding layer is resized accordingly.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
-        dataset_num_proc (`int`, *optional*, defaults to `None`):
+
+        > Parameters that control the data preprocessing
+
+        dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
-        center_rewards_coefficient (`float`, *optional*, defaults to `None`):
+        eos_token (`str`, *optional*):
+            Token used to indicate the end of a turn or sequence. If `None`, it defaults to
+            `processing_class.eos_token`.
+        max_length (`int` or `None`, *optional*, defaults to `1024`):
+            Maximum length of the tokenized sequence. Samples are filtered out if either chosen or rejected sequence
+            exceeds this value. If `None`, no filtering is applied.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the sequences will be padded to a multiple of this value.
+
+        > Parameters that control the training
+
+        center_rewards_coefficient (`float`, *optional*):
             Coefficient to incentivize the reward model to output mean-zero rewards (proposed by
             https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`.
-        remove_unused_columns (`bool`, *optional*, defaults to `False`):
-            Whether to remove the columns that are not used by the model's forward pass. Can be `True` only if
-            the dataset is pretokenized.
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
+
+        > Deprecated parameters
+
+        pad_token:
+
+            <Deprecated version="1.1.0">
+
+            Parameter `pad_token` is deprecated and will be removed in version v2.0.0. Set `tokenizer.pad_token`
+            directly and pass it as `processing_class` to the trainer instead.
+
+            </Deprecated>
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `1e-4` instead of `5e-5`.
     """
 
-    max_length: Optional[int] = field(
-        default=1024,
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    # Parameters whose default values are overridden from TrainingArguments
+    learning_rate: float = field(
+        default=1e-4,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
+
+    # Parameters that control the model
+    model_init_kwargs: dict[str, Any] | str | None = field(
+        default=None,
         metadata={
-            "help": "Maximum length of the sequences (prompt + completion) in the batch, filters out entries that "
-            "exceed the limit. This argument is required if you want to use the default data collator."
+            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
+            "the `RewardTrainer` is provided as a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForSequenceClassification.from_pretrained` and `AutoTokenizer.from_pretrained`."
+        },
+    )
+    chat_template_path: str | None = field(
+        default=None,
+        metadata={
+            "help": "If specified, sets the model's chat template. This can either be the path to a tokenizer (local "
+            "directory or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, "
+            "you must ensure that any special tokens referenced in the template are added to the tokenizer and "
+            "that the model's embedding layer is resized accordingly."
         },
     )
     disable_dropout: bool = field(
         default=True,
-        metadata={"help": "Whether to disable dropout in the model and reference model."},
+        metadata={"help": "Whether to disable dropout in the model."},
     )
-    dataset_num_proc: Optional[int] = field(
+
+    # Parameters that control the data preprocessing
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    center_rewards_coefficient: Optional[float] = field(
+    eos_token: str | None = field(
+        default=None,
+        metadata={
+            "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
+        },
+    )
+    max_length: int | None = field(
+        default=1024,
+        metadata={
+            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
+            "the right. If `None`, no truncation is applied."
+        },
+    )
+    pad_to_multiple_of: int | None = field(
+        default=None,
+        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
+    )
+
+    # Parameters that control the training
+    center_rewards_coefficient: float | None = field(
         default=None,
         metadata={
             "help": "Coefficient to incentivize the reward model to output mean-zero rewards (proposed by "
             "https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`."
         },
     )
-    remove_unused_columns: bool = field(
+    activation_offloading: bool = field(
         default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
+    )
+
+    # Deprecated parameters
+    pad_token: str | None = field(
+        default=None,
         metadata={
-            "help": "Whether to remove the columns that are not used by the model's forward pass. Can be `True` only "
-            "if the dataset is pretokenized."
+            "help": "Deprecated. Set `tokenizer.pad_token` directly and pass it as `processing_class` to the trainer instead."
         },
     )
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.pad_token is not None:
+            warnings.warn(
+                "`pad_token` is deprecated and will be removed in v2.0.0. "
+                "Set `tokenizer.pad_token` directly and pass it as `processing_class` to the trainer instead.",
+                FutureWarning,
+                stacklevel=3,
+            )

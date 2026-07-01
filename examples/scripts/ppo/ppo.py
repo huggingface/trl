@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[peft]",
+#     "trackio",
+#     "kernels",
+# ]
+# ///
+
 import shutil
 
 import torch
@@ -24,24 +32,15 @@ from transformers import (
     HfArgumentParser,
 )
 
-from trl import (
-    ModelConfig,
-    PPOConfig,
-    PPOTrainer,
-    ScriptArguments,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
-)
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+from trl import ModelConfig, ScriptArguments, get_kbit_device_map, get_peft_config, get_quantization_config
+from trl.experimental.ppo import PPOConfig, PPOTrainer
 
 
 """
 python -i examples/scripts/ppo/ppo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
     --dataset_train_split descriptiveness \
-    --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo \
+    --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-ppo \
     --per_device_train_batch_size 64 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
@@ -52,10 +51,9 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     examples/scripts/ppo/ppo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
     --dataset_train_split descriptiveness \
-    --output_dir models/minimal/ppo \
+    --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-ppo \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
-    --learning_rate 3e-6 \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 16 \
     --total_episodes 10000 \
@@ -76,39 +74,31 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
-    quantization_config = get_quantization_config(model_args)
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     model_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
+        dtype=dtype,
     )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, padding_side="left", trust_remote_code=model_args.trust_remote_code
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, padding_side="left")
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-    if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     value_model = AutoModelForSequenceClassification.from_pretrained(
-        training_args.reward_model_path, trust_remote_code=model_args.trust_remote_code, num_labels=1
+        training_args.reward_model_path, num_labels=1, **model_kwargs
     )
     reward_model = AutoModelForSequenceClassification.from_pretrained(
-        training_args.reward_model_path, trust_remote_code=model_args.trust_remote_code, num_labels=1
+        training_args.reward_model_path, num_labels=1, **model_kwargs
     )
-    policy = AutoModelForCausalLM.from_pretrained(
-        training_args.sft_model_path, trust_remote_code=model_args.trust_remote_code
-    )
+    policy = AutoModelForCausalLM.from_pretrained(training_args.sft_model_path, **model_kwargs)
 
     peft_config = get_peft_config(model_args)
     if peft_config is None:
-        ref_policy = AutoModelForCausalLM.from_pretrained(
-            training_args.sft_model_path, trust_remote_code=model_args.trust_remote_code
-        )
+        ref_policy = AutoModelForCausalLM.from_pretrained(training_args.sft_model_path, **model_kwargs)
     else:
         ref_policy = None
 

@@ -1,4 +1,0 @@
-accelerate
-datasets
-rich
-transformers>=4.46.0

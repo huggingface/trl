@@ -1,6 +1,6 @@
 # XPO Trainer
 
-[![](https://img.shields.io/badge/All_models-XPO-blue)](https://huggingface.co/models?other=xpo,trl)
+[![model badge](https://img.shields.io/badge/All_models-XPO-blue)](https://huggingface.co/models?other=xpo,trl)
 
 ## Overview
 
@@ -12,9 +12,12 @@ The abstract from the paper is the following:
 
 This post-training method was contributed by [Kashif Rasul](https://huggingface.co/kashif),  [Quentin Gallouédec](https://huggingface.co/qgallouedec) and [Lewis Tunstall](https://huggingface.co/lewtun).
 
+> [!NOTE]
+> XPO is currently experimental. The API may change without notice while the feature is iterated on.
+
 ## Quick start
 
-This example demonstrates how to train a model using the XPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and [`PairRMJudge`] as a judge. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
+This example demonstrates how to train a model using the XPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and the [trl-lib/Qwen2-0.5B-Reward](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) reward model. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
 <iframe
   src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
   frameborder="0"
@@ -27,17 +30,17 @@ Below is the script to train the model:
 ```python
 # train_xpo.py
 from datasets import load_dataset
-from trl import PairRMJudge, XPOConfig, XPOTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl.experimental.xpo import XPOConfig, XPOTrainer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-judge = PairRMJudge()
+reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
 train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-training_args = XPOConfig(output_dir="Qwen2-0.5B-XPO", logging_steps=10)
+training_args = XPOConfig(output_dir="Qwen2-0.5B-XPO")
 trainer = XPOTrainer(
-    model=model, judge=judge, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
+    model=model, reward_funcs=reward_model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
 )
 trainer.train()
 ```
@@ -52,55 +55,34 @@ Distributed across 8 GPUs, the training takes approximately 1 hour.
 
 To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-XPO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
-<pre><code>$ transformers-cli chat --model_name_or_path trl-lib/Qwen2-0.5B-XPO
+<pre><code>$ transformers chat trl-lib/Qwen2-0.5B-XPO
 <strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
 What is the best programming language?
 
 <strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-XPO&gt;:</span></strong>
-The best programming language depends on individual preferences and familiarity with coding concepts. Some popular languages include Python, Java, C++, and JavaScript. 
+The best programming language depends on individual preferences and familiarity with coding concepts. Some popular languages include Python, Java, C++, and JavaScript.
 </code></pre>
 
 ## Expected dataset type
 
-XPO requires a [prompt-only dataset](dataset_formats#prompt-only). The [`XPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+XPO requires a [prompt-only dataset](dataset_formats#prompt-only). The [`experimental.xpo.XPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 
-### Use a reward model
-
-Instead of a judge, you can chose to use a reward model -- see [Reward Bench](https://huggingface.co/spaces/allenai/reward-bench) for a leaderboard of public models you can use. Below is a code example showing how to replace a judge with the [trl-lib/Qwen2-0.5B-Reward](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) model:
-
-```diff
-- from trl import PairRMJudge
-+ from transformers import AutoModelForSequenceClassification
-
-- judge = PairRMJudge()
-+ reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
-
-  trainer = XPOTrainer(
-      ...
--     judge=judge,
-+     reward_model=reward_model,
-  )
-```
-
-<Tip warning={true}>
-
-Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
-
-</Tip>
-
 ### Encourage EOS token generation
 
-When using a reward model, we may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`XPOConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`XPOConfig`]:
+When using a reward model, we may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`experimental.xpo.XPOConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`experimental.xpo.XPOConfig`]:
 
 ```python
 training_args = XPOConfig(..., max_new_tokens=128, missing_eos_penalty=1.0)
 ```
 
+> [!WARNING]
+> Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
+
 ### Logging Completions
 
-To better understand your model’s behavior during training, you can log sample completions periodically using the [`LogCompletionsCallback`].
+To better understand your model's behavior during training, you can log sample completions periodically using the [`LogCompletionsCallback`].
 
 ```python
 trainer = XPOTrainer(..., eval_dataset=eval_dataset)
@@ -121,18 +103,17 @@ To test the XPO script with the [Qwen2.5 0.5B model](https://huggingface.co/trl-
 ```bash
 python examples/scripts/xpo.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
-    --judge pair_rm \
+    --reward_model_path trl-lib/Qwen2-0.5B-Reward \
     --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 5.0e-7 \
-    --logging_steps 25 \
-    --output_dir Qwen2.5-0.5B-XPO-PairRM \
-    --warmup_ratio 0.1 \
+    --output_dir Qwen2.5-0.5B-XPO \
+    --warmup_steps 0.1 \
     --push_to_hub
 ```
 
 ## Logged metrics
 
-The logged metrics are as follows:
+While training and evaluating we record the following reward metrics:
 
 * `loss/xpo`: The mean xpo part of the full loss.
 * `loss/dpo`: The mean dpo part of the full loss.
@@ -149,14 +130,16 @@ The logged metrics are as follows:
 * `logps/rejected`: The mean log probabilities of the rejected completions.
 * `val/model_contain_eos_token`: The amount of times the model's output contains the eos token.
 * `val/ref_contain_eos_token`: The amount of times the reference's output contains the eos token.
-* `alpha`: The weight of the XPO loss term. Typically fixed, but can be made dynamic by passing a list to [`XPOConfig`].
-* `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`XPOConfig`].
-
+* `alpha`: The weight of the XPO loss term. Typically fixed, but can be made dynamic by passing a list to [`experimental.xpo.XPOConfig`].
+* `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`experimental.xpo.XPOConfig`].
 
 ## XPOTrainer
 
-[[autodoc]] XPOTrainer
+[[autodoc]] experimental.xpo.XPOTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## XPOConfig
 
-[[autodoc]] XPOConfig
+[[autodoc]] experimental.xpo.XPOConfig
