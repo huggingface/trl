@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import accelerate
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -558,18 +560,36 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         return list(position_ids.split(example_lengths))
 
 
-@dataclass
-class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
+def _normalize_audio(audio):
+    """Normalize an audio sample to a 1-D float array suitable for an audio feature extractor.
+
+    Accepts raw `np.ndarray`, the dict format produced by older `datasets.Audio()` decoding (`{"array": np.ndarray,
+    "sampling_rate": int}`), and the `torchcodec` `AudioDecoder` object produced by newer `datasets.Audio()` decoding.
     """
-    Data collator for vision-language modeling tasks.
+    if isinstance(audio, np.ndarray):
+        return audio
+    if isinstance(audio, dict) and "array" in audio:
+        return audio["array"]
+    # torchcodec AudioDecoder: `.data` is a torch.Tensor of shape (channels, samples). Take channel 0.
+    data = audio.get_all_samples().data.numpy()
+    if data.ndim > 1:
+        data = data[0]
+    return data
+
+
+@dataclass
+class DataCollatorForMultimodalLanguageModeling(DataCollatorMixin):
+    """
+    Data collator for multimodal language modeling tasks (vision and/or audio).
 
     Unlike text-only datasets, where the collator typically receives pre-tokenized inputs ready for batching,
-    vision-language data processing involves converting images into pixel values. This conversion is disk-intensive,
-    making upfront preprocessing of the entire dataset impractical. Therefore, this collator performs tokenization and
-    image processing on-the-fly to efficiently prepare batches.
+    multimodal data processing involves converting images into pixel values or audio waveforms into log-mel features.
+    These conversions are disk-intensive, making upfront preprocessing of the entire dataset impractical. Therefore,
+    this collator performs tokenization and multimodal processing on-the-fly to efficiently prepare batches.
 
     Each input example should be a dictionary containing at least:
-    - An `"images"` key holding a list of images, or an `"image"` key holding a single image.
+    - Optionally an `"images"` key holding a list of images, or an `"image"` key holding a single image.
+    - Optionally an `"audios"` key holding a list of audio arrays, or an `"audio"` key holding a single audio array.
     - [language modeling](#language-modeling) type: either a `"messages"` key for conversational inputs or a `"text"`
       key for standard text inputs.
     - [prompt-completion](#prompt-completion) type: keys `"prompt"` and `"completion"` for the prompt and completion.
@@ -577,14 +597,15 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     The collator outputs a dictionary including:
     - `"input_ids"`: Tensor of token IDs.
     - `"attention_mask"`: Tensor indicating attention mask.
-    - `"pixel_values"`: Tensor representing image pixel values.
+    - `"pixel_values"`: Tensor representing image pixel values (vision models).
+    - `"input_features"` / `"feature_attention_mask"`: log-mel features and audio mask (audio models).
     - `"labels"`: Tensor for training labels.
 
     Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"image_position_ids"`.
 
     Args:
         processor ([`~transformers.ProcessorMixin`]):
-            The processor used to tokenize text and process images. It must be a subclass of
+            The processor used to tokenize text and process images / audio. It must be a subclass of
             [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
         max_length (`int`, *optional*):
             Maximum sequence length for input tokens. If `None`, no truncation is applied.
@@ -601,11 +622,11 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     Example:
     ```python
-    >>> from trl.trainer.sft_trainer import DataCollatorForVisionLanguageModeling
+    >>> from trl.trainer.sft_trainer import DataCollatorForMultimodalLanguageModeling
     >>> from transformers import AutoProcessor
 
     >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
-    >>> collator = DataCollatorForVisionLanguageModeling(processor)
+    >>> collator = DataCollatorForMultimodalLanguageModeling(processor)
     >>> examples = [
     ...     {"images": [Image.open("image_0.png")], "messages": [{"role": "user", "content": "What is this?"}]},
     ...     {"images": [Image.open("image_1.png")], "messages": [{"role": "user", "content": "Describe this image."}]},
@@ -660,14 +681,29 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         if "image" in examples[0]:
             for example in examples:
                 example["images"] = [example.pop("image")]
-        images = [example["images"] for example in examples]
+        if "audio" in examples[0]:
+            for example in examples:
+                example["audios"] = [example.pop("audio")]
+
+        images = [example.get("images", []) for example in examples]
         # Transformers requires at least one image in the batch, otherwise it throws an error
         if all(img_list == [] for img_list in images):
             images = None
 
+        audios = [example.get("audios", []) for example in examples]
+        if all(aud_list == [] for aud_list in audios):
+            audios_flat = None
+        else:
+            audios_flat = [_normalize_audio(aud) for sample_audios in audios for aud in sample_audios]
+
         if "messages" in examples[0]:  # conversational case
             messages = [
-                prepare_multimodal_messages(example["messages"], images=example["images"]) for example in examples
+                prepare_multimodal_messages(
+                    example["messages"],
+                    images=example.get("images"),
+                    audios=example.get("audios"),
+                )
+                for example in examples
             ]
             texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
@@ -678,8 +714,13 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                 "data."
             )
 
+        processor_kwargs = {}
+        if images is not None:
+            processor_kwargs["images"] = images
+        if audios_flat is not None:
+            processor_kwargs["audio"] = audios_flat
+
         output = self.processor(
-            images=images,
             text=texts,
             padding=True,
             padding_side="right",
@@ -688,6 +729,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             max_length=self.max_length,
             return_tensors=self.return_tensors,
             add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+            **processor_kwargs,
         )
         labels = output["input_ids"].clone()
         labels[output["attention_mask"] == 0] = -100
@@ -700,32 +742,53 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     def _collate_prompt_completion(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         if self.pad_to_multiple_of is not None:
             raise NotImplementedError(
-                "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
+                "Padding to a multiple of a value is not yet implemented for multimodal language modeling and "
                 "prompt-completion data."
             )
         if "image" in examples[0]:
             for example in examples:
                 example["images"] = [example.pop("image")]
-        images = [example["images"] for example in examples]
+        if "audio" in examples[0]:
+            for example in examples:
+                example["audios"] = [example.pop("audio")]
+
+        images = [example.get("images", []) for example in examples]
         # Transformers requires at least one image in the batch, otherwise it throws an error
         if all(img_list == [] for img_list in images):
             images = None
+
+        audios = [example.get("audios", []) for example in examples]
+        if all(aud_list == [] for aud_list in audios):
+            audios_flat = None
+        else:
+            audios_flat = [_normalize_audio(aud) for sample_audios in audios for aud in sample_audios]
+
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
-                example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
+                example["prompt"] = prepare_multimodal_messages(
+                    example["prompt"],
+                    images=example.get("images"),
+                    audios=example.get("audios"),
+                )
                 example["completion"] = prepare_multimodal_messages(example["completion"])
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples]
         completions = [example["completion"] for example in examples]
 
+        processor_kwargs = {}
+        if images is not None:
+            processor_kwargs["images"] = images
+        if audios_flat is not None:
+            processor_kwargs["audio"] = audios_flat
+
         processed_prompts = self.processor(
-            images=images,
             text=prompts,
             padding=True,
             padding_side="left",
             return_tensors=self.return_tensors,
             add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+            **processor_kwargs,
         )
         processed_completions = self.processor(
             text=completions,
@@ -853,7 +916,7 @@ class SFTTrainer(_BaseTrainer):
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`~trainer.sft_trainer.DataCollatorForLanguageModeling`] if the model is a language model
-            and [`~trainer.sft_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
+            and [`~trainer.sft_trainer.DataCollatorForMultimodalLanguageModeling`] if the model is a multimodal model.
             Custom collators must truncate sequences before padding; the trainer does not apply post-collation
             truncation.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -1173,14 +1236,14 @@ class SFTTrainer(_BaseTrainer):
         else:
             self.completion_only_loss = args.completion_only_loss
 
-        self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
-        if self._is_vision_dataset and not self._is_vlm:
+        self._is_multimodal_dataset = any(key in dataset_sample for key in ("image", "images", "audio", "audios"))
+        if self._is_multimodal_dataset and not self._is_vlm:
             raise ValueError(
-                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
-                "model does not seem to be a vision-language model. Please check your model and dataset."
+                "The dataset appears to be multimodal (contains 'image', 'images', 'audio', or 'audios' keys), but "
+                "the provided model does not seem to be a multimodal model. Please check your model and dataset."
             )
 
-        if data_collator is None and not self._is_vision_dataset:
+        if data_collator is None and not self._is_multimodal_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
             pad_token = args.pad_token or self._tokenizer.pad_token or self._tokenizer.eos_token
@@ -1198,8 +1261,8 @@ class SFTTrainer(_BaseTrainer):
                 padding_free=self.padding_free,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
-        elif data_collator is None and self._is_vision_dataset:
-            data_collator = DataCollatorForVisionLanguageModeling(
+        elif data_collator is None and self._is_multimodal_dataset:
+            data_collator = DataCollatorForMultimodalLanguageModeling(
                 processor=processing_class,
                 max_length=args.max_length,
                 completion_only_loss=self.completion_only_loss,
@@ -1240,7 +1303,7 @@ class SFTTrainer(_BaseTrainer):
             )
 
         # Dataset
-        if self.padding_free and not args.packing and args.max_length is not None and not self._is_vision_dataset:
+        if self.padding_free and not args.packing and args.max_length is not None and not self._is_multimodal_dataset:
             raise ValueError(
                 "When `padding_free=True` without packing, `max_length` is not enforced. Either enable packing "
                 "(e.g., `packing=True, packing_strategy='bfd'`), provide already truncated inputs, or set "
@@ -1251,7 +1314,7 @@ class SFTTrainer(_BaseTrainer):
         self._skip_prepare_dataset = (
             args.dataset_kwargs is not None
             and args.dataset_kwargs.get("skip_prepare_dataset", False)
-            or self._is_vision_dataset
+            or self._is_multimodal_dataset
         )
         # Kept on the instance so that `evaluate` can preprocess freshly-passed eval datasets the same way.
         self._formatting_func = formatting_func
@@ -1647,8 +1710,8 @@ class SFTTrainer(_BaseTrainer):
         # "attention_mask" and "labels"). Dataset preparation also produces a "seq_lengths" column (for packing /
         # padding-free), so we override the default signature columns to keep it alongside the model inputs.
         if self._signature_columns is None:
-            if self._is_vision_dataset:
-                self._signature_columns = ["messages", "prompt", "completion", "image", "images"]
+            if self._is_multimodal_dataset:
+                self._signature_columns = ["messages", "prompt", "completion", "image", "images", "audio", "audios"]
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths"]
 
@@ -1874,3 +1937,18 @@ class SFTTrainer(_BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
+
+
+# Backward-compat alias for one release. The old name was internal-ish, but a deprecation
+# window is cheap and avoids surprise breakage. Remove in v1.6.0.
+class DataCollatorForVisionLanguageModeling(DataCollatorForMultimodalLanguageModeling):
+    """Deprecated alias for [`DataCollatorForMultimodalLanguageModeling`]. Remove in v1.6.0."""
+
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "`DataCollatorForVisionLanguageModeling` is deprecated and will be removed in v1.6.0. "
+            "Use `DataCollatorForMultimodalLanguageModeling` instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
