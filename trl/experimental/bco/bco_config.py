@@ -53,6 +53,10 @@ class BCOConfig(_BaseConfig):
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
+        precompute_ref_batch_size (`int`, *optional*):
+            Batch size to use when precomputing reference model log probabilities. This can be set higher than the
+            training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
+            training and `per_device_eval_batch_size` for evaluation.
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model and
             reference model from strings.
@@ -130,6 +134,14 @@ class BCOConfig(_BaseConfig):
             "help": "Whether to precompute reference model log probabilities for training and evaluation datasets. "
             "This is useful when training without the reference model to reduce the total GPU memory "
             "needed."
+        },
+    )
+    precompute_ref_batch_size: int | None = field(
+        default=None,
+        metadata={
+            "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
+            "than the training batch size to speed up preprocessing. If `None`, defaults to "
+            "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
         },
     )
     model_init_kwargs: dict[str, Any] | str | None = field(

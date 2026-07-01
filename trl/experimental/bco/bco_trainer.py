@@ -998,7 +998,7 @@ class BCOTrainer(_BaseTrainer):
 
         if self.precompute_ref_log_probs and not self._precomputed_train_ref_log_probs:
             dataloader_params = {
-                "batch_size": self.args.per_device_train_batch_size,
+                "batch_size": self.args.precompute_ref_batch_size or self.args.per_device_train_batch_size,
                 "collate_fn": self.data_collator,
                 "num_workers": self.args.dataloader_num_workers,
                 "pin_memory": self.args.dataloader_pin_memory,
@@ -1023,6 +1023,50 @@ class BCOTrainer(_BaseTrainer):
 
         return super().get_train_dataloader()
 
+    def evaluate(
+        self,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        ignore_keys: list[str] | None = None,
+        metric_key_prefix: str = "eval",
+    ) -> dict[str, float]:
+        # When a dataset is passed directly to `evaluate` (e.g. a held-out test set), preprocess it the same way
+        # `__init__` does (extract prompt -> unpair -> apply chat template -> tokenize -> process), so `evaluate`
+        # accepts the same raw dataset types as the trainer. Reference log-probs (with `precompute_ref_log_probs`)
+        # are computed lazily by `get_eval_dataloader`. A `str` selects a dataset prepared at init and is untouched.
+        if eval_dataset is not None and not isinstance(eval_dataset, str):
+            fn_kwargs = {
+                "prefix": "",
+                "is_encoder_decoder": self.is_encoder_decoder,
+                "tokenizer": self.processing_class,
+                "max_length": self.max_length,
+                "max_completion_length": self.max_completion_length,
+            }
+
+            def _prepare(dataset):
+                dataset = dataset.map(maybe_extract_prompt, num_proc=self.args.dataset_num_proc)
+                dataset = maybe_unpair_preference_dataset(dataset, self.args.dataset_num_proc)
+                dataset = dataset.map(
+                    maybe_apply_chat_template,
+                    fn_kwargs={"processing_class": self.processing_class},
+                    num_proc=self.args.dataset_num_proc,
+                )
+                dataset = dataset.map(
+                    _tokenize,
+                    batched=True,
+                    fn_kwargs={"tokenizer": self.processing_class, "embedding_tokenizer": self.embedding_tokenizer},
+                    num_proc=self.args.dataset_num_proc,
+                )
+                return dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=self.args.dataset_num_proc)
+
+            with PartialState().main_process_first():
+                if isinstance(eval_dataset, dict):
+                    eval_dataset = {key: _prepare(dataset) for key, dataset in eval_dataset.items()}
+                else:
+                    eval_dataset = _prepare(eval_dataset)
+        return super().evaluate(
+            eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
+        )
+
     def get_eval_dataloader(self, eval_dataset: Dataset | None = None) -> DataLoader:
         """
         Returns the evaluation [`~torch.utils.data.DataLoader`].
@@ -1036,11 +1080,15 @@ class BCOTrainer(_BaseTrainer):
         """
         if eval_dataset is None and self.eval_dataset is None:
             raise ValueError("Trainer: evaluation requires an eval_dataset.")
+        # When a dataset is passed directly (e.g. via `evaluate(eval_dataset=...)`) instead of defaulting to
+        # `self.eval_dataset`, precompute its reference log-probs fresh and do not cache them back onto
+        # `self.eval_dataset` or the precompute flag (which track only the trainer's own eval dataset).
+        is_default_eval_dataset = eval_dataset is None
         eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
 
-        if self.precompute_ref_log_probs and not self._precomputed_eval_ref_log_probs:
+        if self.precompute_ref_log_probs and not (is_default_eval_dataset and self._precomputed_eval_ref_log_probs):
             dataloader_params = {
-                "batch_size": self.args.per_device_eval_batch_size,
+                "batch_size": self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                 "collate_fn": self.data_collator,
                 "num_workers": self.args.dataloader_num_workers,
                 "pin_memory": self.args.dataloader_pin_memory,
@@ -1062,10 +1110,10 @@ class BCOTrainer(_BaseTrainer):
                 name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
             )
 
-            # Save calculated reference_chosen_logps and reference_rejected_logps to the eval_dataset for subsequent runs
-            if self.eval_dataset is not None:
+            if is_default_eval_dataset:
+                # Save calculated reference log-probs on self.eval_dataset for subsequent runs
                 self.eval_dataset = eval_dataset
-            self._precomputed_eval_ref_log_probs = True
+                self._precomputed_eval_ref_log_probs = True
 
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
 
