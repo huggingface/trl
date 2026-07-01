@@ -826,6 +826,18 @@ class DPOTrainer(_BaseTrainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        text_config = model.config.get_text_config()
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
+        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = args.router_aux_loss_coef
+        if self.aux_loss_enabled and self.use_liger_kernel:
+            raise ValueError(
+                "Liger DPO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, because it "
+                "fuses the loss without materializing the router logits. Either set `router_aux_loss_coef` to `0.0` "
+                "to disable the auxiliary loss, or set `use_liger_kernel` to False."
+            )
+
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
@@ -1247,6 +1259,10 @@ class DPOTrainer(_BaseTrainer):
         _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
         model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
+        # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
+        # as a forward kwarg (not from the model config), so it must be passed here.
+        if self.aux_loss_enabled:
+            model_kwargs["output_router_logits"] = True
         outputs = model(**model_kwargs)
 
         input_ids = inputs["input_ids"]
@@ -1483,6 +1499,11 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss *= chosen_weights * rejected_weights
 
             loss += per_sequence_loss.mean() * loss_weight
+
+        if self.aux_loss_enabled:
+            aux_loss = outputs.aux_loss
+            loss = loss + self.router_aux_loss_coef * aux_loss
+            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         # Log the metrics
         # Entropy
