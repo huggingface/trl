@@ -920,7 +920,7 @@ class KTOTrainer(_BaseTrainer):
         self,
         dataset: Dataset | IterableDataset,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
-        args: KTOConfig | None,
+        args: KTOConfig,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
         # Build the kwargs for the `map` function
