@@ -2031,6 +2031,13 @@ class GRPOTrainer(_BaseTrainer):
         # records each example's environment so `_tokenize_prompts` can render the matching tool schema.
         if self.environment_factories is not None:
             self._batch_environments = [x["environment"] if self._multi_environment else None for x in inputs]
+            if self._multi_environment:
+                for name in set(self._batch_environments):
+                    if name not in self.environment_factories:
+                        raise ValueError(
+                            f"Example has `environment={name!r}`, which is not among the environments passed to "
+                            f"`environment_factory`. Expected one of: {list(self.environment_factories)}."
+                        )
             self.environments = []
             pool_cursor = {}  # how many instances of each environment have been handed out so far this batch
             for name in self._batch_environments:

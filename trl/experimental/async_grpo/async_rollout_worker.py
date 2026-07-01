@@ -355,6 +355,11 @@ class _AsyncRolloutLoop:
                     # The environment is the same for all generations of a group; only its tools are exposed in the
                     # example's prompt. When there are no environments, every example shares the standalone tools.
                     name = row["environment"] if self._multi_environment else None
+                    if self._multi_environment and name not in self.environment_factories:
+                        raise ValueError(
+                            f"Example has `environment={name!r}`, which is not among the environments passed to "
+                            f"`environment_factory`. Expected one of: {list(self.environment_factories)}."
+                        )
                     tools = self._env_tools[name] if self.environment_factories is not None else self.tools
                     if group_id not in pending_groups:
                         prompt = row["prompt"]
