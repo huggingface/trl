@@ -30,7 +30,7 @@ import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
-from datasets import Dataset
+from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader
@@ -361,22 +361,15 @@ class ORPOTrainer(_BaseTrainer):
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().main_process_first():
-            # Extract the prompt if needed, and apply the chat template if needed
-            train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
-            train_dataset = train_dataset.map(
-                maybe_apply_chat_template,
-                fn_kwargs={"processing_class": processing_class},
-                num_proc=args.dataset_num_proc,
-            )
-            train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+            train_dataset = self._prepare_dataset(train_dataset, processing_class, args)
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
-                eval_dataset = eval_dataset.map(
-                    maybe_apply_chat_template,
-                    fn_kwargs={"processing_class": processing_class},
-                    num_proc=args.dataset_num_proc,
-                )
-                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+                if isinstance(eval_dataset, dict):
+                    eval_dataset = {
+                        key: self._prepare_dataset(dataset, processing_class, args)
+                        for key, dataset in eval_dataset.items()
+                    }
+                else:
+                    eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args)
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
@@ -413,6 +406,34 @@ class ORPOTrainer(_BaseTrainer):
             raise AttributeError(
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
             )
+
+    def _prepare_dataset(
+        self,
+        dataset: Dataset | IterableDataset,
+        processing_class: PreTrainedTokenizerBase,
+        args: ORPOConfig,
+    ) -> Dataset | IterableDataset:
+        # Build the kwargs for the `map` calls; `num_proc` is only supported by `Dataset`, not `IterableDataset`.
+        map_kwargs = {}
+        if isinstance(dataset, Dataset):
+            map_kwargs["num_proc"] = args.dataset_num_proc
+
+        # Extract the prompt if needed, and apply the chat template if needed
+        dataset = dataset.map(maybe_extract_prompt, **map_kwargs)
+        dataset = dataset.map(
+            maybe_apply_chat_template, fn_kwargs={"processing_class": processing_class}, **map_kwargs
+        )
+
+        tokenize_kwargs = dict(map_kwargs)
+        if isinstance(dataset, IterableDataset):
+            # For streaming datasets, `accelerate` runs every batch through `find_batch_size`, which only handles
+            # tensors, so the raw (string) columns must be dropped during tokenization. On a regular `Dataset` they
+            # are kept, as `generate_during_eval` relies on them (that path requires `select`/`len` and so is not
+            # available for iterable datasets anyway). `column_names` is `None` after `map` on an `IterableDataset`,
+            # so the columns to remove are inferred from the first example.
+            tokenize_kwargs["remove_columns"] = list(next(iter(dataset)).keys())
+        dataset = dataset.map(self.tokenize_row, **tokenize_kwargs)
+        return dataset
 
     def build_tokenized_answer(self, prompt, answer):
         """

@@ -217,3 +217,64 @@ class TestORPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-2]["eval_test"] == 0.0
+
+    def test_train_with_iterable_dataset(self):
+        # ORPO should support streaming datasets (`IterableDataset`), which don't accept `num_proc` in `map`.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train", streaming=True)
+
+        training_args = ORPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            learning_rate=9e-1,
+            beta=0.1,
+            report_to="none",
+        )
+
+        trainer = ORPOTrainer(
+            model=self.model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if param.sum() != 0:  # ignore 0 biases
+                assert not torch.equal(param, new_param)
+
+    def test_train_with_multiple_eval_dataset(self):
+        # ORPO should support a dict of eval datasets, each prepared and evaluated separately.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        training_args = ORPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            eval_strategy="steps",
+            eval_steps=3,
+            beta=0.1,
+            report_to="none",
+        )
+
+        trainer = ORPOTrainer(
+            model=self.model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dataset["train"],
+            eval_dataset={"data1": dataset["test"], "data2": dataset["test"]},
+        )
+
+        trainer.train()
+
+        assert any("eval_data1_loss" in log for log in trainer.state.log_history)
+        assert any("eval_data2_loss" in log for log in trainer.state.log_history)
