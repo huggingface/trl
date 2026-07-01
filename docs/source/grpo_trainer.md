@@ -757,6 +757,66 @@ trainer.train()
 
 `reset` can return either `None` or a string. In GRPO, when it returns a string, that string is appended to the last user message before generation.
 
+### Multiple environments
+
+To train on a mix of tasks in a single run (e.g. a coding task and a game), pass a dictionary mapping environment names to factories instead of a single callable. Each example then selects its environment through an `environment` field in the dataset, and **only that environment's tools are exposed in the example's prompt**. This avoids leaking irrelevant tools (the game's `move` tool to a coding example, and vice versa).
+
+```python
+from datasets import Dataset
+from trl import GRPOConfig, GRPOTrainer
+
+dataset = Dataset.from_dict(
+    {
+        "prompt": [
+            [{"role": "user", "content": "Compute the 7th Fibonacci number."}],
+            [{"role": "user", "content": "Reach the goal tile."}],
+        ],
+        "environment": ["coding", "game"],  # selects the factory for each example
+    }
+)
+
+class CodingEnv:
+    def reset(self, **kwargs) -> str | None:
+        ...
+
+    def run_code(self, code: str) -> str:  # exposed as a tool only for "coding" examples
+        """Run the given Python code and return its stdout.
+
+        Args:
+            code: The Python source to execute.
+
+        Returns:
+            The captured standard output.
+        """
+        ...
+
+class GameEnv:
+    def reset(self, **kwargs) -> str | None:
+        ...
+
+    def move(self, action: str) -> str:  # exposed as a tool only for "game" examples
+        """Apply an action to the game and return the new observation.
+
+        Args:
+            action: One of "up", "down", "left", "right".
+
+        Returns:
+            The observation after the move.
+        """
+        ...
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen3-0.6B",
+    args=GRPOConfig(chat_template_kwargs={"enable_thinking": False}),
+    train_dataset=dataset,
+    reward_funcs=reward_func,
+    environment_factory={"coding": CodingEnv, "game": GameEnv},
+)
+trainer.train()
+```
+
+The reward function still receives every example's environment through `reward_kwargs["environments"]`, so it can branch on the environment type (e.g. `isinstance(env, CodingEnv)`). Environment instances are reused across steps (reset between episodes), so an expensive `__init__` is paid once rather than every step. The `environment` field is consumed by the trainer and is **not** forwarded to `reset`.
+
 ### Multimodal Tool Responses
 
 Tools can return images alongside text by returning a list of content blocks. This is useful for VLM agent training where the tool provides visual feedback (e.g., screenshots, plots, camera captures).
