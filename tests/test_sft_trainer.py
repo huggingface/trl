@@ -1140,7 +1140,8 @@ class TestSFTTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             padding_free=True,
             max_length=None,  # padding-free without packing doesn't enforce max_length
-            model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"},
+            learning_rate=3e-3,  # bf16 parameters need a larger update to change bitwise in this short test
+            model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2", "dtype": "bfloat16"},
             bf16=True,  # flash_attention_2 only supports bf16 and fp16
             report_to="none",
         )
