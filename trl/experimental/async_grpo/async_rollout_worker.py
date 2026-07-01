@@ -144,6 +144,7 @@ def _child_main(
     heartbeat_value: MPValue,
     failed_event: MPEvent,
     exception_info_queue: MPQueue,
+    prompt_index_value: MPValue,
 ) -> None:
     _scrub_child_env()
     # `accelerate.logging.get_logger` requires `PartialState()` to have been called.
@@ -158,6 +159,7 @@ def _child_main(
         heartbeat_value=heartbeat_value,
         failed_event=failed_event,
         exception_info_queue=exception_info_queue,
+        prompt_index_value=prompt_index_value,
     )
     child_ready_event.set()
     _spawn_stop_watcher(rollout_loop, stop_event)
@@ -201,10 +203,18 @@ class _AsyncRolloutLoop:
         max_tool_calling_iterations: int | None = None,
         log_completions: bool = False,
         num_completions_to_print: int | None = None,
+        dataset_start_index: int = 0,
+        prompt_index_value: MPValue | None = None,
     ):
         self.model_name = model_name
         self.dataset = dataset
         self._dataset_iter = iter(dataset)
+        if dataset_start_index > 0:
+            for _ in range(dataset_start_index % len(dataset)):
+                next(self._dataset_iter)
+        self._prompt_index_value = prompt_index_value
+        if prompt_index_value is not None:
+            prompt_index_value.value = dataset_start_index
         self.reward_funcs = reward_funcs
         self.reward_func_names = [f.__name__ for f in reward_funcs]
         # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
@@ -491,6 +501,8 @@ class _AsyncRolloutLoop:
             except StopIteration:
                 self._dataset_iter = iter(self.dataset)
                 row = next(self._dataset_iter)
+            if self._prompt_index_value is not None:
+                self._prompt_index_value.value += 1
             for _ in range(self.num_generations):
                 yield group_id, row
             group_id += 1
@@ -735,6 +747,7 @@ class AsyncRolloutWorker:
         self._mp_ctx = ctx
         self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)
         self._model_version_value = ctx.Value("i", 0)
+        self._prompt_index_value = ctx.Value("i", 0)  # dataset rows the child has consumed
         self._stop_event_mp = ctx.Event()
         self._child_ready_event = ctx.Event()
         # Liveness state shared with the child. Wall-clock seconds because monotonic() is per-process.
@@ -760,6 +773,10 @@ class AsyncRolloutWorker:
 
     def update_model_version(self, model_version: int) -> None:
         self.model_version = model_version
+
+    @property
+    def prompt_index(self) -> int:
+        return int(self._prompt_index_value.value)
 
     def start(self) -> None:
         if self._process is not None:
@@ -787,6 +804,7 @@ class AsyncRolloutWorker:
                 self._heartbeat_value,
                 self._failed_event,
                 self._exception_info_queue,
+                self._prompt_index_value,
             ),
             name="grpo-rollout-worker-child",
             daemon=True,
