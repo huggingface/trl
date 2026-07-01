@@ -180,8 +180,8 @@ While training and evaluating, we record the following reward metrics:
 - `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
-- `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
-- `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
+- `rewards/{reward_func_name}/mean`: The average reward from a specific reward function. When an environment owns the reward (see [Environment-owned reward](#environment-owned-reward)), `{reward_func_name}` is the environment's class name.
+- `rewards/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
 - `reward`: The overall average reward after summing rewards across functions (weighted by `reward_weights`).
 - `reward_std`: The standard deviation of summed rewards across functions (weighted by `reward_weights`), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
@@ -408,7 +408,7 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
      - `log_extra`: a callable `log_extra(column: str, values: list)` to add extra columns to the completions table. See Example 6. In distributed training, it's important that all processes log the same set of keys.
      - `log_metric`: a callable `log_metric(name: str, value: float)` to log scalar metrics as plots alongside `kl`, `entropy`, etc. See Example 6. In distributed training, it's important that all processes log the same set of keys.
-     - `environments`: a list of environment instances, one per completion. Only present when `environment_factory` is provided. Use this to read state accumulated during the episode (e.g., `env.reward`).
+     - `environments`: a list of environment instances, one per completion. Only present when `environment_factory` is provided. Use this to read state accumulated during the episode (e.g., `env.counter`). For stateful environments, prefer letting the environment own the reward via a `get_reward` method instead — see [Environment-owned reward](#environment-owned-reward).
      - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
@@ -756,6 +756,55 @@ trainer.train()
 ```
 
 `reset` can return either `None` or a string. In GRPO, when it returns a string, that string is appended to the last user message before generation.
+
+### Environment-owned reward
+
+In the `IncrementEnv` example above, the reward is computed by a trainer-owned `reward_func` that reaches into the environment (`environment.counter`) to score the episode. For stateful environments this is often awkward: the reward is really a function of the environment's internal state (did the game end in a win? was the word guessed?), so a separate `reward_func` has to reach back into the environment just to recompute what it already knows.
+
+Instead, the environment can **own the reward**. If it defines a reserved `get_reward` method — taking no argument and returning a `float` — it scores the episode it just ran. `get_reward` is called once per completed rollout and becomes a reward source like any `reward_func`, so `reward_funcs` becomes optional:
+
+```python
+from datasets import Dataset
+from trl import GRPOConfig, GRPOTrainer
+
+instructions = [f"Increment the counter by {i}." for i in range(1, 7)]
+dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": instruction}] for instruction in instructions]})
+
+class IncrementEnv:
+    def reset(self, **kwargs) -> str | None:
+        self.counter = 0
+        return "Counter reset to 0.\n"
+
+    def increment(self, step: int) -> int:  # exposed as a tool
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        self.counter += step
+        return self.counter
+
+    def get_reward(self) -> float:  # reserved: the environment scores itself from its own state
+        return float(self.counter)
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen3-0.6B",
+    args=GRPOConfig(chat_template_kwargs={"enable_thinking": False}),
+    train_dataset=dataset,
+    environment_factory=IncrementEnv,  # owns the reward, so `reward_funcs` can be omitted
+)
+trainer.train()
+```
+
+Like `reset`, `get_reward` is reserved and is **not** exposed to the model as a tool. It is logged under the environment's class name (here, `rewards/IncrementEnv/mean`) and always has weight 1 — the environment owns its own scale.
+
+You can still combine both: pass `reward_funcs` for trainer-owned rewards (e.g. a format check on the completion text) *and* let the environment return its own reward through `get_reward`. All sources are summed, with `reward_weights` applying to the `reward_funcs` only.
+
+This works identically for [`AsyncGRPOTrainer`](async_grpo_trainer).
 
 ### Multimodal Tool Responses
 

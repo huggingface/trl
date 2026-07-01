@@ -412,9 +412,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
             using [`~transformers.AutoModelForCausalLM.from_pretrained`]. The model name is also used to identify the
             model on the vLLM server used for generation.
-        reward_funcs (`RewardFunc | list[RewardFunc]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
-            functions with the prompts and completions and sum the rewards. Can be either:
+            functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
+            by the environment through `environment_factory` (see below). Can be either:
 
             - A single reward function: The function is provided with the prompts and the generated completions, plus
               any additional columns in the dataset. It should return a list of rewards. Reward functions can be either
@@ -468,8 +469,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             for each generation in the batch, allowing for parallel and independent interactions. The environment must
             also implement a callable `reset` method that can be used to reset state between generations. The `reset`
             method should return either `None` or a string: when it returns a string, that string is appended to the
-            last user message before generation. This feature is experimental and may change or be removed at any time
-            without prior notice.
+            last user message before generation. The environment may also define a `get_reward` method taking no
+            argument and returning a `float`: when present, the environment owns the reward, and `get_reward` is called
+            once per completed rollout to score it from the environment's internal state. It acts as an additional
+            reward source (with weight 1, logged under the environment's class name) alongside `reward_funcs`, which
+            then becomes optional. This feature is experimental and may change or be removed at any time without prior
+            notice.
         rollout_worker (`RolloutWorkerProtocol`, *optional*):
             Custom rollout worker implementing [`RolloutWorkerProtocol`]. If `None`, a default [`AsyncRolloutWorker`]
             is created, which spawns a CUDA-free child process and scores completions with the trainer's
@@ -495,7 +500,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def __init__(
         self,
         model: str,
-        reward_funcs: RewardFunc | list[RewardFunc],
+        reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: AsyncGRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         processing_class: PreTrainedTokenizerBase | None = None,
@@ -546,7 +551,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             processing_class.pad_token = processing_class.eos_token
 
         # Reward functions
-        if not isinstance(reward_funcs, list):
+        if reward_funcs is None:
+            reward_funcs = []
+        elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
 
         # Initialize the Trainer
