@@ -828,10 +828,11 @@ class KTOTrainer(_BaseTrainer):
                         self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                     )
 
+    @staticmethod
     def _tokenize(
-        self,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         input: str | list,
+        is_vlm: bool,
         **kwargs,
     ) -> dict[str, list]:
         """Tokenize a single example for dataset preprocessing.
@@ -844,6 +845,9 @@ class KTOTrainer(_BaseTrainer):
                 The tokenizer or processor to use.
             input (`str` or `list`):
                 A string for non-conversational input, or a list of message dicts for conversational input.
+            is_vlm (`bool`):
+                Whether the processing class is a VLM processor, requiring multimodal message preparation and batch
+                dimension normalization.
             **kwargs:
                 Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
 
@@ -851,13 +855,13 @@ class KTOTrainer(_BaseTrainer):
             `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
         """
         if isinstance(input, list):  # conversational: list of message dicts
-            if self._is_vlm:
+            if is_vlm:
                 input = prepare_multimodal_messages(input)
             result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
         else:  # non-conversational: plain text string
             result = processing_class(text=input)
         # VLMs emit a batch dimension even for single examples; unwrap it
-        if self._is_vlm:
+        if is_vlm:
             return {k: v[0] for k, v in result.items()}
         return result
 
@@ -957,24 +961,30 @@ class KTOTrainer(_BaseTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-            def tokenize_fn(example, processing_class):
+            # Bind `_tokenize` to a local so `tokenize_fn` doesn't capture `self`: a closure over `self` makes the map
+            # function unhashable, forcing a random fingerprint that silently disables dataset caching.
+            tokenize = self._tokenize
+
+            def tokenize_fn(example, processing_class, is_vlm):
                 if is_conversational(example):
                     chat_template_kwargs = example.get("chat_template_kwargs", {})
-                    prompt_ids = self._tokenize(
+                    prompt_ids = tokenize(
                         processing_class,
                         example["prompt"],
+                        is_vlm,
                         add_generation_prompt=True,
                         **chat_template_kwargs,
                     )["input_ids"]
-                    prompt_completion_ids = self._tokenize(
+                    prompt_completion_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["completion"],
+                        is_vlm,
                         **chat_template_kwargs,
                     )["input_ids"]
                 else:
-                    prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
-                    prompt_completion_ids = self._tokenize(
-                        processing_class, example["prompt"] + example["completion"]
+                    prompt_ids = tokenize(processing_class, example["prompt"], is_vlm)["input_ids"]
+                    prompt_completion_ids = tokenize(
+                        processing_class, example["prompt"] + example["completion"], is_vlm
                     )["input_ids"]
 
                 if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
@@ -989,7 +999,11 @@ class KTOTrainer(_BaseTrainer):
                     "completion_ids": prompt_completion_ids[len(prompt_ids) :],
                 }
 
-            dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
+            dataset = dataset.map(
+                tokenize_fn,
+                fn_kwargs={"processing_class": processing_class, "is_vlm": self._is_vlm},
+                **map_kwargs,
+            )
 
             # Get KL datasets if needed
             if self.calculate_KL:
