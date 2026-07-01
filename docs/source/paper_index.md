@@ -691,6 +691,30 @@ training_args = GRPOConfig(
 )
 ```
 
+### VIMPO: Value-Implicit Policy Optimization for LLMs
+
+**📜 Paper**: https://huggingface.co/papers/2606.20008
+
+VIMPO is a critic-free RLVR method that keeps GRPO-style grouped rollouts while recovering token-level credit assignment from a policy-implied value recurrence. It trains a terminal value loss against the centered final reward and optionally adds a PPO-style actor branch using detached policy-implied advantages. In TRL, the experimental implementation reuses GRPO's rollout and reward pipeline and replaces the loss with the raw VIMPO objective from the paper. See [VIMPO](vimpo_trainer).
+
+```python
+from trl.experimental.vimpo import VIMPOConfig, VIMPOTrainer
+
+training_args = VIMPOConfig(
+    vimpo_beta=5e-4,
+    vimpo_actor_coeff=5e-3,
+    num_generations=8,
+)
+
+trainer = VIMPOTrainer(
+    model="your-model",
+    reward_funcs=[...],
+    args=training_args,
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
 
 ### Rethinking the Trust Region in LLM Reinforcement Learning
 

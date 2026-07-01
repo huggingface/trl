@@ -60,6 +60,7 @@ _TELEMETRY_TRAINERS = {
     "SDPOTrainer",
     "SSDTrainer",
     "TPOTrainer",
+    "VIMPOTrainer",
     "XPOTrainer",
 }
 
