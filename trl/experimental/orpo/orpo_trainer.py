@@ -926,6 +926,35 @@ class ORPOTrainer(_BaseTrainer):
 
         return policy_output_decoded
 
+    def evaluate(
+        self,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        ignore_keys: list[str] | None = None,
+        metric_key_prefix: str = "eval",
+    ) -> dict[str, float]:
+        # When a dataset is passed directly to `evaluate` (e.g. a held-out test set), preprocess it the same way
+        # `__init__` does (extract prompt -> apply chat template -> tokenize), so `evaluate` accepts the same raw
+        # dataset types as the trainer. A `str` selects an eval dataset prepared at init time and is left untouched.
+        if eval_dataset is not None and not isinstance(eval_dataset, str):
+
+            def _prepare(dataset):
+                dataset = dataset.map(maybe_extract_prompt, num_proc=self.args.dataset_num_proc)
+                dataset = dataset.map(
+                    maybe_apply_chat_template,
+                    fn_kwargs={"processing_class": self.processing_class},
+                    num_proc=self.args.dataset_num_proc,
+                )
+                return dataset.map(self.tokenize_row, num_proc=self.args.dataset_num_proc)
+
+            with PartialState().main_process_first():
+                if isinstance(eval_dataset, dict):
+                    eval_dataset = {key: _prepare(dataset) for key, dataset in eval_dataset.items()}
+                else:
+                    eval_dataset = _prepare(eval_dataset)
+        return super().evaluate(
+            eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
+        )
+
     def prediction_step(
         self,
         model: PreTrainedModel | nn.Module,
