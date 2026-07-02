@@ -561,36 +561,40 @@ class GRPOTrainer(_BaseTrainer):
                     "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
                 )
 
-        # Create the environments and extract their methods to be used as tools. We create one environment per rollout
-        generation_batch_size = args.per_device_train_batch_size * args.steps_per_generation
-        if environment_factory is not None:
-            self.environments = [environment_factory() for _ in range(generation_batch_size)]
-            environment_methods = [[] for _ in range(generation_batch_size)]
-            for i, environment in enumerate(self.environments):
-                has_reset = False
-                for name, member in inspect.getmembers(environment, predicate=inspect.ismethod):
-                    if name == "reset":
-                        has_reset = True
-                    elif not name.startswith("_"):
-                        environment_methods[i].append(member)
-                if not has_reset:
-                    raise ValueError(
-                        "Each environment instance returned by `environment_factory` must define a callable `reset` "
-                    )
-        else:
-            self.environments = None
-
+        # Set up the environment and extract its methods to be used as tools.
         tools = tools or []
-        self._sync_tool_dicts = [{} for _ in range(generation_batch_size)]
-        self._async_tool_dicts = [{} for _ in range(generation_batch_size)]
-        for i in range(generation_batch_size):
-            for tool in tools + (environment_methods[i] if self.environments is not None else []):
-                if inspect.iscoroutinefunction(tool):
-                    self._async_tool_dicts[i][tool.__name__] = tool
-                else:
-                    self._sync_tool_dicts[i][tool.__name__] = tool
+        self._standalone_tools = tools  # tools that are not bound to the environment
 
-        self.tools = tools + (environment_methods[0] if self.environments is not None else [])
+        if environment_factory is not None:
+            # The environment instances used by a batch are only known at batch time. Here we just probe one instance to
+            # validate its `reset` method and extract its tool methods, used to render the tool schema in the prompt.
+            # Instances are pooled and reused (reset) across batches; the probe seeds the pool so it is not wasted. The
+            # pool grows only when a batch needs more concurrent instances than have been created so far, preserving the
+            # "construct once, reset often" contract.
+            self.environment_factory = environment_factory
+            instance = environment_factory()
+            has_reset = False
+            methods = []
+            for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                if member_name == "reset":
+                    has_reset = True
+                elif not member_name.startswith("_"):
+                    methods.append(member)
+            if not has_reset:
+                raise ValueError(
+                    "Each environment instance returned by `environment_factory` must define a callable `reset`."
+                )
+            self._environment_pool = [instance]  # reusable environment instances
+            self.tools = tools + methods
+        else:
+            self.environment_factory = None
+            self.tools = tools
+
+        # The per-rollout environment instances and tool dicts both depend on the batch, so they are built in
+        # `_generate_and_score_completions`, right before generation. Only `self.environments` needs a default here,
+        # because `_calculate_rewards` reads it for every batch (including batches with no environments); the tool dicts
+        # are only read in the tool-calling loop, which runs after they have been (re)built.
+        self.environments = None
 
         # Check for async functions to start an event loop on a daemon thread
         self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs + self.tools)
@@ -1989,6 +1993,37 @@ class GRPOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
+
+        # Draw one reusable instance per rollout from the pool, creating more only when this batch needs more concurrent
+        # instances than exist.
+        if self.environment_factory is not None:
+            self.environments = []
+            for i in range(len(inputs)):
+                if i == len(self._environment_pool):
+                    self._environment_pool.append(self.environment_factory())
+                self.environments.append(self._environment_pool[i])
+
+        # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
+        # its environment. Done here (not at init) because the environment instances are drawn at batch time.
+        if self.tools:
+            self._sync_tool_dicts = []
+            self._async_tool_dicts = []
+            for i in range(len(inputs)):
+                methods = []
+                if self.environments:
+                    methods = [
+                        member
+                        for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                        if member_name != "reset" and not member_name.startswith("_")
+                    ]
+                sync_tool_dict, async_tool_dict = {}, {}
+                for tool in self._standalone_tools + methods:
+                    if inspect.iscoroutinefunction(tool):
+                        async_tool_dict[tool.__name__] = tool
+                    else:
+                        sync_tool_dict[tool.__name__] = tool
+                self._sync_tool_dicts.append(sync_tool_dict)
+                self._async_tool_dicts.append(async_tool_dict)
 
         if self.environments:
             for prompt, environment, reset_kwargs in zip(prompts, self.environments, inputs, strict=True):

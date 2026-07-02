@@ -68,8 +68,8 @@ async def _retry_on_http_error(coro_factory: Callable[[], Awaitable], *, label: 
 
 @dataclass(slots=True)
 class RolloutGroup:
-    prompt: Messages
-    prompt_ids: list[int]
+    prompts: list[Messages]
+    prompt_ids: list[list[int]]
     reward_kwargs: dict[str, list[Any]]
     completions: list[Messages]
     completions_ids: list[list[int]]
@@ -239,30 +239,36 @@ class _AsyncRolloutLoop:
         self.num_completions_to_print = num_completions_to_print
         self.vllm_server_url = vllm_server_url.rstrip("/")
 
-        self.environments = None
-        environment_methods = [[] for _ in range(max_inflight_tasks)]
-        if environment_factory is not None:
-            self.environments = [environment_factory() for _ in range(max_inflight_tasks)]
-            for i, environment in enumerate(self.environments):
-                has_reset = False
-                for name, member in inspect.getmembers(environment, predicate=inspect.ismethod):
-                    if name == "reset":
-                        has_reset = True
-                    elif not name.startswith("_"):
-                        environment_methods[i].append(member)
-                if not has_reset:
-                    raise ValueError(
-                        "Each environment instance returned by `environment_factory` must define `reset`."
-                    )
+        tools = tools or []
+        self._standalone_tools = tools  # tools that are not bound to the environment
+        self.environment_factory = environment_factory
 
-        base_tools = tools or []
-        self._sync_tool_dicts = [{} for _ in range(max_inflight_tasks)]
-        for i in range(max_inflight_tasks):
-            for tool in base_tools + (environment_methods[i] if self.environments is not None else []):
-                if inspect.iscoroutinefunction(tool):
-                    raise ValueError("Asynchronous tools are not supported yet.")
-                self._sync_tool_dicts[i][tool.__name__] = tool
-        self.tools = base_tools + (environment_methods[0] if self.environments is not None else [])
+        if environment_factory is not None:
+            # Probe one instance to validate its `reset` method and extract its tool methods, used to render the tool
+            # schema in the prompt. Instances are pooled and reused (reset) across rollouts; the probe seeds the pool so
+            # it is not wasted. The pool grows only when more concurrent instances are needed than have been created so
+            # far, preserving the "construct once, reset often" contract.
+            instance = environment_factory()
+            has_reset = False
+            methods = []
+            for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                if member_name == "reset":
+                    has_reset = True
+                elif not member_name.startswith("_"):
+                    methods.append(member)
+            if not has_reset:
+                raise ValueError(
+                    "Each environment instance returned by `environment_factory` must define a callable `reset`."
+                )
+            self._environment_pool = [instance]  # reusable environment instances
+            self.tools = tools + methods
+        else:
+            self.tools = tools
+
+        # The async worker can't await tools in its tool loop, so asynchronous tools are not supported.
+        for tool in self.tools:
+            if inspect.iscoroutinefunction(tool):
+                raise ValueError("Asynchronous tools are not supported yet.")
 
         # The chat template must be prefix-preserving in multi-turn training; if the tokenizer's
         # template isn't, swap in a training-safe one.
@@ -317,7 +323,7 @@ class _AsyncRolloutLoop:
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         pending_groups: dict[int, RolloutGroup] = {}
         pending_completed: dict[int, int] = {}
-        inflight_tasks: dict[asyncio.Task, tuple[int, int]] = {}
+        inflight_tasks: dict[asyncio.Task, tuple[int, int, object, Messages]] = {}
         free_slots = set(range(self.max_inflight_tasks))
         work_iter = self._repeat_iterator()
 
@@ -328,24 +334,53 @@ class _AsyncRolloutLoop:
                 self._heartbeat_value.value = time.time()
                 while free_slots and not stop_event.is_set():
                     group_id, row = next(work_iter)
-                    if group_id not in pending_groups:
-                        prompt = row["prompt"]
-                        prompt_ids = self.tokenizer.apply_chat_template(
-                            prompt,
-                            return_dict=False,
-                            add_generation_prompt=True,
-                            tools=self.tools or None,  # `or None`: Llama bug: renders tool boilerplate for tools=[]
-                            chat_template=self.chat_template,
-                            **self.chat_template_kwargs,
+                    slot = free_slots.pop()
+                    # Draw a reusable environment instance for this rollout (creating one only if the pool is
+                    # exhausted); it is returned to the pool when the task completes. Reset it BEFORE building the
+                    # prompt and capture its initial observation (e.g. a task instruction). The reset() return was
+                    # previously discarded, so an environment_factory whose task lives in the observation (not the
+                    # dataset prompt) was generated against the bare prompt. Mirror GRPOTrainer: fold the observation
+                    # into the last prompt message. reset() may be stochastic, so this is done per generation (each
+                    # generation gets its own observation -> its own prompt and prompt_ids).
+                    environment = None
+                    observation = None
+                    if self.environment_factory is not None:
+                        environment = (
+                            self._environment_pool.pop() if self._environment_pool else self.environment_factory()
                         )
+                        observation = environment.reset(**row)
+                    prompt = row["prompt"]
+                    if observation is not None:
+                        # Rebuild the last message instead of mutating in place (as GRPOTrainer does): the
+                        # same row is reused across the group's generations and across epochs. Normalize str vs
+                        # list (multimodal) content the same way GRPOTrainer does before concatenating.
+                        last = prompt[-1]
+                        content = last["content"]
+                        if isinstance(observation, list) and isinstance(content, str):
+                            content = [{"type": "text", "text": content}]
+                        if isinstance(observation, str) and isinstance(content, list):
+                            observation = [{"type": "text", "text": observation}]
+                        prompt = prompt[:-1] + [{**last, "content": content + observation}]
+
+                    # Build this rollout's tool dict: the standalone tools plus the methods of its environment.
+                    methods = []
+                    if environment is not None:
+                        methods = [
+                            member
+                            for member_name, member in inspect.getmembers(environment, predicate=inspect.ismethod)
+                            if member_name != "reset" and not member_name.startswith("_")
+                        ]
+                    tool_dict = {tool.__name__: tool for tool in self._standalone_tools + methods}
+
+                    if group_id not in pending_groups:
                         reward_kwargs = {
                             key: [row[key]] * self.num_generations
                             for key in row
                             if key not in {"prompt", "completion", "completion_ids"}
                         }
                         pending_groups[group_id] = RolloutGroup(
-                            prompt=prompt,
-                            prompt_ids=prompt_ids,
+                            prompts=[],
+                            prompt_ids=[],
                             reward_kwargs=reward_kwargs,
                             completions=[],
                             completions_ids=[],
@@ -357,14 +392,8 @@ class _AsyncRolloutLoop:
                         )
                         pending_completed[group_id] = 0
 
-                    slot = free_slots.pop()
-                    if self.environments is not None:
-                        self.environments[slot].reset(**row)
-
-                    task = asyncio.create_task(
-                        self._generate_one(pending_groups[group_id].prompt, tool_dict=self._sync_tool_dicts[slot])
-                    )
-                    inflight_tasks[task] = (group_id, slot)
+                    task = asyncio.create_task(self._generate_one(prompt, tool_dict=tool_dict))
+                    inflight_tasks[task] = (group_id, slot, environment, prompt)
 
                 if not inflight_tasks:
                     if stop_event.is_set():
@@ -377,12 +406,15 @@ class _AsyncRolloutLoop:
                     continue
 
                 for task in done:
-                    group_id, slot = inflight_tasks.pop(task)
+                    group_id, slot, environment, prompt = inflight_tasks.pop(task)
                     free_slots.add(slot)
+                    if environment is not None:
+                        self._environment_pool.append(environment)
                     if task.exception() is not None:
                         raise task.exception()
 
                     (
+                        prompt_ids,
                         completion,
                         completion_ids,
                         completion_logprobs,
@@ -391,6 +423,8 @@ class _AsyncRolloutLoop:
                         tool_failure_count,
                     ) = task.result()
                     group = pending_groups[group_id]
+                    group.prompts.append(prompt)
+                    group.prompt_ids.append(prompt_ids)
                     group.completions.append(completion)
                     group.completions_ids.append(completion_ids)
                     group.completions_logprobs.append(completion_logprobs)
@@ -497,12 +531,14 @@ class _AsyncRolloutLoop:
 
     async def _generate_one(
         self, prompt: Messages, tool_dict: dict[str, Callable]
-    ) -> tuple[list[dict[str, str]], list[int], list[float], list[int], int, int]:
+    ) -> tuple[list[int], list[dict[str, str]], list[int], list[float], list[int], int, int]:
         completion, completion_ids, completion_logprobs, tool_mask = [], [], [], []
         tool_call_count = 0
         tool_failure_count = 0
         iteration_num = 0
         max_iterations = self.max_tool_calling_iterations
+        # Initial prompt tokens, returned so the scorer can reconstruct input_ids = prompt_ids + completion_ids.
+        # `running_ids` accumulates the turns/tool deltas fed back to the model; `prompt_ids` stays the prompt.
         prompt_ids = self.tokenizer.apply_chat_template(
             prompt,
             return_dict=False,
@@ -511,16 +547,25 @@ class _AsyncRolloutLoop:
             chat_template=self.chat_template,
             **self.chat_template_kwargs,
         )
+        running_ids = prompt_ids
         while True:
-            turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
-            assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
+            turn_ids, turn_logprobs = await self._generate_one_turn(running_ids)
+            assistant_message = parse_response(self.tokenizer, turn_ids, prefix=running_ids)
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
             completion_logprobs.extend(turn_logprobs)
             tool_mask.extend([1] * len(turn_ids))
             tool_calls = assistant_message.get("tool_calls")
             if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
-                return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
+                return (
+                    prompt_ids,
+                    completion,
+                    completion_ids,
+                    completion_logprobs,
+                    tool_mask,
+                    tool_call_count,
+                    tool_failure_count,
+                )
 
             tool_messages, n_calls, n_failures = self._execute_tool_calls(tool_calls, tool_dict)
             tool_call_count += n_calls
@@ -530,7 +575,7 @@ class _AsyncRolloutLoop:
             completion_ids.extend(suffix_ids)
             completion_logprobs.extend([0.0] * len(suffix_ids))
             tool_mask.extend([0] * len(suffix_ids))
-            prompt_ids = prompt_ids + turn_ids + suffix_ids
+            running_ids = running_ids + turn_ids + suffix_ids
             iteration_num += 1
 
     def _get_tool_suffix_ids(self, tool_messages: list[dict[str, Any]]) -> list[int]:
@@ -608,8 +653,7 @@ class _AsyncRolloutLoop:
     async def _score_group(self, group: RolloutGroup) -> list[RolloutSample]:
         kwargs = dict(
             completions=group.completions,
-            prompt=group.prompt,
-            prompts=[group.prompt] * len(group.completions),
+            prompts=group.prompts,
             completion_ids=group.completions_ids,
             **group.reward_kwargs,
         )
@@ -660,11 +704,11 @@ class _AsyncRolloutLoop:
         per_func_rewards = np.array(all_rewards, dtype=float)
         return [
             RolloutSample(
-                prompt=group.prompt,
+                prompt=prompt,
                 completion=completion,
-                input_ids=group.prompt_ids + completion_ids,
-                completion_mask=[0] * len(group.prompt_ids) + tool_mask,
-                old_log_probs=[0.0] * len(group.prompt_ids) + logprobs,
+                input_ids=prompt_ids + completion_ids,
+                completion_mask=[0] * len(prompt_ids) + tool_mask,
+                old_log_probs=[0.0] * len(prompt_ids) + logprobs,
                 advantage=advantage,
                 model_version=group.model_version,
                 metrics={
@@ -677,8 +721,20 @@ class _AsyncRolloutLoop:
                     **tm,
                 },
             )
-            for i, (completion, completion_ids, logprobs, tool_mask, advantage, reward, tm) in enumerate(
+            for i, (
+                prompt,
+                prompt_ids,
+                completion,
+                completion_ids,
+                logprobs,
+                tool_mask,
+                advantage,
+                reward,
+                tm,
+            ) in enumerate(
                 zip(
+                    group.prompts,
+                    group.prompt_ids,
                     group.completions,
                     group.completions_ids,
                     group.completions_logprobs,
