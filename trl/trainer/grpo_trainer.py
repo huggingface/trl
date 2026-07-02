@@ -54,6 +54,7 @@ from transformers import (
     is_trackio_available,
     is_wandb_available,
 )
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from transformers.utils import is_peft_available, is_rich_available
 
 from ..chat_template_utils import (
@@ -3004,7 +3005,7 @@ class GRPOTrainer(_BaseTrainer):
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
         if self.use_adaptive_entropy and self.args.should_save:
-            checkpoint_folder = f"checkpoint-{self.state.global_step}"
+            checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
             output_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
             with open(os.path.join(output_dir, "entropy_ctrl_state.json"), "w") as f:
                 json.dump({"entropy_coef": self.entropy_coef, "last_world_entropy": self._last_world_entropy}, f)
