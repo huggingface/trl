@@ -69,7 +69,7 @@ def main(script_args, training_args, model_args, dataset_args):
     from accelerate.logging import get_logger
     from datasets import load_dataset
 
-    from trl import GRPOTrainer, get_dataset, get_kbit_device_map, get_peft_config, get_quantization_config
+    from trl import GRPOTrainer, get_dataset, get_peft_config, get_quantization_config
     from trl.rewards import (
         accuracy_reward,
         get_soft_overlong_punishment,
@@ -116,7 +116,6 @@ def main(script_args, training_args, model_args, dataset_args):
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        training_args.model_init_kwargs["device_map"] = get_kbit_device_map()
         training_args.model_init_kwargs["quantization_config"] = quantization_config
 
     # Load the dataset
