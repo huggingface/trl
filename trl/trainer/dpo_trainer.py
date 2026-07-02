@@ -744,7 +744,7 @@ class DPOTrainer(_BaseTrainer):
                     "Multiple loss types are not yet supported when using Liger kernel. If you need this feature, "
                     "please open a feature request at https://github.com/huggingface/trl/issues."
                 )
-            self.liger_loss_fn = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
+            self.liger_loss = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
             if compute_metrics is not None:
                 raise ValueError(
                     "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
@@ -1198,9 +1198,7 @@ class DPOTrainer(_BaseTrainer):
         labels = input_ids[:, 1:].clone()
         labels[shift_completion_mask == 0] = -100
 
-        loss, metrics = self.liger_loss_fn(
-            weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias
-        )
+        loss, metrics = self.liger_loss(weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias)
 
         (
             chosen_logps,
