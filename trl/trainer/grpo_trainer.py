@@ -674,6 +674,10 @@ class GRPOTrainer(_BaseTrainer):
         # Cached entropy from the last optimizer step; inf so the first accumulation window
         # applies no bonus until a real measurement arrives (conservative default).
         self._last_world_entropy = float("inf")
+        # Running [entropy_sum, active_token_count] accumulated across the micro-batches of the current
+        # accumulation window, so the adaptive controller sees the exact window-global entropy (not just the
+        # last micro-batch). Reset to None at each optimizer step.
+        self._entropy_window_stats = None
         if self.use_liger_kernel and (self.entropy_coef != 0.0 or self.use_adaptive_entropy):
             raise NotImplementedError("Entropy bonus is not supported with Liger kernel.")
 
@@ -2828,27 +2832,32 @@ class GRPOTrainer(_BaseTrainer):
 
             self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
 
-            # Adaptive update: once per optimizer step, measure the global token-weighted entropy and adjust
-            # the coefficient for the next step. Gated on train mode so evaluation cannot mutate the entropy
-            # controller state, and on sync_gradients so the all-reduce runs once per optimizer step rather
-            # than on every micro-batch of the accumulation window.
-            if self.use_adaptive_entropy and mode == "train" and self.accelerator.sync_gradients:
-                # Reduce sum and token count jointly for a true global mean (unbiased when ranks have
-                # different completion lengths).
-                entropy_stats = self.accelerator.reduce(
-                    torch.stack([(entropies * effective_mask).sum(), effective_mask.sum()]).detach(),
-                    reduction="sum",
-                )
-                world_entropy = (entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item()
-                if world_entropy <= self.args.entropy_target:
-                    self.entropy_coef = min(
-                        self.entropy_coef + self.args.entropy_coef_delta, self.args.entropy_coef_max
-                    )
+            # Adaptive update. Gated on train mode so evaluation cannot mutate the entropy controller state.
+            if self.use_adaptive_entropy and mode == "train":
+                # Accumulate the entropy sum and active-token count of every micro-batch into a running window
+                # buffer, so the controller measures the exact window-global entropy rather than just the last
+                # micro-batch (which would be a 1 / gradient_accumulation_steps subsample).
+                stats = torch.stack([(entropies * effective_mask).sum(), effective_mask.sum()]).detach()
+                if self._entropy_window_stats is None:
+                    self._entropy_window_stats = stats
                 else:
-                    self.entropy_coef = max(
-                        self.entropy_coef - self.args.entropy_coef_delta, self.args.entropy_coef_min
-                    )
-                self._last_world_entropy = world_entropy
+                    self._entropy_window_stats = self._entropy_window_stats + stats
+                # At the optimizer-step boundary, reduce the window totals across ranks (sum and token count
+                # jointly, for a true global mean unbiased when ranks have different completion lengths),
+                # update the coefficient for the next step, then reset the window buffer.
+                if self.accelerator.sync_gradients:
+                    window_stats = self.accelerator.reduce(self._entropy_window_stats, reduction="sum")
+                    world_entropy = (window_stats[0] / window_stats[1].clamp(min=1.0)).item()
+                    if world_entropy <= self.args.entropy_target:
+                        self.entropy_coef = min(
+                            self.entropy_coef + self.args.entropy_coef_delta, self.args.entropy_coef_max
+                        )
+                    else:
+                        self.entropy_coef = max(
+                            self.entropy_coef - self.args.entropy_coef_delta, self.args.entropy_coef_min
+                        )
+                    self._last_world_entropy = world_entropy
+                    self._entropy_window_stats = None
 
             # Log entropy_coef on train optimizer-step boundaries (constant for static control; updated just
             # above for adaptive control). sync_gradients is always True in eval (no accumulation context).
