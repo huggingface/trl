@@ -31,7 +31,6 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
@@ -47,7 +46,7 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import is_peft_available, is_rich_available, is_torch_xpu_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..trainer.model_config import ModelConfig
 
@@ -200,13 +199,6 @@ def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | Non
         quantization_config = None
 
     return quantization_config
-
-
-def get_kbit_device_map() -> dict[str, int] | None:
-    if torch.cuda.is_available() or is_torch_xpu_available():
-        return {"": PartialState().local_process_index}
-    else:
-        return None
 
 
 def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
