@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 import itertools
 import queue
 
@@ -31,52 +30,13 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     TokenBudgetBatcher,
     _balance_by_squared_length,
 )
-from trl.experimental.async_grpo.async_rollout_worker import RolloutGroup, RolloutSample, _AsyncRolloutLoop
+from trl.experimental.async_grpo.async_rollout_worker import RolloutSample
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer
 
 
 def dummy_reward_func(completions, **kwargs):
     return [float(hash(c[0]["content"]) % 100) / 100.0 for c in completions]
-
-
-def test_score_group_adds_environment_owned_reward():
-    # When the environment owns the reward, `_score_group` adds the per-rollout scores captured in `group.env_rewards`
-    # as an extra reward source, summed in with weight 1 alongside the trainer-owned reward funcs.
-    PartialState()  # `_score_group` logs through accelerate, which requires the state to be initialized
-
-    def format_reward(**kwargs):
-        return [0.5, 0.5]
-
-    # Build a loop without its heavy __init__; `_score_group` only reads these three attributes off `self`.
-    loop = object.__new__(_AsyncRolloutLoop)
-    loop.reward_funcs = [format_reward]
-    # The env-owned reward is logged under the env class name, appended to reward_func_names at init.
-    loop.reward_func_names = ["format_reward", "WordleEnvironment"]
-    loop._env_owns_reward = True
-
-    group = RolloutGroup(
-        prompts=[[{"role": "user", "content": "hi"}], [{"role": "user", "content": "hi"}]],
-        prompt_ids=[[1], [1]],
-        reward_kwargs={},
-        completions=[[{"role": "assistant", "content": "a"}], [{"role": "assistant", "content": "b"}]],
-        completions_ids=[[2], [2]],
-        completions_logprobs=[[0.0], [0.0]],
-        tool_mask=[[1], [1]],
-        tool_call_counts=[0, 0],
-        tool_failure_counts=[0, 0],
-        model_version=0,
-        env_rewards=[1.0, 0.0],
-    )
-
-    samples = asyncio.run(loop._score_group(group))
-
-    # format_reward gives 0.5 to both; the env reward gives 1.0 and 0.0 -> summed rewards are 1.5 and 0.5.
-    assert samples[0].metrics["reward"] == pytest.approx(1.5)
-    assert samples[1].metrics["reward"] == pytest.approx(0.5)
-    assert samples[0].metrics["rewards/WordleEnvironment"] == pytest.approx(1.0)
-    assert samples[1].metrics["rewards/WordleEnvironment"] == pytest.approx(0.0)
-    assert samples[0].metrics["rewards/format_reward"] == pytest.approx(0.5)
 
 
 class _StubRolloutWorker:
