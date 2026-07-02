@@ -57,7 +57,6 @@ from trl import (
     ModelConfig,
     ScriptArguments,
     TrlParser,
-    get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
@@ -80,7 +79,6 @@ if __name__ == "__main__":
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
     training_args.model_init_kwargs = model_kwargs
@@ -93,7 +91,6 @@ if __name__ == "__main__":
     )
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        teacher_model_kwargs["device_map"] = get_kbit_device_map()
         teacher_model_kwargs["quantization_config"] = quantization_config
 
     training_args.teacher_model_init_kwargs = teacher_model_kwargs
