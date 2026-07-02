@@ -1726,25 +1726,27 @@ class SFTTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             inputs["output_router_logits"] = True
 
+        # Avoid materializing full logits unless something downstream actually needs them.
+        # By default, we only skip logits during training (self.training=True). When only the
+        # loss is needed for eval (no compute_metrics), we can safely skip logits there too.
+        # prediction_step communicates whether logits are expected via `_prediction_loss_only`;
+        # this prevents skipping logits during `predict()` where outputs are requested.
+        # Keep logits when preprocess_logits_for_metrics is set, even if compute_metrics is None,
+        # to prevent massive vRAM spikes from the lm_head projection.
+        # See: https://github.com/huggingface/trl/issues/4679
+        skip_logits = (
+            self.model.training
+            or self.args.prediction_loss_only
+            or (
+                self.compute_metrics is None
+                and self.preprocess_logits_for_metrics is None
+                and prediction_loss_only is not False
+            )
+        )
+
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
         if self.args.use_liger_kernel:
-            # Avoid materializing full logits during eval unless explicitly needed.
-            # By default, liger kernel only skips logits during training (self.training=True).
-            # When only loss is needed for eval (no compute_metrics), we can safely skip logits.
-            # prediction_step communicates whether logits are expected via `_prediction_loss_only`;
-            # this prevents skipping logits during `predict()` where outputs are requested.
-            # Keep logits when preprocess_logits_for_metrics is set, even if compute_metrics is None.
-            # to prevent massive vRAM spikes from the lm_head projection.
-            # See: https://github.com/huggingface/trl/issues/4679
-            inputs["skip_logits"] = (
-                self.model.training
-                or self.args.prediction_loss_only
-                or (
-                    self.compute_metrics is None
-                    and self.preprocess_logits_for_metrics is None
-                    and prediction_loss_only is not False
-                )
-            )
+            inputs["skip_logits"] = skip_logits
             inputs["return_token_accuracy"] = True
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
 
@@ -1771,7 +1773,7 @@ class SFTTrainer(_BaseTrainer):
             entropy_sum = self.accelerator.gather_for_metrics(outputs.entropy_sum).sum()
             entropy = (entropy_sum / num_valid).item() if num_valid > 0 else 0.0
             self._metrics[mode]["entropy"].append(entropy)
-        elif not self.args.use_liger_kernel:  # liger doesn't return logits
+        elif not self.args.use_liger_kernel and not skip_logits:  # liger doesn't return logits
             with torch.no_grad():
                 if "shift_labels" in inputs:
                     # When using CP or SP, labels are pre-shifted.
