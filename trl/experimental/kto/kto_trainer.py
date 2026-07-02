@@ -789,6 +789,11 @@ class KTOTrainer(_BaseTrainer):
                     "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
                     "Only KTO loss is supported with liger-kernel."
                 )
+            if compute_metrics is not None:
+                raise ValueError(
+                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
+                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
+                )
             if self.precompute_ref_logps:
                 raise ValueError(
                     "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
