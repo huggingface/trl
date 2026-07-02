@@ -1403,7 +1403,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         with (
             patch.object(trainer, "_generate_and_score_completions", side_effect=gen_with_is_ratio),
-            patch.object(trainer.liger_grpo_loss, "forward", wraps=trainer.liger_grpo_loss.forward) as mock_forward,
+            patch.object(trainer.liger_loss, "forward", wraps=trainer.liger_loss.forward) as mock_forward,
         ):
             trainer.train()
 
@@ -3084,7 +3084,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
-        assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_loss, LigerFusedLinearGRPOLoss)
 
         previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
 
@@ -3143,7 +3143,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
-        assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_loss, LigerFusedLinearGRPOLoss)
 
         # Verify PEFT adapter is properly initialized
         from peft import PeftModel
@@ -3194,7 +3194,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
-        assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_loss, LigerFusedLinearGRPOLoss)
 
         previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
 
