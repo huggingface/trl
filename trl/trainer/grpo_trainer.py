@@ -580,8 +580,7 @@ class GRPOTrainer(_BaseTrainer):
             self._environment_pool = [instance]  # reusable environment instances
             self.tools = tools + methods
 
-            # If the environment defines a `get_reward` method, it owns the reward: expose it as an extra reward
-            # source, logged under the environment's class name, and with weight 1.
+            # Expose the environment's `get_reward` as an extra reward source (named after the env class, weight 1).
             if has_reward:
 
                 def get_reward(environments, **kwargs):
