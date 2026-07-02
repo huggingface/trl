@@ -46,34 +46,32 @@ from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import (
-    RepeatSampler,
-    create_model_from_path,
-    disable_dropout_in_model,
-    pad,
-    split_tensor_dict,
-)
+from ...trainer.utils import RepeatSampler, create_model_from_path, disable_dropout_in_model, pad, split_tensor_dict
 from .distillation_config import DistillationConfig
+
+
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
     import peft
     from peft import PeftConfig, get_peft_model
 
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
-
-if is_wandb_available():
-    import wandb
-
-if is_trackio_available():
-    import trackio
 
 if is_rich_available():
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
+
+
+if is_trackio_available():
+    import trackio
+
+
+if is_wandb_available():
+    import wandb
 
 
 def _print_completions_sample(prompts: list[str], completions: list[str], step: int, num_samples: int = None) -> None:

@@ -51,17 +51,19 @@ from transformers.utils import is_peft_available, is_rich_available
 from ..trainer.model_config import ModelConfig
 
 
+if is_comet_available():
+    import comet_ml
+
+
+if is_peft_available():
+    from peft import LoraConfig, PeftConfig, PeftModel
+
+
 if is_rich_available():
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
-
-if is_comet_available():
-    import comet_ml
-
-if is_peft_available():
-    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 logger = get_logger(__name__)
