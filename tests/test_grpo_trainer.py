@@ -2350,7 +2350,6 @@ class TestGRPOTrainer(TrlTestCase):
         strict=True,
     )
     @require_jmespath
-    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_factory(self):
         # In this test, we define a simple tool that increments an internal counter. Regardless of the input prompt,
         # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
@@ -2446,7 +2445,6 @@ class TestGRPOTrainer(TrlTestCase):
         strict=True,
     )
     @require_jmespath
-    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_owned_reward(self):
         # Same setup as `test_train_with_environment_factory`, but the environment owns the reward via a `get_reward`
         # method and no `reward_funcs` is passed. The reward equals the final counter, so the 3 generations
@@ -2547,7 +2545,6 @@ class TestGRPOTrainer(TrlTestCase):
         strict=True,
     )
     @require_jmespath
-    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_environment_owned_reward_coexists_with_reward_funcs(self):
         # When both `reward_funcs` and an environment-owned `get_reward` are present, `get_reward` is appended as an
         # extra reward source (weight 1) after the trainer-owned reward functions.
