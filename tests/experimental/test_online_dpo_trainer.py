@@ -25,6 +25,7 @@ from ..testing_utils import TrlTestCase, require_peft, require_torch_accelerator
 if is_peft_available():
     from peft import LoraConfig
 
+
 if is_vision_available():
     import numpy as np
     from PIL import Image
