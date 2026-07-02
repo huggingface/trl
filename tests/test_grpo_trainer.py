@@ -39,7 +39,6 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.import_utils import is_liger_kernel_available
-from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
     TrlTestCase,
@@ -3303,7 +3302,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
             model_name,
             attn_implementation="kernels-community/flash-attn2",
             dtype="bfloat16",
-            device_map=get_kbit_device_map(),
             quantization_config=quantization_config,
         )
 
