@@ -91,11 +91,14 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
 
     This collator expects each example in the input list to be a dictionary containing the `"prompt_ids"` and
     `"completion_ids"` keys (and optionally a `"KL_completion_ids"` key). The collator returns a dictionary containing
-    the following keys for each prefix (`"completion"` and, if present, `"KL_completion"`):
-    - `"{prefix}_input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
-    - `"{prefix}_attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
-    - `"{prefix}_mask"`: Tensor indicating the positions of the completion tokens, padded to the maximum length of the
-        batch.
+    the following keys:
+    - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
+    - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
+    - `"completion_mask"`: Tensor indicating the positions of the completion tokens, padded to the maximum length of
+        the batch.
+
+    When `"KL_completion_ids"` is present, the same three tensors are returned for the (mismatched) KL sequence under
+    the `"KL_input_ids"`, `"KL_attention_mask"` and `"KL_completion_mask"` keys.
 
     The returned dictionary also contains a `"label"` key with the list of labels. Optionally, the examples can contain
     `"ref_logps"` and `"ref_KL_logps"` keys, in which case the returned dictionary will also contain these keys with
@@ -122,10 +125,10 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     ...     {"prompt_ids": [7, 8], "completion_ids": [9], "label": False},
     ... ]
     >>> collator(examples)
-    {'completion_input_ids': tensor([[1, 2, 3, 4, 5],
-                                     [7, 8, 9, 0, 0]]),
-     'completion_attention_mask': tensor([[1, 1, 1, 1, 1],
-                                          [1, 1, 1, 0, 0]]),
+    {'input_ids': tensor([[1, 2, 3, 4, 5],
+                          [7, 8, 9, 0, 0]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1],
+                               [1, 1, 1, 0, 0]]),
      'completion_mask': tensor([[0, 0, 0, 1, 1],
                                 [0, 0, 1, 0, 0]]),
      'label': [True, False]}
@@ -136,16 +139,16 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
     ...     {"prompt_ids": [7, 8], "completion_ids": [9], "KL_completion_ids": [10, 11], "label": False},
     ... ]
     >>> collator(examples)
-    {'completion_input_ids': tensor([[1, 2, 3, 4, 5],
-                                     [7, 8, 9, 0, 0]]),
-     'completion_attention_mask': tensor([[1, 1, 1, 1, 1],
-                                          [1, 1, 1, 0, 0]]),
+    {'input_ids': tensor([[1, 2, 3, 4, 5],
+                          [7, 8, 9, 0, 0]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1],
+                               [1, 1, 1, 0, 0]]),
      'completion_mask': tensor([[0, 0, 0, 1, 1],
                                 [0, 0, 1, 0, 0]]),
-     'KL_completion_input_ids': tensor([[ 1,  2,  3,  6],
-                                        [ 7,  8, 10, 11]]),
-     'KL_completion_attention_mask': tensor([[1, 1, 1, 1],
-                                             [1, 1, 1, 1]]),
+     'KL_input_ids': tensor([[ 1,  2,  3,  6],
+                             [ 7,  8, 10, 11]]),
+     'KL_attention_mask': tensor([[1, 1, 1, 1],
+                                  [1, 1, 1, 1]]),
      'KL_completion_mask': tensor([[0, 0, 0, 1],
                                    [0, 0, 1, 1]]),
      'label': [True, False]}
@@ -222,13 +225,13 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
     - A `"label"` key (`bool`) indicating whether the completion is desirable.
 
     The collator outputs a dictionary including:
-    - `"completion_input_ids"`: Tensor of token IDs.
-    - `"completion_attention_mask"`: Tensor indicating attention mask.
+    - `"input_ids"`: Tensor of token IDs.
+    - `"attention_mask"`: Tensor indicating attention mask.
     - `"pixel_values"`: Tensor representing image pixel values.
     - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
     - `"label"`: List of booleans indicating whether each completion is desirable.
-    - When `calculate_kl` is `True`: `"KL_completion_input_ids"`, `"KL_completion_attention_mask"` and
-      `"KL_completion_mask"` for the cycled KL sequences.
+    - When `calculate_kl` is `True`: `"KL_input_ids"`, `"KL_attention_mask"` and `"KL_completion_mask"` for the cycled
+      KL sequences.
 
     Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"image_position_ids"`.
 
@@ -268,14 +271,10 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
     ...     },
     ... ]
     >>> collator(examples)
-    {'completion_input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198,
-                                      151652, 151655, 151655, 151655, 151655, 151653,   3838,    374,    419,     30, 151645,    198, 151644,  77091,
-                                         198,   1986,    374,    264,   8251,     13, 151645,    198],
-                                     [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198,
-                                      151652, 151655, 151655, 151655, 151655, 151653,  74785,    419,   2168,     13, 151645,    198, 151644,  77091,
-                                         198,     32,   6233,  18414,     13, 151645,    198, 151643]]),
-     'completion_attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                                          [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]]),
+    {'input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198, 151652, 151655, 151655, 151655, 151655, 151653,   3838,    374,    419,     30, 151645,    198, 151644,  77091,    198,   1986,    374,    264,   8251,     13, 151645,    198],
+                          [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198, 151652, 151655, 151655, 151655, 151655, 151653,  74785,    419,   2168,     13, 151645,    198, 151644,  77091,    198,     32,   6233,  18414,     13, 151645,    198, 151643]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]]),
      'pixel_values': tensor([[-0.0405, -0.0405, -0.0405,  ...,  1.3638,  1.3638,  1.3638],
                              [-0.0405, -0.0405, -0.0405,  ...,  1.3638,  1.3638,  1.3638],
                              [-0.0405, -0.0405, -0.0405,  ...,  1.3638,  1.3638,  1.3638],
@@ -287,14 +286,10 @@ class DataCollatorForVisionUnpairedPreference(DataCollatorMixin):
                                [1, 4, 4]]),
      'completion_mask': tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1],
                                 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0]]),
-     'KL_completion_input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198,
-                                         151652, 151655, 151655, 151655, 151655, 151653,   3838,    374,    419,     30, 151645,    198, 151644,  77091,
-                                            198,     32,   6233,  18414,     13, 151645,    198, 151643],
-                                        [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198,
-                                         151652, 151655, 151655, 151655, 151655, 151653,  74785,    419,   2168,     13, 151645,    198, 151644,  77091,
-                                            198,   1986,    374,    264,   8251,     13, 151645,    198]]),
-     'KL_completion_attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
-                                             [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]),
+     'KL_input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198, 151652, 151655, 151655, 151655, 151655, 151653,   3838,    374,    419,     30, 151645,    198, 151644,  77091,    198,     32,   6233,  18414,     13, 151645,    198, 151643],
+                             [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13, 151645,    198, 151644,    872,    198, 151652, 151655, 151655, 151655, 151655, 151653,  74785,    419,   2168,     13, 151645,    198, 151644,  77091,    198,   1986,    374,    264,   8251,     13, 151645,    198]]),
+     'KL_attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+                                  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]),
      'KL_completion_mask': tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0],
                                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1]]),
      'label': [True, False]}
