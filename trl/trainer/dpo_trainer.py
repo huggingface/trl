@@ -69,7 +69,8 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 logger = get_logger(__name__)
@@ -732,8 +733,10 @@ class DPOTrainer(_BaseTrainer):
                 "Label smoothing must be greater than 0.0 when using 'exo_pair' loss. The EXO paper recommends a "
                 "value of 1e-3."
             )
+
+        # Liger loss
         self.use_liger_kernel = args.use_liger_kernel
-        if args.use_liger_kernel:
+        if self.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
                     "You set `use_liger_kernel=True` but the liger kernel is not available. "
@@ -744,7 +747,6 @@ class DPOTrainer(_BaseTrainer):
                     "Multiple loss types are not yet supported when using Liger kernel. If you need this feature, "
                     "please open a feature request at https://github.com/huggingface/trl/issues."
                 )
-            self.liger_loss = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
             if compute_metrics is not None:
                 raise ValueError(
                     "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
@@ -756,10 +758,32 @@ class DPOTrainer(_BaseTrainer):
                     "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
                 )
             if is_peft_model(model):
-                raise ValueError(
-                    "`use_liger_kernel=True` is not supported with PEFT models. Set `use_liger_kernel=False` to train "
-                    "a PEFT model."
-                )
+                # The Liger fused DPO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head
+                # is targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base
+                # weight and the trainable adapter parameters live in separate submodules that Liger never sees. The
+                # head adapter would silently receive no gradient, so the model trains as if `lm_head` were frozen.
+                # Fail loudly rather than train a silently-frozen head.
+                output_embeddings = model.get_output_embeddings()
+                if isinstance(output_embeddings, BaseTunerLayer):
+                    raise ValueError(
+                        "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The Liger "
+                        "fused DPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and "
+                        "never trained. Either remove `'lm_head'` from your `target_modules`, or set "
+                        "`use_liger_kernel=False`."
+                    )
+                # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
+                # `PeftModel.forward()`. The Liger DPO loss bypasses `PeftModel.forward()` by calling the backbone
+                # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
+                # Fail loudly rather than train on a silently corrupted input.
+                if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                    raise ValueError(
+                        "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
+                        "PrefixTuning, P-Tuning). The Liger DPO loss bypasses `PeftModel.forward()` by calling the "
+                        "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
+                        "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
+                        "`use_liger_kernel=False`."
+                    )
+            self.liger_loss = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -1169,15 +1193,18 @@ class DPOTrainer(_BaseTrainer):
         model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
 
+        if is_peft_model(model):
+            model = model.base_model.model
+
         # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
         # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
         # returns just the text stack and feeds image-placeholder IDs through it.
         # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
         # Fall back to `.model` there.
         if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            backbone, ref_backbone = model.model, self.ref_model.model
+            backbone = model.model
         else:
-            backbone, ref_backbone = model.base_model, self.ref_model.base_model
+            backbone = model.base_model
 
         outputs = backbone(**model_kwargs)
         hidden_states = outputs.last_hidden_state[:, :-1].contiguous()
@@ -1186,8 +1213,28 @@ class DPOTrainer(_BaseTrainer):
         bias = lm_head.bias
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            ref_outputs = ref_backbone(**model_kwargs)
-            ref_lm_head = self.ref_model.get_output_embeddings()
+            if self.ref_model is None:
+                # PEFT model with no explicit reference model: recover reference behaviour by disabling / switching to
+                # the frozen "ref" adapter, exactly as _compute_loss does for logit-based reference computation.
+                model_unwrapped = self.accelerator.unwrap_model(self.model)
+                with use_adapter(
+                    model_unwrapped, adapter_name="ref" if "ref" in model_unwrapped.peft_config else None
+                ):
+                    ref_model_inner = model_unwrapped.base_model.model
+                    if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                        ref_backbone = ref_model_inner.model
+                    else:
+                        ref_backbone = ref_model_inner.base_model
+                    ref_outputs = ref_backbone(**model_kwargs)
+                    ref_lm_head = model_unwrapped.get_output_embeddings()
+            else:
+                ref_model_inner = self.ref_model.base_model.model if is_peft_model(self.ref_model) else self.ref_model
+                if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                    ref_backbone = ref_model_inner.model
+                else:
+                    ref_backbone = ref_model_inner.base_model
+                ref_outputs = ref_backbone(**model_kwargs)
+                ref_lm_head = self.ref_model.get_output_embeddings()
             ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
             ref_weight = ref_lm_head.weight
             ref_bias = ref_lm_head.bias
