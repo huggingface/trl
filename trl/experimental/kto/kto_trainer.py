@@ -103,7 +103,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
         pad_token_id (`int`):
             Token ID to use for padding `input_ids` sequences.
         max_length (`int`, *optional*):
-            Maximum sequence length after assembly. Sequences longer than `max_length` are truncated from the end.
+            Maximum sequence length after assembly. Sequences longer than `max_length` are truncated from the right.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
