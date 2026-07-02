@@ -845,7 +845,7 @@ class GRPOTrainer(_BaseTrainer):
             # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
             self._forward_redirection = _ForwardRedirection()
 
-            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
+            self.liger_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
                 epsilon_low=self.epsilon_low,
                 epsilon_high=self.epsilon_high,
@@ -2591,7 +2591,7 @@ class GRPOTrainer(_BaseTrainer):
 
                 gather_ctx = deepspeed.zero.GatheredParameters(params, modifier_rank=None)
         with gather_ctx:
-            loss, metrics = self.liger_grpo_loss(
+            loss, metrics = self.liger_loss(
                 _input=last_hidden_state,
                 lin_weight=lm_head_weight,
                 selected_token_ids=completion_ids,
