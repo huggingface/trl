@@ -76,6 +76,9 @@ if is_peft_available():
 logger = get_logger(__name__)
 
 
+_CHUNKED_LM_HEAD_CHUNK_SIZE = 256
+
+
 FLASH_ATTENTION_VARIANTS = {
     "flash_attention_2",
     "flash_attention_3",
@@ -83,6 +86,104 @@ FLASH_ATTENTION_VARIANTS = {
     "kernels-community/flash-attn3",
     "kernels-community/vllm-flash-attn3",
 }
+
+
+def _chunk_logps(h, w, b, lbl, logit_scale, final_logit_softcapping):
+    logits = h.float() @ w.float().t()
+    if b is not None:
+        logits = logits + b.float()
+    if logit_scale != 1.0:
+        logits = logits * logit_scale
+    if final_logit_softcapping is not None:
+        logits = final_logit_softcapping * torch.tanh(logits / final_logit_softcapping)
+    selected = torch.gather(logits, dim=-1, index=lbl.unsqueeze(-1)).squeeze(-1)
+    return selected - torch.logsumexp(logits, dim=-1)
+
+
+def _chunked_selective_log_softmax(
+    hidden_states: torch.Tensor,
+    lm_head_weight: torch.Tensor,
+    labels: torch.Tensor,
+    chunk_size: int,
+    lm_head_bias: torch.Tensor | None = None,
+    logit_scale: float = 1.0,
+    final_logit_softcapping: float | None = None,
+) -> torch.Tensor:
+    """
+    Memory-efficient per-token log-probabilities `log P(labels[b, s] | …)` over hidden states and an `lm_head` weight.
+    Mirrors [`_chunked_cross_entropy_loss`][trl.trainer.sft_trainer._chunked_cross_entropy_loss] but returns the full
+    per-token logp tensor instead of reducing to a scalar loss.
+
+    The full `lm_head` projection is never materialized. Positions where labels equal `-100` are dropped before the
+    matmul, and the remaining tokens are processed in chunks of `chunk_size`. Each chunk's `[chunk_size, vocab_size]`
+    logits tensor is kept alive only during its own forward/backward pass via gradient checkpointing, so peak
+    logits-activation memory is `chunk_size * vocab_size` instead of `batch_size * seq_len * vocab_size`.
+
+    Args:
+        hidden_states (`torch.Tensor`):
+            Base decoder output of shape `(B, S, H)`, already aligned with `labels` (i.e. caller has applied any
+            required `[..., :-1, :]` shift before passing it in).
+        lm_head_weight (`torch.Tensor`):
+            Weight of the `lm_head` linear layer, shape `(V, H)`.
+        labels (`torch.Tensor`):
+            Labels of shape `(B, S)`, already shifted. Positions equal to `-100` are excluded from both the `lm_head`
+            matmul and the output (their logp is set to `0.0`).
+        chunk_size (`int`):
+            Number of valid tokens processed per chunk. Peak memory scales linearly with this.
+        lm_head_bias (`torch.Tensor`, *optional*):
+            Bias of the `lm_head` linear layer, shape `(V,)`. Added to each chunk's logits when provided.
+        logit_scale (`float`, *optional*, defaults to `1.0`):
+            Multiplier applied to each chunk's logits before the selective log-softmax, matching the `logit_scale`
+            behavior of Cohere-style models.
+        final_logit_softcapping (`float`, *optional*):
+            If set, applies `softcap * tanh(logits / softcap)` to each chunk's logits before the selective log-softmax,
+            matching the `final_logit_softcapping` behavior of Gemma-style models. Applied after `logit_scale`.
+
+    Returns:
+        `torch.Tensor`: per-token log-probabilities of shape `(B, S)` in `float32`. Positions where `labels == -100`
+        are filled with `0.0`.
+    """
+    B, S, H = hidden_states.shape
+    flat_h = hidden_states.reshape(-1, H)
+    flat_lbl = labels.reshape(-1)
+
+    valid = flat_lbl != -100
+    h_valid = flat_h[valid]
+    lbl_valid = flat_lbl[valid]
+    n_valid = h_valid.size(0)
+
+    if n_valid == 0:
+        # Whole micro-batch masked. Keep the output connected to the autograd graph through every trainable
+        # parameter so `.backward()` succeeds and DDP / FSDP gradient sync doesn't hang on a missing param.
+        zero = (hidden_states.float().sum() + lm_head_weight.float().sum()) * 0.0
+        if lm_head_bias is not None:
+            zero = zero + lm_head_bias.float().sum() * 0.0
+        return zero + hidden_states.new_zeros((B, S))
+
+    logps_chunks = []
+    for start in range(0, n_valid, chunk_size):
+        h_chunk = h_valid[start : start + chunk_size]
+        lbl_chunk = lbl_valid[start : start + chunk_size]
+        logps_chunk = torch.utils.checkpoint.checkpoint(
+            _chunk_logps,
+            h_chunk,
+            lm_head_weight,
+            lm_head_bias,
+            lbl_chunk,
+            logit_scale,
+            final_logit_softcapping,
+            use_reentrant=False,
+        )
+        logps_chunks.append(logps_chunk)
+    # Match `selective_log_softmax`'s output dtype (input hidden_states' dtype) so callers can mix chunked and
+    # non-chunked logps without precision-driven divergence.
+    logps_valid = torch.cat(logps_chunks).to(hidden_states.dtype)
+
+    # Scatter back into the (B, S) shape, with 0.0 at masked positions.
+    out = hidden_states.new_zeros(B * S)
+    indices = valid.nonzero(as_tuple=True)[0]
+    out = out.scatter(0, indices, logps_valid)
+    return out.view(B, S)
 
 
 def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
@@ -783,6 +884,32 @@ class DPOTrainer(_BaseTrainer):
                         "`use_liger_kernel=False`."
                     )
 
+        # MVP scope cuts for the chunked `lm_head` path: same constraints as Liger plus a few of our own. The chunked
+        # path doesn't materialize logits, so any feature that reads `outputs.logits` (entropy/logits/accuracy metrics,
+        # `loss_type='sft'`, `use_weighting`, `compute_metrics`) is incompatible. VLMs are deferred.
+        self.use_chunked_loss = args.use_chunked_loss
+        if args.use_chunked_loss:
+            if args.use_liger_kernel:
+                raise ValueError("`use_chunked_loss` is not compatible with `use_liger_kernel`.")
+            if args.use_weighting:
+                raise NotImplementedError("`use_chunked_loss` is not compatible with `use_weighting` (MVP).")
+            if "sft" in self.loss_types:
+                raise NotImplementedError("`use_chunked_loss` is not compatible with `loss_type='sft'` (MVP).")
+            if self.precompute_ref_logps:
+                raise ValueError(
+                    "`use_chunked_loss` does not support precomputing reference log probabilities. Either disable "
+                    "`precompute_ref_log_probs` or set `use_chunked_loss=False`."
+                )
+            if compute_metrics is not None:
+                raise ValueError(
+                    "`compute_metrics` is not supported with `use_chunked_loss=True`: the chunked path does not "
+                    "materialize logits, which `compute_metrics` typically reads from."
+                )
+            if is_peft_model(model):
+                raise NotImplementedError("`use_chunked_loss` is not implemented for PEFT models (MVP).")
+            if self._is_vision_dataset:
+                raise NotImplementedError("`use_chunked_loss` is not implemented for VLMs (MVP).")
+
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
         # and done on the fly instead.
@@ -1286,21 +1413,49 @@ class DPOTrainer(_BaseTrainer):
         return loss
 
     def _compute_loss(self, model, inputs, return_outputs):
+        if return_outputs and self.use_chunked_loss:
+            raise RuntimeError(
+                "return_outputs=True is not supported with use_chunked_loss=True. The chunked path does not "
+                "materialize the full logits tensor, so outputs cannot be returned."
+            )
         mode = "train" if self.model.training else "eval"
         device = self.accelerator.device
 
         _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
         model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
-        outputs = model(**model_kwargs)
 
         input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
-        shift_logits = outputs.logits[..., :-1, :]
         shift_labels = input_ids[..., 1:]
         shift_completion_mask = completion_mask[..., 1:]
-        per_token_logps = selective_log_softmax(shift_logits, shift_labels)
-        per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+
+        if self.use_chunked_loss:
+            # Chunked `lm_head` path: run the decoder (skipping the `lm_head` projection) and compute per-token
+            # log-probabilities in chunks of valid tokens, so the full `[B, S, V]` logits tensor is never materialized.
+            # Mirrors the SFT `chunked_nll` path; see [`_chunked_selective_log_softmax`].
+            decoder = model.get_decoder()
+            decoder_outputs = decoder(
+                input_ids=input_ids, attention_mask=inputs.get("attention_mask"), use_cache=False
+            )
+            hidden_states = decoder_outputs.last_hidden_state
+            shift_hidden = hidden_states[..., :-1, :].contiguous()
+            # Build labels-for-chunking with `-100` at non-completion positions so they're skipped entirely.
+            shift_labels_for_chunking = shift_labels.masked_fill(shift_completion_mask == 0, -100)
+            lm_head = model.get_output_embeddings()
+            per_token_logps = _chunked_selective_log_softmax(
+                shift_hidden,
+                lm_head.weight,
+                shift_labels_for_chunking,
+                chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE,
+                lm_head_bias=lm_head.bias,
+            )
+            outputs = None
+        else:
+            outputs = model(**model_kwargs)
+            shift_logits = outputs.logits[..., :-1, :]
+            per_token_logps = selective_log_softmax(shift_logits, shift_labels)
+            per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
         if self.ld_alpha is None:
             logps = per_token_logps.sum(dim=1)  # sum over sequence length
         else:
@@ -1323,19 +1478,37 @@ class DPOTrainer(_BaseTrainer):
             # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
             # Temporarily disable checkpointing to avoid this warning during inference.
             with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-                if is_peft_model(model) and self.ref_model is None:
-                    # When training a PEFT adapter, how we obtain the reference depends on the setup:
-                    # - New adapter: disabling adapters yields the base model.
-                    # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
-                    model = self.accelerator.unwrap_model(model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_outputs = self.model(**model_kwargs)
+                if self.use_chunked_loss:
+                    # Mirror the policy chunked path so the reference uses the same precision strategy (fp32 internal),
+                    # otherwise policy_logps and ref_logps would disagree under bf16 even with identical weights.
+                    ref_decoder = self.ref_model.get_decoder()
+                    ref_decoder_outputs = ref_decoder(
+                        input_ids=input_ids, attention_mask=inputs.get("attention_mask"), use_cache=False
+                    )
+                    ref_hidden_states = ref_decoder_outputs.last_hidden_state
+                    ref_shift_hidden = ref_hidden_states[..., :-1, :].contiguous()
+                    ref_lm_head = self.ref_model.get_output_embeddings()
+                    ref_per_token_logps = _chunked_selective_log_softmax(
+                        ref_shift_hidden,
+                        ref_lm_head.weight,
+                        shift_labels_for_chunking,
+                        chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE,
+                        lm_head_bias=ref_lm_head.bias,
+                    )
                 else:
-                    ref_outputs = self.ref_model(**model_kwargs)
+                    if is_peft_model(model) and self.ref_model is None:
+                        # When training a PEFT adapter, how we obtain the reference depends on the setup:
+                        # - New adapter: disabling adapters yields the base model.
+                        # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
+                        model = self.accelerator.unwrap_model(model)
+                        with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                            ref_outputs = self.model(**model_kwargs)
+                    else:
+                        ref_outputs = self.ref_model(**model_kwargs)
 
-            ref_shift_logits = ref_outputs.logits[..., :-1, :]
-            ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
-            ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+                    ref_shift_logits = ref_outputs.logits[..., :-1, :]
+                    ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
+                    ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
             if self.ld_alpha is None:
                 ref_logps = ref_per_token_logps.sum(dim=1)  # sum over sequence length
             else:
@@ -1530,17 +1703,20 @@ class DPOTrainer(_BaseTrainer):
             loss += per_sequence_loss.mean() * loss_weight
 
         # Log the metrics
-        # Entropy
-        per_token_entropy = entropy_from_logits(shift_logits.detach())
-        mask = shift_completion_mask
-        entropy_sum = (per_token_entropy * mask).sum()
-        total_tokens = mask.sum()
+        # Entropy, logits/{chosen,rejected}, and token accuracy all require the materialized `shift_logits` tensor;
+        # the chunked path doesn't keep it around, so these metrics are dropped under `use_chunked_loss=True`.
+        if not self.use_chunked_loss:
+            # Entropy
+            per_token_entropy = entropy_from_logits(shift_logits.detach())
+            mask = shift_completion_mask
+            entropy_sum = (per_token_entropy * mask).sum()
+            total_tokens = mask.sum()
 
-        # Gather counts across ranks and weight-average
-        entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
-        total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
-        entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
-        self._metrics[mode]["entropy"].append(entropy)
+            # Gather counts across ranks and weight-average
+            entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+            total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
+            entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
+            self._metrics[mode]["entropy"].append(entropy)
 
         # Number of tokens
         if mode == "train":
@@ -1548,34 +1724,35 @@ class DPOTrainer(_BaseTrainer):
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        # Average logits for chosen and rejected completions
-        chosen_logits, rejected_logits = shift_logits.detach().chunk(2, dim=0)
-        chosen_mask, rejected_mask = shift_completion_mask.chunk(2, dim=0)
-        total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
-        total_chosen_tokens = chosen_mask.sum()
-        total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
-        total_rejected_tokens = rejected_mask.sum()
-        total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
-        total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
-        total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
-        total_rejected_tokens = self.accelerator.gather_for_metrics(total_rejected_tokens).sum().item()
-        avg_chosen_logits = total_chosen_logits / total_chosen_tokens if total_chosen_tokens > 0 else 0.0
-        avg_rejected_logits = total_rejected_logits / total_rejected_tokens if total_rejected_tokens > 0 else 0.0
-        self._metrics[mode]["logits/chosen"].append(avg_chosen_logits)
-        self._metrics[mode]["logits/rejected"].append(avg_rejected_logits)
+        if not self.use_chunked_loss:
+            # Average logits for chosen and rejected completions
+            chosen_logits, rejected_logits = shift_logits.detach().chunk(2, dim=0)
+            chosen_mask, rejected_mask = shift_completion_mask.chunk(2, dim=0)
+            total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
+            total_chosen_tokens = chosen_mask.sum()
+            total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
+            total_rejected_tokens = rejected_mask.sum()
+            total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
+            total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
+            total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
+            total_rejected_tokens = self.accelerator.gather_for_metrics(total_rejected_tokens).sum().item()
+            avg_chosen_logits = total_chosen_logits / total_chosen_tokens if total_chosen_tokens > 0 else 0.0
+            avg_rejected_logits = total_rejected_logits / total_rejected_tokens if total_rejected_tokens > 0 else 0.0
+            self._metrics[mode]["logits/chosen"].append(avg_chosen_logits)
+            self._metrics[mode]["logits/rejected"].append(avg_rejected_logits)
 
-        # Token accuracy for the chosen completions
-        predictions = chosen_logits.argmax(dim=-1)
-        chosen_mask = shift_completion_mask[: len(shift_completion_mask) // 2].bool()
-        chosen_labels = shift_labels[: len(shift_labels) // 2]
-        correct_predictions = (predictions == chosen_labels) & chosen_mask
-        total_tokens = chosen_mask.sum()
-        correct_tokens = correct_predictions.sum()
-        correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-        total_tokens = self.accelerator.gather_for_metrics(total_tokens)
-        total_sum = total_tokens.sum()
-        accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-        self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+            # Token accuracy for the chosen completions
+            predictions = chosen_logits.argmax(dim=-1)
+            chosen_mask = shift_completion_mask[: len(shift_completion_mask) // 2].bool()
+            chosen_labels = shift_labels[: len(shift_labels) // 2]
+            correct_predictions = (predictions == chosen_labels) & chosen_mask
+            total_tokens = chosen_mask.sum()
+            correct_tokens = correct_predictions.sum()
+            correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
+            total_tokens = self.accelerator.gather_for_metrics(total_tokens)
+            total_sum = total_tokens.sum()
+            accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
+            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         # Rewards for chosen and rejected completions
         chosen_rewards = self.beta * chosen_logratios.detach()

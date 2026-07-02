@@ -196,6 +196,16 @@ Expect **typically ~30 % less peak VRAM, up to ~50 %** on large-vocab models (me
 
 Not compatible with `use_liger_kernel=True`, PEFT, or VLM.
 
+The same optimization is available for DPO via `use_chunked_loss=True` in [`DPOConfig`]. Both the policy and reference forwards skip the full `lm_head` projection and compute per-token log-probabilities in chunks. Same math as the default DPO loss.
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(..., use_chunked_loss=True)
+```
+
+Expect ~25 % less peak VRAM at typical configurations (measured on `Qwen2.5-0.5B-Instruct`, bf16, `batch_size=4`, `max_length=1024`: 26.5 GB → 19.5 GB peak). Not compatible with `use_liger_kernel`, `precompute_ref_log_probs`, `use_weighting`, `loss_type='sft'`, `compute_metrics`, PEFT, or VLMs.
+
 ## Padding-free
 
 Padding-free batching is an alternative approach for reducing memory usage. In this method, a batch is first sampled and then flattened into a single sequence, avoiding padding. Unlike packing, which can result in incomplete sequences by combining parts of different samples, padding-free batching ensures that all sequences remain complete and intact.
