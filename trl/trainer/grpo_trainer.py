@@ -3018,4 +3018,4 @@ class GRPOTrainer(_BaseTrainer):
                 with open(path) as f:
                     state = json.load(f)
                 self.entropy_coef = state["entropy_coef"]
-                self._last_world_entropy = state.get("last_world_entropy", float("inf"))
+                self._last_world_entropy = state["last_world_entropy"]
