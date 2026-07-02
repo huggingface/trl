@@ -36,6 +36,7 @@ from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
+    AutoTokenizer,
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
@@ -52,7 +53,12 @@ from transformers.utils import is_peft_available, is_torch_fx_proxy
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, selective_log_softmax
+from ...trainer.utils import (
+    disable_dropout_in_model,
+    get_config_model_id,
+    log_table_to_comet_experiment,
+    selective_log_softmax,
+)
 from ..utils import (
     DPODataCollatorWithPadding,
     add_bos_token_if_needed,
@@ -68,11 +74,12 @@ if is_peft_available():
     from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
 
 
-if is_wandb_available():
-    import wandb
-
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
+
+
+if is_wandb_available():
+    import wandb
 
 
 logger = get_logger(__name__)
@@ -290,7 +297,9 @@ class ORPOTrainer(_BaseTrainer):
             self.pad_token_id = model.config.pad_token_id
 
         if processing_class is None:
-            raise ValueError("processing_class must be specified to tokenize a ORPO dataset.")
+            processing_class = AutoTokenizer.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            )
         if args.max_length is None:
             logger.warning(
                 "`max_length` is not set in the ORPOConfig's init"
