@@ -393,7 +393,7 @@ class SDFTTrainer(_BaseTrainer):
                     "`use_liger_kernel` is incompatible with `distillation_is_clip`: the fused kernel does not expose "
                     "per-token losses for importance-sampling clipping."
                 )
-            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.distillation_alpha,
                 ignore_index=-100,
                 temperature=args.temperature,
@@ -1216,7 +1216,7 @@ class SDFTTrainer(_BaseTrainer):
         # Per-sequence then batch mean (grpo), matching the non-Liger path: the fused kernel reduces by total tokens
         # (bnpo), so we call it per sequence and average.
         seq_losses = [
-            self.liger_jsd_loss(
+            self.liger_loss(
                 student_input=student_hidden[i],
                 student_weight=student_head.weight,
                 teacher_input=teacher_hidden[i],
