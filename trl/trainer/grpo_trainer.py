@@ -581,9 +581,7 @@ class GRPOTrainer(_BaseTrainer):
             self.tools = tools + methods
 
             # If the environment defines a `get_reward` method, it owns the reward: expose it as an extra reward
-            # source, logged under the environment's class name. It scores from the environment's internal state, so it
-            # takes no completion; it just reads `self.environments` (injected into the reward kwargs by
-            # `_calculate_rewards`). It always gets weight 1: the environment owns its own scale.
+            # source, logged under the environment's class name, and with weight 1.
             if has_reward:
 
                 def get_reward(environments, **kwargs):
