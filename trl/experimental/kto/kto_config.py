@@ -50,7 +50,7 @@ class KTOConfig(_BaseConfig):
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left.
+            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the end.
             If `None`, no truncation is applied.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
@@ -152,7 +152,7 @@ class KTOConfig(_BaseConfig):
         default=1024,
         metadata={
             "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
-            "the left. If `None`, no truncation is applied."
+            "the end. If `None`, no truncation is applied."
         },
     )
     pad_to_multiple_of: int | None = field(
