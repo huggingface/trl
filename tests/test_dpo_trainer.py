@@ -849,6 +849,24 @@ class TestDPOTrainer(TrlTestCase):
                 peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
             )
 
+    @require_liger_kernel
+    def test_init_fails_with_compute_metrics_and_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="compute_metrics is not supported with the Liger kernel"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                compute_metrics=lambda _: {},
+            )
+
     def test_train_with_iterable_dataset(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train", streaming=True)
 
