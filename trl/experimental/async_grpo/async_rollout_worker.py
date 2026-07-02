@@ -243,8 +243,6 @@ class _AsyncRolloutLoop:
         tools = tools or []
         self._standalone_tools = tools  # tools that are not bound to the environment
         self.environment_factory = environment_factory
-        # If the environment defines a `get_reward` method, it owns the reward: it is called once per completed rollout
-        # to score it from the environment's internal state, and added as an extra reward source (see `_score_group`).
         self._env_owns_reward = False
 
         if environment_factory is not None:
