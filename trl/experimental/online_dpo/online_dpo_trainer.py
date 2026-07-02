@@ -59,6 +59,14 @@ from ..utils import DPODataCollatorWithPadding, create_reference_model, empty_ca
 from .online_dpo_config import OnlineDPOConfig
 
 
+if Version(transformers.__version__) >= Version("5.2.0"):
+    from transformers.trainer_pt_utils import nested_gather
+
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
+
+
 if is_peft_available():
     from peft import PeftConfig
 
@@ -72,18 +80,13 @@ else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
 
-if Version(transformers.__version__) >= Version("5.2.0"):
-    from transformers.trainer_pt_utils import nested_gather
-
-
 if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
 
-if is_bitsandbytes_available():
-    import bitsandbytes as bnb
 
 logger = get_logger(__name__)
+
 
 # A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
 # a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional

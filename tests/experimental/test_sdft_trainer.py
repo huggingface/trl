@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
+
 import pytest
 import torch
 from datasets import Dataset
@@ -61,6 +63,10 @@ class RecordingTeacherClient:
 
 
 class TestSDFTTrainer(TrlTestCase):
+    def teardown_method(self):
+        if hasattr(self, "_liger_module"):
+            importlib.reload(importlib.import_module(self._liger_module))
+
     @staticmethod
     def _trainable_param_snapshot(model):
         return {name: param.detach().clone() for name, param in model.named_parameters() if param.requires_grad}
@@ -153,6 +159,7 @@ class TestSDFTTrainer(TrlTestCase):
             args=SDFTConfig(use_liger_kernel=True, **common),
             train_dataset=dataset,
         )
+        self._liger_module = liger_trainer.model.__module__
 
         liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
         torch.manual_seed(0)

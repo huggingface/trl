@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import logging
 
 import pytest
@@ -73,6 +74,10 @@ class RecordingTeacherClient:
 
 
 class TestSDPOTrainer(TrlTestCase):
+    def teardown_method(self):
+        if hasattr(self, "_liger_module"):
+            importlib.reload(importlib.import_module(self._liger_module))
+
     def test_trust_remote_code(self):
         dataset = Dataset.from_dict(
             {
@@ -197,6 +202,7 @@ class TestSDPOTrainer(TrlTestCase):
             args=SDPOConfig(use_liger_kernel=True, **common),
             train_dataset=dataset,
         )
+        self._liger_module = liger_trainer.model.__module__
 
         liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
         torch.manual_seed(0)
