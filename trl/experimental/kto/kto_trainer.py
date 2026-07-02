@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import json
 import os
 import textwrap
 from collections import defaultdict
@@ -972,12 +973,15 @@ class KTOTrainer(_BaseTrainer):
             tokenize = self._tokenize
 
             def tokenize_fn(example, processing_class, is_vlm):
+                tools = example.get("tools")
+                tools = json.loads(tools) if isinstance(tools, str) else tools
                 if is_conversational(example):
                     chat_template_kwargs = example.get("chat_template_kwargs", {})
                     prompt_ids = tokenize(
                         processing_class,
                         example["prompt"],
                         is_vlm,
+                        tools=tools,
                         add_generation_prompt=True,
                         **chat_template_kwargs,
                     )["input_ids"]
@@ -985,6 +989,7 @@ class KTOTrainer(_BaseTrainer):
                         processing_class,
                         example["prompt"] + example["completion"],
                         is_vlm,
+                        tools=tools,
                         **chat_template_kwargs,
                     )["input_ids"]
                 else:
@@ -1056,6 +1061,7 @@ class KTOTrainer(_BaseTrainer):
                     "image",
                     "images",
                     "label",
+                    "tools",
                     "chat_template_kwargs",
                 ]
             else:
