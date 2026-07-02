@@ -770,7 +770,7 @@ class GOLDTrainer(SFTTrainer):
         # Liger fused GKD loss (JSD)
         self.use_liger_gkd_loss = False
         if args.use_liger_kernel:
-            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 temperature=args.temperature,
@@ -808,6 +808,9 @@ class GOLDTrainer(SFTTrainer):
             if args.teacher_model_revision is not None:
                 init_kwargs.setdefault("revision", args.teacher_model_revision)
             init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            # Distributed training requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                init_kwargs["device_map"] = None
             teacher_model = create_model_from_path(teacher_model, **init_kwargs)
         self.use_uld_loss = args.use_uld_loss
         self.teacher_tokenizer = None
@@ -1745,7 +1748,7 @@ class GOLDTrainer(SFTTrainer):
                 student_head = unwrapped_student.get_output_embeddings()
                 teacher_head = unwrapped_teacher.get_output_embeddings()
 
-                loss = self.liger_jsd_loss(
+                loss = self.liger_loss(
                     student_input=student_hidden,
                     student_weight=student_head.weight,
                     teacher_input=teacher_hidden,

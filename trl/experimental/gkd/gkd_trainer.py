@@ -146,7 +146,7 @@ class GKDTrainer(SFTTrainer):
         if args.use_liger_kernel:
             # Match the non-Liger path: pure JSD (no hard CE component) and no temperature
             # scaling, since `generalized_jsd_loss` is called without a `temperature` argument.
-            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 compiled=False,
@@ -358,7 +358,7 @@ class GKDTrainer(SFTTrainer):
             teacher_head = unwrapped_teacher.get_output_embeddings()
 
             # liger fused jsd loss
-            loss = self.liger_jsd_loss(
+            loss = self.liger_loss(
                 student_input=student_hidden,
                 student_weight=student_head.weight,
                 teacher_input=teacher_hidden,
