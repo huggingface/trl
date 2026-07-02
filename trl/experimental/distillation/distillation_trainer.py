@@ -478,7 +478,7 @@ class DistillationTrainer(_BaseTrainer):
         # ── Liger fused JSD loss ──
         self.use_liger_loss = False
         if args.use_liger_kernel:
-            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 temperature=args.temperature,
@@ -1594,7 +1594,7 @@ class DistillationTrainer(_BaseTrainer):
         student_head = unwrapped_student.get_output_embeddings()
         teacher_head = unwrapped_teacher.get_output_embeddings()
 
-        loss = self.liger_jsd_loss(
+        loss = self.liger_loss(
             student_input=student_hidden,
             student_weight=student_head.weight,
             teacher_input=teacher_hidden,

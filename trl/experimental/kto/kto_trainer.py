@@ -776,8 +776,8 @@ class KTOTrainer(_BaseTrainer):
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
+        # Liger loss
         self.use_liger_kernel = args.use_liger_kernel
-        # Import Liger kernel if enabled
         if self.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
@@ -788,6 +788,11 @@ class KTOTrainer(_BaseTrainer):
                 raise ValueError(
                     "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
                     "Only KTO loss is supported with liger-kernel."
+                )
+            if compute_metrics is not None:
+                raise ValueError(
+                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
+                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
                 )
             if self.precompute_ref_logps:
                 raise ValueError(
@@ -915,7 +920,7 @@ class KTOTrainer(_BaseTrainer):
         self,
         dataset: Dataset | IterableDataset,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
-        args: KTOConfig | None,
+        args: KTOConfig,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
         # Build the kwargs for the `map` function
@@ -1211,10 +1216,10 @@ class KTOTrainer(_BaseTrainer):
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
-        policy_KL_logps = self._compute_kl_logps(model, batch)
+        KL_logps = self._compute_kl_logps(model, batch)
         ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
         if self.calculate_KL:
-            kl = (policy_KL_logps - ref_KL_logps).mean().detach()
+            kl = (KL_logps - ref_KL_logps).mean().detach()
             kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
         else:
             kl = torch.zeros(1).to(self.accelerator.device)
@@ -1324,7 +1329,7 @@ class KTOTrainer(_BaseTrainer):
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
-        policy_KL_logps = self._compute_kl_logps(model, batch)
+        KL_logps = self._compute_kl_logps(model, batch)
 
         _non_model_keys = {
             "completion_mask",
@@ -1361,10 +1366,10 @@ class KTOTrainer(_BaseTrainer):
         chosen_idx = torch.nonzero(bool_labels, as_tuple=False).view(-1)
         rejected_idx = torch.nonzero(~bool_labels, as_tuple=False).view(-1)
 
-        policy_chosen_logps = completion_logps.index_select(0, chosen_idx)
-        policy_rejected_logps = completion_logps.index_select(0, rejected_idx)
-        policy_chosen_logits = outputs.logits.index_select(0, chosen_idx)
-        policy_rejected_logits = outputs.logits.index_select(0, rejected_idx)
+        chosen_logps = completion_logps.index_select(0, chosen_idx)
+        rejected_logps = completion_logps.index_select(0, rejected_idx)
+        chosen_logits = outputs.logits.index_select(0, chosen_idx)
+        rejected_logits = outputs.logits.index_select(0, rejected_idx)
 
         if self.precompute_ref_logps:
             ref_chosen_logps = batch["ref_logps"].index_select(0, chosen_idx)
@@ -1394,13 +1399,13 @@ class KTOTrainer(_BaseTrainer):
             ref_rejected_logps = ref_completion_logps.index_select(0, rejected_idx)
 
         if self.calculate_KL:
-            kl = (policy_KL_logps - ref_KL_logps).mean().detach()
+            kl = (KL_logps - ref_KL_logps).mean().detach()
             kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
         else:
-            kl = torch.zeros(1).to(policy_chosen_logps.device)
+            kl = torch.zeros(1).to(chosen_logps.device)
         # Chosen losses
-        if policy_chosen_logps.shape[0] != 0 or ref_chosen_logps.shape[0] != 0:
-            chosen_logratios = policy_chosen_logps - ref_chosen_logps
+        if chosen_logps.shape[0] != 0 or ref_chosen_logps.shape[0] != 0:
+            chosen_logratios = chosen_logps - ref_chosen_logps
 
             if self.loss_type == "kto":
                 # Eqn (7) of the KTO paper (https://huggingface.co/papers/2402.01306)
@@ -1417,8 +1422,8 @@ class KTOTrainer(_BaseTrainer):
             chosen_losses = torch.Tensor([]).to(self.accelerator.device)
             chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
         # Rejected losses
-        if policy_rejected_logps.shape[0] != 0 or ref_rejected_logps.shape[0] != 0:
-            rejected_logratios = policy_rejected_logps - ref_rejected_logps
+        if rejected_logps.shape[0] != 0 or ref_rejected_logps.shape[0] != 0:
+            rejected_logratios = rejected_logps - ref_rejected_logps
 
             if self.loss_type == "kto":
                 rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
@@ -1445,10 +1450,10 @@ class KTOTrainer(_BaseTrainer):
                 self.accelerator.gather_for_metrics(chosen_rewards.nansum()).nansum().item() / all_num_chosen
             )
             self._metrics[mode]["logps/chosen"].append(
-                self.accelerator.gather_for_metrics(policy_chosen_logps.nansum()).nansum().item() / all_num_chosen
+                self.accelerator.gather_for_metrics(chosen_logps.nansum()).nansum().item() / all_num_chosen
             )
             self._metrics[mode]["logits/chosen"].append(
-                self.accelerator.gather_for_metrics(policy_chosen_logits.nansum()).nansum().item() / all_num_chosen
+                self.accelerator.gather_for_metrics(chosen_logits.nansum()).nansum().item() / all_num_chosen
             )
 
         if all_num_rejected > 0:
@@ -1456,10 +1461,10 @@ class KTOTrainer(_BaseTrainer):
                 self.accelerator.gather_for_metrics(rejected_rewards.nansum()).nansum().item() / all_num_rejected
             )
             self._metrics[mode]["logps/rejected"].append(
-                self.accelerator.gather_for_metrics(policy_rejected_logps.nansum()).nansum().item() / all_num_rejected
+                self.accelerator.gather_for_metrics(rejected_logps.nansum()).nansum().item() / all_num_rejected
             )
             self._metrics[mode]["logits/rejected"].append(
-                self.accelerator.gather_for_metrics(policy_rejected_logits.nansum()).nansum().item() / all_num_rejected
+                self.accelerator.gather_for_metrics(rejected_logits.nansum()).nansum().item() / all_num_rejected
             )
 
         if all_num_chosen > 0 and all_num_rejected > 0:
