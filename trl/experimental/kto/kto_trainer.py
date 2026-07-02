@@ -776,8 +776,8 @@ class KTOTrainer(_BaseTrainer):
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
+        # Liger loss
         self.use_liger_kernel = args.use_liger_kernel
-        # Import Liger kernel if enabled
         if self.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
