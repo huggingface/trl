@@ -790,22 +790,7 @@ class TestDPOTrainer(TrlTestCase):
 
     @require_liger_kernel
     @require_peft
-    def test_liger_kernel_with_peft_lm_head_raises(self):
-        # The Liger fused DPO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
-        # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
-        training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        with pytest.raises(ValueError, match="lm_head"):
-            DPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=dataset,
-                peft_config=LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"]),
-            )
-
-    @require_liger_kernel
-    @require_peft
-    def test_liger_kernel_with_peft_trains(self):
+    def test_train_with_liger_kernel_and_peft(self):
         # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real
         # weight. Verify the full PEFT+Liger path actually trains (peft params change, base params stay frozen).
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -833,6 +818,21 @@ class TestDPOTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    @require_peft
+    def test_liger_kernel_with_peft_lm_head_raises(self):
+        # The Liger fused DPO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+        # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        with pytest.raises(ValueError, match="lm_head"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_modules=["q_proj", "v_proj", "lm_head"]),
+            )
 
     @require_liger_kernel
     @require_peft
