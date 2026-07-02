@@ -93,8 +93,8 @@ if __name__ == "__main__":
     )
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
-        model_kwargs["quantization_config"] = quantization_config
+        teacher_model_kwargs["device_map"] = get_kbit_device_map()
+        teacher_model_kwargs["quantization_config"] = quantization_config
 
     training_args.teacher_model_init_kwargs = teacher_model_kwargs
 
@@ -124,7 +124,8 @@ if __name__ == "__main__":
         peft_config=get_peft_config(model_args),
     )
 
-    if training_args.eval_strategy != "no":
+    # LogCompletionsCallback needs a "prompt" column, absent from conversational datasets.
+    if training_args.eval_strategy != "no" and "prompt" in dataset[script_args.dataset_test_split].column_names:
         generation_config = GenerationConfig(
             max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
         )
