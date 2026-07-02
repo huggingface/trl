@@ -189,6 +189,14 @@ class GKDTrainer(SFTTrainer):
             teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
 
+        if self.model.config.vocab_size != teacher_model.config.vocab_size:
+            raise ValueError(
+                f"The student model has vocab_size {self.model.config.vocab_size} but the teacher model has "
+                f"vocab_size {teacher_model.config.vocab_size}. GKD compares the teacher's full next-token "
+                f"distribution, which requires a shared vocabulary. Use a teacher with the same vocab_size, or "
+                f"GOLD for cross-tokenizer distillation."
+            )
+
         # Disable dropout in the model
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
