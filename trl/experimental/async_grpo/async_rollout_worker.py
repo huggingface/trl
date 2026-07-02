@@ -78,6 +78,7 @@ class RolloutGroup:
     tool_call_counts: list[int]
     tool_failure_counts: list[int]
     model_version: int
+    env_rewards: list[float]
     queued_at: float = 0.0
 
 
@@ -242,6 +243,9 @@ class _AsyncRolloutLoop:
         tools = tools or []
         self._standalone_tools = tools  # tools that are not bound to the environment
         self.environment_factory = environment_factory
+        # If the environment defines a `get_reward` method, it owns the reward: it is called once per completed rollout
+        # to score it from the environment's internal state, and added as an extra reward source (see `_score_group`).
+        self._env_owns_reward = False
 
         if environment_factory is not None:
             # Probe one instance to validate its `reset` method and extract its tool methods, used to render the tool
@@ -254,16 +258,28 @@ class _AsyncRolloutLoop:
             for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
                 if member_name == "reset":
                     has_reset = True
+                elif member_name == "get_reward":
+                    self._env_owns_reward = True
                 elif not member_name.startswith("_"):
                     methods.append(member)
             if not has_reset:
                 raise ValueError(
                     "Each environment instance returned by `environment_factory` must define a callable `reset`."
                 )
+            if self._env_owns_reward:
+                self.reward_func_names.append(type(instance).__name__)
             self._environment_pool = [instance]  # reusable environment instances
             self.tools = tools + methods
         else:
             self.tools = tools
+
+        # At least one reward source is required: either `reward_funcs`, or an environment that owns the reward via a
+        # `get_reward` method.
+        if not self.reward_funcs and not self._env_owns_reward:
+            raise ValueError(
+                "No reward source provided. Pass `reward_funcs`, or an `environment_factory` whose environment "
+                "defines a `get_reward` method."
+            )
 
         # The async worker can't await tools in its tool loop, so asynchronous tools are not supported.
         for tool in self.tools:
@@ -368,7 +384,7 @@ class _AsyncRolloutLoop:
                         methods = [
                             member
                             for member_name, member in inspect.getmembers(environment, predicate=inspect.ismethod)
-                            if member_name != "reset" and not member_name.startswith("_")
+                            if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                         ]
                     tool_dict = {tool.__name__: tool for tool in self._standalone_tools + methods}
 
@@ -389,6 +405,7 @@ class _AsyncRolloutLoop:
                             tool_call_counts=[],
                             tool_failure_counts=[],
                             model_version=self.model_version,
+                            env_rewards=[],
                         )
                         pending_completed[group_id] = 0
 
@@ -431,6 +448,10 @@ class _AsyncRolloutLoop:
                     group.tool_mask.append(tool_mask)
                     group.tool_call_counts.append(tool_call_count)
                     group.tool_failure_counts.append(tool_failure_count)
+                    # The environment owns the reward: score it now, while this rollout's environment still holds its
+                    # final state (it is reset only when drawn again for the next rollout).
+                    if self._env_owns_reward:
+                        group.env_rewards.append(environment.get_reward())
                     self._total_completion_tokens += sum(tool_mask)
                     pending_completed[group_id] += 1
 
@@ -665,6 +686,10 @@ class _AsyncRolloutLoop:
                 for reward_func in self.reward_funcs
             ]
         )
+        # The environment owns the reward: add its per-rollout scores (captured at generation time in
+        # `group.env_rewards`) as an extra reward source, summed in with weight 1 like any reward func.
+        if self._env_owns_reward:
+            all_rewards = [*all_rewards, group.env_rewards]
 
         # Reward funcs may return None per-sample (unparseable gold). Convert to NaN. A completion
         # for which every func returned None is unscorable: nansum would give 0 and the row would

@@ -172,9 +172,10 @@ class GRPOTrainer(_BaseTrainer):
               from the model config.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-        reward_funcs (`RewardFunc | list[RewardFunc]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
-            functions with the prompts and completions and sum the rewards. Can be either:
+            functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
+            by the environment through `environment_factory` (see below). Can be either:
 
             - A single reward function, such as:
                 - A string: The *model ID* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -256,8 +257,12 @@ class GRPOTrainer(_BaseTrainer):
             for each generation in the batch, allowing for parallel and independent interactions. The environment must
             also implement a callable `reset` method that can be used to reset state between generations. The `reset`
             method should return either `None` or a string: when it returns a string, that string is appended to the
-            last user message before generation. This feature is experimental and may change or be removed at any time
-            without prior notice.
+            last user message before generation. The environment may also define a `get_reward` method taking no
+            argument and returning a `float`: when present, the environment owns the reward, and `get_reward` is called
+            once per completed rollout to score it from the environment's internal state. It acts as an additional
+            reward source (with weight 1, logged under the environment's class name) alongside `reward_funcs`, which
+            then becomes optional. This feature is experimental and may change or be removed at any time without prior
+            notice.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -278,7 +283,7 @@ class GRPOTrainer(_BaseTrainer):
     def __init__(
         self,
         model: "str | PreTrainedModel | PeftModel",
-        reward_funcs: RewardFunc | list[RewardFunc],
+        reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: GRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
@@ -441,7 +446,9 @@ class GRPOTrainer(_BaseTrainer):
                     param.data = param.data.to(torch.bfloat16)
 
         # Reward functions
-        if not isinstance(reward_funcs, list):
+        if reward_funcs is None:
+            reward_funcs = []
+        elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
         for i, reward_func in enumerate(reward_funcs):
@@ -557,10 +564,13 @@ class GRPOTrainer(_BaseTrainer):
             self.environment_factory = environment_factory
             instance = environment_factory()
             has_reset = False
+            has_reward = False
             methods = []
             for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
                 if member_name == "reset":
                     has_reset = True
+                elif member_name == "get_reward":
+                    has_reward = True
                 elif not member_name.startswith("_"):
                     methods.append(member)
             if not has_reset:
@@ -569,9 +579,31 @@ class GRPOTrainer(_BaseTrainer):
                 )
             self._environment_pool = [instance]  # reusable environment instances
             self.tools = tools + methods
+
+            # If the environment defines a `get_reward` method, it owns the reward: expose it as an extra reward
+            # source, logged under the environment's class name. It scores from the environment's internal state, so it
+            # takes no completion; it just reads `self.environments` (injected into the reward kwargs by
+            # `_calculate_rewards`). It always gets weight 1: the environment owns its own scale.
+            if has_reward:
+
+                def get_reward(environments, **kwargs):
+                    return [environment.get_reward() for environment in environments]
+
+                self.reward_funcs.append(get_reward)
+                self.reward_func_names.append(type(instance).__name__)
+                self.reward_processing_classes.append(None)
+                self.reward_weights = torch.cat([self.reward_weights, torch.ones(1)])
         else:
             self.environment_factory = None
             self.tools = tools
+
+        # At least one reward source is required: either `reward_funcs`, or an environment that owns the reward via a
+        # `get_reward` method.
+        if not self.reward_funcs:
+            raise ValueError(
+                "No reward source provided. Pass `reward_funcs`, or an `environment_factory` whose environment "
+                "defines a `get_reward` method."
+            )
 
         # The per-rollout environment instances and tool dicts both depend on the batch, so they are built in
         # `_generate_and_score_completions`, right before generation. Only `self.environments` needs a default here,
@@ -1995,7 +2027,7 @@ class GRPOTrainer(_BaseTrainer):
                     methods = [
                         member
                         for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
-                        if member_name != "reset" and not member_name.startswith("_")
+                        if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                     ]
                 sync_tool_dict, async_tool_dict = {}, {}
                 for tool in self._standalone_tools + methods:
