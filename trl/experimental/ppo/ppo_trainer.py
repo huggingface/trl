@@ -38,6 +38,7 @@ from transformers import (
     DataCollatorWithPadding,
     FeatureExtractionMixin,
     GenerationConfig,
+    PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
@@ -51,20 +52,13 @@ from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
 from ...models.utils import prepare_deepspeed, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import (
-    disable_dropout_in_model,
-    log_table_to_comet_experiment,
-    pad,
-    selective_log_softmax,
-)
-from ..utils import (
-    create_reference_model,
-    empty_cache,
-    first_true_indices,
-    get_reward,
-    peft_module_casting_to_bf16,
-)
+from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, pad, selective_log_softmax
+from ..utils import create_reference_model, empty_cache, first_true_indices, get_reward, peft_module_casting_to_bf16
 from .ppo_config import PPOConfig
+
+
+if is_peft_available():
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 
 if is_rich_available():
@@ -72,13 +66,10 @@ if is_rich_available():
     from rich.table import Table
 
 
-logger = get_logger(__name__)
-
-if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model
-
-
 INVALID_LOGPROB = 1.0
+
+
+logger = get_logger(__name__)
 
 
 def generate(
@@ -314,15 +305,15 @@ class PPOTrainer(_BaseTrainer):
             Training arguments.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`]):
             Class to process the data.
-        model (`torch.nn.Module`):
+        model ([`~transformers.PreTrainedModel`]):
             Model to be trained. This is the policy model.
-        ref_model (`torch.nn.Module`, *optional*):
+        ref_model ([`~transformers.PreTrainedModel`], *optional*):
             Reference model used to compute the KL divergence. If `None`, a copy of the policy model is created.
-        reward_model (`torch.nn.Module`):
+        reward_model ([`~transformers.PreTrainedModel`]):
             Reward model used to compute the rewards.
         train_dataset ([`~datasets.Dataset`]):
             Dataset for training.
-        value_model (`torch.nn.Module`):
+        value_model ([`~transformers.PreTrainedModel`]):
             Value model used to predict the value of a state.
         data_collator ([`~transformers.DataCollatorWithPadding`], *optional*):
             Data collator to batch and pad samples from the dataset. If `None`, a default data collator is created
@@ -359,11 +350,11 @@ class PPOTrainer(_BaseTrainer):
         self,
         args: PPOConfig,
         processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
-        model: nn.Module,
-        ref_model: nn.Module | None,
-        reward_model: nn.Module,
+        model: PreTrainedModel,
+        ref_model: PreTrainedModel | None,
+        reward_model: PreTrainedModel,
         train_dataset: Dataset,
-        value_model: nn.Module,
+        value_model: PreTrainedModel,
         data_collator: DataCollatorWithPadding | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
         # less commonly used
