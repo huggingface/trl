@@ -737,8 +737,10 @@ class DPOTrainer(_BaseTrainer):
                 "Label smoothing must be greater than 0.0 when using 'exo_pair' loss. The EXO paper recommends a "
                 "value of 1e-3."
             )
+
+        # Liger loss
         self.use_liger_kernel = args.use_liger_kernel
-        if args.use_liger_kernel:
+        if self.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
                     "You set `use_liger_kernel=True` but the liger kernel is not available. "
@@ -749,7 +751,6 @@ class DPOTrainer(_BaseTrainer):
                     "Multiple loss types are not yet supported when using Liger kernel. If you need this feature, "
                     "please open a feature request at https://github.com/huggingface/trl/issues."
                 )
-            self.liger_loss_fn = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
             if compute_metrics is not None:
                 raise ValueError(
                     "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
@@ -786,6 +787,7 @@ class DPOTrainer(_BaseTrainer):
                         "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
                         "`use_liger_kernel=False`."
                     )
+            self.liger_loss = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -1247,9 +1249,7 @@ class DPOTrainer(_BaseTrainer):
         labels = input_ids[:, 1:].clone()
         labels[shift_completion_mask == 0] = -100
 
-        loss, metrics = self.liger_loss_fn(
-            weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias
-        )
+        loss, metrics = self.liger_loss(weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias)
 
         (
             chosen_logps,
