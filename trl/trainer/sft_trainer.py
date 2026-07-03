@@ -55,6 +55,7 @@ from ..chat_template_utils import (
 )
 from ..data_utils import (
     apply_chat_template,
+    get_dataset_column_names,
     is_conversational,
     is_conversational_from_value,
     maybe_convert_to_chatml,
@@ -388,10 +389,6 @@ FLASH_ATTENTION_VARIANTS = {
     "kernels-community/flash-attn3",
     "kernels-community/vllm-flash-attn3",
 }
-
-
-def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
-    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
 @dataclass
