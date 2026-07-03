@@ -1846,6 +1846,38 @@ Expected dataset columns:
 
 For more details, see the [SDFT Trainer documentation](sdft_trainer).
 
+### DOPD: Dual On-Policy Distillation
+
+**📜 Paper**: https://huggingface.co/papers/2606.30626
+
+DOPD routes each token of an on-policy self-distillation rollout ([`OPSDTrainer`]) into one of four regimes based on the "advantage gap" — the absolute log-probability difference on the realized token between the privileged teacher (scored with the ground-truth solution in context) and the privileged student (sampled from the bare problem) — and each side's confidence: low-gap-confident tokens get a light top-k reverse-KL nudge toward the teacher, low-gap-unsure tokens get a weak stop-gradient self-regularization anchor, high-gap-teacher-confident tokens get the full corrective JSD signal, and high-gap-student-confident tokens get a light stop-gradient consistency nudge. Ambiguous tokens (high gap, neither side confident) fall back to the weak self-regularization regime. Available via `distillation_mode="dopd"` on [`OPSDConfig`].
+
+```python
+from trl.experimental.opsd import OPSDConfig, OPSDTrainer
+
+training_args = OPSDConfig(
+    distillation_mode="dopd",                        # Enable DOPD-style advantage-gap token routing
+    distillation_dopd_gap_threshold=2.0,              # Nats separating "low gap" / "high gap" regimes
+    distillation_dopd_confidence_threshold=0.5,       # Max-softmax-prob threshold for "confident"
+    distillation_dopd_light_topk=8,                   # Top-k support for the light-signal regimes
+    distillation_dopd_self_reg_weight=0.01,           # Weight on the low-gap/unsure self-regularization regime
+    distillation_dopd_student_consistency_weight=0.1, # Weight on the high-gap/student-confident regime
+)
+
+trainer = OPSDTrainer(
+    model="Qwen/Qwen3-1.7B",
+    args=training_args,
+    train_dataset=...,
+)
+trainer.train()
+```
+
+Expected dataset columns:
+
+- `prompt` and `privileged_context` (the ground-truth solution), or gsm8k-style `question`/`answer` columns (mapped automatically)
+
+For more details, see the [OPSD Trainer documentation](opsd_trainer).
+
 ### Embarrassingly Simple Self-Distillation Improves Code Generation
 
 **📜 Paper**: https://huggingface.co/papers/2604.01193

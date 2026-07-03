@@ -924,6 +924,9 @@ class OPSDTrainer(_BaseTrainer):
 
         old_per_token_logps = inputs.get("old_per_token_logps")
         if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
+            # Detached IS ratio is a scalar per-token multiplier applied uniformly across every `distillation_mode`,
+            # including "dopd": it doesn't reintroduce gradient through the routing masks or interact with regimes
+            # 2/4's internal stop-gradients above, since it only rescales the (already-computed) per-token loss.
             student_per_token_logps = selective_log_softmax(
                 distillation_logits.student_logits,
                 distillation_logits.completion_ids,

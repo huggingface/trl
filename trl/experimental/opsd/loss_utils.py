@@ -153,7 +153,7 @@ def compute_dopd_routed_loss(
     self_reg_weight: float,
     student_consistency_weight: float,
 ) -> torch.Tensor:
-    """DOPD-style (arXiv:2606.30626) advantage-gap routing between four token-level regimes.
+    """DOPD-style (https://huggingface.co/papers/2606.30626) advantage-gap routing between four token-level regimes.
 
     The "advantage gap" is the absolute log-probability difference on the realized token between the privileged
     teacher (``teacher_logits``, e.g. scored with the ground-truth solution in context) and the privileged student

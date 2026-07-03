@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CPU-only unit tests for the DOPD (arXiv:2606.30626) token-routing loss.
+"""CPU-only unit tests for the DOPD (https://huggingface.co/papers/2606.30626) token-routing loss.
 
 These tests exercise `compute_dopd_routed_loss` in isolation with hand-built logits: no model, tokenizer, vLLM, or
 GPU is involved, matching the coverage style of `test_self_distillation_trainer_behavior.py`'s pure loss-util tests.
@@ -22,11 +22,11 @@ import torch
 
 from trl.experimental.opsd.loss_utils import (
     compute_divergence,
+    compute_dopd_routed_loss,
     compute_full_logit_self_distillation_loss,
     compute_sampled_token_self_distillation_loss,
     compute_topk_self_distillation_loss,
 )
-from trl.experimental.opsd.loss_utils import compute_dopd_routed_loss
 
 
 GAP_THRESHOLD = 1.0
@@ -164,6 +164,35 @@ class TestDOPDRouting:
         routed.sum().backward()
         assert student_logits.grad is not None
         assert torch.any(student_logits.grad.abs() > 0)
+
+    def test_all_regimes_produce_nonzero_gradient_through_student_logits(self):
+        """Every regime (1, 2, 3, 4) must backprop into the student, not just regime 2 (checked separately above).
+
+        A silently mis-detached path in any regime's loss formula would zero out that row's gradient while leaving
+        the forward value (and the other regime-specific value tests) untouched, so this needs its own check.
+        """
+        student_logits, teacher_logits, completion_ids = self._build_batch()
+        student_logits = student_logits.clone().requires_grad_(True)
+
+        routed = compute_dopd_routed_loss(
+            student_logits,
+            teacher_logits,
+            completion_ids,
+            gap_threshold=GAP_THRESHOLD,
+            confidence_threshold=CONFIDENCE_THRESHOLD,
+            light_topk=LIGHT_TOPK,
+            self_reg_weight=SELF_REG_WEIGHT,
+            student_consistency_weight=STUDENT_CONSISTENCY_WEIGHT,
+        )
+        routed.sum().backward()
+
+        assert student_logits.grad is not None
+        # Row order from `_build_batch`: 0->regime1, 1->regime3, 2->regime4, 3->regime2, 4->regime2 (ambiguous).
+        for row, regime_name in enumerate(["regime1", "regime3", "regime4", "regime2", "regime2 (ambiguous)"]):
+            row_grad = student_logits.grad[row]
+            assert torch.any(row_grad.abs() > 0), (
+                f"row {row} ({regime_name}) got a zero gradient through student_logits"
+            )
 
     def test_raising_gap_threshold_moves_high_gap_rows_into_regime_two(self):
         """Sanity check on the threshold's monotonic effect: a huge gap_threshold collapses everything to 'low gap'."""
