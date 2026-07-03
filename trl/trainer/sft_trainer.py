@@ -399,10 +399,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     Data collator used for language modeling data. Inputs are dynamically padded to the maximum length of a batch.
 
     This collator expects each example in the input list to be a dictionary containing at least the `"input_ids"` key.
-    If the input contains `"labels"`, they are used as is (truncated and padded like the input IDs); otherwise the
-    labels default to the input IDs. Tokens that shouldn't contribute to the loss are expected to be already set to
-    `-100` in the labels; the [`SFTTrainer`] takes care of this during dataset preparation. The collator returns a
-    dictionary containing the following keys:
+    If the input contains `"labels"`, they are used as is (padded like the input IDs); otherwise the labels default to
+    the input IDs. Tokens that shouldn't contribute to the loss are expected to be already set to `-100` in the labels;
+    the [`SFTTrainer`] takes care of this during dataset preparation. The collator returns a dictionary containing the
+    following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
     - `"labels"`: Tensor of labels, padded with `-100` to the maximum length of the batch. If `padding_free` is set
     to `False`, the following key is also returned:
@@ -413,12 +413,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     Args:
         pad_token_id (`int`):
             Token ID to use for padding.
-        max_length (`int`, *optional*):
-            Maximum length of the sequences in the batch. Sequences longer than `max_length` are truncated to
-            `max_length`.
-        truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
-            Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
-            `"keep_start"`.
         padding_free (`bool`, *optional*, defaults to `False`):
             If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
             generated accordingly and returned instead of the attention mask.
@@ -464,8 +458,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     """
 
     pad_token_id: int
-    max_length: int | None = None
-    truncation_mode: str = "keep_start"
     padding_free: bool = False
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
@@ -474,19 +466,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         input_ids = [example["input_ids"] for example in examples]
         batch_seq_lengths = [example["seq_lengths"] for example in examples] if "seq_lengths" in examples[0] else None
         labels = [example.get("labels", example["input_ids"]) for example in examples]
-
-        # Truncate per sequence if necessary
-        if self.max_length is not None and not self.padding_free:
-            if self.truncation_mode == "keep_start":
-                sl = slice(None, self.max_length)
-            elif self.truncation_mode == "keep_end":
-                sl = slice(-self.max_length, None)
-            else:
-                raise ValueError(
-                    f"Unsupported truncation mode: {self.truncation_mode}, expected 'keep_start' or 'keep_end'"
-                )
-            input_ids = [ids[sl] for ids in input_ids]
-            labels = [lbl[sl] for lbl in labels]
 
         # Convert to tensor
         input_ids = [torch.tensor(ids) for ids in input_ids]
@@ -854,8 +833,6 @@ class SFTTrainer(_BaseTrainer):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`~trainer.sft_trainer.DataCollatorForLanguageModeling`] if the model is a language model
             and [`~trainer.sft_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
-            Custom collators must truncate sequences before padding; the trainer does not apply post-collation
-            truncation.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
@@ -864,7 +841,12 @@ class SFTTrainer(_BaseTrainer):
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
 
-            The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
+            The trainer also supports pre-tokenized datasets, recognized by a required `input_ids` column. An optional
+            `labels` column (`-100` on tokens excluded from the loss) is used as is if present; otherwise labels are
+            built from the optional `assistant_masks` / `completion_mask` columns (which are folded in then dropped,
+            `completion_mask` only when `completion_only_loss=True`), or default to a copy of `input_ids`. Sequences
+            are truncated to `max_length` during preparation. With `skip_prepare_dataset=True`, preparation is skipped
+            and the collator is expected to handle the dataset as is.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
@@ -1193,8 +1175,6 @@ class SFTTrainer(_BaseTrainer):
             self._tokenizer.pad_token = pad_token
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=self._tokenizer.pad_token_id,
-                max_length=None if self.padding_free else args.max_length,
-                truncation_mode=args.truncation_mode,
                 padding_free=self.padding_free,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
@@ -1612,7 +1592,32 @@ class SFTTrainer(_BaseTrainer):
                     ]
                     return {"labels": labels}
 
-                dataset = dataset.map(build_labels, fn_kwargs={"mask_columns": mask_columns}, **map_kwargs)
+                dataset = dataset.map(
+                    build_labels,
+                    fn_kwargs={"mask_columns": mask_columns},
+                    remove_columns=mask_columns,
+                    **map_kwargs,
+                )
+
+            # Truncate to max_length. Skipped when packing, since packing already chunks sequences to max_length.
+            # Done here, during preparation, so the result is cached. When preparation is skipped
+            # (`skip_prepare_dataset=True`), no truncation is applied and the dataset must already be truncated.
+            if args.max_length is not None and not packing:
+                if args.truncation_mode == "keep_start":
+                    sl = slice(None, args.max_length)
+                elif args.truncation_mode == "keep_end":
+                    sl = slice(-args.max_length, None)
+                else:
+                    raise ValueError(
+                        f"Unsupported truncation mode: {args.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                    )
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
+
+                def truncate(example, sl):
+                    return {"input_ids": example["input_ids"][sl], "labels": example["labels"][sl]}
+
+                dataset = dataset.map(truncate, fn_kwargs={"sl": sl}, **map_kwargs)
 
             # Pack
             if packing:
