@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import json
 import os
 import textwrap
 from collections import defaultdict
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
@@ -29,7 +31,6 @@ from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
-from torch.nn import functional as F
 from torch.utils.data import DataLoader, Sampler, SequentialSampler
 from transformers import (
     AutoProcessor,
@@ -40,24 +41,26 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_utils import EvalLoopOutput, has_length
+from transformers.trainer_utils import EvalPrediction, has_length
 from transformers.utils import is_peft_available
 
 from ...data_utils import (
     apply_chat_template,
     extract_prompt,
+    get_dataset_column_names,
     is_conversational,
     prepare_multimodal_messages,
     unpair_preference_dataset,
 )
 from ...import_utils import is_liger_kernel_available
-from ...models import get_act_offloading_ctx_manager
-from ...models.utils import disable_gradient_checkpointing, prepare_deepspeed, prepare_fsdp
+from ...models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
+from ...models.utils import disable_gradient_checkpointing
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
+    entropy_from_logits,
     flush_left,
     get_config_model_id,
     hash_module,
@@ -80,10 +83,6 @@ if is_peft_available():
 logger = get_logger(__name__)
 
 
-def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
-    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
-
-
 @dataclass
 class DataCollatorForUnpairedPreference(DataCollatorMixin):
     """
@@ -103,7 +102,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
         pad_token_id (`int`):
             Token ID to use for padding `input_ids` sequences.
         max_length (`int`, *optional*):
-            Maximum sequence length after assembly. Sequences longer than `max_length` are truncated from the end.
+            Maximum sequence length after assembly. Sequences longer than `max_length` are truncated from the right.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -470,7 +469,7 @@ class KTOTrainer(_BaseTrainer):
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
-        compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
@@ -675,6 +674,35 @@ class KTOTrainer(_BaseTrainer):
                 "loss.",
             )
 
+        # Liger loss
+        self.use_liger_kernel = args.use_liger_kernel
+        if self.use_liger_kernel:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
+                    "Please install liger-kernel first: `pip install liger-kernel`"
+                )
+            if self.loss_type in ["apo_zero_unpaired"]:
+                raise ValueError(
+                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
+                    "Only KTO loss is supported with liger-kernel."
+                )
+            if compute_metrics is not None:
+                raise ValueError(
+                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
+                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
+                )
+            if self.precompute_ref_logps:
+                raise ValueError(
+                    "Liger KTO loss does not support precomputing reference log probabilities. Either disable "
+                    "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
+                )
+            if is_peft_model(model):
+                raise ValueError(
+                    "`use_liger_kernel=True` is not supported with PEFT models. Set `use_liger_kernel=False` to train "
+                    "a PEFT model."
+                )
+
         # Dataset
         # Skip dataset preparation for VLMs: tokenization and image processing happen on-the-fly in the collator.
         if not self._is_vision_dataset:
@@ -776,34 +804,9 @@ class KTOTrainer(_BaseTrainer):
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
-        self.use_liger_kernel = args.use_liger_kernel
-        # Import Liger kernel if enabled
+        # The Liger loss is built here, because it needs `self.ref_model`
         if self.use_liger_kernel:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
-                    "Please install liger-kernel first: `pip install liger-kernel`"
-                )
-            if self.loss_type in ["apo_zero_unpaired"]:
-                raise ValueError(
-                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
-                    "Only KTO loss is supported with liger-kernel."
-                )
-            if compute_metrics is not None:
-                raise ValueError(
-                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
-                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
-                )
-            if self.precompute_ref_logps:
-                raise ValueError(
-                    "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
-                    "`precompute_ref_log_probs=False`."
-                )
-            if is_peft_model(self.model):
-                raise ValueError(
-                    "You cannot use `use_liger_kernel=True` with Peft models. Please set `use_liger_kernel=False`."
-                )
-            self.liger_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
+            self.liger_loss = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
         if self.precompute_ref_logps:
             if isinstance(self.train_dataset, IterableDataset) or isinstance(
@@ -833,10 +836,11 @@ class KTOTrainer(_BaseTrainer):
                         self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                     )
 
+    @staticmethod
     def _tokenize(
-        self,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         input: str | list,
+        is_vlm: bool,
         **kwargs,
     ) -> dict[str, list]:
         """Tokenize a single example for dataset preprocessing.
@@ -849,6 +853,9 @@ class KTOTrainer(_BaseTrainer):
                 The tokenizer or processor to use.
             input (`str` or `list`):
                 A string for non-conversational input, or a list of message dicts for conversational input.
+            is_vlm (`bool`):
+                Whether the processing class is a VLM processor, requiring multimodal message preparation and batch
+                dimension normalization.
             **kwargs:
                 Forwarded to `apply_chat_template` (e.g. `add_generation_prompt`, `return_assistant_tokens_mask`).
 
@@ -856,13 +863,13 @@ class KTOTrainer(_BaseTrainer):
             `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
         """
         if isinstance(input, list):  # conversational: list of message dicts
-            if self._is_vlm:
+            if is_vlm:
                 input = prepare_multimodal_messages(input)
             result = processing_class.apply_chat_template(input, tokenize=True, return_dict=True, **kwargs)
         else:  # non-conversational: plain text string
             result = processing_class(text=input)
         # VLMs emit a batch dimension even for single examples; unwrap it
-        if self._is_vlm:
+        if is_vlm:
             return {k: v[0] for k, v in result.items()}
         return result
 
@@ -962,24 +969,34 @@ class KTOTrainer(_BaseTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-            def tokenize_fn(example, processing_class):
+            # Bind `_tokenize` to a local so `tokenize_fn` doesn't capture `self`: a closure over `self` makes the map
+            # function unhashable, forcing a random fingerprint that silently disables dataset caching.
+            tokenize = self._tokenize
+
+            def tokenize_fn(example, processing_class, is_vlm):
+                tools = example.get("tools")
+                tools = json.loads(tools) if isinstance(tools, str) else tools
                 if is_conversational(example):
                     chat_template_kwargs = example.get("chat_template_kwargs", {})
-                    prompt_ids = self._tokenize(
+                    prompt_ids = tokenize(
                         processing_class,
                         example["prompt"],
+                        is_vlm,
+                        tools=tools,
                         add_generation_prompt=True,
                         **chat_template_kwargs,
                     )["input_ids"]
-                    prompt_completion_ids = self._tokenize(
+                    prompt_completion_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["completion"],
+                        is_vlm,
+                        tools=tools,
                         **chat_template_kwargs,
                     )["input_ids"]
                 else:
-                    prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
-                    prompt_completion_ids = self._tokenize(
-                        processing_class, example["prompt"] + example["completion"]
+                    prompt_ids = tokenize(processing_class, example["prompt"], is_vlm)["input_ids"]
+                    prompt_completion_ids = tokenize(
+                        processing_class, example["prompt"] + example["completion"], is_vlm
                     )["input_ids"]
 
                 if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
@@ -994,7 +1011,9 @@ class KTOTrainer(_BaseTrainer):
                     "completion_ids": prompt_completion_ids[len(prompt_ids) :],
                 }
 
-            dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
+            dataset = dataset.map(
+                tokenize_fn, fn_kwargs={"processing_class": processing_class, "is_vlm": self._is_vlm}, **map_kwargs
+            )
 
             # Get KL datasets if needed
             if self.calculate_KL:
@@ -1043,6 +1062,7 @@ class KTOTrainer(_BaseTrainer):
                     "image",
                     "images",
                     "label",
+                    "tools",
                     "chat_template_kwargs",
                 ]
             else:
@@ -1062,9 +1082,7 @@ class KTOTrainer(_BaseTrainer):
             if train_dataset is None or not has_length(train_dataset):
                 return None
             return SequentialSampler(train_dataset)
-        return super()._get_train_sampler(
-            train_dataset
-        )  # Override training step to add activation offloading context.
+        return super()._get_train_sampler(train_dataset)
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
@@ -1272,7 +1290,7 @@ class KTOTrainer(_BaseTrainer):
                 chosen_rewards_sum,
                 rejected_rewards_sum,
             ),
-        ) = self.liger_loss_fn(
+        ) = self.liger_loss(
             _input=outputs.last_hidden_state[:, :-1],
             lin_weight=lm_head.weight,
             target=target,
@@ -1441,6 +1459,18 @@ class KTOTrainer(_BaseTrainer):
         )
 
         self._metrics[mode]["kl"].append(kl.item())
+
+        # Entropy
+        per_token_entropy = entropy_from_logits(shift_logits.detach())
+        mask = batch["completion_mask"][:, 1:]
+        entropy_sum = (per_token_entropy * mask).sum()
+        total_tokens = mask.sum()
+
+        # Gather counts across ranks and weight-average
+        entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+        total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
+        entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
+        self._metrics[mode]["entropy"].append(entropy)
 
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()

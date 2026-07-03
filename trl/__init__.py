@@ -67,7 +67,6 @@ _import_structure = {
         "SFTTrainer",
         "SyncRefModelCallback",
         "WeaveCallback",
-        "get_kbit_device_map",
         "get_peft_config",
         "get_quantization_config",
     ],
@@ -115,7 +114,6 @@ if TYPE_CHECKING:
         SFTTrainer,
         SyncRefModelCallback,
         WeaveCallback,
-        get_kbit_device_map,
         get_peft_config,
         get_quantization_config,
     )
