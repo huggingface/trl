@@ -1271,9 +1271,6 @@ class KTOTrainer(_BaseTrainer):
         }
         model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
-        if self.aux_loss_enabled:
-            model_kwargs["output_router_logits"] = True
-        ref_model_kwargs = {k: v for k, v in model_kwargs.items() if k != "output_router_logits"}
 
         if is_peft_model(model):
             model = model.base_model.model
@@ -1306,7 +1303,7 @@ class KTOTrainer(_BaseTrainer):
                         ref_backbone = ref_model_inner.model
                     else:
                         ref_backbone = ref_model_inner.base_model
-                    ref_outputs = ref_backbone(**ref_model_kwargs)
+                    ref_outputs = ref_backbone(**model_kwargs)
                     ref_lm_head = model_unwrapped.get_output_embeddings()
             else:
                 ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
@@ -1315,7 +1312,7 @@ class KTOTrainer(_BaseTrainer):
                     ref_backbone = ref_model_inner.model
                 else:
                     ref_backbone = ref_model_inner.base_model
-                ref_outputs = ref_backbone(**ref_model_kwargs)
+                ref_outputs = ref_backbone(**model_kwargs)
                 ref_lm_head = self.ref_model.get_output_embeddings()
 
         if self.calculate_KL:
@@ -1349,8 +1346,6 @@ class KTOTrainer(_BaseTrainer):
             ref_bias=ref_lm_head.bias if hasattr(lm_head, "bias") else None,
             kl=kl,
         )
-        if self.aux_loss_enabled:
-            loss += self.aux_loss_coef * outputs.aux_loss
 
         self._metrics[mode]["kl"].append(kl.item())
 
