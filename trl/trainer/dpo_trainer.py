@@ -827,6 +827,19 @@ class DPOTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise). Checked
+        # before building the reference model so a misconfiguration errors out before loading a second model copy.
+        text_config = model.config.get_text_config()
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
+        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = args.router_aux_loss_coef
+        if self.aux_loss_enabled and self.use_liger_kernel:
+            raise ValueError(
+                "Liger DPO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, because it "
+                "fuses the loss without materializing the router logits. Either set `router_aux_loss_coef` to `0.0` "
+                "to disable the auxiliary loss, or set `use_liger_kernel` to False."
+            )
+
         # Reference model
         if ref_model is None:
             if is_peft_model(self.model) or args.precompute_ref_log_probs:
@@ -850,18 +863,6 @@ class DPOTrainer(_BaseTrainer):
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
-
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
-        text_config = model.config.get_text_config()
-        is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
-        self.router_aux_loss_coef = args.router_aux_loss_coef
-        if self.aux_loss_enabled and self.use_liger_kernel:
-            raise ValueError(
-                "Liger DPO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, because it "
-                "fuses the loss without materializing the router logits. Either set `router_aux_loss_coef` to `0.0` "
-                "to disable the auxiliary loss, or set `use_liger_kernel` to False."
-            )
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1336,6 +1337,9 @@ class DPOTrainer(_BaseTrainer):
         if self.precompute_ref_logps:
             ref_chosen_logps, ref_rejected_logps = inputs["ref_chosen_logps"], inputs["ref_rejected_logps"]
         else:
+            # The reference forward only needs logits for log-probs. Drop `output_router_logits` so the frozen
+            # reference model does not materialize router logits and compute a discarded MoE aux loss.
+            ref_model_kwargs = {k: v for k, v in model_kwargs.items() if k != "output_router_logits"}
             # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
             # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
             # Temporarily disable checkpointing to avoid this warning during inference.
@@ -1346,9 +1350,9 @@ class DPOTrainer(_BaseTrainer):
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
                     model = self.accelerator.unwrap_model(model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_outputs = self.model(**model_kwargs)
+                        ref_outputs = self.model(**ref_model_kwargs)
                 else:
-                    ref_outputs = self.ref_model(**model_kwargs)
+                    ref_outputs = self.ref_model(**ref_model_kwargs)
 
             ref_shift_logits = ref_outputs.logits[..., :-1, :]
             ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
