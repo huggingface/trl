@@ -43,9 +43,10 @@ from transformers import (
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
+from ..import_utils import is_liger_kernel_available
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
