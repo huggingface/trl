@@ -274,6 +274,40 @@ class TestTransformersContinuousBatchingContract:
         )
 
 
+class TestGRPONanLogprobFix:
+    def test_none_logprob_backfilled_with_old_policy_logprob(self):
+        """
+        Reproduce the NaN logprob handling in `GRPOTrainer._generate_and_score_completions`.
+
+        vLLM can return NaN logprobs for near-deterministic tokens; `extract_logprobs` encodes them
+        as `None`. The trainer converts those `None` values to `-inf` so `torch.tensor` succeeds,
+        then backfills them with the old policy logprob so the importance-sampling ratio is neutral
+        for those tokens.
+        """
+        from trl.trainer.utils import pad
+
+        sampling_per_token_logps_list = [[-0.1, None, -0.2], [-0.3, None]]
+        sampling_per_token_logps = [
+            torch.tensor([float("-inf") if x is None else x for x in logps])
+            for logps in sampling_per_token_logps_list
+        ]
+        sampling_per_token_logps = pad(
+            sampling_per_token_logps,
+            padding_value=0.0,
+            padding_side="right",
+        )
+
+        old_per_token_logps = torch.tensor([[-0.5, -0.6, -0.7], [-0.8, -0.9, 0.0]])
+
+        nan_logprob_mask = torch.isneginf(sampling_per_token_logps)
+        sampling_per_token_logps = torch.where(
+            nan_logprob_mask, old_per_token_logps, sampling_per_token_logps
+        )
+
+        expected = torch.tensor([[-0.1, -0.6, -0.2], [-0.3, -0.9, 0.0]])
+        torch.testing.assert_close(sampling_per_token_logps, expected)
+
+
 class TestGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
         # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset

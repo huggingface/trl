@@ -2113,7 +2113,13 @@ class GRPOTrainer(_BaseTrainer):
             completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
         if sampling_per_token_logps_list is not None:
-            sampling_per_token_logps = [torch.tensor(logps) for logps in sampling_per_token_logps_list]
+            # vLLM may return NaN logprobs for near-deterministic tokens; `extract_logprobs` represents
+            # those as `None`. Convert them to `-inf` so that `torch.tensor` succeeds, then backfill
+            # with the old policy logprobs later so the importance-sampling ratio is neutral.
+            sampling_per_token_logps = [
+                torch.tensor([float("-inf") if x is None else x for x in logps])
+                for logps in sampling_per_token_logps_list
+            ]
             sampling_per_token_logps = pad(
                 sampling_per_token_logps,
                 padding_value=0.0,
@@ -2284,6 +2290,15 @@ class GRPOTrainer(_BaseTrainer):
                 )
             else:
                 old_per_token_logps = None
+
+            # Backfill tokens whose vLLM sampling logprob was NaN (represented as -inf) with the old
+            # policy logprob. This keeps the importance-sampling ratio neutral and avoids polluting
+            # reward/advantage estimation with an arbitrary sentinel value.
+            if sampling_per_token_logps is not None and old_per_token_logps is not None:
+                nan_logprob_mask = torch.isneginf(sampling_per_token_logps)
+                sampling_per_token_logps = torch.where(
+                    nan_logprob_mask, old_per_token_logps, sampling_per_token_logps
+                )
 
             # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
             if self.use_vllm and self.vllm_importance_sampling_correction:
