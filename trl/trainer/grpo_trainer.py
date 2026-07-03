@@ -1392,6 +1392,10 @@ class GRPOTrainer(_BaseTrainer):
         # Allow reward functions to log additional scalar metrics.
         reward_kwargs["log_metric"] = self._log_metric
 
+        # Expose the per-completion environment instances to reward functions (both sync and async paths).
+        if self.environments is not None:
+            reward_kwargs["environments"] = self.environments
+
         async_funcs_info = []  # async custom functions for asyncio.gather
 
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
@@ -1418,8 +1422,6 @@ class GRPOTrainer(_BaseTrainer):
             else:
                 # Run synchronous reward function
                 with profiling_context(self, reward_func_name):
-                    if self.environments is not None:
-                        reward_kwargs["environments"] = self.environments
                     output_reward_func = reward_func(
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
