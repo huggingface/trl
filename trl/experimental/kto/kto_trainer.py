@@ -77,7 +77,8 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 logger = get_logger(__name__)
@@ -394,7 +395,10 @@ class KTOTrainer(_BaseTrainer):
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
-              config) with the keyword arguments in `args.model_init_kwargs`.
+              config) with the keyword arguments in `args.model_init_kwargs`. If `dtype` is not specified in
+              `args.model_init_kwargs`, it defaults to `float32`. This differs from
+              [`~transformers.PreTrainedModel.from_pretrained`], where (since Transformers v5) the dtype is inferred
+              from the model config.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
         ref_model ([`~transformers.PreTrainedModel`], *optional*):
@@ -688,10 +692,31 @@ class KTOTrainer(_BaseTrainer):
                     "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
                 )
             if is_peft_model(model):
-                raise ValueError(
-                    "`use_liger_kernel=True` is not supported with PEFT models. Set `use_liger_kernel=False` to train "
-                    "a PEFT model."
-                )
+                # The Liger fused KTO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head
+                # is targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base
+                # weight and the trainable adapter parameters live in separate submodules that Liger never sees. The
+                # head adapter would silently receive no gradient, so the model trains as if `lm_head` were frozen.
+                # Fail loudly rather than train a silently-frozen head.
+                output_embeddings = model.get_output_embeddings()
+                if isinstance(output_embeddings, BaseTunerLayer):
+                    raise ValueError(
+                        "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The Liger "
+                        "fused KTO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and "
+                        "never trained. Either remove `'lm_head'` from your `target_modules`, or set "
+                        "`use_liger_kernel=False`."
+                    )
+                # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
+                # `PeftModel.forward()`. The Liger KTO loss bypasses `PeftModel.forward()` by calling the backbone
+                # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
+                # Fail loudly rather than train on a silently corrupted input.
+                if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                    raise ValueError(
+                        "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
+                        "PrefixTuning, P-Tuning). The Liger KTO loss bypasses `PeftModel.forward()` by calling the "
+                        "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
+                        "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
+                        "`use_liger_kernel=False`."
+                    )
 
         # Dataset
         # Skip dataset preparation for VLMs: tokenization and image processing happen on-the-fly in the collator.
@@ -1237,12 +1262,6 @@ class KTOTrainer(_BaseTrainer):
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
         KL_logps = self._compute_kl_logps(model, batch)
-        ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
-        if self.calculate_KL:
-            kl = (KL_logps - ref_KL_logps).mean().detach()
-            kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
-        else:
-            kl = torch.zeros(1).to(self.accelerator.device)
 
         _non_model_keys = {
             "completion_mask",
@@ -1258,23 +1277,54 @@ class KTOTrainer(_BaseTrainer):
         model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
 
+        if is_peft_model(model):
+            model = model.base_model.model
+
         # `base_model` gives the inner module (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
         # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
         # returns just the text stack and feeds image-placeholder IDs through it.
         # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
         # Fall back to `.model` there.
         if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            backbone, ref_backbone = model.model, self.ref_model.model
+            backbone = model.model
         else:
-            backbone, ref_backbone = model.base_model, self.ref_model.base_model
+            backbone = model.base_model
 
         outputs = backbone(**model_kwargs)
+        lm_head = model.get_output_embeddings()
 
         # reference model
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            ref_outputs = ref_backbone(**model_kwargs)
-        lm_head = model.get_output_embeddings()
-        ref_lm_head = self.ref_model.get_output_embeddings()
+            if self.ref_model is None:
+                # PEFT model with no explicit reference model: recover reference behaviour by disabling / switching to
+                # the frozen "ref" adapter, exactly as _compute_loss does for logit-based reference computation.
+                model_unwrapped = self.accelerator.unwrap_model(self.model)
+                with use_adapter(
+                    model_unwrapped, adapter_name="ref" if "ref" in model_unwrapped.peft_config else None
+                ):
+                    ref_KL_logps = self._compute_kl_logps(self.model, batch)
+                    ref_model_inner = model_unwrapped.base_model.model
+                    if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                        ref_backbone = ref_model_inner.model
+                    else:
+                        ref_backbone = ref_model_inner.base_model
+                    ref_outputs = ref_backbone(**model_kwargs)
+                    ref_lm_head = model_unwrapped.get_output_embeddings()
+            else:
+                ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
+                ref_model_inner = self.ref_model.base_model.model if is_peft_model(self.ref_model) else self.ref_model
+                if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                    ref_backbone = ref_model_inner.model
+                else:
+                    ref_backbone = ref_model_inner.base_model
+                ref_outputs = ref_backbone(**model_kwargs)
+                ref_lm_head = self.ref_model.get_output_embeddings()
+
+        if self.calculate_KL:
+            kl = (KL_logps - ref_KL_logps).mean().detach()
+            kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
+        else:
+            kl = torch.zeros(1).to(self.accelerator.device)
 
         shift_completion_mask = batch["completion_mask"][:, 1:]
         target = batch["input_ids"][:, 1:].clone()
