@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
@@ -30,7 +31,6 @@ from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
-from torch.nn import functional as F
 from torch.utils.data import DataLoader, Sampler, SequentialSampler
 from transformers import (
     AutoProcessor,
@@ -41,7 +41,7 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_utils import EvalLoopOutput, has_length
+from transformers.trainer_utils import EvalPrediction, has_length
 from transformers.utils import is_peft_available
 
 from ...data_utils import (
@@ -53,8 +53,8 @@ from ...data_utils import (
     unpair_preference_dataset,
 )
 from ...import_utils import is_liger_kernel_available
-from ...models import get_act_offloading_ctx_manager
-from ...models.utils import disable_gradient_checkpointing, prepare_deepspeed, prepare_fsdp
+from ...models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
+from ...models.utils import disable_gradient_checkpointing
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
@@ -102,7 +102,7 @@ class DataCollatorForUnpairedPreference(DataCollatorMixin):
         pad_token_id (`int`):
             Token ID to use for padding `input_ids` sequences.
         max_length (`int`, *optional*):
-            Maximum sequence length after assembly. Sequences longer than `max_length` are truncated from the end.
+            Maximum sequence length after assembly. Sequences longer than `max_length` are truncated from the right.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -469,7 +469,7 @@ class KTOTrainer(_BaseTrainer):
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
-        compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
@@ -1083,9 +1083,7 @@ class KTOTrainer(_BaseTrainer):
             if train_dataset is None or not has_length(train_dataset):
                 return None
             return SequentialSampler(train_dataset)
-        return super()._get_train_sampler(
-            train_dataset
-        )  # Override training step to add activation offloading context.
+        return super()._get_train_sampler(train_dataset)
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
