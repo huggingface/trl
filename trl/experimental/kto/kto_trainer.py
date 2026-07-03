@@ -793,6 +793,7 @@ class KTOTrainer(_BaseTrainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -1352,6 +1353,12 @@ class KTOTrainer(_BaseTrainer):
 
         self._metrics[mode]["kl"].append(kl.item())
 
+        # Number of tokens
+        if mode == "train":
+            num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum()).sum().item()
+            self._total_train_tokens += num_tokens_in_batch
+        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
@@ -1517,6 +1524,12 @@ class KTOTrainer(_BaseTrainer):
         total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
         entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
         self._metrics[mode]["entropy"].append(entropy)
+
+        # Number of tokens
+        if mode == "train":
+            num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum()).sum().item()
+            self._total_train_tokens += num_tokens_in_batch
+        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
