@@ -181,7 +181,12 @@ class TestAddResponseSchema:
         response = text[len(prefix) :]
         # Here, we just test that the parsing doesn't raise an error.
         # The correctness of the parsing is tested in TestParseResponse
-        tokenizer.parse_response(response)
+        # The new-style `response_template` parser requires the prompt prefix; the legacy `response_schema` parser
+        # does not accept a `prefix=` argument.
+        if _SUPPORTS_RESPONSE_TEMPLATE:
+            tokenizer.parse_response(response, prefix=prefix)
+        else:
+            tokenizer.parse_response(response)
 
     @pytest.mark.parametrize(
         "processor_name",
@@ -217,7 +222,12 @@ class TestAddResponseSchema:
         response = text[len(prefix) :]
         # Here, we just test that the parsing doesn't raise an error.
         # The correctness of the parsing is tested in TestParseResponse
-        processor.tokenizer.parse_response(response)
+        # The new-style `response_template` parser requires the prompt prefix; the legacy `response_schema` parser
+        # does not accept a `prefix=` argument.
+        if _SUPPORTS_RESPONSE_TEMPLATE:
+            processor.tokenizer.parse_response(response, prefix=prefix)
+        else:
+            processor.tokenizer.parse_response(response)
 
 
 class TestSupportsToolCalling:
