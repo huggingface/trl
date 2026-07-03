@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import json
 import os
 import textwrap
 from collections import defaultdict
@@ -46,6 +47,7 @@ from transformers.utils import is_peft_available
 from ...data_utils import (
     apply_chat_template,
     extract_prompt,
+    get_dataset_column_names,
     is_conversational,
     prepare_multimodal_messages,
     unpair_preference_dataset,
@@ -78,10 +80,6 @@ if is_peft_available():
 
 
 logger = get_logger(__name__)
-
-
-def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
-    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
 @dataclass
@@ -695,8 +693,8 @@ class KTOTrainer(_BaseTrainer):
                 )
             if self.precompute_ref_logps:
                 raise ValueError(
-                    "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
-                    "`precompute_ref_log_probs=False`."
+                    "Liger KTO loss does not support precomputing reference log probabilities. Either disable "
+                    "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
                 )
             if is_peft_model(model):
                 raise ValueError(
@@ -807,7 +805,7 @@ class KTOTrainer(_BaseTrainer):
 
         # The Liger loss is built here, because it needs `self.ref_model`
         if self.use_liger_kernel:
-            self.liger_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
+            self.liger_loss = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
         if self.precompute_ref_logps:
             if isinstance(self.train_dataset, IterableDataset) or isinstance(
@@ -975,12 +973,15 @@ class KTOTrainer(_BaseTrainer):
             tokenize = self._tokenize
 
             def tokenize_fn(example, processing_class, is_vlm):
+                tools = example.get("tools")
+                tools = json.loads(tools) if isinstance(tools, str) else tools
                 if is_conversational(example):
                     chat_template_kwargs = example.get("chat_template_kwargs", {})
                     prompt_ids = tokenize(
                         processing_class,
                         example["prompt"],
                         is_vlm,
+                        tools=tools,
                         add_generation_prompt=True,
                         **chat_template_kwargs,
                     )["input_ids"]
@@ -988,6 +989,7 @@ class KTOTrainer(_BaseTrainer):
                         processing_class,
                         example["prompt"] + example["completion"],
                         is_vlm,
+                        tools=tools,
                         **chat_template_kwargs,
                     )["input_ids"]
                 else:
@@ -1059,6 +1061,7 @@ class KTOTrainer(_BaseTrainer):
                     "image",
                     "images",
                     "label",
+                    "tools",
                     "chat_template_kwargs",
                 ]
             else:
@@ -1288,7 +1291,7 @@ class KTOTrainer(_BaseTrainer):
                 chosen_rewards_sum,
                 rejected_rewards_sum,
             ),
-        ) = self.liger_loss_fn(
+        ) = self.liger_loss(
             _input=outputs.last_hidden_state[:, :-1],
             lin_weight=lm_head.weight,
             target=target,
