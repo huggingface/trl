@@ -222,11 +222,11 @@ class OffloadActivations(saved_tensors_hooks):
             num_bytes = get_num_bytes_tensor(activation)
             tensor_id = get_tensor_id()
 
-            # Check for tensor deduplication using storage pointer
+            # Check for tensor deduplication using storage pointer in streams mode.
             # If this storage is already being tracked, we still create a new tensor_id
-            # but don't offload again (just keep the tensor in GPU)
+            # but don't offload again (just keep the tensor in GPU).
             storage_key = _get_unique_tensor_key(activation)
-            if storage_key in self.storage_to_tensor_id:
+            if self.use_streams and storage_key in self.storage_to_tensor_id:
                 # Storage already offloaded - don't offload again, just track the reference
                 self.tracker[tensor_id] = (activation, False, None, None, None)  # Keep on GPU, don't offload
                 track_storage_key(storage_key, tensor_id)
