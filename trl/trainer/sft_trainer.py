@@ -70,6 +70,7 @@ from .utils import (
     get_config_model_id,
     pad,
     selective_log_softmax,
+    warn_if_fp32_with_mixed_precision,
 )
 
 
@@ -959,6 +960,8 @@ class SFTTrainer(_BaseTrainer):
         # Model
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
+            # Warn if the model will load in fp32 under mixed precision (see warn_if_fp32_with_mixed_precision)
+            warn_if_fp32_with_mixed_precision(args, model_init_kwargs)
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
