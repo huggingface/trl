@@ -22,6 +22,7 @@ import threading
 import time
 import traceback
 import warnings
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from multiprocessing.queues import Queue as MPQueue
@@ -195,6 +196,7 @@ class _AsyncRolloutLoop:
         queue_maxsize: int = 0,
         vllm_server_url: str = "http://localhost:8000",
         max_tokens: int = 32,
+        max_staleness: int = 4,
         temperature: float = 1.0,
         request_timeout: int = 120,
         chat_template_kwargs: dict[str, Any] | None = None,
@@ -231,6 +233,7 @@ class _AsyncRolloutLoop:
         self.max_inflight_tasks = max_inflight_tasks
         self.queue_maxsize = queue_maxsize
         self.max_tokens = max_tokens
+        self.max_staleness = max_staleness
         self.temperature = temperature
         self.request_timeout = request_timeout
         self.chat_template_kwargs = chat_template_kwargs or {}
@@ -323,15 +326,35 @@ class _AsyncRolloutLoop:
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         pending_groups: dict[int, RolloutGroup] = {}
         pending_completed: dict[int, int] = {}
+        pending_failures: dict[int, int] = {}
+        # Tasks dispatched so far per not-yet-fully-dispatched group; used to defer stale-cancellation eligibility.
+        dispatched: dict[int, int] = {}
         inflight_tasks: dict[asyncio.Task, tuple[int, int, object, Messages]] = {}
         free_slots = set(range(self.max_inflight_tasks))
         work_iter = self._repeat_iterator()
+        # FIFO queue of (model_version_at_start, group_id). Groups are enqueued in group_id order once fully
+        # dispatched, and their start versions only ever increase, so the oldest is always at the front. That
+        # lets stale groups be popped from the front without needing a heap.
+        version_queue: deque[tuple[int, int]] = deque()
+        last_seen_version = self.model_version
 
         self._generation_start_time = time.monotonic()
         try:
             while True:
                 # Wall-clock for cross-process comparison; parent uses time.time() in check_health.
                 self._heartbeat_value.value = time.time()
+
+                # When the policy version advances, cancel in-flight generations that are now too stale so we
+                # stop spending vLLM compute on rollouts that would be dropped for staleness anyway.
+                current_version = self.model_version
+                if current_version > last_seen_version:
+                    last_seen_version = current_version
+                    cancelled = self._cancel_stale_tasks(
+                        version_queue, pending_groups, pending_completed, pending_failures, inflight_tasks, free_slots
+                    )
+                    if cancelled:
+                        logger.info(f"[staleness] cancelled {cancelled} stale in-flight task(s)")
+
                 while free_slots and not stop_event.is_set():
                     group_id, row = next(work_iter)
                     slot = free_slots.pop()
@@ -391,9 +414,18 @@ class _AsyncRolloutLoop:
                             model_version=self.model_version,
                         )
                         pending_completed[group_id] = 0
+                        dispatched[group_id] = 0
 
                     task = asyncio.create_task(self._generate_one(prompt, tool_dict=tool_dict))
                     inflight_tasks[task] = (group_id, slot, environment, prompt)
+                    dispatched[group_id] += 1
+                    # A group only becomes eligible for stale-cancellation once every one of its generations has
+                    # been dispatched. Cancelling a partially-dispatched group would delete state that the
+                    # remaining rows from `_repeat_iterator` then recreate, stranding a group that can never reach
+                    # num_generations.
+                    if dispatched[group_id] == self.num_generations:
+                        version_queue.append((pending_groups[group_id].model_version, group_id))
+                        del dispatched[group_id]
 
                 if not inflight_tasks:
                     if stop_event.is_set():
@@ -410,42 +442,66 @@ class _AsyncRolloutLoop:
                     free_slots.add(slot)
                     if environment is not None:
                         self._environment_pool.append(environment)
-                    if task.exception() is not None:
-                        raise task.exception()
-
-                    (
-                        prompt_ids,
-                        completion,
-                        completion_ids,
-                        completion_logprobs,
-                        tool_mask,
-                        tool_call_count,
-                        tool_failure_count,
-                    ) = task.result()
                     group = pending_groups[group_id]
-                    group.prompts.append(prompt)
-                    group.prompt_ids.append(prompt_ids)
-                    group.completions.append(completion)
-                    group.completions_ids.append(completion_ids)
-                    group.completions_logprobs.append(completion_logprobs)
-                    group.tool_mask.append(tool_mask)
-                    group.tool_call_counts.append(tool_call_count)
-                    group.tool_failure_counts.append(tool_failure_count)
-                    self._total_completion_tokens += sum(tool_mask)
+
+                    # A single generation failure shouldn't crash the whole rollout worker. Record it against the
+                    # group (rather than re-raising and killing the child process); successful siblings are kept.
+                    if task.exception() is not None:
+                        logger.warning(
+                            f"Generation failed for group {group_id}, dropping this generation",
+                            exc_info=task.exception(),
+                        )
+                        pending_failures[group_id] = pending_failures.get(group_id, 0) + 1
+                    else:
+                        (
+                            prompt_ids,
+                            completion,
+                            completion_ids,
+                            completion_logprobs,
+                            tool_mask,
+                            tool_call_count,
+                            tool_failure_count,
+                        ) = task.result()
+                        group.prompts.append(prompt)
+                        group.prompt_ids.append(prompt_ids)
+                        group.completions.append(completion)
+                        group.completions_ids.append(completion_ids)
+                        group.completions_logprobs.append(completion_logprobs)
+                        group.tool_mask.append(tool_mask)
+                        group.tool_call_counts.append(tool_call_count)
+                        group.tool_failure_counts.append(tool_failure_count)
+                        self._total_completion_tokens += sum(tool_mask)
                     pending_completed[group_id] += 1
 
                     if pending_completed[group_id] == self.num_generations:
-                        group.queued_at = time.monotonic()
-                        while True:
-                            try:
-                                self._groups_to_score.put_nowait(group)
-                                break
-                            except asyncio.QueueFull:
-                                if stop_event.is_set():
-                                    return
-                                await asyncio.sleep(0.1)
+                        # Score the surviving generations rather than discarding the whole group on one failure.
+                        # GRPO needs at least 2 completions to form a group-relative baseline (the std over a
+                        # single sample is 0), so a group with fewer survivors is dropped.
+                        n_success = len(group.completions)
+                        n_failed = pending_failures.get(group_id, 0)
+                        if n_success < 2:
+                            logger.warning(
+                                f"Dropping group {group_id}: only {n_success}/{self.num_generations} generation(s) "
+                                f"succeeded ({n_failed} failed); need >=2 for a group baseline."
+                            )
+                        else:
+                            if n_failed:
+                                logger.warning(
+                                    f"Scoring group {group_id} with {n_success}/{self.num_generations} "
+                                    f"generation(s); {n_failed} failed."
+                                )
+                            group.queued_at = time.monotonic()
+                            while True:
+                                try:
+                                    self._groups_to_score.put_nowait(group)
+                                    break
+                                except asyncio.QueueFull:
+                                    if stop_event.is_set():
+                                        return
+                                    await asyncio.sleep(0.1)
                         del pending_groups[group_id]
                         del pending_completed[group_id]
+                        pending_failures.pop(group_id, None)
         finally:
             for task in inflight_tasks:
                 task.cancel()
@@ -455,6 +511,52 @@ class _AsyncRolloutLoop:
                 self._groups_to_score.put_nowait(None)
             except asyncio.QueueFull:
                 pass
+
+    def _cancel_stale_tasks(
+        self,
+        version_queue: deque[tuple[int, int]],
+        pending_groups: dict[int, RolloutGroup],
+        pending_completed: dict[int, int],
+        pending_failures: dict[int, int],
+        inflight_tasks: dict[asyncio.Task, tuple[int, int, object, Messages]],
+        free_slots: set[int],
+    ) -> int:
+        """Cancel in-flight generation tasks whose group started more than `max_staleness` versions ago.
+
+        Groups are tracked in `version_queue`, a FIFO queue whose front is always the oldest (start versions are
+        enqueued in non-decreasing order), so stale groups are found without scanning every pending group. Returns the
+        number of tasks cancelled.
+        """
+        stale_cutoff = self.model_version - self.max_staleness
+        stale_group_ids: set[int] = set()
+        while version_queue and version_queue[0][0] < stale_cutoff:
+            _, group_id = version_queue.popleft()
+            # A completed/dropped group leaves a dead queue entry behind; skip it.
+            if group_id in pending_groups:
+                stale_group_ids.add(group_id)
+
+        if not stale_group_ids:
+            return 0
+
+        cancelled = 0
+        for task, (group_id, slot, environment, _prompt) in list(inflight_tasks.items()):
+            if group_id in stale_group_ids:
+                task.cancel()
+                del inflight_tasks[task]
+                free_slots.add(slot)
+                # Return the reserved environment to the pool so cancellation doesn't leak instances.
+                if environment is not None:
+                    self._environment_pool.append(environment)
+                cancelled += 1
+
+        for group_id in stale_group_ids:
+            staleness = self.model_version - pending_groups[group_id].model_version
+            logger.info(f"[staleness] dropping stale group {group_id} (staleness={staleness})")
+            del pending_groups[group_id]
+            del pending_completed[group_id]
+            pending_failures.pop(group_id, None)
+
+        return cancelled
 
     async def _score_loop(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
@@ -651,11 +753,14 @@ class _AsyncRolloutLoop:
         return choice["token_ids"], choice["logprobs"]["token_logprobs"]
 
     async def _score_group(self, group: RolloutGroup) -> list[RolloutSample]:
+        # `reward_kwargs` were built with `num_generations` identical copies per key; a group with dropped
+        # generations has fewer completions, so trim them to match and keep the reward inputs aligned.
+        n = len(group.completions)
         kwargs = dict(
             completions=group.completions,
             prompts=group.prompts,
             completion_ids=group.completions_ids,
-            **group.reward_kwargs,
+            **{key: values[:n] for key, values in group.reward_kwargs.items()},
         )
         all_rewards = await asyncio.gather(
             *[

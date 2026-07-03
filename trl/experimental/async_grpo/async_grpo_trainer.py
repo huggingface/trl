@@ -639,6 +639,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     queue_maxsize=self.args.queue_maxsize,
                     vllm_server_url=self.args.vllm_server_base_url,
                     max_tokens=self.args.max_completion_length,
+                    max_staleness=self.args.max_staleness,
                     temperature=self.args.temperature,
                     request_timeout=self.args.request_timeout,
                     chat_template_kwargs=self.args.chat_template_kwargs,
