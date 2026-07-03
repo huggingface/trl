@@ -45,8 +45,10 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         args = {
             "distillation_mode": "sampled_token",
             "distillation_topk": None,
+            "distillation_topk_support": "student",
             "distillation_alpha": 1.0,
             "distillation_add_tail": False,
+            "distillation_kl_clip": None,
             "distillation_is_clip": None,
         }
         args.update(args_overrides)
