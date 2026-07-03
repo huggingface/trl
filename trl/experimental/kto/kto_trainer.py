@@ -652,8 +652,6 @@ class KTOTrainer(_BaseTrainer):
         self.loss_type = args.loss_type
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
-        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         self.calculate_KL = calculate_kl
         if self.calculate_KL and args.train_sampling_strategy != "sequential":
             raise ValueError(
@@ -666,14 +664,6 @@ class KTOTrainer(_BaseTrainer):
             raise ValueError(
                 "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
             )
-        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            logger.warning(
-                "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
-                "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
-                "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
-                "loss.",
-            )
-
         # Liger loss
         self.use_liger_kernel = args.use_liger_kernel
         if self.use_liger_kernel:
@@ -741,6 +731,18 @@ class KTOTrainer(_BaseTrainer):
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
+
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        text_config = model.config.get_text_config()
+        is_moe = getattr(text_config, "output_router_logits", None) is not None
+        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
+        self.router_aux_loss_coef = args.router_aux_loss_coef
+        if self.aux_loss_enabled and self.use_liger_kernel:
+            raise ValueError(
+                "Liger KTO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, because it "
+                "fuses the loss without materializing the router logits. Either set `router_aux_loss_coef` to `0.0` "
+                "to disable the auxiliary loss, or set `use_liger_kernel` to False."
+            )
 
         # Reference model
         if ref_model is None:
@@ -1255,8 +1257,6 @@ class KTOTrainer(_BaseTrainer):
         }
         model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
-        if self.aux_loss_enabled:
-            model_kwargs["output_router_logits"] = True
 
         # `base_model` gives the inner module (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
         # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
@@ -1272,7 +1272,7 @@ class KTOTrainer(_BaseTrainer):
 
         # reference model
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            ref_outputs = ref_backbone(**{k: v for k, v in model_kwargs.items() if k != "output_router_logits"})
+            ref_outputs = ref_backbone(**model_kwargs)
         lm_head = model.get_output_embeddings()
         ref_lm_head = self.ref_model.get_output_embeddings()
 
@@ -1301,8 +1301,6 @@ class KTOTrainer(_BaseTrainer):
             ref_bias=ref_lm_head.bias if hasattr(lm_head, "bias") else None,
             kl=kl,
         )
-        if self.aux_loss_enabled:
-            loss += self.aux_loss_coef * outputs.aux_loss
 
         self._metrics[mode]["kl"].append(kl.item())
 
@@ -1365,8 +1363,6 @@ class KTOTrainer(_BaseTrainer):
             model_kwargs["output_router_logits"] = True
 
         outputs = model(**model_kwargs)
-        if self.aux_loss_enabled:
-            aux_loss = outputs.aux_loss
 
         shift_logits = outputs.logits[:, :-1, :]
         per_token_logps = selective_log_softmax(shift_logits, batch["input_ids"][:, 1:])
@@ -1504,7 +1500,9 @@ class KTOTrainer(_BaseTrainer):
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
-            loss += self.aux_loss_coef * aux_loss
+            aux_loss = outputs.aux_loss
+            loss = loss + self.router_aux_loss_coef * aux_loss
+            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         return (loss, outputs) if return_outputs else loss
 
