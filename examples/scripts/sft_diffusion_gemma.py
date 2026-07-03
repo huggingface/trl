@@ -207,7 +207,10 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         if self.args.max_length is None:
             truncated = torch.zeros(batch_size, dtype=torch.bool, device=device)
         else:
-            truncated = attention_mask.sum(dim=1) >= self.args.max_length
+            # Detect a real clip by the response reaching the last real token, not by length alone: an example that
+            # fills `max_length` but keeps a terminator after its response is complete, not truncated.
+            real_len = attention_mask.sum(dim=1)
+            truncated = (real_len >= self.args.max_length) & (span_end == real_len - 1)
 
         # One canvas per step: select one response block per example. The encoder reads the full clean sequence (its
         # autoregressive co-loss covers it all), but the decoder may only see the prompt and the clean response
