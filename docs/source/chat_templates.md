@@ -20,7 +20,7 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 ## Supported model families
 
-TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3, Gemma, Gemma3, GLM-4-MoE, GPT-OSS, Idefics3, Llama 3 / 3.1 / 3.2, Llava-Next, Nemotron 3 (Nano, Super, Ultra), Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6.
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3, Gemma, Gemma3, GLM-4-MoE, GPT-OSS, Idefics2, Idefics3, Llama 3 / 3.1 / 3.2, Llava-Next, Nemotron 3 (Nano, Super, Ultra), Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6.
 
 ## Training templates
 
@@ -107,6 +107,12 @@ Wrap assistant message output (both `content` and `tool_calls`) with `&#123;% ge
 Patched GPT-OSS template. Diff vs `gptoss.jinja`:
 
 Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `idefics2_training.jinja`
+
+Patched Idefics2 template. Diff vs `idefics2.jinja`:
+
+Split the assistant message into its own branch so the `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
 
 ### `idefics3_training.jinja`
 

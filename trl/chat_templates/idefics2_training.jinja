@@ -1,0 +1,10 @@
+{#- Training variant of the Idefics2 chat template (see idefics2.jinja for the original).
+    Modifications vs the original:
+    - Split the assistant message into its own branch so the {% generation %} / {% endgeneration %}
+      markers wrap the assistant content (everything after the 'Assistant:' prompt cue, up to and
+      including the trailing '<end_of_utterance>\n'). This enables assistant-only loss masking in
+      SFT training.
+-#}
+{% for message in messages %}{% if message['role'] == 'assistant' %}Assistant:{% generation %}{% if message['content'][0]['type'] != 'image' %} {% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '<image>' }}{% endif %}{% endfor %}<end_of_utterance>
+{% endgeneration %}{% else %}{{message['role'].capitalize()}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '<image>' }}{% endif %}{% endfor %}<end_of_utterance>
+{% endif %}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}
