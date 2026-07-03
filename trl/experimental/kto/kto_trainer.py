@@ -1082,9 +1082,7 @@ class KTOTrainer(_BaseTrainer):
             if train_dataset is None or not has_length(train_dataset):
                 return None
             return SequentialSampler(train_dataset)
-        return super()._get_train_sampler(
-            train_dataset
-        )  # Override training step to add activation offloading context.
+        return super()._get_train_sampler(train_dataset)
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         model_hash = hash_module(self.ref_model or self.model)
