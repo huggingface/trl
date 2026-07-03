@@ -673,6 +673,12 @@ class KTOTrainer(_BaseTrainer):
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
                 "loss.",
             )
+        if self.aux_loss_enabled and args.use_liger_kernel:
+            raise ValueError(
+                "Liger KTO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, because it "
+                "fuses the loss without materializing the router logits. Either set `output_router_logits` to `False` "
+                "in the model config to disable the auxiliary loss, or set `use_liger_kernel` to False."
+            )
 
         # Liger loss
         self.use_liger_kernel = args.use_liger_kernel
