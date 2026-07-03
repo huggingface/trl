@@ -44,7 +44,7 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_torch_neuron_available
 
 from ..chat_template_utils import (
     clone_chat_template,
@@ -237,6 +237,83 @@ def _chunked_cross_entropy_loss(
     return loss, correct, entropy_sum, n_valid_tensor
 
 
+def _chunk_neuron(h, w, b, lbl, logit_scale, final_logit_softcapping):
+    logits = h.float() @ w.float().t()
+    if b is not None:
+        logits = logits + b.float()
+    if logit_scale != 1.0:
+        logits = logits * logit_scale
+    if final_logit_softcapping is not None:
+        logits = final_logit_softcapping * torch.tanh(logits / final_logit_softcapping)
+    log_p = F.log_softmax(logits, dim=-1)
+    # `lbl` is not pre-compacted here (unlike `_chunk`), so it can contain `-100` positions. `nll_loss`'s default
+    # `ignore_index=-100` zeroes their loss contribution; `mask` does the same for accuracy/entropy, which don't
+    # get that behavior for free.
+    chunk_loss = F.nll_loss(log_p, lbl, ignore_index=-100, reduction="sum")
+    mask = lbl != -100
+    chunk_correct = ((logits.argmax(dim=-1) == lbl) & mask).sum().float()
+    chunk_entropy = (-(log_p.exp() * log_p).sum(dim=-1) * mask).sum()
+    return chunk_loss, chunk_correct, chunk_entropy
+
+
+def _chunked_cross_entropy_loss_neuron(
+    hidden_states: torch.Tensor,
+    lm_head_weight: torch.Tensor,
+    chunk_size: int,
+    labels: torch.Tensor | None = None,
+    shift_labels: torch.Tensor | None = None,
+    num_items_in_batch: torch.Tensor | int | None = None,
+    logit_scale: float = 1.0,
+    final_logit_softcapping: float | None = None,
+    lm_head_bias: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Neuron/XLA-safe variant of `_chunked_cross_entropy_loss`.
+    """
+    if labels is None and shift_labels is None:
+        raise ValueError("At least one of `labels` or `shift_labels` must be provided.")
+
+    if shift_labels is not None:
+        hidden = hidden_states.reshape(-1, hidden_states.size(-1))
+        labels = shift_labels.reshape(-1)
+    else:
+        hidden = hidden_states[..., :-1, :].reshape(-1, hidden_states.size(-1))
+        labels = labels[..., 1:].reshape(-1)
+
+    total = hidden.size(0)
+    correct = hidden.new_zeros((), dtype=torch.float32)
+    entropy_sum = hidden.new_zeros((), dtype=torch.float32)
+    loss = hidden.new_zeros((), dtype=torch.float32)
+    n_valid_tensor = (labels != -100).sum()
+
+    for start in range(0, total, chunk_size):
+        h_chunk = hidden[start : start + chunk_size]
+        lbl_chunk = labels[start : start + chunk_size]
+        chunk_loss, chunk_correct, chunk_entropy = torch.utils.checkpoint.checkpoint(
+            _chunk_neuron,
+            h_chunk,
+            lm_head_weight,
+            lm_head_bias,
+            lbl_chunk,
+            logit_scale,
+            final_logit_softcapping,
+            use_reentrant=False,
+        )
+        loss = loss + chunk_loss
+        correct = correct + chunk_correct
+        entropy_sum = entropy_sum + chunk_entropy
+
+    if num_items_in_batch is None:
+        # Avoid a data-dependent branch on `n_valid_tensor == 0`; `loss` is already 0 in that case, so the clamp
+        # only prevents a 0/0 division without affecting any other case.
+        loss = loss / n_valid_tensor.clamp(min=1)
+    else:
+        if isinstance(num_items_in_batch, torch.Tensor):
+            num_items_in_batch = num_items_in_batch.to(loss.device)
+        loss = loss / num_items_in_batch
+    return loss, correct, entropy_sum, n_valid_tensor
+
+
 def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: bool = False) -> None:
     """
     Patch `model.forward` to compute the LM loss via [`_chunked_cross_entropy_loss`].
@@ -269,6 +346,9 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
     logit_scale = getattr(text_config, "logit_scale", 1.0)
     original_forward = model.forward
     lm_head = model.get_output_embeddings()
+    chunked_cross_entropy_loss = (
+        _chunked_cross_entropy_loss_neuron if is_torch_neuron_available() else _chunked_cross_entropy_loss
+    )
 
     def _chunked_ce_forward(
         self: torch.nn.Module,
@@ -323,7 +403,7 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
             lm_head_weight = lm_head_weight.full_tensor()
             if lm_head_bias is not None:
                 lm_head_bias = lm_head_bias.full_tensor()
-        loss, num_correct_tokens, entropy_sum, num_valid_tokens = _chunked_cross_entropy_loss(
+        loss, num_correct_tokens, entropy_sum, num_valid_tokens = chunked_cross_entropy_loss(
             hidden_states,
             lm_head_weight,
             chunk_size,
