@@ -169,7 +169,7 @@ To use this formulation, set `loss_type="sapo"` in the [`GRPOConfig`].
 
 ## Logged metrics
 
-While training and evaluating, we record the following reward metrics:
+While training and evaluating, we record the following metrics:
 
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions. When using tools, only non-tool tokens are counted.
 - `step_time`: The average time (in seconds) taken per training step (including generation).
@@ -284,15 +284,43 @@ $$
 
 This turns an otherwise on policy RL problem into an off policy one.
 
-The standard way to correct for this distribution shift is **importance sampling (IS)**. We provide two IS variants: [Truncated Importance Sampling (TIS)](paper_index#truncated-importance-sampling) and [Masked Importance Sampling (MIS)](paper_index#masked-importance-sampling). Both variants can be applied either at the token level or at the sequence level.Let  \\( \rho \\) denote the importance weight, for example  \\( \rho_t \\) per token or  \\( \rho_{\text{seq}} \\) per sequence. Under TIS, ratios larger than `vllm_importance_sampling_cap` are clipped,
+The standard way to correct for this distribution shift is **importance sampling (IS)**. We provide two IS variants: [Truncated Importance Sampling (TIS)](paper_index#truncated-importance-sampling) and [Masked Importance Sampling (MIS)](paper_index#masked-importance-sampling). Both variants can be applied either at the token level or at the sequence level. Let  \\( \rho \\) denote the importance weight, for example  \\( \rho_t \\) per token or  \\( \rho_{\text{seq}} \\) per sequence. Under TIS, ratios outside of the range `[vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max]` are clipped,
 
 $$
-\rho \leftarrow \min(\rho, C).
+\rho \leftarrow \text{clip}(\rho, C_{\min}, C_{\max}).
 $$
 
-Under MIS, ratios larger than `vllm_importance_sampling_cap` are set to zero, so those samples do not contribute to the gradient. In other words, large ratio samples are downweighted under TIS and discarded under MIS. The configuration flag `vllm_importance_sampling_mode` chooses both the IS variant (masking or truncation) and the granularity (token level or sequence level).
+The original [TIS paper](https://huggingface.co/papers/1606.02647) proposed a single upper-bound clipping mechanism, i.e.,  \\( \min(\rho, C_{\max}) \\). The implementation in TRL generalized this by also introducing a lower bound, yielding the two-sided formulation shown above, inspired by the [IcePop](paper_index#masked-importance-sampling) method.  
+Note that in IcePop, the bounds are labelled as  \\( \alpha \\) and  \\( \beta \\) while in TRL we use  \\( C_{\min} \\) and  \\( C_{\max} \\).
+
+Under MIS, ratios outside of this range are set to zero, so those samples do not contribute to the gradient. In other words, outlier samples are downweighted under TIS and discarded under MIS. The configuration flag `vllm_importance_sampling_mode` chooses both the IS variant (masking or truncation) and the granularity (token level or sequence level).
 
 Importance sampling is the principled algorithmic response to the training–inference mismatch. However, there are also more direct approaches that attempt to reduce the mismatch between the two engines themselves. Most of these are engineering solutions. For example, [MiniMax M1 uses an FP32 language model head](https://huggingface.co/papers/2506.13585) in the inference engine. Thinking Machines has explored [deterministic inference kernels](https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/), although this comes with a significant efficiency cost. vLLM has shown [bitwise consistent policies](https://blog.vllm.ai/2025/11/10/bitwise-consistent-train-inference.html) by building on the batch invariant deterministic kernels from Thinking Machines, but as of November 2025 there remains a substantial throughput penalty relative to standard vLLM inference.
+
+### Speed up training with transformers continuous batching
+
+As an alternative to vLLM, you can use transformers' built-in continuous batching engine for faster generation. Continuous batching removes finished sequences from the batch immediately rather than waiting for the slowest one to finish. For tasks with variable completion lengths (e.g., math reasoning), this yields faster generation and lower VRAM usage than the default `generate()` at large batch sizes (N≥32).
+
+> [!TIP]
+> Continuous batching is a drop-in upgrade with no server setup or weight synchronization. It runs in-process and is well-suited for single-GPU training or memory-constrained environments. For maximum generation throughput at scale, use vLLM instead.
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    use_transformers_continuous_batching=True,
+    transformers_continuous_batching_config={
+        "use_cuda_graph": False,
+        "max_memory_percent": 0.4,  # lower values leave more VRAM for the training backward pass
+    },
+)
+```
+
+> [!TIP]
+> TRL defaults `max_memory_percent` to `0.5` (instead of transformers' `0.9`) to leave enough VRAM for the training backward pass. Tune it down to `0.3`–`0.4` for large generation batches (N≥32) or if you see out-of-memory errors.
+
+For a full training example, see [`examples/scripts/grpo_continuous_batching.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_continuous_batching.py).
 
 ### GRPO at scale: train a 70B+ Model on multiple nodes
 
@@ -674,7 +702,15 @@ trainer = GRPOTrainer(
 )
 ```
 
-You can also provide tools through `environment_factory`. In this mode, [`GRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools.
+You can also provide tools through `environment_factory`. In this mode, [`GRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools. See the [OpenEnv guide](openenv) for the `environment_factory` contract.
+
+All environments plug into the same `environment_factory` slot, so they are interchangeable at the TRL level — pick the one whose ecosystem fits your task:
+
+| Integration | What it is | Use it when |
+|---|---|---|
+| [OpenEnv](openenv) | The open environment standard (Gymnasium-style API, served over WebSocket or containerised execution), backed by Hugging Face and the community. | You're using a ready-made OpenEnv environment from the Hub, or defining your own against the open standard (e.g. Wordle, Sudoku, Catch). |
+| [OpenReward](openreward) | An integration with ORS-speaking environments (the [openreward.ai](https://openreward.ai) catalog or your own ORS server); tasks **and** rewards are served over HTTP. | You want to train against an ORS environment: the catalog (e.g. `Eigent/SETA`), one you self-host on your own infra, or a local server you're developing. |
+| [Harbor](harbor) | An integration with Harbor task suites: each task is an instruction, a real sandbox image (`docker`, `e2b`, ...), and an in-sandbox verifier. | You want to train against a Harbor task suite: a tree of tasks, each a self-contained sandbox plus verifier (e.g. a data-analysis agent that explores files in a sandbox and writes an answer a grader checks). |
 
 > [!IMPORTANT]
 > `environment_factory` requires `transformers>=5.2.0`.

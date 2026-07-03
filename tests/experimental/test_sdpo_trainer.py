@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import logging
 
+import pytest
 import torch
 from datasets import Dataset, load_dataset
 from transformers import TrainerCallback
@@ -59,7 +61,48 @@ class SelfDistillationCaptureCallback(TrainerCallback):
             self.captured_old_per_token_logps = old_per_token_logps.detach().cpu()
 
 
+class RecordingTeacherClient:
+    """Stands in for the vLLM server client and records scoring requests."""
+
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def get_sequence_logprobs(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+
 class TestSDPOTrainer(TrlTestCase):
+    def teardown_method(self):
+        if hasattr(self, "_liger_module"):
+            importlib.reload(importlib.import_module(self._liger_module))
+
+    def test_trust_remote_code(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            SDPOTrainer(
+                model=model_id,
+                reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+                args=SDPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = SDPOTrainer(
+            model=model_id,
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=SDPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     def test_train_with_positional_config_argument(self):
         dataset = Dataset.from_dict(
             {
@@ -159,6 +202,7 @@ class TestSDPOTrainer(TrlTestCase):
             args=SDPOConfig(use_liger_kernel=True, **common),
             train_dataset=dataset,
         )
+        self._liger_module = liger_trainer.model.__module__
 
         liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
         torch.manual_seed(0)
@@ -493,3 +537,52 @@ class TestSDPOTrainer(TrlTestCase):
         completion_length = capture_callback.captured_completion_mask.shape[1]
         teacher_completion_attention = capture_callback.captured_teacher_attention_mask[0, -completion_length:]
         assert torch.equal(teacher_completion_attention, capture_callback.captured_completion_mask[0])
+
+    def test_server_loss_finite_with_masked_and_padded_rows(self):
+        # Drives the teacher-server path through `compute_loss` with a fake server client: row 0 is fully masked
+        # (zero-length scored completion) and row 1 has a shorter completion than the padded batch, so the client
+        # response is ragged and the padded tail comes back as -inf. Neither may leak NaN or inf.
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."], "privileged_context": ["Example answer: 4."]})
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            max_completion_length=3,
+            num_generations=1,
+            distillation_mode="topk_logits",
+            distillation_topk=2,
+            distillation_alpha=0.5,
+            distillation_add_tail=True,
+            distillation_is_clip=None,
+            report_to="none",
+        )
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.use_teacher_server = True
+        trainer.teacher_client = RecordingTeacherClient(
+            {
+                "actual_logprobs": [[], [[-1.1], [-0.4]]],
+                "logprobs": [[], [[-1.1, -1.5], [-0.4, -0.9]]],
+                "logprob_token_ids": [[], [[14, 15], [16, 17]]],
+            }
+        )
+
+        device = next(trainer.model.parameters()).device
+        batch = {
+            "prompt_ids": torch.tensor([[10, 11], [12, 13]], device=device),
+            "prompt_mask": torch.tensor([[1, 1], [1, 1]], device=device),
+            "completion_ids": torch.tensor([[14, 15, 16], [17, 18, 19]], device=device),
+            "completion_mask": torch.tensor([[0, 0, 0], [1, 1, 0]], device=device),
+            "teacher_input_ids": torch.tensor([[20, 21, 22, 14, 15, 16], [23, 24, 25, 17, 18, 19]], device=device),
+            "teacher_attention_mask": torch.tensor([[1, 1, 1, 0, 0, 0], [1, 1, 1, 1, 1, 0]], device=device),
+        }
+
+        loss = trainer.compute_loss(trainer.model, batch)
+
+        assert torch.isfinite(loss)
+        loss.backward()
+        assert all(torch.isfinite(p.grad).all() for p in trainer.model.parameters() if p.grad is not None)
+        assert trainer.teacher_client.calls[0]["top_logprobs"] == 2

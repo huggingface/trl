@@ -25,6 +25,7 @@ from ..testing_utils import TrlTestCase, require_peft, require_torch_accelerator
 if is_peft_available():
     from peft import LoraConfig
 
+
 if is_vision_available():
     import numpy as np
     from PIL import Image
@@ -43,6 +44,31 @@ class TestOnlineDPOTrainer(TrlTestCase):
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.reward_model_id, num_labels=1)
         self.reward_tokenizer = AutoTokenizer.from_pretrained(self.reward_model_id)
         self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
+
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+
+        with pytest.raises(ValueError, match="custom code"):
+            OnlineDPOTrainer(
+                model=model_id,
+                reward_funcs=self.reward_model,
+                args=OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                processing_class=tokenizer,
+                reward_processing_classes=self.reward_tokenizer,
+            )
+
+        trainer = OnlineDPOTrainer(
+            model=model_id,
+            reward_funcs=self.reward_model,
+            args=OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+            processing_class=tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_train(self, config_name):

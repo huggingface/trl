@@ -1,12 +1,12 @@
 # Asynchronous GRPO
 
 > [!IMPORTANT]
-> This trainer requires `vllm>=0.17.1` and `transformers>=5.2.0`. For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
+> This trainer requires `vllm>=0.22.0` and `transformers>=5.2.0`. For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
 >
 > Currently, `vllm` and `transformers` have conflicting dependency constraints. To work around this, install vLLM first and then force-install transformers:
 >
 > ```bash
-> pip install 'vllm>=0.17.1'
+> pip install 'vllm>=0.22.0'
 > pip install 'transformers>=5.2.0' --no-deps
 > ```
 
@@ -18,14 +18,14 @@ This trainer was contributed by [Quentin Gallouédec](https://huggingface.co/qga
 
 ## How it differs from [`GRPOTrainer`]
 
-In the standard [`GRPOTrainer`], generation and training are sequential: generate a batch, compute the loss, update weights, repeat. Even in [vLLM colocate mode](grpo_trainer#speed-up-training-with-vllm), where generation runs on the same GPUs, one phase must finish before the other begins.
+In the standard [`GRPOTrainer`], generation and training are sequential: generate a batch, compute the loss, update weights, repeat. Even in [vLLM colocate mode](grpo_trainer#speed-up-training-with-vllm-powered-generation), where generation runs on the same GPUs, one phase must finish before the other begins.
 
 [`AsyncGRPOTrainer`] separates these two concerns:
 
 - **Rollout worker** (background process) — sends prompts to a vLLM server, scores completions with reward functions, computes advantages, and pushes ready-to-train samples into a queue.
 - **Training loop** (main process) — pulls samples from the queue, computes the clipped surrogate loss, and updates the model weights.
 
-The rollout worker runs in a separate process spawned from the trainer, so reward computation never contends with the training loop for the GIL. This has two consequences for what you can pass as `reward_funcs`, `tools`, and `environment_factory`:
+The rollout worker runs in a separate process spawned from the trainer, so reward computation never contends with the training loop for the GIL. This has two consequences for what you can pass as `reward_funcs`, `tools`, and `environment_factory` (for the latter, see the [OpenEnv guide](openenv), which covers the contract and the available integrations):
 
 > [!WARNING]
 > Because we run the rollout worker in a separate process, everything passed to it is **pickled**. Each reward function, tool, and `environment_factory` (and anything they close over) must therefore be picklable: use a module-level function, [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial), or a **callable class instance**. Lambdas and closures will raise a `TypeError` at `trainer.train()`. This is a difference from [`GRPOTrainer`], where reward functions are called in-process and closures work.

@@ -8,11 +8,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       with:
         fetch-depth: 0
     - name: Secret Scanning
-      uses: trufflesecurity/trufflehog@37b77001d0174ebec2fcca2bd83ff83a6d45a3ab  # v3.95.3
+      uses: trufflesecurity/trufflehog@30d5bb91af1a771378349dbbb0c82129392acf70  # v3.95.6
       with:
         # exclude buggy postgres detector that is causing false positives and not relevant to our codebase
         extra_args: --results=verified,unknown --exclude-detectors=postgres

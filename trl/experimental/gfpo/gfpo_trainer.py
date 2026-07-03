@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -71,6 +72,37 @@ class GFPOTrainer(_GRPOTrainer):
         mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
+
+        # Draw one reusable instance per rollout from the pool, creating more only when this batch needs more concurrent
+        # instances than exist.
+        if self.environment_factory is not None:
+            self.environments = []
+            for i in range(len(inputs)):
+                if i == len(self._environment_pool):
+                    self._environment_pool.append(self.environment_factory())
+                self.environments.append(self._environment_pool[i])
+
+        # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
+        # its environment. Done here (not at init) because the environment instances are drawn at batch time.
+        if self.tools:
+            self._sync_tool_dicts = []
+            self._async_tool_dicts = []
+            for i in range(len(inputs)):
+                methods = []
+                if self.environments:
+                    methods = [
+                        member
+                        for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                        if member_name != "reset" and not member_name.startswith("_")
+                    ]
+                sync_tool_dict, async_tool_dict = {}, {}
+                for tool in self._standalone_tools + methods:
+                    if inspect.iscoroutinefunction(tool):
+                        async_tool_dict[tool.__name__] = tool
+                    else:
+                        sync_tool_dict[tool.__name__] = tool
+                self._sync_tool_dicts.append(sync_tool_dict)
+                self._async_tool_dicts.append(async_tool_dict)
 
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
@@ -222,7 +254,7 @@ class GFPOTrainer(_GRPOTrainer):
             if self.args.gradient_accumulation_steps % generate_every != 0 or (
                 self.use_vllm and self.vllm_importance_sampling_correction
             ):
-                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                old_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,
                     attention_mask,
@@ -238,13 +270,15 @@ class GFPOTrainer(_GRPOTrainer):
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 importance_sampling_ratio = torch.exp(old_per_token_logps - sampling_per_token_logps)
                 importance_sampling_ratio = torch.clamp(
-                    importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                    importance_sampling_ratio,
+                    min=self.vllm_importance_sampling_clip_min,
+                    max=self.vllm_importance_sampling_clip_max,
                 )
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:
-                    ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                         self.ref_model,
                         prompt_completion_ids,
                         attention_mask,
@@ -255,7 +289,7 @@ class GFPOTrainer(_GRPOTrainer):
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                        ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                             self.model,
                             prompt_completion_ids,
                             attention_mask,
@@ -311,8 +345,8 @@ class GFPOTrainer(_GRPOTrainer):
             group_global_indices = group_row_offsets + group_local_indices
             group_global_indices = group_global_indices.flatten()
 
-            rewards = rewards[group_global_indices].contiguous()
-            rewards_per_func = rewards_per_func[group_global_indices, :].contiguous()
+            rewards = rewards[group_global_indices]
+            rewards_per_func = rewards_per_func[group_global_indices, :]
 
             num_inputs_in_device = int(len(prompts) / self.num_generations * self.num_remains_in_group)
 
@@ -352,23 +386,23 @@ class GFPOTrainer(_GRPOTrainer):
                 prompts
             )  # step is length of prompts
 
-            prompt_ids = prompt_ids[local_input_indices_to_keep].contiguous()
-            prompt_mask = prompt_mask[local_input_indices_to_keep].contiguous()
-            completion_ids = completion_ids[local_input_indices_to_keep].contiguous()
-            completion_mask = completion_mask[local_input_indices_to_keep].contiguous()
-            attention_mask = attention_mask[local_input_indices_to_keep].contiguous()
+            prompt_ids = prompt_ids[local_input_indices_to_keep]
+            prompt_mask = prompt_mask[local_input_indices_to_keep]
+            completion_ids = completion_ids[local_input_indices_to_keep]
+            completion_mask = completion_mask[local_input_indices_to_keep]
+            attention_mask = attention_mask[local_input_indices_to_keep]
             completion_lengths = completion_mask.sum(1)
             agg_completion_lengths = self.accelerator.gather(completion_lengths)
             num_items_in_batch = agg_completion_lengths.sum()
 
             if sampling_per_token_logps is not None:
-                sampling_per_token_logps = sampling_per_token_logps[local_input_indices_to_keep].contiguous()
+                sampling_per_token_logps = sampling_per_token_logps[local_input_indices_to_keep]
             if old_per_token_logps is not None:
-                old_per_token_logps = old_per_token_logps[local_input_indices_to_keep].contiguous()
+                old_per_token_logps = old_per_token_logps[local_input_indices_to_keep]
             if ref_per_token_logps is not None:
-                ref_per_token_logps = ref_per_token_logps[local_input_indices_to_keep].contiguous()
+                ref_per_token_logps = ref_per_token_logps[local_input_indices_to_keep]
             if self.use_vllm and self.vllm_importance_sampling_correction:
-                importance_sampling_ratio = importance_sampling_ratio[local_input_indices_to_keep].contiguous()
+                importance_sampling_ratio = importance_sampling_ratio[local_input_indices_to_keep]
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):

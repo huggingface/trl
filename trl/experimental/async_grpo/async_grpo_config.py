@@ -13,8 +13,9 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Any
 
-from trl.trainer.base_config import _BaseConfig
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
@@ -28,6 +29,19 @@ class AsyncGRPOConfig(_BaseConfig):
     in this class may differ from those in [`~transformers.TrainingArguments`].
 
     Parameters:
+        > Parameters that control the model
+
+        model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
+            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
+            model from a path.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
+        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
+            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
+            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
+            weight. Set to `0.0` to disable it.
+
         > Parameters that control generation
 
         num_generations (`int`, *optional*, defaults to `8`):
@@ -55,9 +69,19 @@ class AsyncGRPOConfig(_BaseConfig):
         > Parameters that control the training
 
         epsilon (`float`, *optional*, defaults to `0.2`):
-            Lower-bound epsilon value for clipping.
-        epsilon_high (`float`, *optional*, defaults to `0.2`):
-            Upper-bound epsilon value for clipping.
+            Epsilon value for clipping.
+        epsilon_high (`float`, *optional*):
+            Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
+            specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+        token_budget (`int`, *optional*):
+            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic
+            token-budgeted micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches
+            whose rows each stay within this budget, bounding peak memory independently of the sample count (the
+            number of samples per row becomes dynamic). If `None` (default), it is set to the vLLM server's
+            `max_model_len` (queried at train start) — the cap on prompt + completion length — so no rollout sample
+            can ever exceed the budget. A sample longer than `token_budget` fits in no row and is dropped with a
+            warning. Set `<= 0` to disable token budgeting and instead pack a fixed `per_device_train_batch_size ×
+            num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows.
 
         > Parameters that control the async rollout pipeline
 
@@ -81,16 +105,42 @@ class AsyncGRPOConfig(_BaseConfig):
 
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps.
-        num_completions_to_print (`int`, *optional*, defaults to `3`):
-            Number of completions to print when `log_completions=True`.
+        num_completions_to_print (`int`, *optional*):
+            Number of completions to print with `rich`. If `None`, all completions are logged.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
-    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `logging_steps`: Defaults to `1` instead of `500`.
     > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
+
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    # Parameters that control the model
+    model_init_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when instantiating "
+            "the model from a path."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoTokenizer.from_pretrained`."
+        },
+    )
+    router_aux_loss_coef: float = field(
+        default=0.001,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
+            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
+            "training loss with this weight. Set to `0.0` to disable it."
+        },
+    )
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -154,11 +204,26 @@ class AsyncGRPOConfig(_BaseConfig):
     # Parameters that control the training
     epsilon: float = field(
         default=0.2,
-        metadata={"help": "Lower-bound epsilon value for clipping."},
+        metadata={"help": "Epsilon value for clipping."},
     )
-    epsilon_high: float = field(
-        default=0.2,
-        metadata={"help": "Upper-bound epsilon value for clipping."},
+    epsilon_high: float | None = field(
+        default=None,
+        metadata={
+            "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
+            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
+        },
+    )
+    token_budget: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic "
+            "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches "
+            "whose rows each stay within this budget, bounding peak memory independently of the sample count. If "
+            "None (default), it is set to the vLLM server's `max_model_len` (queried at train start), so no "
+            "rollout sample can ever exceed the budget. A sample longer than `token_budget` fits in no row and is "
+            "dropped with a warning. Set <= 0 to disable token budgeting and instead pack a fixed "
+            "`per_device_train_batch_size × num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows."
+        },
     )
 
     # Parameters that control the async rollout pipeline
@@ -203,9 +268,9 @@ class AsyncGRPOConfig(_BaseConfig):
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
-    num_completions_to_print: int = field(
-        default=3,
-        metadata={"help": "Number of completions to print when `log_completions=True`."},
+    num_completions_to_print: int | None = field(
+        default=None,
+        metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
 
     def __post_init__(self):
