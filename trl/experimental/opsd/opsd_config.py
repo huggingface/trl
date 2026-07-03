@@ -35,7 +35,7 @@ class OPSDConfig(_BaseConfig):
             Distillation objective mode. OPSD defaults to the full-vocabulary divergence of the paper. `topk_logits`
             restricts the divergence to the teacher's top-k support and `sampled_token` uses the token-level reverse KL
             (requires `distillation_alpha=1.0`). `dopd` routes each token between four regimes based on the
-            teacher/student advantage gap, following DOPD (arXiv:2606.30626); see the `distillation_dopd_*` parameters.
+            teacher/student advantage gap, following DOPD (https://huggingface.co/papers/2606.30626); see the `distillation_dopd_*` parameters.
         distillation_topk (`int`, *optional*):
             Number of top tokens used by the `topk_logits` objective. Must be set when `distillation_mode=topk_logits`.
         distillation_kl_clip (`float`, *optional*, defaults to `0.05`):
