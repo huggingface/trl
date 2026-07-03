@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import json
 import os
 import textwrap
 from collections import defaultdict
@@ -46,6 +47,7 @@ from transformers.utils import is_peft_available
 from ...data_utils import (
     apply_chat_template,
     extract_prompt,
+    get_dataset_column_names,
     is_conversational,
     prepare_multimodal_messages,
     unpair_preference_dataset,
@@ -58,6 +60,7 @@ from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
+    entropy_from_logits,
     flush_left,
     get_config_model_id,
     hash_module,
@@ -78,10 +81,6 @@ if is_peft_available():
 
 
 logger = get_logger(__name__)
-
-
-def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
-    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
 @dataclass
@@ -796,8 +795,8 @@ class KTOTrainer(_BaseTrainer):
                 )
             if self.precompute_ref_logps:
                 raise ValueError(
-                    "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
-                    "`precompute_ref_log_probs=False`."
+                    "Liger KTO loss does not support precomputing reference log probabilities. Either disable "
+                    "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
                 )
             if is_peft_model(self.model):
                 raise ValueError(
@@ -972,12 +971,15 @@ class KTOTrainer(_BaseTrainer):
             tokenize = self._tokenize
 
             def tokenize_fn(example, processing_class, is_vlm):
+                tools = example.get("tools")
+                tools = json.loads(tools) if isinstance(tools, str) else tools
                 if is_conversational(example):
                     chat_template_kwargs = example.get("chat_template_kwargs", {})
                     prompt_ids = tokenize(
                         processing_class,
                         example["prompt"],
                         is_vlm,
+                        tools=tools,
                         add_generation_prompt=True,
                         **chat_template_kwargs,
                     )["input_ids"]
@@ -985,6 +987,7 @@ class KTOTrainer(_BaseTrainer):
                         processing_class,
                         example["prompt"] + example["completion"],
                         is_vlm,
+                        tools=tools,
                         **chat_template_kwargs,
                     )["input_ids"]
                 else:
@@ -1056,6 +1059,7 @@ class KTOTrainer(_BaseTrainer):
                     "image",
                     "images",
                     "label",
+                    "tools",
                     "chat_template_kwargs",
                 ]
             else:
@@ -1454,6 +1458,18 @@ class KTOTrainer(_BaseTrainer):
         )
 
         self._metrics[mode]["kl"].append(kl.item())
+
+        # Entropy
+        per_token_entropy = entropy_from_logits(shift_logits.detach())
+        mask = batch["completion_mask"][:, 1:]
+        entropy_sum = (per_token_entropy * mask).sum()
+        total_tokens = mask.sum()
+
+        # Gather counts across ranks and weight-average
+        entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
+        total_tokens = self.accelerator.gather_for_metrics(total_tokens).sum()
+        entropy = (entropy_sum / total_tokens).item() if total_tokens > 0 else 0.0
+        self._metrics[mode]["entropy"].append(entropy)
 
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
