@@ -418,6 +418,9 @@ class DistillationTrainer(_BaseTrainer):
         if isinstance(model, str):
             model_name_or_path = model
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            # Distributed training requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             model_name_or_path = model.config._name_or_path if model is not None else None
@@ -549,6 +552,9 @@ class DistillationTrainer(_BaseTrainer):
                 init_kwargs = dict(teacher_model_init_kwargs)
                 if args.teacher_model_revision is not None:
                     init_kwargs.setdefault("revision", args.teacher_model_revision)
+                # Distributed training requires device_map=None ("auto" fails)
+                if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                    init_kwargs["device_map"] = None
                 teacher_model = create_model_from_path(teacher_model, **init_kwargs)
 
         # Trainer does not need to remove unused columns — the collator handles raw data
