@@ -774,7 +774,7 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        with pytest.raises(ValueError, match="You cannot use `use_liger_kernel=True` with Peft models"):
+        with pytest.raises(ValueError, match="`use_liger_kernel=True` is not supported with PEFT models."):
             KTOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
@@ -1263,4 +1263,38 @@ class TestKTOTrainerVLM(TrlTestCase):
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+
+@pytest.mark.slow
+class TestKTOTrainerSlow(TrlTestCase):
+    # Gemma 3n uses a timm encoder, making it difficult to create a smaller variant for testing.
+    # To ensure coverage, we run tests on the full model but mark them as slow to exclude from default runs.
+    @pytest.mark.skip(reason="Model google/gemma-3n-E2B-it is gated and requires HF token")
+    @require_vision
+    def test_train_vlm_gemma_3n(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            model_init_kwargs={"dtype": "bfloat16"},
+            report_to="none",
+        )
+        trainer = KTOTrainer(model="google/gemma-3n-E2B-it", args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "model.audio_tower" in n or "model.embed_audio" in n:
+                # The audio embedding parameters are not updated because this dataset contains no audio data
+                continue
             assert not torch.equal(param, new_param), f"Param {n} is not updated"
