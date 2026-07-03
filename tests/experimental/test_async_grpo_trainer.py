@@ -146,19 +146,15 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.slow
     @require_torch_multi_accelerator
     def test_train_fsdp2(self):
-        # Functional smoke: AsyncGRPOTrainer trains under a 2-process FSDP2 group. This exercises the
-        # `patch_chunked_lm_head` chunked-logprob path on FSDP2-sharded parameters end-to-end and confirms
-        # the optimizer actually updates them. The worker uses an in-process stub rollout worker (no vLLM
-        # server / NCCL weight transfer), so the only distributed surface is the FSDP2 parameter lifecycle.
+        # Functional smoke: AsyncGRPOTrainer trains under a 2-process FSDP2 group, confirming the optimizer
+        # updates the FSDP2-sharded parameters. Uses an in-process stub rollout worker (no vLLM server /
+        # NCCL weight transfer), so the only distributed surface is the FSDP2 parameter lifecycle.
         #
-        # (This is NOT a #6077 all-gather microbenchmark: under FSDP2 the per-parameter gathers are driven
-        # by autograd unshard hooks, not by `DTensor.full_tensor`, and the trainer's weight-sync path calls
-        # `full_tensor` on every parameter every step — so counting `full_tensor` cannot isolate the chunk
-        # path. The #6077 question is settled by static analysis instead: `patch_chunked_lm_head` has no
-        # `torch.utils.checkpoint` recompute, so the per-chunk re-gather that PR #6077 fixed for SFT's
-        # `chunked_nll` is structurally absent here.)
+        # `@pytest.mark.slow` so it runs in the multi-GPU `slow_tests` lane; the experimental lane is
+        # single-GPU, where `@require_torch_multi_accelerator` would otherwise skip it permanently.
         #
         # Pin the repo root onto PYTHONPATH for the child: `accelerate launch` re-execs each rank via
         # torch.distributed.elastic, which sets sys.path[0] to the launched script's directory
