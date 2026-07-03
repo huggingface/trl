@@ -78,10 +78,6 @@ if __name__ == "__main__":
         attn_implementation=model_args.attn_implementation,
         dtype=dtype,
     )
-    quantization_config = get_quantization_config(model_args)
-    if quantization_config is not None:
-        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        training_args.model_init_kwargs["quantization_config"] = quantization_config
 
     ################
     # Dataset
@@ -133,6 +129,7 @@ if __name__ == "__main__":
         reward_funcs=[think_format_reward, accuracy_reward],
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
+        quantization_config=get_quantization_config(model_args),
         peft_config=get_peft_config(model_args),
     )
 
