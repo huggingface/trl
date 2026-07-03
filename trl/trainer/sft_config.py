@@ -38,9 +38,15 @@ class SFTConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`SFTTrainer`] is provided as a string. If you're training a MoE architecture and want to
-            include the load balancing/auxiliary loss as a part of the final loss, remember to set
-            `output_router_logits=True` in this dictionary.
+            argument of the [`SFTTrainer`] is provided as a string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
+            [`~transformers.AutoProcessor.from_pretrained`].
+        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
+            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
+            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
+            weight. Set to `0.0` to disable it.
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
@@ -60,16 +66,13 @@ class SFTConfig(_BaseConfig):
         eos_token (`str`, *optional*):
             Token used to indicate the end of a turn or sequence. If `None`, it defaults to
             `processing_class.eos_token`.
-        pad_token (`str`, *optional*):
-            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
-            it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left
             or right depending on `truncation_mode`. If `None`, no truncation is applied. When packing is enabled,
             this value sets the sequence length.
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
-            Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
-            `"keep_start"`.
+            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is
+            `"keep_start"`. The `"keep_end"` value is deprecated and will be removed in v2.0.0.
         shuffle_dataset (`bool`, *optional*, defaults to `False`):
             Whether to shuffle the dataset.
         packing (`bool`, *optional*, defaults to `False`):
@@ -101,11 +104,30 @@ class SFTConfig(_BaseConfig):
             Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
             on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
             `False`, loss is computed on the entire sequence.
-        loss_type (`str`, *optional*, defaults to `"nll"`):
-            Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` (Dynamic
-            Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629)).
+        loss_type (`str`, *optional*, defaults to `"chunked_nll"`):
+            Type of loss to use. When left unset, it defaults to `"chunked_nll"`, except when `use_liger_kernel=True`,
+            in which case it defaults to `"nll"`. Possible values are:
+
+            - `"nll"`: standard negative log-likelihood.
+            - `"dft"`: Dynamic Fine-Tuning, as described in
+              [this paper](https://huggingface.co/papers/2508.05629).
+            - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
+              only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
+              in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.
+
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
+
+        > Deprecated parameters
+
+        pad_token:
+
+            <Deprecated version="1.1.0">
+
+            Parameter `pad_token` is deprecated and will be removed in version v2.0.0. Set `tokenizer.pad_token`
+            directly and pass it as `processing_class` to the trainer instead.
+
+            </Deprecated>
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -128,9 +150,22 @@ class SFTConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `SFTTrainer` is provided as a string. If you're training a MoE architecture and want to include the "
-            "load balancing/auxiliary loss as a part of the final loss, remember to set `output_router_logits=True` "
-            "in this dictionary."
+            "the `SFTTrainer` is provided as a string."
+        },
+    )
+    router_aux_loss_coef: float = field(
+        default=0.001,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
+            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
+            "training loss with this weight. Set to `0.0` to disable it."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
         },
     )
     chat_template_path: str | None = field(
@@ -167,13 +202,6 @@ class SFTConfig(_BaseConfig):
             "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
         },
     )
-    pad_token: str | None = field(
-        default=None,
-        metadata={
-            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
-            "is also `None`, it falls back to `processing_class.eos_token`."
-        },
-    )
     max_length: int | None = field(
         default=1024,
         metadata={
@@ -185,8 +213,8 @@ class SFTConfig(_BaseConfig):
     truncation_mode: str = field(
         default="keep_start",
         metadata={
-            "help": "Truncation mode to use when the sequence exceeds `max_length`. Possible values are `'keep_end'` "
-            "and `'keep_start'`.",
+            "help": "Truncation mode to use when the sequence exceeds `max_length`. The only supported value is "
+            "`'keep_start'`. The `'keep_end'` value is deprecated and will be removed in v2.0.0.",
             "choices": ["keep_end", "keep_start"],
         },
     )
@@ -252,13 +280,17 @@ class SFTConfig(_BaseConfig):
             )
         },
     )
-    loss_type: str = field(
-        default="nll",
+    loss_type: str | None = field(
+        default=None,
         metadata={
-            "help": (
-                'Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` '
-                "(Dynamic Fine-Tuning, as described in https://huggingface.co/papers/2508.05629)."
-            )
+            "help": "Type of loss to use. When left unset, it defaults to `'chunked_nll'`, except when "
+            "`use_liger_kernel=True`, in which case it defaults to `'nll'`. Possible values are `'nll'` (standard "
+            "negative log-likelihood), `'dft'` (Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), and "
+            "`'chunked_nll'` (same math as `'nll'`, but the `lm_head` projection is computed on non-ignored tokens "
+            "only — positions with `labels == -100` are dropped before the matmul — and the cross-entropy is "
+            "processed in chunks of tokens to reduce peak activation memory; not compatible with `use_liger_kernel`; "
+            "the patched `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level "
+            "`lm_head`, architectures with a non-standard head are not supported)."
         },
     )
     activation_offloading: bool = field(
@@ -266,13 +298,39 @@ class SFTConfig(_BaseConfig):
         metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
+    # Deprecated parameters
+    pad_token: str | None = field(
+        default=None,
+        metadata={
+            "help": "Deprecated. Set `tokenizer.pad_token` directly and pass it as `processing_class` to the trainer instead."
+        },
+    )
+
     def __post_init__(self):
         super().__post_init__()
-
+        if self.pad_token is not None:
+            warnings.warn(
+                "`pad_token` is deprecated and will be removed in v2.0.0. "
+                "Set `tokenizer.pad_token` directly and pass it as `processing_class` to the trainer instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+        if self.truncation_mode == "keep_end":
+            warnings.warn(
+                "The `'keep_end'` truncation mode is deprecated and will be removed in v2.0.0. "
+                "Use `truncation_mode='keep_start'` (the default) instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
         if self.packing_strategy == "bfd-requeue":
             warnings.warn(
                 "The `bfd-requeue` packing strategy has been renamed to `bfd_split`. Please update your configuration accordingly. "
-                "The `bfd-requeue` strategy is deprecated and will be removed in a future version.",
+                "The `bfd-requeue` strategy is deprecated and will be removed in v2.0.0.",
                 FutureWarning,
+                stacklevel=3,
             )
             self.packing_strategy = "bfd_split"
+
+        # When unset, default to "chunked_nll" unless `use_liger_kernel=True`, in which case default to "nll".
+        if self.loss_type is None:
+            self.loss_type = "nll" if self.use_liger_kernel else "chunked_nll"

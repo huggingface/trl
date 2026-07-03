@@ -57,7 +57,6 @@ from trl import (
     ModelConfig,
     ScriptArguments,
     TrlParser,
-    get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
@@ -73,7 +72,6 @@ if __name__ == "__main__":
     ################
     model_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
@@ -81,21 +79,18 @@ if __name__ == "__main__":
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
     training_args.model_init_kwargs = model_kwargs
 
     teacher_model_kwargs = dict(
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=True,
     )
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-        model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
     training_args.teacher_model_init_kwargs = teacher_model_kwargs
@@ -103,7 +98,6 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
         padding_side="left",
     )
     if tokenizer.pad_token is None:

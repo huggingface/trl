@@ -15,7 +15,6 @@
 
 import torch
 from datasets import load_dataset
-from transformers.utils import is_peft_available
 
 from trl import GRPOConfig
 from trl.experimental.gspo_token import GRPOTrainer as GSPOTokenTrainer
@@ -23,12 +22,8 @@ from trl.experimental.gspo_token import GRPOTrainer as GSPOTokenTrainer
 from ..testing_utils import TrlTestCase
 
 
-if is_peft_available():
-    pass
-
-
 class TestGSPOTokenTrainer(TrlTestCase):
-    def test_training(self):
+    def test_train(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(

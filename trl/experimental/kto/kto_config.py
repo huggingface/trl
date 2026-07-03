@@ -33,12 +33,38 @@ class KTOConfig(_BaseConfig):
     command line.
 
     Parameters:
+        > Parameters that control the model
+
+        model_init_kwargs (`dict[str, Any]`, *optional*):
+            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
+            argument of the [`KTOTrainer`] is provided as a string.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
+            [`~transformers.AutoProcessor.from_pretrained`].
+        disable_dropout (`bool`, *optional*, defaults to `True`):
+            Whether to disable dropout in the model and reference model.
+
+        > Parameters that control the data preprocessing
+
+        dataset_num_proc (`int`, *optional*):
+            Number of processes to use for processing the dataset.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
-            to use the default data collator.
-        beta (`float`, *optional*, defaults to `0.1`):
-            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
-            reference model.
+            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
+            If `None`, no truncation is applied.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the sequences will be padded to a multiple of this value.
+        precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
+            Whether to precompute the reference model log probabilities for the entire training dataset before
+            training. This allows to save memory during training, as the reference model does not need to be kept in
+            memory.
+        precompute_ref_batch_size (`int`, *optional*):
+            Batch size to use when precomputing reference model log probabilities. This can be set higher than the
+            training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
+            training and `per_device_eval_batch_size` for evaluation.
+
+        > Parameters that control the training
+
         loss_type (`str`, *optional*, defaults to `"kto"`):
             Type of loss to use. Possible values are:
 
@@ -46,30 +72,37 @@ class KTOConfig(_BaseConfig):
                 - `"apo_zero_unpaired"`: Unpaired variant of APO-zero loss from the
                   [APO](https://huggingface.co/papers/2408.06266) paper.
 
+        beta (`float`, *optional*, defaults to `0.1`):
+            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
+            reference model.
         desirable_weight (`float`, *optional*, defaults to `1.0`):
-            Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
+            Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
         undesirable_weight (`float`, *optional*, defaults to `1.0`):
             Undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
-        generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
-            during evaluation.
-        precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
-            Whether to precompute reference model log probabilities for training and evaluation datasets. This is
-            useful when training without the reference model to reduce the total GPU memory needed.
-        model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
-            string.
-        dataset_num_proc: (`int`, *optional*):
-            Number of processes to use for processing the dataset.
-        disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether to disable dropout in the model and reference model.
-
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
+        sync_ref_model (`bool`, *optional*, defaults to `False`):
+            Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
+            the `ref_model_mixup_alpha` parameter. This synchronization originates from the
+            [TR-DPO](https://huggingface.co/papers/2404.09656) paper. `sync_ref_model=True` is not yet compatible with
+            PEFT or `precompute_ref_log_probs=True`.
+        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
+            α parameter from the TR-DPO paper, which controls the mix between the current policy and the previous
+            reference policy during updates. The reference policy is updated according to the equation: `π_ref = α *
+            π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`.
+        ref_model_sync_steps (`int`, *optional*, defaults to `512`):
+            τ parameter from the TR-DPO paper, which determines how frequently the current policy is synchronized with
+            the reference policy. To use this parameter, you must set `sync_ref_model=True`.
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
     > - `logging_steps`: Defaults to `10` instead of `500`.
     > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
+    > - `train_sampling_strategy`: Defaults to `"sequential"` instead of `"random"`. Loss types
+    >   that estimate the KL divergence term (all except `"apo_zero_unpaired"`) require sequential
+    >   sampling because the KL completion for each example is precomputed against its neighbors in
+    >   a fixed-order batch; any other strategy breaks that pairing.
     """
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -79,23 +112,83 @@ class KTOConfig(_BaseConfig):
         default=1e-6,
         metadata={"help": "The initial learning rate for AdamW."},
     )
+    train_sampling_strategy: str = field(
+        default="sequential",
+        metadata={
+            "help": "Sampler to use for the training dataloader. Loss types that estimate the KL divergence term "
+            "(all except `'apo_zero_unpaired'`) require `'sequential'` because the KL completion for each example is "
+            "precomputed against its neighbors in a fixed-order batch; any other strategy breaks that pairing. "
+            "Possible values are `'random'`, `'sequential'`, and `'group_by_length'`.",
+            "choices": ["random", "sequential", "group_by_length"],
+        },
+    )
 
+    # Parameters that control the model
+    model_init_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
+            "the `KTOTrainer` is provided as a string."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
+        },
+    )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Whether to disable dropout in the model and reference model."},
+    )
+
+    # Parameters that control the data preprocessing
+    dataset_num_proc: int | None = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
     max_length: int | None = field(
         default=1024,
-        metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
+        metadata={
+            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
+            "the right. If `None`, no truncation is applied."
+        },
+    )
+    pad_to_multiple_of: int | None = field(
+        default=None,
+        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
+    )
+    precompute_ref_log_probs: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to precompute the reference model log probabilities for the entire training dataset "
+            "before training. This allows to save memory during training, as the reference model does not need to be "
+            "kept in memory."
+        },
+    )
+    precompute_ref_batch_size: int | None = field(
+        default=None,
+        metadata={
+            "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
+            "than the training batch size to speed up preprocessing. If `None`, defaults to "
+            "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
+        },
+    )
+
+    # Parameters that control the training
+    loss_type: str = field(
+        default="kto",
+        metadata={
+            "help": "Type of loss to use.",
+            "choices": ["kto", "apo_zero_unpaired"],
+        },
     )
     beta: float = field(
         default=0.1,
         metadata={
             "help": "Parameter controlling the deviation from the reference model. Higher β means less deviation from "
             "the reference model."
-        },
-    )
-    loss_type: str = field(
-        default="kto",
-        metadata={
-            "help": "Type of loss to use.",
-            "choices": ["kto", "apo_zero_unpaired"],
         },
     )
     desirable_weight: float = field(
@@ -112,32 +205,31 @@ class KTOConfig(_BaseConfig):
             "undesirable pairs.",
         },
     )
-    generate_during_eval: bool = field(
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
+    )
+    sync_ref_model: bool = field(
         default=False,
         metadata={
-            "help": "If `True`, generates and logs completions from both the model and the reference model to W&B "
-            "during evaluation."
+            "help": "Whether to synchronize the reference model with the active model every `ref_model_sync_steps` "
+            "steps, using the `ref_model_mixup_alpha` parameter. This synchronization originates from the "
+            "[TR-DPO](https://huggingface.co/papers/2404.09656) paper. `sync_ref_model=True` is not yet compatible "
+            "with PEFT or `precompute_ref_log_probs=True`."
         },
     )
-    disable_dropout: bool = field(
-        default=True,
-        metadata={"help": "Whether to disable dropout in the model."},
-    )
-    precompute_ref_log_probs: bool = field(
-        default=False,
+    ref_model_mixup_alpha: float = field(
+        default=0.6,
         metadata={
-            "help": "Whether to precompute reference model log probabilities for training and evaluation datasets. "
-            "This is useful when training without the reference model to reduce the total GPU memory needed."
+            "help": "α parameter from the TR-DPO paper, which controls the mix between the current policy and the "
+            "previous reference policy during updates. The reference policy is updated according to the equation: "
+            "`π_ref = α * π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`."
         },
     )
-    model_init_kwargs: dict[str, Any] | str | None = field(
-        default=None,
+    ref_model_sync_steps: int = field(
+        default=512,
         metadata={
-            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
-            "from a string."
+            "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
+            "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
-    )
-    dataset_num_proc: int | None = field(
-        default=None,
-        metadata={"help": "Number of processes to use for processing the dataset."},
     )

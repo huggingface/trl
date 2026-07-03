@@ -12,44 +12,186 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
+
 import pytest
 import torch
 from datasets import Dataset
-from transformers import AutoModelForCausalLM, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
+from transformers import TrainerCallback
 from transformers.utils import is_peft_available
 
-from trl.data_utils import maybe_apply_chat_template
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
 
-from ..testing_utils import TrlTestCase, require_peft
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_torch_accelerator
 
 
 if is_peft_available():
-    from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
-
-    from trl.experimental.self_distillation.peft_adapter_ema_callback import PEFTAdapterEMACallback
+    from peft import LoraConfig
 
 
 class SelfDistillationCaptureCallback(TrainerCallback):
     def __init__(self):
-        self.captured_generation_prompt_text = None
+        self.captured_generation_prompts = None
         self.captured_old_per_token_logps = None
+        self.captured_prompt_ids = None
         self.generation_batch_build_count = 0
 
-    def on_generation_prompts_selected(self, generation_prompt_text=None, **kwargs):
-        if self.captured_generation_prompt_text is None and generation_prompt_text is not None:
-            self.captured_generation_prompt_text = generation_prompt_text[0]
+    def on_generation_prompts_selected(self, generation_prompts=None, **kwargs):
+        if self.captured_generation_prompts is None and generation_prompts is not None:
+            self.captured_generation_prompts = generation_prompts
 
-    def on_self_distillation_batch_prepared(self, old_per_token_logps=None, **kwargs):
+    def on_self_distillation_batch_prepared(self, old_per_token_logps=None, prompt_ids=None, **kwargs):
         if self.captured_old_per_token_logps is None and old_per_token_logps is not None:
             self.captured_old_per_token_logps = old_per_token_logps.detach().cpu()
+        if self.captured_prompt_ids is None and prompt_ids is not None:
+            self.captured_prompt_ids = prompt_ids.detach().cpu()
 
     def on_generation_batch_built(self, **kwargs):
         self.generation_batch_build_count += 1
 
 
+class RecordingTeacherClient:
+    """Stands in for the vLLM server client and records scoring requests."""
+
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def get_sequence_logprobs(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+
 class TestSDFTTrainer(TrlTestCase):
-    def test_training_rejects_none_privileged_context(self):
+    def teardown_method(self):
+        if hasattr(self, "_liger_module"):
+            importlib.reload(importlib.import_module(self._liger_module))
+
+    @staticmethod
+    def _trainable_param_snapshot(model):
+        return {name: param.detach().clone() for name, param in model.named_parameters() if param.requires_grad}
+
+    @staticmethod
+    def _assert_any_trainable_param_changed(model, previous_trainable_params):
+        assert any(
+            not torch.allclose(previous_param, model.get_parameter(name), rtol=1e-12, atol=1e-12)
+            for name, previous_param in previous_trainable_params.items()
+        )
+
+    def test_trust_remote_code(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            SDFTTrainer(
+                model=model_id,
+                args=SDFTConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = SDFTTrainer(
+            model=model_id,
+            args=SDFTConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
+    def test_train(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": [
+                    "Example answer: 4.",
+                    "Example answer: Paris.",
+                ],
+            }
+        )
+
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            max_completion_length=8,
+            max_steps=1,
+            num_generations=1,
+            report_to="none",
+        )
+
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        previous_trainable_params = self._trainable_param_snapshot(trainer.model)
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
+
+    @require_liger_kernel
+    @require_torch_accelerator
+    def test_liger_loss_matches_non_liger_loss(self):
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."], "privileged_context": ["Example answer: 4."]})
+        common = dict(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            per_device_train_batch_size=1,
+            max_completion_length=3,
+            num_generations=1,
+            distillation_mode="full_logits",
+            distillation_is_clip=None,
+            num_loss_tokens_to_skip=1,
+        )
+
+        ref_trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=SDFTConfig(use_liger_kernel=False, **common),
+            train_dataset=dataset,
+        )
+        liger_trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=SDFTConfig(use_liger_kernel=True, **common),
+            train_dataset=dataset,
+        )
+        self._liger_module = liger_trainer.model.__module__
+
+        liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for param in ref_trainer.teacher_model.parameters():
+                param.add_(0.5 * torch.randn_like(param))
+        liger_trainer.teacher_model.load_state_dict(ref_trainer.teacher_model.state_dict())
+
+        device = next(ref_trainer.model.parameters()).device
+        batch = {
+            "prompt_ids": torch.tensor([[10, 11], [12, 13]], device=device),
+            "prompt_mask": torch.tensor([[1, 1], [1, 1]], device=device),
+            "completion_ids": torch.tensor([[14, 15, 16], [17, 18, 19]], device=device),
+            "completion_mask": torch.tensor([[1, 1, 0], [1, 1, 1]], device=device),
+            "teacher_input_ids": torch.tensor([[20, 21, 22, 14, 15, 16], [23, 24, 25, 17, 18, 19]], device=device),
+            "teacher_attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]], device=device),
+        }
+
+        ref_trainer.model.eval()
+        liger_trainer.model.eval()
+        with torch.no_grad():
+            ref_loss = ref_trainer.compute_loss(ref_trainer.model, batch).item()
+            liger_loss = liger_trainer.compute_loss(liger_trainer.model, batch).item()
+
+        torch.testing.assert_close(
+            torch.tensor(liger_loss),
+            torch.tensor(ref_loss),
+            rtol=2e-2,
+            atol=1e-6,
+        )
+
+    def test_train_rejects_none_privileged_context(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2."],
@@ -63,6 +205,7 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=1,
             num_generations=1,
+            report_to="none",
         )
 
         trainer = SDFTTrainer(
@@ -74,7 +217,7 @@ class TestSDFTTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="`privileged_context` must not be None"):
             trainer.train()
 
-    def test_training_with_generate_from_teacher(self):
+    def test_train_with_generate_from_teacher(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
@@ -93,6 +236,7 @@ class TestSDFTTrainer(TrlTestCase):
             max_steps=1,
             num_generations=1,
             generate_from_teacher=True,
+            report_to="none",
         )
 
         capture_callback = SelfDistillationCaptureCallback()
@@ -105,11 +249,17 @@ class TestSDFTTrainer(TrlTestCase):
 
         trainer.train()
 
-        assert capture_callback.captured_generation_prompt_text is not None
-        assert "Solve 2+2." in capture_callback.captured_generation_prompt_text
-        assert "Teacher hint" in capture_callback.captured_generation_prompt_text
+        assert capture_callback.captured_generation_prompts == [
+            "Solve 2+2.\n\nTeacher hint: answer with 4 and explain briefly."
+        ]
+        student_prompt_text = trainer.processing_class.decode(
+            capture_callback.captured_prompt_ids[0],
+            skip_special_tokens=True,
+        )
+        assert "Teacher hint" not in student_prompt_text
+        assert "Solve 2+2." in student_prompt_text
 
-    def test_training_with_chat_template_kwargs(self):
+    def test_train_with_chat_template_kwargs(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": [
@@ -131,28 +281,24 @@ class TestSDFTTrainer(TrlTestCase):
             max_steps=1,
             num_generations=1,
             chat_template_kwargs={"enable_thinking": False},
+            report_to="none",
         )
 
-        capture_callback = SelfDistillationCaptureCallback()
         trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
-            callbacks=[capture_callback],
         )
 
-        expected_prompt = maybe_apply_chat_template(
-            {"prompt": dataset[0]["prompt"]},
-            trainer.processing_class,
-            **training_args.chat_template_kwargs,
-        )["prompt"]
+        previous_trainable_params = self._trainable_param_snapshot(trainer.model)
 
         trainer.train()
 
-        assert capture_callback.captured_generation_prompt_text == expected_prompt
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
     @require_peft
-    def test_training_with_peft_model(self):
+    def test_train_with_peft_model(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
@@ -170,6 +316,7 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=1,
             num_generations=1,
+            report_to="none",
         )
 
         trainer = SDFTTrainer(
@@ -182,12 +329,15 @@ class TestSDFTTrainer(TrlTestCase):
             ),
         )
 
+        previous_trainable_params = self._trainable_param_snapshot(trainer.model)
+
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
     @require_peft
-    def test_training_with_peft_model_and_sync_ref_model(self):
+    def test_train_with_peft_model_and_ema_teacher_sync(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
@@ -205,9 +355,10 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=2,
             num_generations=1,
-            sync_ref_model=True,
-            ref_model_mixup_alpha=0.05,
-            ref_model_sync_steps=1,
+            teacher_model_kind="ema",
+            teacher_update_rate=0.05,
+            teacher_sync_steps=1,
+            report_to="none",
         )
 
         trainer = SDFTTrainer(
@@ -219,62 +370,14 @@ class TestSDFTTrainer(TrlTestCase):
                 target_modules=["q_proj", "v_proj"],
             ),
         )
+        previous_trainable_params = self._trainable_param_snapshot(trainer.model)
 
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
-    @require_peft
-    def test_peft_adapter_ema_callback(self):
-        model = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            device_map="cpu",
-        )
-        lora_config = LoraConfig(
-            task_type="CAUSAL_LM",
-            target_modules=["q_proj", "v_proj"],
-            r=8,
-        )
-        model = get_peft_model(model, lora_config, adapter_name="default")
-
-        update_rate = 0.5
-        callback = PEFTAdapterEMACallback(
-            model=model,
-            teacher_adapter_name="teacher",
-            update_rate=update_rate,
-            sync_steps=1,
-        )
-
-        # Initialize and verify teacher adapter was created with zero weights
-        callback._initialize_teacher_adapter()
-        assert "teacher" in model.peft_config
-        assert callback.shadow_weights is not None
-
-        teacher_state = get_peft_model_state_dict(model, adapter_name="teacher")
-        for key, param in teacher_state.items():
-            assert torch.all(param == 0), f"Teacher param {key} should be zero-initialized"
-
-        # Verify shadow weights keys match student state dict keys
-        student_state = {k: v.clone() for k, v in get_peft_model_state_dict(model, adapter_name="default").items()}
-        assert set(callback.shadow_weights.keys()) == set(student_state.keys())
-
-        # Simulate a training step and verify EMA update
-        args = TrainingArguments(output_dir=self.tmp_dir)
-        state = TrainerState(global_step=1)
-        control = TrainerControl()
-        callback.on_step_end(args, state, control)
-
-        # shadow = (1 - rate) * 0 + rate * student = rate * student
-        for key in callback.shadow_weights:
-            expected = update_rate * student_state[key]
-            torch.testing.assert_close(callback.shadow_weights[key], expected)
-
-        # Verify teacher adapter received the shadow weights
-        teacher_state = get_peft_model_state_dict(model, adapter_name="teacher")
-        for key in teacher_state:
-            torch.testing.assert_close(teacher_state[key].float(), callback.shadow_weights[key])
-
-    def test_training_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
+    def test_train_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
@@ -294,6 +397,7 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=1,
             num_generations=1,
+            report_to="none",
         )
 
         capture_callback = SelfDistillationCaptureCallback()
@@ -308,7 +412,43 @@ class TestSDFTTrainer(TrlTestCase):
 
         assert capture_callback.captured_old_per_token_logps is not None
 
-    def test_training_reuses_buffered_generation_batches(self):
+    def test_train_with_generate_from_teacher_skips_old_log_probs_for_distillation_clipping(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Solve 3+3."],
+                "privileged_context": [
+                    "Teacher hint: answer with 4.",
+                    "Teacher hint: answer with 6.",
+                ],
+            }
+        )
+
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=3,
+            steps_per_generation=2,
+            max_completion_length=8,
+            max_steps=1,
+            num_generations=1,
+            generate_from_teacher=True,
+            report_to="none",
+        )
+
+        capture_callback = SelfDistillationCaptureCallback()
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            callbacks=[capture_callback],
+        )
+
+        trainer.train()
+
+        assert capture_callback.captured_old_per_token_logps is None
+
+    def test_train_reuses_buffered_generation_batches(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
@@ -327,6 +467,7 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=2,
             num_generations=1,
+            report_to="none",
         )
 
         capture_callback = SelfDistillationCaptureCallback()
@@ -340,3 +481,51 @@ class TestSDFTTrainer(TrlTestCase):
         trainer.train()
 
         assert capture_callback.generation_batch_build_count == 1
+
+    def test_server_loss_finite_with_masked_and_padded_rows(self):
+        # Drives the teacher-server path through `compute_loss` with a fake server client: row 0 is fully masked
+        # (zero-length scored completion) and row 1 has a shorter completion than the padded batch, so the client
+        # response is ragged and the padded tail comes back as -inf. Neither may leak NaN or inf.
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."], "privileged_context": ["Example answer: 4."]})
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            max_completion_length=3,
+            num_generations=1,
+            distillation_mode="topk_logits",
+            distillation_topk=2,
+            distillation_alpha=0.5,
+            distillation_add_tail=True,
+            distillation_is_clip=None,
+            report_to="none",
+        )
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.use_teacher_server = True
+        trainer.teacher_client = RecordingTeacherClient(
+            {
+                "actual_logprobs": [[], [[-1.1], [-0.4]]],
+                "logprobs": [[], [[-1.1, -1.5], [-0.4, -0.9]]],
+                "logprob_token_ids": [[], [[14, 15], [16, 17]]],
+            }
+        )
+
+        device = next(trainer.model.parameters()).device
+        batch = {
+            "prompt_ids": torch.tensor([[10, 11], [12, 13]], device=device),
+            "prompt_mask": torch.tensor([[1, 1], [1, 1]], device=device),
+            "completion_ids": torch.tensor([[14, 15, 16], [17, 18, 19]], device=device),
+            "completion_mask": torch.tensor([[0, 0, 0], [1, 1, 0]], device=device),
+            "teacher_input_ids": torch.tensor([[20, 21, 22, 14, 15, 16], [23, 24, 25, 17, 18, 19]], device=device),
+            "teacher_attention_mask": torch.tensor([[1, 1, 1, 0, 0, 0], [1, 1, 1, 1, 1, 0]], device=device),
+        }
+
+        loss = trainer.compute_loss(trainer.model, batch)
+
+        assert torch.isfinite(loss)
+        loss.backward()
+        assert all(torch.isfinite(p.grad).all() for p in trainer.model.parameters() if p.grad is not None)
+        assert trainer.teacher_client.calls[0]["top_logprobs"] == 2

@@ -14,11 +14,11 @@
 
 import random
 import textwrap
-import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
+from itertools import takewhile
 from typing import Any, Optional
 
 import torch
@@ -39,47 +39,37 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
-from transformers.utils import (
-    is_datasets_available,
-    is_flash_attn_2_available,
-    is_liger_kernel_available,
-    is_peft_available,
-    is_rich_available,
-)
+from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available, is_rich_available
 
 from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
-from ...models.utils import unwrap_model_for_generation
+from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
-from ...trainer.utils import (
-    RepeatSampler,
-    create_model_from_path,
-    disable_dropout_in_model,
-    pad,
-    split_tensor_dict,
-)
-from ..utils import DataCollatorForChatML, empty_cache, truncate_dataset
+from ...trainer.utils import RepeatSampler, create_model_from_path, disable_dropout_in_model, pad, split_tensor_dict
+from ..utils import DataCollatorForChatML, empty_cache, encode_with_byte_offsets, pad_byte_offsets, piece_byte_len
 from .gold_config import GOLDConfig
+
+
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
     from peft import PeftConfig
 
-if is_wandb_available():
-    import wandb
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 if is_rich_available():
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
+
+
+if is_wandb_available():
+    import wandb
 
 
 def print_prompt_completions_sample_uld(
@@ -89,7 +79,7 @@ def print_prompt_completions_sample_uld(
     num_samples: int = None,
 ) -> None:
     """
-    Print out a sample of model completions to the console with multiple reward metrics.
+    Print out a sample of model completions to the console.
 
     This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring model outputs
     during training. It requires the `rich` library to be installed.
@@ -99,10 +89,6 @@ def print_prompt_completions_sample_uld(
             List of prompts.
         completions (`list[str]`):
             List of completions corresponding to the prompts.
-        rewards (`dict[str, list[float]]`):
-            Dictionary where keys are reward names and values are lists of rewards.
-        advantages (`list[float]`):
-            List of advantages corresponding to the prompts and completions.
         step (`int`):
             Current training step number, used in the output title.
         num_samples (`int` or `None`, *optional*, defaults to `None`):
@@ -110,27 +96,25 @@ def print_prompt_completions_sample_uld(
 
     Example:
     ```python
-    >>> from trl.trainer.utils import print_prompt_completions_sample
+    >>> from trl.experimental.gold.gold_trainer import print_prompt_completions_sample_uld
 
     >>> prompts = ["The sky is", "The sun is"]
     >>> completions = [" blue.", " in the sky."]
-    >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
-    >>> advantages = [0.987, 0.654]
-    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42)
-    ╭──────────────────────────── Step 42 ─────────────────────────────╮
-    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
-    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
-    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
-    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
-    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
-    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
-    │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
-    ╰──────────────────────────────────────────────────────────────────╯
+    >>> print_prompt_completions_sample_uld(prompts, completions, 42)
+    ╭─────────── Step 42 ───────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │ │
+    │ ├────────────┼──────────────┤ │
+    │ │ The sun is │  in the sky. │ │
+    │ └────────────┴──────────────┘ │
+    ╰───────────────────────────────╯
     ```
     """
     if not is_rich_available():
         raise ImportError(
-            "The function `print_prompt_completions_sample` requires the `rich` library. Please install it with "
+            "The function `print_prompt_completions_sample_uld` requires the `rich` library. Please install it with "
             "`pip install rich`."
         )
     console = Console()
@@ -165,34 +149,48 @@ def build_teacher_inputs_from_texts(
     tokenizer: PreTrainedTokenizerBase,
     prompt_texts: list[str],
     completion_texts: list[str],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
-    """Tokenize teacher prompts/completions and produce tensors ready for GOLD loss."""
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Tokenize teacher prompts/completions and produce tensors ready for GOLD loss.
+
+    Returns ``(input_ids, labels, attention_mask, byte_offsets)``. ``byte_offsets`` is a ``[batch, seq, 2]`` tensor of
+    UTF-8 byte ``(start, end)`` for each token: prompt and padding positions are filled with ``(0, 0)``; completion
+    tokens carry offsets relative to the corresponding ``completion_text``; the appended EOS gets ``(content_len,
+    content_len)``. Byte offsets are derived from the fast tokenizer's char offsets via ``encode_with_byte_offsets``.
+    """
 
     pad_token_id = tokenizer.pad_token_id
     eos_token_id = tokenizer.eos_token_id
+    backend = tokenizer.backend_tokenizer
 
     prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
-    completion_token_ids = tokenizer(completion_texts, add_special_tokens=False)["input_ids"]
+    completion_encs = encode_with_byte_offsets(backend, completion_texts, add_special_tokens=False)
 
     sequences: list[torch.Tensor] = []
     attention_masks: list[torch.Tensor] = []
     labels_list: list[torch.Tensor] = []
-    prompt_lengths: list[int] = []
+    offsets_list: list[list[tuple[int, int]]] = []
 
-    for prompt_ids, completion_ids in zip(prompt_token_ids, completion_token_ids, strict=True):
+    for prompt_ids, (enc_ids, enc_offs), completion_text in zip(
+        prompt_token_ids, completion_encs, completion_texts, strict=True
+    ):
         # Remove trailing EOS from prompt so completions can extend cleanly
         if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
             prompt_ids = prompt_ids[:-1]
 
-        prompt_lengths.append(len(prompt_ids))
-        sequence = list(prompt_ids)
-        sequence.extend(completion_ids)
+        completion_ids = list(enc_ids)
+        completion_offs = list(enc_offs)
+        content_len = len(completion_text.encode("utf-8"))
+
+        sequence = list(prompt_ids) + completion_ids
+        offsets = [(0, 0)] * len(prompt_ids) + completion_offs
         if eos_token_id is not None:
             sequence.append(eos_token_id)
+            offsets.append((content_len, content_len))
 
         seq_tensor = torch.tensor(sequence, dtype=torch.long)
         sequences.append(seq_tensor)
         attention_masks.append(torch.ones_like(seq_tensor))
+        offsets_list.append(offsets)
 
         labels = seq_tensor.clone()
         labels[: len(prompt_ids)] = -100
@@ -219,9 +217,13 @@ def build_teacher_inputs_from_texts(
                 last_idx = valid.nonzero(as_tuple=True)[0][-1]
                 teacher_attention_mask[row, last_idx + 1 :] = False
 
-    teacher_prompt_length = max(prompt_lengths) if prompt_lengths else 0
+    target_len = teacher_input_ids.size(1)
+    teacher_byte_offsets = torch.stack(
+        [pad_byte_offsets(offs, target_len, padding_side="right") for offs in offsets_list],
+        dim=0,
+    )
 
-    return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_prompt_length
+    return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_byte_offsets
 
 
 class ULDLoss(nn.Module):
@@ -239,6 +241,7 @@ class ULDLoss(nn.Module):
         self.skip_student_eos = config.uld_skip_student_eos
         self.skip_teacher_eos = config.uld_skip_teacher_eos
         self.use_extended_uld = config.use_extended_uld
+        self.token_merge_strategy = config.uld_token_merge_strategy
         self.ignore_index = -100
 
         # Add tokenizers for enhanced alignment
@@ -259,7 +262,15 @@ class ULDLoss(nn.Module):
             self._initialize_vocabulary_mapping()
 
     def __call__(
-        self, student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+        self,
+        student_logits,
+        teacher_logits,
+        student_labels,
+        teacher_labels,
+        student_input_ids,
+        teacher_input_ids,
+        student_byte_offsets=None,
+        teacher_byte_offsets=None,
     ):
         """
         Compute ULD loss with GKD trainer interface.
@@ -271,6 +282,10 @@ class ULDLoss(nn.Module):
             teacher_labels: Teacher target labels [batch_size, seq_len]
             student_input_ids: Student input token IDs [batch_size, seq_len]
             teacher_input_ids: Teacher input token IDs [batch_size, seq_len]
+            student_byte_offsets: Per-token UTF-8 byte offsets ``[batch, seq, 2]``
+                from the data collator (relative to the rendered chat-template message). Required.
+            teacher_byte_offsets: Per-sample list of completion-relative byte
+                offsets (one list per batch item) from ``build_teacher_inputs_from_texts``. Required.
 
         Returns:
             Total loss (cross-entropy + distillation)
@@ -287,7 +302,14 @@ class ULDLoss(nn.Module):
 
         # Compute distillation loss using ULD approximation
         distillation_loss = self._compute_distillation_loss(
-            student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+            student_logits,
+            teacher_logits,
+            student_labels,
+            teacher_labels,
+            student_input_ids,
+            teacher_input_ids,
+            student_byte_offsets=student_byte_offsets,
+            teacher_byte_offsets=teacher_byte_offsets,
         )
 
         return crossentropy_loss + distillation_loss
@@ -325,7 +347,15 @@ class ULDLoss(nn.Module):
             self.mapping_tensor = self.mapping_tensor.to(self.device)
 
     def _compute_distillation_loss(
-        self, student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
+        self,
+        student_logits,
+        teacher_logits,
+        student_labels,
+        teacher_labels,
+        student_input_ids,
+        teacher_input_ids,
+        student_byte_offsets=None,
+        teacher_byte_offsets=None,
     ):
         """
         Compute the Universal Logit Distillation loss with token mapping.
@@ -365,34 +395,65 @@ class ULDLoss(nn.Module):
                 distillation_losses.append(loss_i)
                 continue
 
-            # Extract answer logits
-            student_answer_logits = student_logits[i, student_start : student_start + student_size]
-            teacher_answer_logits = teacher_logits[i, teacher_start : teacher_start + teacher_size]
+            # The "bayesian" shift has no predictor logit for an answer span starting at index 0 (front-truncation can
+            # drop the whole prompt). Skip that unscorable leading span on both sides to keep them on a shared span.
+            if self.token_merge_strategy == "bayesian" and (student_start == 0 or teacher_start == 0):
+                if self.use_extended_uld:
+                    if student_byte_offsets is None or teacher_byte_offsets is None:
+                        raise ValueError("Byte offsets are required when `use_extended_uld=True`.")
+                    s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
+                    t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
+                    student_groups, teacher_groups = self._align_by_byte_offsets(s_answer, t_answer)
+                    if not student_groups or not teacher_groups:
+                        distillation_losses.append(student_logits[i].sum() * 0.0)
+                        continue
+                    # Drop the first aligned group pair (advance by the tokens it covered).
+                    student_drop, teacher_drop = len(student_groups[0]), len(teacher_groups[0])
+                else:
+                    # Drop the first positional target from both sides.
+                    student_drop = teacher_drop = 1
+
+                student_start, student_size = student_start + student_drop, student_size - student_drop
+                teacher_start, teacher_size = teacher_start + teacher_drop, teacher_size - teacher_drop
+                if student_size <= 0 or teacher_size <= 0:
+                    distillation_losses.append(student_logits[i].sum() * 0.0)
+                    continue
+
+            # Extract answer logits. "bayesian" starts one position earlier so probs[k] predicts token_ids[k].
+            if self.token_merge_strategy == "bayesian":
+                student_answer_logits = student_logits[i, student_start - 1 : student_start + student_size - 1]
+                teacher_answer_logits = teacher_logits[i, teacher_start - 1 : teacher_start + teacher_size - 1]
+            else:
+                student_answer_logits = student_logits[i, student_start : student_start + student_size]
+                teacher_answer_logits = teacher_logits[i, teacher_start : teacher_start + teacher_size]
 
             # Convert to probabilities
             student_probs = F.softmax(student_answer_logits / self.student_temperature, dim=-1)
             teacher_probs = F.softmax(teacher_answer_logits / self.teacher_temperature, dim=-1)
 
-            # Get token IDs for mapping (always use actual input_ids)
+            # Pass actual input_ids so split-token groups can multiply conditional probabilities.
             student_token_ids = student_input_ids[i, student_start : student_start + student_size].tolist()
             teacher_token_ids = teacher_input_ids[i, teacher_start : teacher_start + teacher_size].tolist()
 
             if self.use_extended_uld:
-                # Build alignment groups directly from token ids using greedy text matching
-                student_alignment_groups, teacher_alignment_groups = self._build_alignment_groups_from_ids(
-                    student_token_ids, teacher_token_ids
-                )
+                if student_byte_offsets is None or teacher_byte_offsets is None:
+                    raise ValueError("Byte offsets are required when `use_extended_uld=True`.")
 
-                # Merge student probabilities using student alignment groups
-                # Pass student_token_ids to enable corrected conditional probability merging
+                # Both sides are completion-relative, so plain slicing gives a shared byte coordinate system.
+                s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
+                t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
+                student_groups, teacher_groups = self._align_by_byte_offsets(s_answer, t_answer)
+                # Drop degenerate pairs where either side is empty — e.g. teacher's trailing zero-width EOS at
+                # ``(content_len, content_len)`` paired with an empty student group merges to a zero distribution
+                # and inflates the loss (only reachable when ``skip_teacher_eos=False``).
+                paired = [(sg, tg) for sg, tg in zip(student_groups, teacher_groups, strict=False) if sg and tg]
+                student_groups = [sg for sg, _ in paired]
+                teacher_groups = [tg for _, tg in paired]
                 student_aligned = self._merge_probabilities_with_alignment_groups(
-                    student_probs, student_alignment_groups, student_token_ids
+                    student_probs, student_groups, student_token_ids
                 )
-
-                # Merge teacher probabilities using teacher alignment groups
-                # Pass teacher_token_ids to enable corrected conditional probability merging
                 teacher_aligned = self._merge_probabilities_with_alignment_groups(
-                    teacher_probs, teacher_alignment_groups, teacher_token_ids
+                    teacher_probs, teacher_groups, teacher_token_ids
                 )
             else:
                 min_length = min(len(student_token_ids), len(teacher_token_ids))
@@ -426,118 +487,44 @@ class ULDLoss(nn.Module):
         distillation_loss = torch.stack(distillation_losses).mean()
         return self.distillation_weight * distillation_loss
 
-    def _build_alignment_groups_from_ids(self, student_token_ids, teacher_token_ids):
+    @staticmethod
+    def _align_by_byte_offsets(s_offsets, t_offsets):
         """
-        Build alignment groups using a greedy substring-equality algorithm on decoded token pieces.
-
-        Args:
-            student_token_ids: List[int]
-            teacher_token_ids: List[int]
-
-        Returns:
-            Tuple[List[List[int]], List[List[int]]]: student and teacher alignment groups
+        Walk both byte-offset arrays, advancing the side whose current token ends earlier. A group closes when both
+        sides reach the same byte boundary — the points where the two tokenizers agree on a split.
         """
-
-        def to_canonical_pieces(tok, ids):
-            pieces = []
-            prev = ""
-            for k in range(len(ids)):
-                # IMPORTANT: Do NOT skip special tokens - we need to align them too
-                cur = tok.decode(ids[: k + 1], skip_special_tokens=False, clean_up_tokenization_spaces=False)
-                # Extract the incremental addition (may include spaces/ZWJ/etc.)
-                pieces.append(cur[len(prev) :])
-                prev = cur
-            return pieces
-
-        s_pieces = to_canonical_pieces(self.student_tokenizer, student_token_ids)
-        t_pieces = to_canonical_pieces(self.teacher_tokenizer, teacher_token_ids)
-
-        i = j = 0
-        s_buf = t_buf = ""
-        s_group = []
-        t_group = []
-        s_groups = []
-        t_groups = []
-
-        def flush():
-            if s_group and t_group:
-                s_groups.append(s_group.copy())
-                t_groups.append(t_group.copy())
-
-        # Greedily accumulate pieces until substrings match, then flush
-        while i < len(s_pieces) or j < len(t_pieces):
-            if s_buf == t_buf and s_buf != "":
-                flush()
-                s_buf = t_buf = ""
-                s_group = []
-                t_group = []
-                continue
-
-            if s_buf == "" and i < len(s_pieces):
-                s_buf += s_pieces[i]
-                s_group.append(i)
-                i += 1
-                continue
-            if t_buf == "" and j < len(t_pieces):
-                t_buf += t_pieces[j]
-                t_group.append(j)
-                j += 1
-                continue
-
-            if len(s_buf) <= len(t_buf):
-                if i < len(s_pieces):
-                    s_buf += s_pieces[i]
-                    s_group.append(i)
-                    i += 1
-                elif j < len(t_pieces):
-                    t_buf += t_pieces[j]
-                    t_group.append(j)
-                    j += 1
+        s_groups, t_groups = [], []
+        s_start = t_start = s = t = 0
+        n_s, n_t = len(s_offsets), len(t_offsets)
+        while s < n_s and t < n_t:
+            s_end, t_end = s_offsets[s][1], t_offsets[t][1]
+            if s_end < t_end:
+                s += 1
+            elif s_end > t_end:
+                t += 1
             else:
-                if j < len(t_pieces):
-                    t_buf += t_pieces[j]
-                    t_group.append(j)
-                    j += 1
-                elif i < len(s_pieces):
-                    s_buf += s_pieces[i]
-                    s_group.append(i)
-                    i += 1
-
-        # Flush any remainder if both sides accumulated something
-        if s_buf == t_buf and s_group and t_group:
-            flush()
-        elif s_group or t_group:
-            # Handle remaining unmatched tokens by forcing a flush
-            # This ensures both sides have the same number of alignment groups
-            if s_group or t_group:
-                # Ensure both groups have content (even if empty list)
-                if not s_group:
-                    s_group = []
-                if not t_group:
-                    t_group = []
-                # Force flush even if buffers don't match
-                if s_group or t_group:
-                    s_groups.append(s_group.copy() if s_group else [])
-                    t_groups.append(t_group.copy() if t_group else [])
-
+                s += 1
+                t += 1
+                s_groups.append(list(range(s_start, s)))
+                t_groups.append(list(range(t_start, t)))
+                s_start, t_start = s, t
+        if s < n_s or t < n_t:
+            s_groups.append(list(range(s_start, n_s)))
+            t_groups.append(list(range(t_start, n_t)))
         return s_groups, t_groups
 
     def _merge_probabilities_with_alignment_groups(self, probs, alignment_groups, token_ids=None):
         """
-        Merge probabilities based on alignment groups with corrected conditional probability handling.
+        Merge probabilities based on alignment groups, using either the "observed" or "bayesian" strategy
+        (`self.token_merge_strategy`).
 
-        For a group merging tokens at positions [i, i+1, ..., i+k], we compute:
-            P_merged(y | x) = P(y | x) × P(token_{i+1} | token_i, x) × ... × P(token_{i+k} | ..., x)
+        For a group merging tokens at positions [i, ..., i+k]:
+        - "observed": multiply the marginal distribution at the FIRST position by the scalar conditional probabilities
+          of the actual later tokens.
+        - "bayesian": multiply the full distribution at the LAST position (conditioned on the actual prefix tokens) by
+          the scalar probabilities of the actual earlier tokens, following the chain rule.
 
-        Where:
-        - P(y | x) is the marginal probability distribution over all vocabulary tokens at position i
-        - token_{i+1}, ..., token_{i+k} are the ACTUAL tokens that were generated
-        - The conditional probabilities P(token_j | ..., x) are extracted as SCALARS
-        - y ranges over all vocabulary tokens at position i
-
-        This ensures the probability of the actual generated sequence is correct (by the chain rule), while introducing
-        a known bias for counterfactual tokens (since we don't have P(token_{i+k} | y, x) for y != token_i). The merged
-        distribution is unnormalized but preserves correct relative probabilities.
+        Both produce an unnormalized distribution that preserves correct relative probabilities.
 
         Args:
             probs: Probability tensor [seq_len, vocab_size]
@@ -564,31 +551,28 @@ class ULDLoss(nn.Module):
         for group_idx, group in enumerate(alignment_groups):
             # Handle probability merging
             if len(group) > 1:
-                # Multiple tokens map to this group - merge using corrected conditional probability approach
+                # Multiple tokens map to this group - merge by multiplying in the scalar probabilities of the tokens
                 if token_ids is None:
                     raise ValueError(
                         "token_ids must be provided when merging multi-token groups. "
-                        "This is required for mathematically correct probability merging."
+                        "They are needed to extract the scalar probabilities of the actually generated tokens."
                     )
 
-                # Start with the marginal distribution at the first position
-                first_pos = group[0]
-                marginal_probs = probs[first_pos]  # P(y | x₀) for all y
+                if self.token_merge_strategy == "bayesian":
+                    base_probs = probs[group[-1]]  # last position's full distribution
+                    scalar_positions = group[:-1]
+                else:
+                    base_probs = probs[group[0]]  # first position's marginal distribution
+                    scalar_positions = group[1:]
 
-                # For each subsequent token in the group, extract the SCALAR conditional probability
-                # of the actual token that was generated, and multiply
+                # Multiply base_probs by the scalar probabilities of the actual tokens at scalar_positions
                 conditional_prob_product = 1.0
-                for idx in group[1:]:
-                    # Get the actual token ID that was generated at this position
+                for idx in scalar_positions:
                     actual_token_id = token_ids[idx]
-                    # Extract its probability (scalar)
                     token_prob = probs[idx, actual_token_id].clamp_min(eps)
                     conditional_prob_product *= token_prob
 
-                # Merge: multiply the scalar conditional prob product with the entire marginal distribution
-                # This gives: P(y | x_0) × P(token_1 | token_0, x) × ... × P(token_k | ..., x)
-                # Note: This is unnormalized, but preserves the correct joint probability for the actual sequence
-                merged_probs = marginal_probs * conditional_prob_product
+                merged_probs = base_probs * conditional_prob_product
                 aligned_probs[group_idx] = merged_probs
 
             elif len(group) == 1:
@@ -786,7 +770,7 @@ class GOLDTrainer(SFTTrainer):
         # Liger fused GKD loss (JSD)
         self.use_liger_gkd_loss = False
         if args.use_liger_kernel:
-            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 temperature=args.temperature,
@@ -795,6 +779,7 @@ class GOLDTrainer(SFTTrainer):
                 weight_soft_loss=1.0,
             )
             self.use_liger_gkd_loss = True
+            self._forward_redirection = _ForwardRedirection()
 
         if args.teacher_model_init_kwargs is None:
             teacher_model_init_kwargs = {}
@@ -804,10 +789,10 @@ class GOLDTrainer(SFTTrainer):
             )
         else:
             teacher_model_init_kwargs = args.teacher_model_init_kwargs
-            teacher_model_init_kwargs["torch_dtype"] = (
-                teacher_model_init_kwargs["torch_dtype"]
-                if teacher_model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, teacher_model_init_kwargs["torch_dtype"])
+            teacher_model_init_kwargs["dtype"] = (
+                teacher_model_init_kwargs["dtype"]
+                if teacher_model_init_kwargs["dtype"] in ["auto", None]
+                else getattr(torch, teacher_model_init_kwargs["dtype"])
             )
 
         if args.use_uld_loss and args.teacher_tokenizer_name_or_path is None:
@@ -822,13 +807,17 @@ class GOLDTrainer(SFTTrainer):
             init_kwargs = dict(teacher_model_init_kwargs)
             if args.teacher_model_revision is not None:
                 init_kwargs.setdefault("revision", args.teacher_model_revision)
-            if "torch_dtype" in init_kwargs and "dtype" not in init_kwargs:
-                init_kwargs["dtype"] = init_kwargs.pop("torch_dtype")
+            init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            # Distributed training requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                init_kwargs["device_map"] = None
             teacher_model = create_model_from_path(teacher_model, **init_kwargs)
         self.use_uld_loss = args.use_uld_loss
         self.teacher_tokenizer = None
         if args.use_uld_loss and args.teacher_tokenizer_name_or_path is not None:
-            self.teacher_tokenizer = AutoTokenizer.from_pretrained(args.teacher_tokenizer_name_or_path)
+            self.teacher_tokenizer = AutoTokenizer.from_pretrained(
+                args.teacher_tokenizer_name_or_path, trust_remote_code=args.trust_remote_code
+            )
             if not hasattr(self.teacher_tokenizer, "pad_token") or self.teacher_tokenizer.pad_token is None:
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
 
@@ -851,7 +840,7 @@ class GOLDTrainer(SFTTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
         if not args.use_uld_loss:
-            teacher_model.resize_token_embeddings(self.model.config.vocab_size)
+            teacher_model.resize_token_embeddings(self.model.config.get_text_config().vocab_size)
 
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
@@ -882,8 +871,6 @@ class GOLDTrainer(SFTTrainer):
         self._unmatched_sum = 0.0
         self._matched_step_eq = 0.0
         self._unmatched_step_eq = 0.0
-
-        self.use_transformers_paged = args.use_transformers_paged or False
 
         self.uld_loss_fn = None
         if self.use_uld_loss:
@@ -938,7 +925,6 @@ class GOLDTrainer(SFTTrainer):
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
                 accelerator=self.accelerator,
-                is_fsdp_enabled=self.is_fsdp_enabled,
                 processing_class=self.processing_class,
                 mode=args.vllm_mode,
                 structured_outputs_regex=args.vllm_structured_outputs_regex,
@@ -974,6 +960,8 @@ class GOLDTrainer(SFTTrainer):
             "tools",
             "original_prompt_text",
             "original_completion_text",
+            "byte_offsets",
+            "completion_mask",
         ]
         if self._signature_columns is None:
             self._signature_columns = required_columns
@@ -1048,51 +1036,6 @@ class GOLDTrainer(SFTTrainer):
         self._step += 1
         return inputs
 
-    def _decode_completion_texts_from_labels(self, slice_inputs: dict[str, torch.Tensor | Any]) -> list[str] | None:
-        """Decode completion text from labels when raw text is absent."""
-        labels = slice_inputs.get("labels")
-        if labels is None or not isinstance(labels, torch.Tensor):
-            return None
-
-        labels_cpu = labels.detach().cpu()
-        decoded_completion_tokens: list[list[int]] = []
-        for row in labels_cpu:
-            token_ids = row[row != -100].tolist()
-            if self.processing_class.pad_token_id is not None:
-                token_ids = [tok for tok in token_ids if tok != self.processing_class.pad_token_id]
-            decoded_completion_tokens.append(token_ids)
-
-        return self.processing_class.batch_decode(
-            decoded_completion_tokens,
-            skip_special_tokens=False,
-            clean_up_tokenization_spaces=False,
-        )
-
-    def _ensure_original_text_fields(
-        self, slice_inputs: dict[str, torch.Tensor | Any]
-    ) -> dict[str, torch.Tensor | Any]:
-        """Populate original prompt/completion text fields when missing."""
-        if "original_prompt_text" in slice_inputs and "original_completion_text" in slice_inputs:
-            return slice_inputs
-
-        prompts = slice_inputs.get("prompts")
-        if prompts is None or not isinstance(prompts, torch.Tensor):
-            return slice_inputs
-
-        prompt_texts = self.processing_class.batch_decode(
-            prompts,
-            skip_special_tokens=False,
-            clean_up_tokenization_spaces=False,
-        )
-        completion_texts = self._decode_completion_texts_from_labels(slice_inputs)
-        if completion_texts is None:
-            return slice_inputs
-
-        updated_slice = dict(slice_inputs)
-        updated_slice["original_prompt_text"] = prompt_texts
-        updated_slice["original_completion_text"] = completion_texts
-        return updated_slice
-
     @staticmethod
     def _build_sequence_batch(
         new_input_ids: torch.Tensor,
@@ -1121,6 +1064,36 @@ class GOLDTrainer(SFTTrainer):
 
         return new_attention_mask, new_labels
 
+    def _maybe_add_completion_byte_offsets(self, updated_slice: dict[str, torch.Tensor | Any]) -> None:
+        """Attach completion-relative byte offsets to on-policy ULD batches.
+
+        Derived from the sampled ids via ``piece_byte_len`` (no decode→re-encode round-trip).
+        """
+        if not (
+            self.use_uld_loss
+            and self.teacher_tokenizer is not None
+            and self.uld_loss_fn is not None
+            and self.uld_loss_fn.use_extended_uld
+        ):
+            return
+
+        new_input_ids = updated_slice["input_ids"]
+        new_labels = updated_slice["labels"]
+        seq_len = new_input_ids.shape[1]
+
+        rows: list[list[tuple[int, int]]] = []
+        for row_ids, row_labels in zip(new_input_ids.cpu().tolist(), new_labels.cpu().tolist(), strict=True):
+            offs: list[tuple[int, int]] = [(0, 0)] * seq_len
+            cumulative = 0
+            for pos, (tid, label) in enumerate(zip(row_ids, row_labels, strict=True)):
+                if label == -100:
+                    continue
+                nb = piece_byte_len(self.processing_class.convert_ids_to_tokens([tid])[0])
+                offs[pos] = (cumulative, cumulative + nb)
+                cumulative += nb
+            rows.append(offs)
+        updated_slice["byte_offsets"] = torch.tensor(rows, dtype=torch.long, device=new_input_ids.device)
+
     @profiling_decorator
     def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any], buffer_steps: int):
         slices = split_tensor_dict(generation_batch, buffer_steps)
@@ -1141,14 +1114,26 @@ class GOLDTrainer(SFTTrainer):
             if not flag:
                 slice_inputs = slices[i]
 
-                if self.use_uld_loss and self.teacher_tokenizer is not None:
-                    slice_inputs = self._ensure_original_text_fields(slice_inputs)
-                    if "original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs:
-                        raise ValueError(
-                            "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
-                            "When using ULD loss with cross-tokenizer alignment, datasets must be prepared with "
-                            "_prepare_dataset_with_original_text(). Ensure your dataset includes these fields."
-                        )
+                if (
+                    self.use_uld_loss
+                    and self.teacher_tokenizer is not None
+                    and ("original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs)
+                ):
+                    raise ValueError(
+                        "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
+                        "Use the default DataCollatorForChatML (or a collator that emits these fields) so the "
+                        "teacher tokenizer has source text to align against."
+                    )
+                if (
+                    self.use_uld_loss
+                    and self.teacher_tokenizer is not None
+                    and self.uld_loss_fn.use_extended_uld
+                    and "byte_offsets" not in slice_inputs
+                ):
+                    raise ValueError(
+                        "Off-policy batch missing `byte_offsets`. Use the default DataCollatorForChatML or set "
+                        "`use_extended_uld=False`."
+                    )
 
                 self._buffered_inputs[i] = slice_inputs
 
@@ -1171,10 +1156,6 @@ class GOLDTrainer(SFTTrainer):
                 local_slice_indices.append(slice_idx)
 
         prompts_text = self.processing_class.batch_decode(
-            prompt_ids_list,
-            skip_special_tokens=True,
-        )
-        prompts_text_with_special = self.processing_class.batch_decode(
             prompt_ids_list,
             skip_special_tokens=False,
         )
@@ -1202,7 +1183,6 @@ class GOLDTrainer(SFTTrainer):
             local_slice_indices,
             completion_ids,
             prompt_ids_list,
-            prompts_text_with_special,
             prompts_text,
             self.generation_config.max_new_tokens,
         )
@@ -1230,6 +1210,7 @@ class GOLDTrainer(SFTTrainer):
                 updated_slice["labels"] = new_labels
                 updated_slice["original_prompt_text"] = prompt_texts
                 updated_slice["original_completion_text"] = completion_texts
+                self._maybe_add_completion_byte_offsets(updated_slice)
 
                 self._buffered_inputs[slice_idx] = updated_slice
                 self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
@@ -1241,7 +1222,6 @@ class GOLDTrainer(SFTTrainer):
         local_slice_indices: list[int],
         completion_ids: list,
         prompt_ids_list: list[list[int]],
-        prompts_text_with_special: list[str],
         prompts_text: list[str],
         max_completion_length: int,
     ):
@@ -1254,12 +1234,10 @@ class GOLDTrainer(SFTTrainer):
         slice_completions = {idx: [] for idx in on_policy_indices}
         slice_prompt_ids = {idx: [] for idx in on_policy_indices}
         slice_prompts = {idx: [] for idx in on_policy_indices}
-        slice_prompts_special = {idx: [] for idx in on_policy_indices}
 
         for i, slice_idx in enumerate(local_slice_indices):
             slice_completions[slice_idx].append(completion_ids[i])
             slice_prompt_ids[slice_idx].append(prompt_ids_list[i])
-            slice_prompts_special[slice_idx].append(prompts_text_with_special[i])
             slice_prompts[slice_idx].append(prompts_text[i])
 
         for slice_idx in on_policy_indices:
@@ -1267,7 +1245,6 @@ class GOLDTrainer(SFTTrainer):
             completion_ids_for_slice = slice_completions[slice_idx]
             prompt_ids_for_slice = slice_prompt_ids[slice_idx]
             prompt_txts = slice_prompts[slice_idx]
-            prompt_txts_with_special = slice_prompts_special[slice_idx]
 
             prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
             truncated_prompt_ids = []
@@ -1285,6 +1262,14 @@ class GOLDTrainer(SFTTrainer):
 
             prompt_ids = pad(truncated_prompt_ids, padding_side="left", padding_value=pad_token_id)
             prompt_attention_mask = pad(prompt_attention_masks, padding_side="left", padding_value=0)
+
+            # Decode the truncated prompt so the teacher conditions on the same context the student saw.
+            # `clean_up_tokenization_spaces=False` matches the completion decode below so byte counts stay aligned.
+            prompt_txts_with_special = self.processing_class.batch_decode(
+                [ids.tolist() for ids in truncated_prompt_ids],
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
 
             completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids_for_slice]
             completion_ids_for_text: list[list[int]] = []
@@ -1353,6 +1338,7 @@ class GOLDTrainer(SFTTrainer):
             updated_slice["labels"] = new_labels
             updated_slice["original_prompt_text"] = prompt_txts_with_special
             updated_slice["original_completion_text"] = completion_texts
+            self._maybe_add_completion_byte_offsets(updated_slice)
 
             self._buffered_inputs[slice_idx] = updated_slice
             self._buffered_text_logs[slice_idx] = (prompt_txts, completion_texts)
@@ -1369,6 +1355,12 @@ class GOLDTrainer(SFTTrainer):
         """Preserve original text fields for ULD when needed."""
         column_names = list(next(iter(dataset)).keys())
         is_processed = "input_ids" in column_names
+
+        if packing and self.use_uld_loss and self.teacher_tokenizer is not None:
+            raise ValueError(
+                "Packing is not supported with cross-tokenizer ULD because byte-offset alignment is defined per "
+                "prompt/completion example."
+            )
 
         if not is_processed or (self.use_uld_loss and self.teacher_tokenizer is not None):
             return self._prepare_dataset_with_original_text(
@@ -1415,7 +1407,7 @@ class GOLDTrainer(SFTTrainer):
                 **map_kwargs,
             )
 
-            # Apply the chat template if needed and preserve original text
+            # Add EOS token if needed: non-conversational only
             first_example = next(iter(dataset))
             if not is_conversational(first_example):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -1439,131 +1431,117 @@ class GOLDTrainer(SFTTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset (preserving original text)"
 
-            def tokenize_with_original_text(example, processing_class, dataset_text_field, assistant_only_loss):
-                """Modified tokenization function that preserves original text."""
+            def tokenize_with_original_text(example, processing_class, dataset_text_field, max_length):
+                """Emit input_ids, attention_mask, byte_offsets, completion_mask, and the original prompt/completion
+                text. Byte offsets and input_ids come from a single ``encode_with_byte_offsets`` call."""
+                backend = processing_class.backend_tokenizer
                 result = {}
 
                 if "prompt" in example:  # prompt-completion case
-                    # Store original text
-                    result["original_prompt_text"] = example["prompt"]
-                    result["original_completion_text"] = example["completion"]
-
                     if is_conversational(example):
-                        prompt_ids = processing_class.apply_chat_template(
-                            example["prompt"], return_dict=False, **example.get("chat_template_kwargs", {})
+                        prompt_text = processing_class.apply_chat_template(
+                            example["prompt"],
+                            add_generation_prompt=True,
+                            tokenize=False,
+                            **example.get("chat_template_kwargs", {}),
                         )
-                        prompt_completion_ids = processing_class.apply_chat_template(
+                        full_text = processing_class.apply_chat_template(
                             example["prompt"] + example["completion"],
-                            return_dict=False,
+                            tokenize=False,
                             **example.get("chat_template_kwargs", {}),
                         )
-                    else:
-                        prompt_ids = processing_class(text=example["prompt"]).input_ids
-                        prompt_completion_ids = processing_class(
-                            text=example["prompt"] + example["completion"]
-                        ).input_ids
-
-                    # Check if the tokenized prompt starts with the tokenized prompt+completion
-                    if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                        warnings.warn(
-                            "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
-                            "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                            "token handling. Verify that the tokenizer is processing text consistently.",
-                            stacklevel=2,
+                        prompt_text = "".join(
+                            x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt_text, full_text, strict=False))
                         )
-
-                    # Create a completion mask
-                    completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                    result.update(
-                        {
-                            "input_ids": prompt_completion_ids,
-                            "completion_mask": completion_mask,
-                            "attention_mask": [1] * len(prompt_completion_ids),  # Add attention mask
-                        }
-                    )
-
-                else:  # language modeling or conversational case
-                    if is_conversational(example):
-                        # For conversational data (ChatML), extract prompt and completion properly
-                        messages = example["messages"]
-
-                        # Extract user and assistant messages separately
-                        user_messages = [msg for msg in messages if msg["role"] != "assistant"]
-                        assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
-
-                        if user_messages and assistant_messages:
-                            # Apply chat template to get the prompt (everything up to assistant)
+                        completion_text = full_text[len(prompt_text) :]
+                    else:
+                        prompt_text = example["prompt"]
+                        completion_text = example["completion"]
+                        full_text = prompt_text + completion_text
+                    result["original_prompt_text"] = prompt_text
+                    result["original_completion_text"] = completion_text
+                elif is_conversational(example):
+                    messages = example["messages"]
+                    assistant_indices = [idx for idx, msg in enumerate(messages) if msg["role"] == "assistant"]
+                    if assistant_indices:
+                        completion_idx = assistant_indices[-1]
+                        prompt_messages = messages[:completion_idx]
+                        full_messages = messages[: completion_idx + 1]
+                        if prompt_messages:
                             prompt_text = processing_class.apply_chat_template(
-                                user_messages,
-                                add_generation_prompt=True,  # add assistant prompt
+                                prompt_messages,
+                                add_generation_prompt=True,
                                 tokenize=False,
                                 **example.get("chat_template_kwargs", {}),
                             )
-
-                            # Get the full conversation with assistant response
-                            full_text = processing_class.apply_chat_template(
-                                messages,
-                                add_generation_prompt=False,
-                                tokenize=False,
-                                **example.get("chat_template_kwargs", {}),
-                            )
-
-                            # Extract completion as everything after the prompt
-                            # This ensures we capture any extra tokens (like <think> tags) that the template adds
-                            if full_text.startswith(prompt_text):
-                                completion_text = full_text[len(prompt_text) :]
-                            else:
-                                # Fallback: use assistant content + EOS
-                                assistant_content = assistant_messages[0]["content"]
-                                completion_text = (
-                                    assistant_content + processing_class.eos_token
-                                    if hasattr(processing_class, "eos_token")
-                                    else assistant_content
-                                )
-
-                            # Store original text for cross-tokenizer distillation
-                            result["original_prompt_text"] = prompt_text
-                            result["original_completion_text"] = completion_text
                         else:
-                            # Fallback: use empty prompt and full text as completion
-                            full_text = processing_class.apply_chat_template(
-                                messages, tokenize=False, **example.get("chat_template_kwargs", {})
-                            )
-                            result["original_prompt_text"] = ""
-                            result["original_completion_text"] = full_text
-
-                        # Process the conversation normally
-                        processed = processing_class.apply_chat_template(
-                            example["messages"],
-                            return_dict=True,
-                            return_assistant_tokens_mask=assistant_only_loss,
+                            prompt_text = ""
+                        full_text = processing_class.apply_chat_template(
+                            full_messages,
+                            add_generation_prompt=False,
+                            tokenize=False,
                             **example.get("chat_template_kwargs", {}),
                         )
-                        if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
-                            raise RuntimeError(
-                                "You're using `assistant_only_loss=True`, but at least one example has no "
-                                "assistant tokens. This usually means the tokenizer's chat template doesn't "
-                                "generate assistant masks — it may be missing the `{% generation %}` tag. Please "
-                                "check the template and ensure it's correctly configured to support assistant "
-                                "masking."
-                            )
-                        result.update({k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed})
-                        # Add attention_mask if not already present
-                        if "attention_mask" not in result:
-                            result["attention_mask"] = [1] * len(result["input_ids"])
-                    else:
-                        # For regular language modeling, store the full text as completion and empty prompt
-                        result["original_prompt_text"] = ""
-                        result["original_completion_text"] = example.get(dataset_text_field, example.get("text", ""))
-
-                        tokenized = processing_class(text=example[dataset_text_field])
-                        result.update(
-                            {
-                                "input_ids": tokenized.input_ids,
-                                "attention_mask": getattr(tokenized, "attention_mask", [1] * len(tokenized.input_ids)),
-                            }
+                        prompt_text = "".join(
+                            x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt_text, full_text, strict=False))
                         )
+                        completion_text = full_text[len(prompt_text) :]
+                        result["original_prompt_text"] = prompt_text
+                        result["original_completion_text"] = completion_text
+                    else:
+                        full_text = processing_class.apply_chat_template(
+                            messages, tokenize=False, **example.get("chat_template_kwargs", {})
+                        )
+                        prompt_text = ""
+                        result["original_prompt_text"] = ""
+                        result["original_completion_text"] = full_text
+                else:
+                    text = example.get(dataset_text_field, example.get("text", ""))
+                    prompt_text = ""
+                    full_text = text
+                    result["original_prompt_text"] = ""
+                    result["original_completion_text"] = text
 
+                # Single backend call: ids and char-derived byte offsets from the same encoding,
+                # so input_ids[i] is described by full_offs[i] without any boundary slop.
+                [(input_ids, full_offs)] = encode_with_byte_offsets(backend, [full_text], add_special_tokens=False)
+                prompt_byte_len = len(prompt_text.encode("utf-8"))
+                completion_start = next(
+                    (idx for idx, (s, _) in enumerate(full_offs) if s >= prompt_byte_len),
+                    len(input_ids),
+                )
+                # Completion-relative: prompt positions zeroed, completion offsets shifted to
+                # the assistant content's first byte (matches build_teacher_inputs_from_texts).
+                byte_offsets = [(0, 0)] * completion_start + [
+                    (s - prompt_byte_len, e - prompt_byte_len) for s, e in full_offs[completion_start:]
+                ]
+
+                # Keep the last `max_length` tokens (the completion end). `completion_mask` tracks the
+                # boundary so it survives truncation without re-tokenizing the prompt.
+                if max_length is not None and len(input_ids) > max_length:
+                    drop = len(input_ids) - max_length
+                    input_ids = input_ids[drop:]
+                    byte_offsets = byte_offsets[drop:]
+                    completion_start = max(0, completion_start - drop)
+                    # If truncation ate into the completion, rebase the kept completion offsets so they're
+                    # relative to the new (truncated) `original_completion_text` the teacher will re-encode.
+                    if completion_start < len(byte_offsets):
+                        base = byte_offsets[completion_start][0]
+                        if base > 0:
+                            byte_offsets = byte_offsets[:completion_start] + [
+                                (s - base, e - base) for s, e in byte_offsets[completion_start:]
+                            ]
+                    # Resync the strings the teacher will re-encode with the ids the student kept.
+                    decode = partial(
+                        processing_class.decode, skip_special_tokens=False, clean_up_tokenization_spaces=False
+                    )
+                    result["original_prompt_text"] = decode(input_ids[:completion_start])
+                    result["original_completion_text"] = decode(input_ids[completion_start:])
+
+                result["input_ids"] = input_ids
+                result["attention_mask"] = [1] * len(input_ids)
+                result["byte_offsets"] = byte_offsets
+                result["completion_mask"] = [0] * completion_start + [1] * (len(input_ids) - completion_start)
                 return result
 
             dataset = dataset.map(
@@ -1571,12 +1549,14 @@ class GOLDTrainer(SFTTrainer):
                 fn_kwargs={
                     "processing_class": processing_class,
                     "dataset_text_field": args.dataset_text_field,
-                    "assistant_only_loss": args.assistant_only_loss,
+                    "max_length": args.max_length,
                 },
                 **map_kwargs,
             )
 
-            # Pack or truncate
+            # Pack if requested. Truncation already happened in `tokenize_with_original_text`, keeping
+            # the completion end — so the generic front-truncating `truncate_dataset` is intentionally
+            # not applied here (it would drop the completion).
             if packing:
                 if args.max_length is None:
                     raise ValueError("When packing is enabled, `max_length` can't be `None`.")
@@ -1589,10 +1569,6 @@ class GOLDTrainer(SFTTrainer):
 
                 dataset = dataset.select_columns(columns_to_select)
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
-            elif args.max_length is not None:
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
-                dataset = truncate_dataset(dataset, args.max_length, map_kwargs=map_kwargs)
 
             if args.use_liger_kernel:
                 required_columns = {
@@ -1601,9 +1577,9 @@ class GOLDTrainer(SFTTrainer):
                     "position_ids",
                     "completion_mask",
                     "messages",
-                    "assistant_masks",
                     "original_prompt_text",
                     "original_completion_text",
+                    "byte_offsets",
                 }
                 dataset = dataset.select_columns(required_columns.intersection(dataset.column_names))
 
@@ -1618,6 +1594,7 @@ class GOLDTrainer(SFTTrainer):
         temperature=1.0,
         reduction="batchmean",
         logits_are_probs=False,
+        num_items_in_batch=None,
     ):
         """
         Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div. See Eq. (1)
@@ -1680,8 +1657,18 @@ class GOLDTrainer(SFTTrainer):
             jsd = jsd[mask]
 
         # Apply reduction
+        if num_items_in_batch is not None:
+            # Normalize by the global number of valid tokens for gradient-accumulation-correct loss (see issue #4719).
+            jsd_sum = jsd.sum()
+            if isinstance(num_items_in_batch, torch.Tensor):
+                num_items_in_batch = num_items_in_batch.to(jsd_sum.device)
+            return jsd_sum / num_items_in_batch
         if reduction == "batchmean":
-            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / jsd.size(0)
+            # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
+            # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
+            # so 0/1 == 0 with a valid grad path.
+            denom = mask.sum().clamp_min(1) if labels is not None else max(jsd.size(0), 1)
+            return jsd.sum() / denom
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":
@@ -1691,33 +1678,17 @@ class GOLDTrainer(SFTTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if self.use_uld_loss and self.teacher_tokenizer is not None:
-            if "original_prompt_text" in inputs and "original_completion_text" in inputs:
-                prompt_texts = inputs["original_prompt_text"]
-                completion_texts = inputs["original_completion_text"]
-                full_texts = [p + c for p, c in zip(prompt_texts, completion_texts, strict=True)]
-            else:
-                # Fallback: decode student input_ids (current approach)
-                # WARNING: This may not work perfectly for cross-tokenizer distillation
-                full_sequences = inputs["input_ids"]
-                full_texts = self.processing_class.batch_decode(full_sequences, skip_special_tokens=False)
-
-                # Try to split prompt/completion using original prompt length
-                prompt_lengths = inputs["prompts"].shape[1]
-                prompt_texts = self.processing_class.batch_decode(inputs["prompts"], skip_special_tokens=False)
-                completion_texts = [
-                    full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
-                ]
+            # Both DataCollatorForChatML and the on-policy generation path attach these
+            # fields, so cross-tokenizer ULD never has to round-trip through batch_decode.
+            prompt_texts = inputs["original_prompt_text"]
+            completion_texts = inputs["original_completion_text"]
 
             (
                 teacher_input_ids,
                 teacher_labels,
                 teacher_attention_mask,
-                teacher_prompt_length,
-            ) = build_teacher_inputs_from_texts(
-                self.teacher_tokenizer,
-                prompt_texts,
-                completion_texts,
-            )
+                teacher_completion_byte_offsets,
+            ) = build_teacher_inputs_from_texts(self.teacher_tokenizer, prompt_texts, completion_texts)
 
             teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
             teacher_labels = teacher_labels.to(self.accelerator.device)
@@ -1735,27 +1706,14 @@ class GOLDTrainer(SFTTrainer):
                     input_ids=teacher_input_ids,
                     attention_mask=teacher_attention_mask,
                 )
-
-            # These are not used for ULD loss but are needed if JSD loss were to be used in this branch
-            student_prompt_length = inputs["prompts"].shape[1]
-            shifted_student_logits = outputs_student.logits[:, student_prompt_length - 1 : -1, :]
-            shifted_teacher_logits = outputs_teacher.logits[:, teacher_prompt_length - 1 : -1, :]
-            shifted_labels = inputs["labels"][:, student_prompt_length:]
         else:
             if self.use_liger_gkd_loss:
-                # Forward only through the base models (avoid lm_head to save memory)
+                # Forward only through the base models (avoid lm_head to save memory).
+                # Route through the DDP/FSDP wrapper via _forward_redirection so that
+                # DDP.forward() is called and prepare_for_backward() fires correctly.
                 unwrapped_student = self.accelerator.unwrap_model(model)
-                if hasattr(unwrapped_student, "get_decoder") and unwrapped_student.get_decoder() is not None:
-                    base_student = unwrapped_student.get_decoder()
-                else:
-                    base_student = getattr(
-                        unwrapped_student, getattr(unwrapped_student, "base_model_prefix", "model"), unwrapped_student
-                    )
-
-                student_outputs = base_student(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
-                    use_cache=False,
+                student_outputs = self._forward_redirection(
+                    model, unwrapped_student, self._liger_student_forward, unwrapped_student, inputs
                 )
 
                 self.teacher_model.eval()
@@ -1785,12 +1743,12 @@ class GOLDTrainer(SFTTrainer):
                 masked_input_ids = torch.where(
                     labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100)
                 )
-                true_labels = masked_input_ids[:, 1:].contiguous().reshape(-1)
+                true_labels = masked_input_ids[:, 1:].reshape(-1)
 
                 student_head = unwrapped_student.get_output_embeddings()
                 teacher_head = unwrapped_teacher.get_output_embeddings()
 
-                loss = self.liger_jsd_loss(
+                loss = self.liger_loss(
                     student_input=student_hidden,
                     student_weight=student_head.weight,
                     teacher_input=teacher_hidden,
@@ -1799,6 +1757,14 @@ class GOLDTrainer(SFTTrainer):
                     student_bias=getattr(student_head, "bias", None),
                     teacher_bias=getattr(teacher_head, "bias", None),
                 )
+
+                # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we
+                # want the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
+                if num_items_in_batch is not None:
+                    num_valid_local = (true_labels != -100).sum().clamp_min(1)
+                    if isinstance(num_items_in_batch, torch.Tensor):
+                        num_items_in_batch = num_items_in_batch.to(loss.device)
+                    loss = loss * num_valid_local / num_items_in_batch
 
                 del student_hidden, teacher_hidden, true_labels
             else:
@@ -1814,42 +1780,43 @@ class GOLDTrainer(SFTTrainer):
                         attention_mask=inputs["attention_mask"],
                     )
 
-                prompt_lengths = inputs["prompts"].shape[1]
-                shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
-                shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1 : -1, :]
-                shifted_labels = inputs["labels"][:, prompt_lengths:]
+                # Standard causal shift: logits at position i predict the token at i + 1. The `labels != -100` mask
+                # inside `generalized_jsd_loss` already excludes prompt (and padding) positions, so we do not slice by
+                # prompt length. Slicing by `inputs["prompts"].shape[1]` (the batch-max prompt width) would drop real
+                # completion tokens for samples whose prompt is shorter than the batch maximum, since `labels` is
+                # padded to the full-sequence width independently of `prompts`.
+                shifted_student_logits = outputs_student.logits[:, :-1, :]
+                shifted_teacher_logits = outputs_teacher.logits[:, :-1, :]
+                shifted_labels = inputs["labels"][:, 1:]
                 loss = self.generalized_jsd_loss(
                     student_logits=shifted_student_logits,
                     teacher_logits=shifted_teacher_logits,
                     labels=shifted_labels,
                     beta=self.beta,
                     temperature=self.temperature,
+                    num_items_in_batch=num_items_in_batch,
                 )
 
-        if self.use_uld_loss:
-            student_input_ids = inputs["input_ids"]
-
-            teacher_labels_for_loss = teacher_labels if "teacher_labels" in locals() else inputs["labels"]
-            teacher_input_ids_for_loss = teacher_input_ids if "teacher_input_ids" in locals() else inputs["input_ids"]
-
+        if self.use_uld_loss and self.teacher_tokenizer is not None:
             student_labels = inputs["labels"].clone()
-            if hasattr(self.processing_class, "pad_token_id") and self.processing_class.pad_token_id is not None:
+            if self.processing_class.pad_token_id is not None:
                 student_labels[student_labels == self.processing_class.pad_token_id] = -100
-
-            if (
-                hasattr(self, "teacher_tokenizer")
-                and hasattr(self.teacher_tokenizer, "pad_token_id")
-                and self.teacher_tokenizer.pad_token_id is not None
-            ):
+            if self.teacher_tokenizer.pad_token_id is not None:
                 teacher_labels[teacher_labels == self.teacher_tokenizer.pad_token_id] = -100
+
+            student_byte_offsets = inputs.get("byte_offsets")
+            if self.uld_loss_fn.use_extended_uld and student_byte_offsets is None:
+                raise ValueError("Input batches must include `byte_offsets` when `use_extended_uld=True`.")
 
             loss = self.uld_loss_fn(
                 student_logits=outputs_student.logits,
                 teacher_logits=outputs_teacher.logits,
                 student_labels=student_labels,
-                teacher_labels=teacher_labels_for_loss,
-                student_input_ids=student_input_ids,
-                teacher_input_ids=teacher_input_ids_for_loss,
+                teacher_labels=teacher_labels,
+                student_input_ids=inputs["input_ids"],
+                teacher_input_ids=teacher_input_ids,
+                student_byte_offsets=student_byte_offsets,
+                teacher_byte_offsets=teacher_completion_byte_offsets,
             )
 
             if hasattr(self.uld_loss_fn, "last_matched_loss") and hasattr(self.uld_loss_fn, "last_unmatched_loss"):
@@ -1877,35 +1844,14 @@ class GOLDTrainer(SFTTrainer):
 
     def generate_on_policy_outputs(self, model, inputs, generation_config, pad_token_id=None):
         # Generate output with respect to the prompt only
-        if self.use_transformers_paged:
-            previous_attn = self.model.config._attn_implementation
-            if is_flash_attn_2_available():
-                model.config._attn_implementation = "paged_attention"
-            else:
-                model.config._attn_implementation = "sdpa_paged"
-            prompt_mask = inputs.get("prompt_attention_mask")
-            prompts_tensor = inputs["prompts"]
-            if prompt_mask is not None:
-                prompt_sequences = [
-                    row[mask.bool()].detach().cpu().tolist()
-                    for row, mask in zip(prompts_tensor, prompt_mask, strict=True)
-                ]
-            else:
-                prompt_sequences = [row.detach().cpu().tolist() for row in prompts_tensor]
-            generated_outputs = model.generate_batch(prompt_sequences, generation_config=generation_config)
-            model.config._attn_implementation = previous_attn
-
-            completion_ids = [output.generated_tokens for output in generated_outputs.values()]
-            generated_tokens = torch.stack([torch.tensor(ids, device=model.device) for ids in completion_ids])
-        else:
-            generated_outputs = model.generate(
-                input_ids=inputs["prompts"],
-                attention_mask=inputs.get("prompt_attention_mask", None),
-                generation_config=generation_config,
-                return_dict_in_generate=True,
-            )
-            # Get the generated token IDs
-            generated_tokens = generated_outputs.sequences
+        generated_outputs = model.generate(
+            input_ids=inputs["prompts"],
+            attention_mask=inputs.get("prompt_attention_mask", None),
+            generation_config=generation_config,
+            return_dict_in_generate=True,
+        )
+        # Get the generated token IDs
+        generated_tokens = generated_outputs.sequences
 
         batch_size = generated_tokens.size(0)
         device = generated_tokens.device
@@ -1913,18 +1859,9 @@ class GOLDTrainer(SFTTrainer):
         prompt_mask = inputs.get("prompt_attention_mask")
         pad_token_id = pad_token_id if pad_token_id is not None else self.processing_class.pad_token_id
 
-        if self.use_transformers_paged:
-            # generate_batch() returns completion-only tokens, so the entire tensor is completion.
-            prompt_lengths = torch.zeros(batch_size, dtype=torch.long, device=device)
-        else:
-            # model.generate() returns full sequences (prompt + completion), so completions start
-            # after the full padded prompt width.
-            prompt_lengths = torch.full(
-                (batch_size,),
-                inputs["prompts"].shape[1],
-                dtype=torch.long,
-                device=device,
-            )
+        # model.generate() returns full sequences (prompt + completion), so completions start
+        # after the full padded prompt width.
+        prompt_lengths = torch.full((batch_size,), inputs["prompts"].shape[1], dtype=torch.long, device=device)
 
         new_input_ids = generated_tokens
         new_attention_mask, new_labels = self._build_sequence_batch(new_input_ids, prompt_lengths, pad_token_id)
@@ -1946,6 +1883,7 @@ class GOLDTrainer(SFTTrainer):
                 )
             )
             completion_tokens = new_input_ids[idx, length:]
+            completion_tokens = completion_tokens[new_labels[idx, length:] != -100]
             completion_texts.append(
                 self.processing_class.decode(
                     completion_tokens.tolist(),
@@ -1955,6 +1893,18 @@ class GOLDTrainer(SFTTrainer):
             )
 
         return new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts
+
+    def _liger_student_forward(self, student, inputs):
+        """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
+        if hasattr(student, "get_decoder") and student.get_decoder() is not None:
+            decoder = student.get_decoder()
+        else:
+            decoder = getattr(student, getattr(student, "base_model_prefix", "model"), student)
+        return decoder(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            use_cache=False,
+        )
 
     def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
         if not self.use_liger_gkd_loss:
@@ -2075,7 +2025,7 @@ class GOLDTrainer(SFTTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 

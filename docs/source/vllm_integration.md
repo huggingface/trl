@@ -3,7 +3,7 @@
 This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summarize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood.
 
 > [!WARNING]
-> TRL currently only supports vLLM versions from `0.11.0` to `0.17.1`. Please ensure you have a version in this range installed to avoid compatibility issues.
+> TRL currently only supports vLLM versions from `0.13.0` to `0.23.0`. Please ensure you have a version in this range installed to avoid compatibility issues.
 
 > [!TIP]
 > The following trainers currently support generation with vLLM:
@@ -220,8 +220,8 @@ options:
   --tensor_parallel_size TENSOR_PARALLEL_SIZE, --tensor-parallel-size TENSOR_PARALLEL_SIZE
                         Number of tensor parallel workers to use. (default: 1)
   --data_parallel_size DATA_PARALLEL_SIZE, --data-parallel-size DATA_PARALLEL_SIZE
-                        Number of data parallel workers to use. For dense models, keep this at 1. Starting from vLLM `0.14.0`, setting
-                        this above `1` for dense models is no longer supported/useful and will error out (see vLLM PR #30739).
+                        Number of data parallel workers to use. For dense models, keep this at 1. Setting this above `1` for
+                        dense models is not supported/useful and will error out (see vLLM PR #30739).
                         (default: 1)
   --host HOST           Host address to run the server on. (default: 0.0.0.0)
   --port PORT           Port to run the server on. (default: 8000)

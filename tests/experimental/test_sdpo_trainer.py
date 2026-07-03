@@ -12,16 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import logging
-from types import SimpleNamespace
 
+import pytest
 import torch
 from datasets import Dataset, load_dataset
 from transformers import TrainerCallback
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
-from ..testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
 
 
 class SelfDistillationCaptureCallback(TrainerCallback):
@@ -60,8 +61,49 @@ class SelfDistillationCaptureCallback(TrainerCallback):
             self.captured_old_per_token_logps = old_per_token_logps.detach().cpu()
 
 
+class RecordingTeacherClient:
+    """Stands in for the vLLM server client and records scoring requests."""
+
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def get_sequence_logprobs(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+
 class TestSDPOTrainer(TrlTestCase):
-    def test_training_with_positional_config_argument(self):
+    def teardown_method(self):
+        if hasattr(self, "_liger_module"):
+            importlib.reload(importlib.import_module(self._liger_module))
+
+    def test_trust_remote_code(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            SDPOTrainer(
+                model=model_id,
+                reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+                args=SDPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = SDPOTrainer(
+            model=model_id,
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=SDPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
+    def test_train_with_positional_config_argument(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2."],
@@ -78,6 +120,7 @@ class TestSDPOTrainer(TrlTestCase):
             max_completion_length=8,
             include_environment_feedback=True,
             max_steps=1,
+            report_to="none",
         )
 
         trainer = SDPOTrainer(
@@ -99,80 +142,7 @@ class TestSDPOTrainer(TrlTestCase):
         assert config.vllm_mode == "colocate"
         assert config.vllm_model_impl == "vllm"
 
-    def test_generate_vllm_syncs_on_step_change_and_uses_mode_specific_num_generations(self):
-        class FakeTokenizer:
-            def __call__(self, text, **kwargs):
-                token_map = {
-                    "Solve 2+2.": [11, 12],
-                    "Check 3+3.": [21, 22],
-                }
-                return {"input_ids": [token_map[prompt] for prompt in text]}
-
-        class FakeVLLMGeneration:
-            def __init__(self):
-                self.sync_weights_call_count = 0
-                self.generate_calls = []
-
-            def sync_weights(self):
-                self.sync_weights_call_count += 1
-
-            def generate(self, prompts, images, num_generations):
-                self.generate_calls.append(
-                    {
-                        "prompts": prompts,
-                        "images": images,
-                        "num_generations": num_generations,
-                    }
-                )
-                completion_ids = [[100 + index] for index in range(len(prompts))]
-                return prompts, completion_ids, None, None
-
-        trainer = object.__new__(SDPOTrainer)
-        trainer.use_vllm = True
-        trainer.max_prompt_length = 16
-        trainer.num_generations = 2
-        trainer.num_generations_eval = 3
-        trainer.model = SimpleNamespace(training=True)
-        trainer.state = SimpleNamespace(global_step=4)
-        trainer._last_loaded_step = 3
-        trainer.processing_class = FakeTokenizer()
-        trainer.vllm_generation = FakeVLLMGeneration()
-        trainer._apply_prompt_template = lambda prompts: prompts
-
-        prompt_ids, completion_ids = trainer._generate(["Solve 2+2.", "Solve 2+2."])
-
-        assert prompt_ids == [[11, 12], [11, 12]]
-        assert completion_ids == [[100], [101]]
-        assert trainer.vllm_generation.sync_weights_call_count == 1
-        assert trainer._last_loaded_step == 4
-        assert trainer.vllm_generation.generate_calls == [
-            {
-                "prompts": [[11, 12], [11, 12]],
-                "images": None,
-                "num_generations": 2,
-            }
-        ]
-
-        trainer.model.training = False
-        eval_prompt_ids, eval_completion_ids = trainer._generate(["Check 3+3.", "Check 3+3.", "Check 3+3."])
-
-        assert eval_prompt_ids == [[21, 22], [21, 22], [21, 22]]
-        assert eval_completion_ids == [[100], [101], [102]]
-        assert trainer.vllm_generation.sync_weights_call_count == 1
-        assert trainer.vllm_generation.generate_calls[-1] == {
-            "prompts": [[21, 22], [21, 22], [21, 22]],
-            "images": None,
-            "num_generations": 3,
-        }
-
-        trainer.model.training = True
-        trainer.state.global_step = 5
-        trainer._generate(["Solve 2+2.", "Solve 2+2."])
-
-        assert trainer.vllm_generation.sync_weights_call_count == 2
-        assert trainer._last_loaded_step == 5
-
-    def test_training(self):
+    def test_train(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SDPOConfig(
@@ -181,9 +151,10 @@ class TestSDPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
+            distillation_mode="topk_logits",
             distillation_topk=5,
-            full_logit_distillation=True,
             distillation_is_clip=None,
+            report_to="none",
         )
         trainer = SDPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -201,9 +172,70 @@ class TestSDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Parameter {n} has not changed."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_without_successful_rollouts(self):
+    @require_liger_kernel
+    @require_torch_accelerator
+    def test_liger_loss_matches_non_liger_loss(self):
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
+        common = dict(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            per_device_train_batch_size=1,
+            generation_batch_size=2,
+            num_generations=2,
+            max_completion_length=3,
+            distillation_mode="full_logits",
+            distillation_is_clip=None,
+            distillation_weight=1.0,
+        )
+
+        ref_trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=SDPOConfig(use_liger_kernel=False, **common),
+            train_dataset=dataset,
+        )
+        liger_trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=SDPOConfig(use_liger_kernel=True, **common),
+            train_dataset=dataset,
+        )
+        self._liger_module = liger_trainer.model.__module__
+
+        liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
+        torch.manual_seed(0)
+        with torch.no_grad():
+            for param in ref_trainer.teacher_model.parameters():
+                param.add_(0.5 * torch.randn_like(param))
+        liger_trainer.teacher_model.load_state_dict(ref_trainer.teacher_model.state_dict())
+
+        device = next(ref_trainer.model.parameters()).device
+        batch = {
+            "prompt_ids": torch.tensor([[10, 11], [12, 13]], device=device),
+            "prompt_mask": torch.tensor([[1, 1], [1, 1]], device=device),
+            "completion_ids": torch.tensor([[14, 15, 16], [17, 18, 19]], device=device),
+            "completion_mask": torch.tensor([[1, 1, 0], [1, 1, 1]], device=device),
+            "teacher_input_ids": torch.tensor([[20, 21, 22, 14, 15, 16], [23, 24, 25, 17, 18, 19]], device=device),
+            "teacher_attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]], device=device),
+            "self_distillation_mask": torch.tensor([1.0, 0.0], device=device),
+        }
+
+        ref_trainer.model.eval()
+        liger_trainer.model.eval()
+        with torch.no_grad():
+            ref_loss = ref_trainer.compute_loss(ref_trainer.model, batch).item()
+            liger_loss = liger_trainer.compute_loss(liger_trainer.model, batch).item()
+
+        torch.testing.assert_close(
+            torch.tensor(liger_loss),
+            torch.tensor(ref_loss),
+            rtol=2e-2,
+            atol=1e-6,
+        )
+
+    def test_train_without_successful_rollouts(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SDPOConfig(
@@ -213,6 +245,7 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             distillation_is_clip=None,
+            report_to="none",
         )
 
         def zero_reward(**kwargs):
@@ -230,7 +263,7 @@ class TestSDPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_training_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
+    def test_train_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2.", "Solve 3+3."]})
 
         training_args = SDPOConfig(
@@ -242,6 +275,7 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=2,
             max_completion_length=8,
             max_steps=1,
+            report_to="none",
         )
 
         capture_callback = SelfDistillationCaptureCallback()
@@ -273,6 +307,7 @@ class TestSDPOTrainer(TrlTestCase):
             dont_reprompt_on_self_success=False,
             distillation_is_clip=None,
             max_steps=1,
+            report_to="none",
         )
 
         def eval_rewards(**kwargs):
@@ -320,6 +355,7 @@ class TestSDPOTrainer(TrlTestCase):
             success_reward_threshold=0.5,
             dont_reprompt_on_self_success=False,
             max_steps=1,
+            report_to="none",
         )
 
         def reward_with_one_success(**kwargs):
@@ -338,10 +374,12 @@ class TestSDPOTrainer(TrlTestCase):
         trainer.train()
 
         assert capture_callback.captured_teacher_input_text is not None
+        assert "Solve f(x) = {x^2}." in capture_callback.captured_teacher_input_text
+        assert 'Feedback: use {"x": 2} as a check.' in capture_callback.captured_teacher_input_text
         assert "{{" not in capture_callback.captured_teacher_input_text
         assert "}}" not in capture_callback.captured_teacher_input_text
 
-    def test_training_with_conversational_prompts_preserves_context(self):
+    def test_train_with_conversational_prompts_preserves_context(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": [
@@ -363,6 +401,7 @@ class TestSDPOTrainer(TrlTestCase):
             distillation_is_clip=None,
             success_reward_threshold=0.5,
             max_steps=1,
+            report_to="none",
         )
 
         def first_only_reward(**kwargs):
@@ -387,7 +426,7 @@ class TestSDPOTrainer(TrlTestCase):
         assert "Solve 2+2" in capture_callback.captured_teacher_input_text
         assert capture_callback.captured_self_distillation_mask is not None
 
-    def test_training_with_feedback_only_reprompts_teacher(self):
+    def test_train_with_feedback_only_reprompts_teacher(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": [
@@ -410,6 +449,7 @@ class TestSDPOTrainer(TrlTestCase):
             distillation_is_clip=None,
             include_environment_feedback=True,
             max_steps=1,
+            report_to="none",
         )
 
         def zero_reward(**kwargs):
@@ -432,7 +472,7 @@ class TestSDPOTrainer(TrlTestCase):
         assert capture_callback.captured_self_distillation_mask is not None
         assert capture_callback.captured_self_distillation_mask[0].item() == 1.0
 
-    def test_training_warns_when_sdpo_rewards_are_flat(self, caplog):
+    def test_train_warns_when_sdpo_rewards_are_flat(self, caplog):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = SDPOConfig(
@@ -443,6 +483,7 @@ class TestSDPOTrainer(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             diagnostics_warning_interval=2,
             max_steps=2,
+            report_to="none",
         )
 
         def zero_reward(**kwargs):
@@ -461,7 +502,7 @@ class TestSDPOTrainer(TrlTestCase):
         assert "Observed flat SDPO rewards across all sampled generations" in caplog.text
         assert "SDPO self-distillation is inactive because no reprompted samples were constructed" in caplog.text
 
-    def test_training_preserves_teacher_completion_attention_mask(self):
+    def test_train_preserves_teacher_completion_attention_mask(self):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
 
         training_args = SDPOConfig(
@@ -473,6 +514,7 @@ class TestSDPOTrainer(TrlTestCase):
             max_completion_length=8,
             success_reward_threshold=0.5,
             max_steps=1,
+            report_to="none",
         )
 
         def first_only_reward(**kwargs):
@@ -495,3 +537,52 @@ class TestSDPOTrainer(TrlTestCase):
         completion_length = capture_callback.captured_completion_mask.shape[1]
         teacher_completion_attention = capture_callback.captured_teacher_attention_mask[0, -completion_length:]
         assert torch.equal(teacher_completion_attention, capture_callback.captured_completion_mask[0])
+
+    def test_server_loss_finite_with_masked_and_padded_rows(self):
+        # Drives the teacher-server path through `compute_loss` with a fake server client: row 0 is fully masked
+        # (zero-length scored completion) and row 1 has a shorter completion than the padded batch, so the client
+        # response is ragged and the padded tail comes back as -inf. Neither may leak NaN or inf.
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."], "privileged_context": ["Example answer: 4."]})
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            max_completion_length=3,
+            num_generations=1,
+            distillation_mode="topk_logits",
+            distillation_topk=2,
+            distillation_alpha=0.5,
+            distillation_add_tail=True,
+            distillation_is_clip=None,
+            report_to="none",
+        )
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.use_teacher_server = True
+        trainer.teacher_client = RecordingTeacherClient(
+            {
+                "actual_logprobs": [[], [[-1.1], [-0.4]]],
+                "logprobs": [[], [[-1.1, -1.5], [-0.4, -0.9]]],
+                "logprob_token_ids": [[], [[14, 15], [16, 17]]],
+            }
+        )
+
+        device = next(trainer.model.parameters()).device
+        batch = {
+            "prompt_ids": torch.tensor([[10, 11], [12, 13]], device=device),
+            "prompt_mask": torch.tensor([[1, 1], [1, 1]], device=device),
+            "completion_ids": torch.tensor([[14, 15, 16], [17, 18, 19]], device=device),
+            "completion_mask": torch.tensor([[0, 0, 0], [1, 1, 0]], device=device),
+            "teacher_input_ids": torch.tensor([[20, 21, 22, 14, 15, 16], [23, 24, 25, 17, 18, 19]], device=device),
+            "teacher_attention_mask": torch.tensor([[1, 1, 1, 0, 0, 0], [1, 1, 1, 1, 1, 0]], device=device),
+        }
+
+        loss = trainer.compute_loss(trainer.model, batch)
+
+        assert torch.isfinite(loss)
+        loss.backward()
+        assert all(torch.isfinite(p.grad).all() for p in trainer.model.parameters() if p.grad is not None)
+        assert trainer.teacher_client.calls[0]["top_logprobs"] == 2
