@@ -102,7 +102,7 @@ if is_liger_kernel_available():
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -697,6 +697,18 @@ class GRPOTrainer(_BaseTrainer):
                     "fused GRPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and never "
                     "trained. Either remove `'lm_head'` from your `target_modules`, or set `use_liger_kernel=False`."
                 )
+            # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
+            # `PeftModel.forward()`. The Liger GRPO loss bypasses `PeftModel.forward()` by calling the backbone
+            # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
+            # Fail loudly rather than train on a silently corrupted input.
+            if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+                raise ValueError(
+                    "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
+                    "PrefixTuning, P-Tuning). The Liger GRPO loss bypasses `PeftModel.forward()` by calling the "
+                    "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
+                    "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
+                    "`use_liger_kernel=False`."
+                )
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
         if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
@@ -849,7 +861,7 @@ class GRPOTrainer(_BaseTrainer):
             # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
             self._forward_redirection = _ForwardRedirection()
 
-            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
+            self.liger_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
                 epsilon_low=self.epsilon_low,
                 epsilon_high=self.epsilon_high,
@@ -2642,7 +2654,7 @@ class GRPOTrainer(_BaseTrainer):
 
                 gather_ctx = deepspeed.zero.GatheredParameters(params, modifier_rank=None)
         with gather_ctx:
-            loss, metrics = self.liger_grpo_loss(
+            loss, metrics = self.liger_loss(
                 _input=last_hidden_state,
                 lin_weight=lm_head_weight,
                 selected_token_ids=completion_ids,
