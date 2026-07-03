@@ -348,7 +348,7 @@ class OffloadActivations(saved_tensors_hooks):
                 # Stash to keep activation alive til s1 is done
                 self.fwd_stash[tensor_id] = (activation, event)
 
-                # Track this storage for deduplication while the GPU tensor is live.
+                # Track storage only while fwd_stash keeps the GPU tensor live; single-stream has no release point.
                 track_storage_key(storage_key, tensor_id)
 
             return tensor_id
