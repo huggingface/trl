@@ -31,7 +31,7 @@ cross-attending to that cache. Training therefore differs from autoregressive SF
 1. Per example, one response block of `canvas_length` tokens is selected at random; the encoder reads the full clean
    sequence, and the decoder mask restricts the canvas to the prompt plus the clean response blocks before it.
 2. The clean canvas (EOS-filled past the end of the response) is corrupted by independently replacing tokens with
-   uniform-random vocabulary tokens with per-example probability `t ~ U(eps, 1)`. There is no mask token.
+   uniform-random vocabulary tokens with per-example probability `t ~ U(eps, 1 - eps)`. There is no mask token.
 3. With probability 0.5 per example, the decoder is self-conditioned on its own logits from a first, no-grad pass.
 4. The loss is plain mean cross-entropy between the decoder logits and the clean tokens over the whole canvas
    (corrupted and uncorrupted positions alike), plus an autoregressive co-loss on the encoder.
@@ -170,7 +170,7 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
     module docstring.
     """
 
-    eps = 1e-3  # minimum corruption ratio, avoids zero-corruption samples
+    eps = 1e-4  # safety margin on the sampled time, matching the reference `SafeSpan(safety_epsilon=1e-4)`
     self_conditioning_p = 0.5
 
     def __init__(self, *args, **kwargs):
@@ -223,9 +223,9 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         in_response = offsets < (response_len - block_idx * block_size)[:, None]
         canvas_target = torch.where(in_response, input_ids.gather(1, abs_idx), self.eos_token_id)
 
-        # Uniform random-token corruption: per-example t ~ U(eps, 1), each canvas position is independently replaced
-        # with a token drawn uniformly from the vocabulary (there is no mask token)
-        t = self.eps + (1 - self.eps) * torch.rand(batch_size, 1, device=device)
+        # Uniform random-token corruption: per-example t ~ U(eps, 1 - eps), each canvas position is independently
+        # replaced with a token drawn uniformly from the vocabulary (there is no mask token)
+        t = self.eps + (1 - 2 * self.eps) * torch.rand(batch_size, 1, device=device)
         corrupt = torch.rand(batch_size, block_size, device=device) < t
         random_tokens = torch.randint(self.vocab_size, (batch_size, block_size), device=device)
         canvas_ids = torch.where(corrupt, random_tokens, canvas_target)
