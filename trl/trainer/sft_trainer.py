@@ -148,14 +148,14 @@ def _chunked_cross_entropy_loss(
     The full `lm_head` projection is never materialized. Valid (non-`-100`) tokens are packed to the front, and the
     processed length is rounded up to a whole `chunk_size`, so masked positions form trailing chunks that are skipped.
     Each chunk's `[chunk_size, vocab_size]` logits tensor is kept alive only during its own forward/backward pass via
-    gradient checkpointing, so peak logits-activation memory is `chunk_size * vocab_size` instead of
-    `batch_size * seq_len * vocab_size`.
+    gradient checkpointing, so peak logits-activation memory is `chunk_size * vocab_size` instead of `batch_size *
+    seq_len * vocab_size`.
 
     The packing uses `argsort` on the label mask (a static-shape op) rather than boolean indexing (a data-dependent
     shape), and the number of processed chunks is quantized to a multiple of `chunk_size`. This keeps the function
     XLA/Neuron-safe: across steps the traced shape takes at most `total / chunk_size` distinct values — a small,
-    one-time set of graphs — instead of recompiling on every distinct valid-token count. On GPU it recovers the
-    speedup of dropping masked tokens, wasting at most one partial chunk of compute.
+    one-time set of graphs — instead of recompiling on every distinct valid-token count. On GPU it recovers the speedup
+    of dropping masked tokens, wasting at most one partial chunk of compute.
 
     At least one of `labels` or `shift_labels` must be provided. Passing `labels` alone is the standard path and
     triggers the internal `labels[..., 1:]` / `hidden_states[..., :-1, :]` shift. Passing `shift_labels` skips the
