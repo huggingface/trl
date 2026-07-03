@@ -34,6 +34,7 @@ from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from transformers import (
     AutoProcessor,
+    BitsAndBytesConfig,
     DataCollator,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -54,6 +55,7 @@ from ..chat_template_utils import (
 )
 from ..data_utils import (
     apply_chat_template,
+    get_dataset_column_names,
     is_conversational,
     is_conversational_from_value,
     maybe_convert_to_chatml,
@@ -387,10 +389,6 @@ FLASH_ATTENTION_VARIANTS = {
     "kernels-community/flash-attn3",
     "kernels-community/vllm-flash-attn3",
 }
-
-
-def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
-    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
 @dataclass
@@ -886,6 +884,9 @@ class SFTTrainer(_BaseTrainer):
             by this function will be reflected in the predictions received by `compute_metrics`.
 
             Note that the labels (second parameter) will be `None` if the dataset does not have them.
+        quantization_config ([`~transformers.BitsAndBytesConfig`], *optional*):
+            Quantization configuration used when loading the model from a model identifier. Combine with `peft_config`
+            for QLoRA training. Ignored if the model is already instantiated.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         formatting_func (`Callable`, *optional*):
@@ -910,6 +911,7 @@ class SFTTrainer(_BaseTrainer):
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         optimizer_cls_and_kwargs: tuple[type[torch.optim.Optimizer], dict[str, Any]] | None = None,
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
         formatting_func: Callable[[dict], str] | None = None,
     ):
@@ -940,7 +942,14 @@ class SFTTrainer(_BaseTrainer):
 
         # Model
         if isinstance(model, str):
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -951,6 +960,11 @@ class SFTTrainer(_BaseTrainer):
                 logger.warning(
                     "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. The "
+                    "`quantization_config` will be ignored."
                 )
         # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
         _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
