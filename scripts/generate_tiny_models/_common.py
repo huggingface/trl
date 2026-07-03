@@ -77,29 +77,44 @@ def smoke_test(model, tokenizer_or_processor=None):
     device = next(model.parameters()).device
 
     if isinstance(tokenizer_or_processor, ProcessorMixin):
-        # VLM path: build a dummy (image, text) input via the processor.
-        from PIL import Image
-
+        # Multimodal path: build dummy inputs from whichever modalities the processor declares.
         processor = tokenizer_or_processor
-        red = Image.new("RGB", (24, 24), color="red")
-        blue = Image.new("RGB", (24, 24), color="blue")
-        messages = [
-            [
-                {
-                    "role": "user",
-                    "content": [{"type": "image", "image": red}, {"type": "text", "text": "What is this?"}],
-                }
-            ],
-            [{"role": "user", "content": [{"type": "text", "text": "Is it blue?"}, {"type": "image", "image": blue}]}],
-        ]
-        inputs = processor.apply_chat_template(
-            conversation=messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
-            padding=True,
-        ).to(device)
+        has_image = "image_processor" in processor.attributes
+        has_audio = "feature_extractor" in processor.attributes
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Audio: write a 1s silent WAV and reference it by path — LCD format accepted by both
+            # Jinja-based templates (Qwen2-Audio) and Mistral-common backed ones (Voxtral).
+            audio_path = None
+            if has_audio:
+                import wave
+
+                import numpy as np
+
+                audio_path = os.path.join(tmpdir, "smoke.wav")
+                with wave.open(audio_path, "wb") as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)  # 16-bit PCM
+                    wav.setframerate(16000)
+                    wav.writeframes(np.zeros(16000, dtype=np.int16).tobytes())
+
+            from PIL import Image
+
+            content = []
+            if has_image:
+                content.append({"type": "image", "image": Image.new("RGB", (24, 24), color="red")})
+            if has_audio:
+                content.append({"type": "audio", "path": audio_path})
+            content.append({"type": "text", "text": "What is this?"})
+            messages = [[{"role": "user", "content": content}]]
+
+            inputs = processor.apply_chat_template(
+                conversation=messages,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+                padding=True,
+            ).to(device)
     else:
         inputs = {"input_ids": torch.tensor([[1, 2, 3, 4]], device=device)}
 
