@@ -761,7 +761,7 @@ trainer.train()
 An environment class has two reserved methods: `reset` and `get_reward`. Unlike any other public methods, these are not exposed to the model as tools.
 
 - `reset` (required) is called when the rollout starts. It can return either `None` or a string. In GRPO, when it returns a string, that string is appended to the last user message.
-- `get_reward` (optional) takes no argument and returns a `float`: the environment scores the episode it just ran from its own internal state (did the game end in a win? was the word guessed?). It is called once per completed rollout and acts as a reward source.
+- `get_reward` (optional, sync or async) takes no argument and returns a `float`: the environment scores the episode it just ran from its own internal state (did the game end in a win? was the word guessed?). It is called once per completed rollout and acts as a reward source.
 
 ### Rewards
 

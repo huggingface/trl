@@ -581,10 +581,18 @@ class GRPOTrainer(_BaseTrainer):
             self.tools = tools + methods
 
             # Expose the environment's `get_reward` as an extra reward source (named after the env class, weight 1).
+            # `get_reward` may be async (e.g. an LLM judge); wrap it accordingly so `_calculate_rewards` runs it on the
+            # daemon event loop like any other async reward func.
             if has_reward:
+                if inspect.iscoroutinefunction(instance.get_reward):
 
-                def get_reward(environments, **kwargs):
-                    return [environment.get_reward() for environment in environments]
+                    async def get_reward(environments, **kwargs):
+                        return [await environment.get_reward() for environment in environments]
+
+                else:
+
+                    def get_reward(environments, **kwargs):
+                        return [environment.get_reward() for environment in environments]
 
                 self.reward_funcs.append(get_reward)
                 self.reward_func_names.append(type(instance).__name__)

@@ -423,8 +423,6 @@ class _AsyncRolloutLoop:
                 for task in done:
                     group_id, slot, environment, prompt = inflight_tasks.pop(task)
                     free_slots.add(slot)
-                    if environment is not None:
-                        self._environment_pool.append(environment)
                     if task.exception() is not None:
                         raise task.exception()
 
@@ -447,9 +445,15 @@ class _AsyncRolloutLoop:
                     group.tool_call_counts.append(tool_call_count)
                     group.tool_failure_counts.append(tool_failure_count)
                     # The environment owns the reward: score it now, while this rollout's environment still holds its
-                    # final state (it is reset only when drawn again for the next rollout).
+                    # final state and before returning it to the pool. `get_reward` may be async awaiting yields to
+                    # inflight requests instead of halting them. The env is returned to the pool only after scoring, so
+                    # a concurrent rollout can't draw and reset it during the await.
                     if self._env_has_reward:
-                        group.env_rewards.append(environment.get_reward())
+                        get_reward = environment.get_reward
+                        reward = await get_reward() if inspect.iscoroutinefunction(get_reward) else get_reward()
+                        group.env_rewards.append(reward)
+                    if environment is not None:
+                        self._environment_pool.append(environment)
                     self._total_completion_tokens += sum(tool_mask)
                     pending_completed[group_id] += 1
 
