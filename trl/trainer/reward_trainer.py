@@ -49,7 +49,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..chat_template_utils import clone_chat_template
-from ..data_utils import is_conversational
+from ..data_utils import get_dataset_column_names, is_conversational
 from ..models import get_act_offloading_ctx_manager
 from .base_trainer import _BaseTrainer
 from .reward_config import RewardConfig
@@ -131,10 +131,6 @@ def suppress_seqcls_warning():
         transformers_logger = logging.getLogger("transformers.modeling_utils")
         with _suppress_seqcls_cross_arch_keys(transformers_logger):
             yield
-
-
-def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
-    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
 @dataclass
