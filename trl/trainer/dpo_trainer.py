@@ -827,8 +827,7 @@ class DPOTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise). Checked
-        # before building the reference model so a misconfiguration errors out before loading a second model copy.
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
         text_config = model.config.get_text_config()
         is_moe = getattr(text_config, "output_router_logits", None) is not None
         self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
