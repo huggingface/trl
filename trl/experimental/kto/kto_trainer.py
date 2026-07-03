@@ -805,7 +805,7 @@ class KTOTrainer(_BaseTrainer):
                     "`use_liger_kernel=True` is not supported with PEFT models. Set `use_liger_kernel=False` to train "
                     "a PEFT model."
                 )
-            self.liger_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
+            self.liger_loss = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
         if self.precompute_ref_logps:
             if isinstance(self.train_dataset, IterableDataset) or isinstance(
@@ -1286,7 +1286,7 @@ class KTOTrainer(_BaseTrainer):
                 chosen_rewards_sum,
                 rejected_rewards_sum,
             ),
-        ) = self.liger_loss_fn(
+        ) = self.liger_loss(
             _input=outputs.last_hidden_state[:, :-1],
             lin_weight=lm_head.weight,
             target=target,
