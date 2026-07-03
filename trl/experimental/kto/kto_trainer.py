@@ -46,6 +46,7 @@ from transformers.utils import is_peft_available
 from ...data_utils import (
     apply_chat_template,
     extract_prompt,
+    get_dataset_column_names,
     is_conversational,
     prepare_multimodal_messages,
     unpair_preference_dataset,
@@ -78,10 +79,6 @@ if is_peft_available():
 
 
 logger = get_logger(__name__)
-
-
-def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
-    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
 @dataclass
