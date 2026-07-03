@@ -120,6 +120,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
+            token_budget=256,  # set explicitly; the stub worker has no real vLLM server to query for max_model_len
             vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
             report_to="none",
         )
@@ -225,20 +226,6 @@ class TestPackingAwareBatching(TrlTestCase):
             assert all(len(group) > 0 for group in groups)  # every row stays non-empty
             lengths = [len(sample["input_ids"]) for group in groups for sample in group]
             assert all(length <= 8 for length in lengths)  # the oversized sample (12) was dropped
-
-    def test_token_budget_defaults_to_per_device_bs_times_completion_length(self):
-        # Unset token_budget resolves to per_device_train_batch_size * max_completion_length = 3 * 8.
-        args = AsyncGRPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=3,
-            max_completion_length=8,
-            bf16=False,
-            report_to="none",
-        )
-        assert args.token_budget == 24
-        # An explicit <= 0 value is left untouched and disables budgeting (-> FixedCountBatcher).
-        args = AsyncGRPOConfig(output_dir=self.tmp_dir, token_budget=-1, bf16=False, report_to="none")
-        assert args.token_budget == -1
 
     def test_fixed_count_batcher_yields_balanced_fixed_count_micro_batches(self):
         source = (_rollout_sample(length) for length in itertools.cycle((4, 3, 2, 1)))
