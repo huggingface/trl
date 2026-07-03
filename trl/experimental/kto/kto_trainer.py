@@ -797,8 +797,8 @@ class KTOTrainer(_BaseTrainer):
                 )
             if self.precompute_ref_logps:
                 raise ValueError(
-                    "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
-                    "`precompute_ref_log_probs=False`."
+                    "Liger KTO loss does not support precomputing reference log probabilities. Either disable "
+                    "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
                 )
             if is_peft_model(self.model):
                 raise ValueError(
