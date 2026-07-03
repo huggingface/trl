@@ -992,3 +992,7 @@ def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
         example["messages"] = example.pop("conversations")
 
     return example
+
+
+def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
+    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
