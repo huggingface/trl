@@ -59,6 +59,7 @@ from .loss_utils import (
     add_tail_bucket,
     apply_importance_sampling_clipping,
     compute_divergence,
+    compute_dopd_routed_loss,
     compute_full_logit_self_distillation_loss,
     compute_sampled_token_self_distillation_loss,
     compute_topk_self_distillation_loss,
@@ -192,7 +193,11 @@ class DemonstrationTeacherContextBuilder:
             self._compose_teacher_prompt(prompt, privileged_context)
             for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
         ]
-        teacher_prompt_ids_list = self.trainer._tokenize_prompts(teacher_prompts)
+        # Score the teacher on the full prompt: the problem leads the teacher template, so left-truncating to
+        # max_prompt_length (correct for the student generation prompt) would drop it.
+        teacher_prompt_ids_list = self.trainer._tokenize_prompts_untruncated(
+            teacher_prompts, chat_template_kwargs=self.trainer.teacher_chat_template_kwargs
+        )
         device = completion_ids.device
         teacher_prompt_ids = [torch.tensor(ids) for ids in teacher_prompt_ids_list]
         teacher_prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in teacher_prompt_ids]
@@ -296,6 +301,12 @@ class SDFTTrainer(_BaseTrainer):
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
 
+        # The EMA teacher adapter must exist before accelerate/DeepSpeed wraps the model: ZeRO-3 registers every
+        # module exactly once at initialization and cannot adopt modules added afterwards.
+        if args.teacher_model_kind == "ema" and is_peft_model(model) and is_pure_lora_training(model):
+            active_adapter = model.active_adapter or "default"
+            model.add_adapter("teacher", model.peft_config[active_adapter])
+
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 get_config_model_id(model.config),
@@ -324,6 +335,11 @@ class SDFTTrainer(_BaseTrainer):
         self.generate_from_teacher = args.generate_from_teacher
         self.use_vllm = args.use_vllm
         self.chat_template_kwargs = args.chat_template_kwargs or {}
+        self.teacher_chat_template_kwargs = (
+            args.teacher_chat_template_kwargs
+            if args.teacher_chat_template_kwargs is not None
+            else self.chat_template_kwargs
+        )
         self._step = 0
         self._buffered_inputs = None
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -367,7 +383,9 @@ class SDFTTrainer(_BaseTrainer):
                     "`use_teacher_server=True` only supports `distillation_mode` in {'sampled_token', 'topk_logits'}, "
                     f"got {args.distillation_mode!r}. The server returns the teacher's top-k logprobs, not the full "
                     "vocabulary, so `full_logits` is unavailable. Note `topk_logits` distills over the teacher's own "
-                    "top-k support (the server cannot score the student's top-k indices)."
+                    "top-k support (the server cannot score the student's top-k indices). `dopd` is also unavailable: "
+                    "it needs full student/teacher logit access to compute per-token confidence and advantage gap, "
+                    "the same reason `full_logits` is excluded."
                 )
             if args.use_liger_kernel:
                 raise ValueError(
@@ -392,6 +410,12 @@ class SDFTTrainer(_BaseTrainer):
                 raise ValueError(
                     "`use_liger_kernel` is incompatible with `distillation_is_clip`: the fused kernel does not expose "
                     "per-token losses for importance-sampling clipping."
+                )
+            if args.distillation_kl_clip is not None:
+                raise ValueError(
+                    "`use_liger_kernel` is incompatible with `distillation_kl_clip`: the fused kernel does not expose "
+                    "the per-vocabulary-entry divergences the pointwise clip applies to. Set "
+                    "`distillation_kl_clip=None`."
                 )
             self.liger_loss = LigerFusedLinearJSDLoss(
                 beta=args.distillation_alpha,
@@ -504,6 +528,14 @@ class SDFTTrainer(_BaseTrainer):
 
         Must be called after `super().__init__` so that `self.callback_handler` is available.
         """
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+        if is_peft_model(self.model) and is_zero3:
+            raise ValueError(
+                "PEFT with DeepSpeed ZeRO-3 is currently unsupported: the teacher forward on the shared model "
+                "invalidates the ZeRO-3 parameter coordinator trace and training crashes at backward recompute. "
+                "Use FSDP2 or ZeRO-2 with PEFT, or full fine-tuning under ZeRO-3."
+            )
 
         teacher_model_kind = self.args.teacher_model_kind
 
@@ -730,18 +762,26 @@ class SDFTTrainer(_BaseTrainer):
             for ids, length in zip(batch["completion_ids"].detach().cpu(), raw_completion_lengths, strict=True)
         ]
 
-    def _tokenize_prompts(self, prompts: list[Any]) -> list[list[int]]:
+    def _tokenize_prompts_untruncated(
+        self, prompts: list[Any], chat_template_kwargs: dict[str, Any] | None = None
+    ) -> list[list[int]]:
         if is_conversational({"prompt": prompts[0]}):
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
-                **self.chat_template_kwargs,
+                **(self.chat_template_kwargs if chat_template_kwargs is None else chat_template_kwargs),
             )
             prompt_ids = tokenized["input_ids"]
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
+        return prompt_ids
+
+    def _tokenize_prompts(
+        self, prompts: list[Any], chat_template_kwargs: dict[str, Any] | None = None
+    ) -> list[list[int]]:
+        prompt_ids = self._tokenize_prompts_untruncated(prompts, chat_template_kwargs=chat_template_kwargs)
         if self.max_prompt_length is not None:
             prompt_ids = [ids[-self.max_prompt_length :] for ids in prompt_ids]
         return prompt_ids
@@ -874,12 +914,15 @@ class SDFTTrainer(_BaseTrainer):
                 distillation_topk=self.args.distillation_topk,
                 distillation_alpha=self.args.distillation_alpha,
                 distillation_add_tail=self.args.distillation_add_tail,
+                distillation_kl_clip=self.args.distillation_kl_clip,
+                topk_support=self.args.distillation_topk_support,
             )
         elif self.args.distillation_mode == "full_logits":
             per_token_loss = compute_full_logit_self_distillation_loss(
                 distillation_logits.student_logits,
                 distillation_logits.teacher_logits,
                 distillation_alpha=self.args.distillation_alpha,
+                distillation_kl_clip=self.args.distillation_kl_clip,
             )
         elif self.args.distillation_mode == "sampled_token":
             per_token_loss = compute_sampled_token_self_distillation_loss(
@@ -888,9 +931,20 @@ class SDFTTrainer(_BaseTrainer):
                 distillation_logits.completion_ids,
                 distillation_alpha=self.args.distillation_alpha,
             )
+        elif self.args.distillation_mode == "dopd":
+            per_token_loss = compute_dopd_routed_loss(
+                distillation_logits.student_logits,
+                distillation_logits.teacher_logits,
+                distillation_logits.completion_ids,
+                gap_threshold=self.args.distillation_dopd_gap_threshold,
+                confidence_threshold=self.args.distillation_dopd_confidence_threshold,
+                light_topk=self.args.distillation_dopd_light_topk,
+                self_reg_weight=self.args.distillation_dopd_self_reg_weight,
+                student_consistency_weight=self.args.distillation_dopd_student_consistency_weight,
+            )
         else:
             raise ValueError(
-                "distillation_mode must be one of: 'sampled_token', 'full_logits', 'topk_logits', "
+                "distillation_mode must be one of: 'sampled_token', 'full_logits', 'topk_logits', 'dopd', "
                 f"got {self.args.distillation_mode!r}"
             )
 
@@ -1000,7 +1054,9 @@ class SDFTTrainer(_BaseTrainer):
             else:
                 student_topk_logps = student_topk_logps - torch.logsumexp(student_topk_logps, dim=-1, keepdim=True)
                 teacher_topk_logps = teacher_topk_logps - torch.logsumexp(teacher_topk_logps, dim=-1, keepdim=True)
-            per_token_loss = compute_divergence(student_topk_logps, teacher_topk_logps, self.args.distillation_alpha)
+            per_token_loss = compute_divergence(
+                student_topk_logps, teacher_topk_logps, self.args.distillation_alpha, self.args.distillation_kl_clip
+            )
 
         old_per_token_logps = inputs.get("old_per_token_logps")
         if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
